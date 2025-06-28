@@ -239,14 +239,8 @@ impl eframe::App for WalletApp {
             } else {
                 ui.heading("Кошелек");
                 ui.label(format!("Адрес: {}", self.wallet_address));
-                let balance = self
-                    .node
-                    .blockchain
-                    .lock()
-                    .unwrap()
-                    .balances
-                    .get(&self.wallet_address)
-                    .unwrap_or(&0);
+                let blockchain = self.node.blockchain.lock().unwrap();
+                let balance = blockchain.balances.get(&self.wallet_address).unwrap_or(&0);
                 ui.label(format!("Баланс: {}", balance));
 
                 ui.heading("Перевод");
@@ -352,7 +346,7 @@ mod tests {
 }
 
 fn main() {
-    let node = Node::new("127.0.0.1:8081".to_string());
+    let mut node = Node::new("127.0.0.1:8081".to_string());
     node.start_server(8081);
     node.discover_peers();
 
