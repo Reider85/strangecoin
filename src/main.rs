@@ -5,7 +5,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
-use eframe::{egui, epi};
+use eframe::{egui, App};
 use std::io::{Read, Write};
 use rand::Rng;
 
@@ -29,7 +29,7 @@ struct Transaction {
 }
 
 // Структура блокчейна
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Blockchain {
     chain: Vec<Block>,
     balances: HashMap<String, u64>,
@@ -220,12 +220,8 @@ impl Node {
     }
 }
 
-impl epi::App for WalletApp {
-    fn name(&self) -> &str {
-        "Blockchain Wallet"
-    }
-
-    fn update(&mut self, ctx: &egui::Context, _frame: &epi::Frame) {
+impl eframe::App for WalletApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             if !self.is_authenticated {
                 ui.heading("Аутентификация");
@@ -318,7 +314,7 @@ mod tests {
             eframe::run_native(
                 "Client 1",
                 eframe::NativeOptions::default(),
-                Box::new(|_cc| Ok(Box::new(app1))),
+                Box::new(|_cc| Box::new(app1)),
             )
                 .unwrap();
         });
@@ -339,7 +335,7 @@ mod tests {
             eframe::run_native(
                 "Client 2",
                 eframe::NativeOptions::default(),
-                Box::new(|_cc| Ok(Box::new(app2))),
+                Box::new(|_cc| Box::new(app2)),
             )
                 .unwrap();
         });
@@ -373,7 +369,7 @@ fn main() {
     eframe::run_native(
         "Blockchain Wallet",
         eframe::NativeOptions::default(),
-        Box::new(|_cc| Ok(Box::new(app))),
+        Box::new(|_cc| Box::new(app)),
     )
         .unwrap();
 }
