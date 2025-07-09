@@ -5,19 +5,20 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
-use eframe::{egui, App};
+use eframe::egui;
 use std::io::{Read, Write};
 use rand::Rng;
-use toml; // Added for TOML parsing
-use std::fs; // Added for file reading
+use std::fs;
+use std::path::PathBuf;
+use serde_json;
 
 // Структура для конфигурации
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct Config {
     wallet: WalletConfig,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct WalletConfig {
     name: String,
     password: String,
@@ -56,6 +57,7 @@ struct Blockchain {
 struct Node {
     blockchain: Arc<Mutex<Blockchain>>,
     peers: Arc<Mutex<Vec<String>>>,
+    #[allow(dead_code)]
     address: String,
 }
 
@@ -147,7 +149,9 @@ impl Blockchain {
         // Обновление балансов
         for tx in &block.transactions {
             *self.balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
-            *self.balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
+            *self.balances.entry(tx.receiver.clone
+
+            ()).or_insert(0) += tx.amount;
         }
 
         self.pending_transactions.clear();
@@ -175,26 +179,21 @@ impl Node {
         }
     }
 
-    // Поиск узлов в сети
     fn discover_peers(&mut self) {
         let mut peers = self.peers.lock().unwrap();
-        // Имитация поиска узлов (в реальной сети можно использовать UDP-бродкаст)
         peers.push("127.0.0.1:8081".to_string());
         peers.push("127.0.0.1:8082".to_string());
     }
 
-    // Поиск кошелька по IP
     fn find_wallet_by_ip(&self, ip: &str) -> Option<String> {
         let peers = self.peers.lock().unwrap();
         if peers.contains(&ip.to_string()) {
-            // Для простоты возвращаем случайный адрес
             Some(format!("wallet{}", rand::thread_rng().gen_range(1..3)))
         } else {
             None
         }
     }
 
-    // Запуск сервера для обработки входящих соединений
     fn start_server(&self, port: u16) {
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
         let blockchain = Arc::clone(&self.blockchain);
@@ -215,7 +214,7 @@ impl Node {
         });
     }
 
-    // Синхронизация с другими узлами
+    #[allow(dead_code)]
     fn sync_blockchain(&self) {
         let peers = self.peers.lock().unwrap();
         for peer in peers.iter() {
@@ -243,7 +242,6 @@ impl eframe::App for WalletApp {
                 ui.text_edit_singleline(&mut self.wallet_address);
                 ui.text_edit_singleline(&mut self.password);
                 if ui.button("Войти").clicked() {
-                    // Простая проверка пароля
                     if self.password == "password" {
                         self.is_authenticated = true;
                         self.status = "Успешная аутентификация".to_string();
@@ -300,16 +298,23 @@ impl eframe::App for WalletApp {
     }
 }
 
-// Тест для запуска двух клиентов
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_two_clients() {
+        // Получение директории исполняемого файла
+        let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
+        let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
+
         // Загрузка конфигурации для клиента 1
-        let config_content1 = fs::read_to_string("config.toml").expect("Не удалось прочитать config.toml");
-        let config1: Config = toml::from_str(&config_content1).expect("Ошибка парсинга конфигурации");
+        let config_path1 = exe_dir.join("config.json");
+        let config_content1 = fs::read_to_string(&config_path1).unwrap_or_else(|err| {
+            eprintln!("Ошибка чтения {}: {}. Используются значения по умолчанию.", config_path1.display(), err);
+            r#"{"wallet": {"name": "wallet1", "password": "password", "port": 8081}}"#.to_string()
+        });
+        let config1: Config = serde_json::from_str(&config_content1).expect("Ошибка парсинга конфигурации");
 
         // Клиент 1
         let node1 = Node::new(format!("127.0.0.1:{}", config1.wallet.port));
@@ -333,15 +338,19 @@ mod tests {
         });
 
         // Загрузка конфигурации для клиента 2
-        let config_content2 = fs::read_to_string("config.toml").expect("Не удалось прочитать config.toml");
-        let config2: Config = toml::from_str(&config_content2).expect("Ошибка парсинга конфигурации");
+        let config_path2 = exe_dir.join("config2.json");
+        let config_content2 = fs::read_to_string(&config_path2).unwrap_or_else(|err| {
+            eprintln!("Ошибка чтения {}: {}. Используются значения по умолчанию.", config_path2.display(), err);
+            r#"{"wallet": {"name": "wallet2", "password": "password", "port": 8082}}"#.to_string()
+        });
+        let config2: Config = serde_json::from_str(&config_content2).expect("Ошибка парсинга конфигурации");
 
         // Клиент 2
-        let node2 = Node::new(format!("127.0.0.1:{}", config2.wallet.port + 1)); // Используем другой порт
-        node2.start_server(config2.wallet.port + 1);
+        let node2 = Node::new(format!("127.0.0.1:{}", config2.wallet.port));
+        node2.start_server(config2.wallet.port);
         let app2 = WalletApp {
             node: node2.clone(),
-            wallet_address: "wallet2".to_string(), // Для второго клиента используем другой адрес
+            wallet_address: config2.wallet.name,
             password: config2.wallet.password,
             is_authenticated: false,
             receiver_address: String::new(),
@@ -369,9 +378,17 @@ mod tests {
 }
 
 fn main() {
+    // Получение директории исполняемого файла
+    let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
+    let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
+    let config_path = exe_dir.join("config.json");
+
     // Загрузка конфигурации
-    let config_content = fs::read_to_string("config.toml").expect("Не удалось прочитать config.toml");
-    let config: Config = toml::from_str(&config_content).expect("Ошибка парсинга конфигурации");
+    let config_content = fs::read_to_string(&config_path).unwrap_or_else(|err| {
+        eprintln!("Ошибка чтения {}: {}. Используются значения по умолчанию.", config_path.display(), err);
+        r#"{"wallet": {"name": "wallet1", "password": "password", "port": 8081}}"#.to_string()
+    });
+    let config: Config = serde_json::from_str(&config_content).expect("Ошибка парсинга конфигурации");
 
     let mut node = Node::new(format!("127.0.0.1:{}", config.wallet.port));
     node.start_server(config.wallet.port);

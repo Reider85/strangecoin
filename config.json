@@ -1,0 +1,7 @@
+{
+  "wallet": {
+    "name": "wallet11",
+    "password": "password",
+    "port": 8081
+  }
+}
