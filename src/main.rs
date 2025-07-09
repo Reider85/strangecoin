@@ -70,6 +70,16 @@ struct WalletApp {
     receiver_address: String,
     amount: String,
     status: String,
+    mining_status: Arc<Mutex<MiningStatus>>,
+}
+
+// Статус майнинга
+#[derive(Clone, Debug)]
+enum MiningStatus {
+    Idle,
+    Mining,
+    Completed(Option<Block>),
+    Failed(String),
 }
 
 impl Blockchain {
@@ -77,7 +87,7 @@ impl Blockchain {
         let mut blockchain = Blockchain {
             chain: vec![],
             balances: HashMap::new(),
-            difficulty: 2,
+            difficulty: 1,
             pending_transactions: vec![],
         };
         blockchain.create_genesis_block();
@@ -100,7 +110,6 @@ impl Blockchain {
         let mut genesis_block = genesis_block;
         genesis_block.hash = hash;
         self.chain.push(genesis_block);
-        // Начальный баланс для тестов
         self.balances.insert("wallet1".to_string(), 1000);
         self.balances.insert("wallet2".to_string(), 1000);
     }
@@ -136,7 +145,6 @@ impl Blockchain {
             nonce: 0,
         };
 
-        // Proof of Work
         loop {
             let hash = self.calculate_hash(&block);
             if hash.starts_with(&"0".repeat(self.difficulty as usize)) {
@@ -146,12 +154,9 @@ impl Blockchain {
             block.nonce += 1;
         }
 
-        // Обновление балансов
         for tx in &block.transactions {
             *self.balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
-            *self.balances.entry(tx.receiver.clone
-
-            ()).or_insert(0) += tx.amount;
+            *self.balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
         }
 
         self.pending_transactions.clear();
@@ -259,25 +264,65 @@ impl eframe::App for WalletApp {
                 ui.heading("Перевод");
                 ui.text_edit_singleline(&mut self.receiver_address);
                 ui.text_edit_singleline(&mut self.amount);
-                if ui.button("Отправить").clicked() {
-                    if let Ok(amount) = self.amount.parse::<u64>() {
-                        let transaction = Transaction {
-                            sender: self.wallet_address.clone(),
-                            receiver: self.receiver_address.clone(),
-                            amount,
-                        };
-                        let mut blockchain = self.node.blockchain.lock().unwrap();
-                        if blockchain.add_transaction(transaction) {
-                            if let Some(block) = blockchain.mine_block() {
-                                self.status = format!("Транзакция отправлена, блок добавлен: {:?}", block);
-                            } else {
-                                self.status = "Ошибка при майнинге блока".to_string();
-                            }
-                        } else {
-                            self.status = "Недостаточно средств или неверный адрес".to_string();
+
+                // Проверяем статус майнинга
+                {
+                    let mut mining_status = self.mining_status.lock().unwrap();
+                    match &*mining_status {
+                        MiningStatus::Mining => {
+                            ui.label("Майнинг блока в процессе...");
+                            ui.spinner();
                         }
-                    } else {
-                        self.status = "Неверный формат суммы".to_string();
+                        MiningStatus::Completed(block) => {
+                            self.status = format!("Транзакция отправлена, блок добавлен: {:?}", block);
+                            *mining_status = MiningStatus::Idle;
+                        }
+                        MiningStatus::Failed(err) => {
+                            self.status = err.clone();
+                            *mining_status = MiningStatus::Idle;
+                        }
+                        MiningStatus::Idle => {
+                            if ui.button("Отправить").clicked() {
+                                if let Ok(amount) = self.amount.parse::<u64>() {
+                                    let transaction = Transaction {
+                                        sender: self.wallet_address.clone(),
+                                        receiver: self.receiver_address.clone(),
+                                        amount,
+                                    };
+                                    let blockchain = Arc::clone(&self.node.blockchain);
+                                    let mining_status = Arc::clone(&self.mining_status);
+
+                                    // Проверяем возможность добавления транзакции
+                                    {
+                                        let mut blockchain = blockchain.lock().unwrap();
+                                        if !blockchain.add_transaction(transaction) {
+                                            self.status = "Недостаточно средств или неверный адрес".to_string();
+                                            return;
+                                        }
+                                    }
+
+                                    // Запускаем майнинг в отдельном потоке
+                                    {
+                                        let mut mining_status = mining_status.lock().unwrap();
+                                        *mining_status = MiningStatus::Mining;
+                                    }
+                                    thread::spawn(move || {
+                                        let mut blockchain = blockchain.lock().unwrap();
+                                        let result = blockchain.mine_block();
+                                        let mut mining_status = mining_status.lock().unwrap();
+                                        *mining_status = match result {
+                                            Some(block) => MiningStatus::Completed(Some(block)),
+                                            None => MiningStatus::Failed("Ошибка при майнинге блока".to_string()),
+                                        };
+                                    });
+
+                                    // Запрашиваем обновление UI
+                                    ctx.request_repaint();
+                                } else {
+                                    self.status = "Неверный формат суммы".to_string();
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -304,11 +349,9 @@ mod tests {
 
     #[test]
     fn test_two_clients() {
-        // Получение директории исполняемого файла
         let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
         let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
 
-        // Загрузка конфигурации для клиента 1
         let config_path1 = exe_dir.join("config.json");
         let config_content1 = fs::read_to_string(&config_path1).unwrap_or_else(|err| {
             eprintln!("Ошибка чтения {}: {}. Используются значения по умолчанию.", config_path1.display(), err);
@@ -316,7 +359,6 @@ mod tests {
         });
         let config1: Config = serde_json::from_str(&config_content1).expect("Ошибка парсинга конфигурации");
 
-        // Клиент 1
         let node1 = Node::new(format!("127.0.0.1:{}", config1.wallet.port));
         node1.start_server(config1.wallet.port);
         let app1 = WalletApp {
@@ -327,6 +369,7 @@ mod tests {
             receiver_address: String::new(),
             amount: String::new(),
             status: String::new(),
+            mining_status: Arc::new(Mutex::new(MiningStatus::Idle)),
         };
         thread::spawn(move || {
             eframe::run_native(
@@ -337,7 +380,6 @@ mod tests {
                 .unwrap();
         });
 
-        // Загрузка конфигурации для клиента 2
         let config_path2 = exe_dir.join("config2.json");
         let config_content2 = fs::read_to_string(&config_path2).unwrap_or_else(|err| {
             eprintln!("Ошибка чтения {}: {}. Используются значения по умолчанию.", config_path2.display(), err);
@@ -345,7 +387,6 @@ mod tests {
         });
         let config2: Config = serde_json::from_str(&config_content2).expect("Ошибка парсинга конфигурации");
 
-        // Клиент 2
         let node2 = Node::new(format!("127.0.0.1:{}", config2.wallet.port));
         node2.start_server(config2.wallet.port);
         let app2 = WalletApp {
@@ -356,6 +397,7 @@ mod tests {
             receiver_address: String::new(),
             amount: String::new(),
             status: String::new(),
+            mining_status: Arc::new(Mutex::new(MiningStatus::Idle)),
         };
         thread::spawn(move || {
             eframe::run_native(
@@ -366,10 +408,8 @@ mod tests {
                 .unwrap();
         });
 
-        // Даем время клиентам запуститься
         thread::sleep(std::time::Duration::from_secs(5));
 
-        // Проверка синхронизации
         node1.discover_peers();
         node2.discover_peers();
         node1.sync_blockchain();
@@ -378,12 +418,10 @@ mod tests {
 }
 
 fn main() {
-    // Получение директории исполняемого файла
     let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
     let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
     let config_path = exe_dir.join("config.json");
 
-    // Загрузка конфигурации
     let config_content = fs::read_to_string(&config_path).unwrap_or_else(|err| {
         eprintln!("Ошибка чтения {}: {}. Используются значения по умолчанию.", config_path.display(), err);
         r#"{"wallet": {"name": "wallet1", "password": "password", "port": 8081}}"#.to_string()
@@ -402,6 +440,7 @@ fn main() {
         receiver_address: String::new(),
         amount: String::new(),
         status: String::new(),
+        mining_status: Arc::new(Mutex::new(MiningStatus::Idle)),
     };
 
     eframe::run_native(
