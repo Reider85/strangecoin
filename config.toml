@@ -1,0 +1,4 @@
+[wallet]
+name = "wallet1"
+password = "password"
+port = 8081

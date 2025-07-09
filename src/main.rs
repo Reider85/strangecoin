@@ -8,6 +8,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use eframe::{egui, App};
 use std::io::{Read, Write};
 use rand::Rng;
+use toml; // Added for TOML parsing
+use std::fs; // Added for file reading
+
+// Структура для конфигурации
+#[derive(Deserialize)]
+struct Config {
+    wallet: WalletConfig,
+}
+
+#[derive(Deserialize)]
+struct WalletConfig {
+    name: String,
+    password: String,
+    port: u16,
+}
 
 // Структура блока
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -292,13 +307,17 @@ mod tests {
 
     #[test]
     fn test_two_clients() {
+        // Загрузка конфигурации для клиента 1
+        let config_content1 = fs::read_to_string("config.toml").expect("Не удалось прочитать config.toml");
+        let config1: Config = toml::from_str(&config_content1).expect("Ошибка парсинга конфигурации");
+
         // Клиент 1
-        let node1 = Node::new("127.0.0.1:8081".to_string());
-        node1.start_server(8081);
+        let node1 = Node::new(format!("127.0.0.1:{}", config1.wallet.port));
+        node1.start_server(config1.wallet.port);
         let app1 = WalletApp {
             node: node1.clone(),
-            wallet_address: "wallet1".to_string(),
-            password: "password".to_string(),
+            wallet_address: config1.wallet.name,
+            password: config1.wallet.password,
             is_authenticated: false,
             receiver_address: String::new(),
             amount: String::new(),
@@ -313,13 +332,17 @@ mod tests {
                 .unwrap();
         });
 
+        // Загрузка конфигурации для клиента 2
+        let config_content2 = fs::read_to_string("config.toml").expect("Не удалось прочитать config.toml");
+        let config2: Config = toml::from_str(&config_content2).expect("Ошибка парсинга конфигурации");
+
         // Клиент 2
-        let node2 = Node::new("127.0.0.1:8082".to_string());
-        node2.start_server(8082);
+        let node2 = Node::new(format!("127.0.0.1:{}", config2.wallet.port + 1)); // Используем другой порт
+        node2.start_server(config2.wallet.port + 1);
         let app2 = WalletApp {
             node: node2.clone(),
-            wallet_address: "wallet2".to_string(),
-            password: "password".to_string(),
+            wallet_address: "wallet2".to_string(), // Для второго клиента используем другой адрес
+            password: config2.wallet.password,
             is_authenticated: false,
             receiver_address: String::new(),
             amount: String::new(),
@@ -346,14 +369,18 @@ mod tests {
 }
 
 fn main() {
-    let mut node = Node::new("127.0.0.1:8081".to_string());
-    node.start_server(8081);
+    // Загрузка конфигурации
+    let config_content = fs::read_to_string("config.toml").expect("Не удалось прочитать config.toml");
+    let config: Config = toml::from_str(&config_content).expect("Ошибка парсинга конфигурации");
+
+    let mut node = Node::new(format!("127.0.0.1:{}", config.wallet.port));
+    node.start_server(config.wallet.port);
     node.discover_peers();
 
     let app = WalletApp {
         node,
-        wallet_address: "wallet1".to_string(),
-        password: String::new(),
+        wallet_address: config.wallet.name,
+        password: config.wallet.password,
         is_authenticated: false,
         receiver_address: String::new(),
         amount: String::new(),
