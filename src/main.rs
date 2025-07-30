@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, IpAddr};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -87,7 +87,7 @@ impl Blockchain {
         let mut blockchain = Blockchain {
             chain: vec![],
             balances: HashMap::new(),
-            difficulty: 1,
+            difficulty: 1, // Уменьшено для ускорения майнинга
             pending_transactions: vec![],
         };
         blockchain.create_genesis_block();
@@ -128,7 +128,9 @@ impl Blockchain {
     }
 
     fn mine_block(&mut self) -> Option<Block> {
+        println!("Начало майнинга...");
         if self.pending_transactions.is_empty() {
+            println!("Нет транзакций для майнинга");
             return None;
         }
 
@@ -161,6 +163,7 @@ impl Blockchain {
 
         self.pending_transactions.clear();
         self.chain.push(block.clone());
+        println!("Майнинг завершен: {:?}", block);
         Some(block)
     }
 
@@ -168,9 +171,11 @@ impl Blockchain {
         if let Some(sender_balance) = self.balances.get(&transaction.sender) {
             if *sender_balance >= transaction.amount {
                 self.pending_transactions.push(transaction);
+                println!("Транзакция добавлена: {:?}", self.pending_transactions);
                 return true;
             }
         }
+        println!("Ошибка: Недостаточно средств или неверный адрес");
         false
     }
 }
@@ -188,13 +193,23 @@ impl Node {
         let mut peers = self.peers.lock().unwrap();
         peers.push("127.0.0.1:8081".to_string());
         peers.push("127.0.0.1:8082".to_string());
+        println!("Обнаружены пиры: {:?}", *peers);
     }
 
     fn find_wallet_by_ip(&self, ip: &str) -> Option<String> {
+        let ip = ip.trim();
+        if ip.parse::<IpAddr>().is_err() {
+            println!("Некорректный формат IP: {}", ip);
+            return None;
+        }
         let peers = self.peers.lock().unwrap();
+        println!("Список пиров: {:?}", *peers);
         if peers.contains(&ip.to_string()) {
-            Some(format!("wallet{}", rand::thread_rng().gen_range(1..3)))
+            let wallet = format!("wallet{}", rand::thread_rng().gen_range(1..3));
+            println!("Найден кошелек: {}", wallet);
+            Some(wallet)
         } else {
+            println!("IP {} не найден в списке пиров", ip);
             None
         }
     }
@@ -253,6 +268,7 @@ impl eframe::App for WalletApp {
                     } else {
                         self.status = "Неверный пароль".to_string();
                     }
+                    ctx.request_repaint();
                 }
             } else {
                 ui.heading("Кошелек");
@@ -272,14 +288,17 @@ impl eframe::App for WalletApp {
                         MiningStatus::Mining => {
                             ui.label("Майнинг блока в процессе...");
                             ui.spinner();
+                            ctx.request_repaint(); // Обновляем UI во время майнинга
                         }
                         MiningStatus::Completed(block) => {
                             self.status = format!("Транзакция отправлена, блок добавлен: {:?}", block);
                             *mining_status = MiningStatus::Idle;
+                            ctx.request_repaint();
                         }
                         MiningStatus::Failed(err) => {
                             self.status = err.clone();
                             *mining_status = MiningStatus::Idle;
+                            ctx.request_repaint();
                         }
                         MiningStatus::Idle => {
                             if ui.button("Отправить").clicked() {
@@ -297,11 +316,13 @@ impl eframe::App for WalletApp {
                                         let mut blockchain = blockchain.lock().unwrap();
                                         if !blockchain.add_transaction(transaction) {
                                             self.status = "Недостаточно средств или неверный адрес".to_string();
+                                            ctx.request_repaint();
                                             return;
                                         }
                                     }
 
                                     // Запускаем майнинг в отдельном потоке
+                                    self.status = "Запуск майнинга...".to_string();
                                     {
                                         let mut mining_status = mining_status.lock().unwrap();
                                         *mining_status = MiningStatus::Mining;
@@ -312,14 +333,13 @@ impl eframe::App for WalletApp {
                                         let mut mining_status = mining_status.lock().unwrap();
                                         *mining_status = match result {
                                             Some(block) => MiningStatus::Completed(Some(block)),
-                                            None => MiningStatus::Failed("Ошибка при майнинге блока".to_string()),
+                                            None => MiningStatus::Failed("Нет транзакций для майнинга".to_string()),
                                         };
                                     });
-
-                                    // Запрашиваем обновление UI
                                     ctx.request_repaint();
                                 } else {
                                     self.status = "Неверный формат суммы".to_string();
+                                    ctx.request_repaint();
                                 }
                             }
                         }
@@ -330,11 +350,17 @@ impl eframe::App for WalletApp {
                 let mut ip = String::new();
                 ui.text_edit_singleline(&mut ip);
                 if ui.button("Найти кошелек").clicked() {
-                    if let Some(wallet) = self.node.find_wallet_by_ip(&ip) {
-                        self.status = format!("Найден кошелек: {}", wallet);
+                    let ip = ip.trim();
+                    if ip.parse::<IpAddr>().is_ok() {
+                        if let Some(wallet) = self.node.find_wallet_by_ip(ip) {
+                            self.status = format!("Найден кошелек: {}", wallet);
+                        } else {
+                            self.status = format!("Кошелек не найден для IP: {}", ip);
+                        }
                     } else {
-                        self.status = "Кошелек не найден".to_string();
+                        self.status = "Некорректный формат IP-адреса".to_string();
                     }
+                    ctx.request_repaint();
                 }
 
                 ui.label(&self.status);
