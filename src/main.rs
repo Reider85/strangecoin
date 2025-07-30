@@ -3,7 +3,6 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream, IpAddr};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use eframe::egui;
 use std::io::{Read, Write};
@@ -11,6 +10,7 @@ use rand::Rng;
 use std::fs;
 use std::path::PathBuf;
 use serde_json;
+use tokio::task;
 
 // Структура для конфигурации
 #[derive(Deserialize, Serialize)]
@@ -57,7 +57,6 @@ struct Blockchain {
 struct Node {
     blockchain: Arc<Mutex<Blockchain>>,
     peers: Arc<Mutex<Vec<String>>>,
-    #[allow(dead_code)]
     address: String,
 }
 
@@ -87,7 +86,7 @@ impl Blockchain {
         let mut blockchain = Blockchain {
             chain: vec![],
             balances: HashMap::new(),
-            difficulty: 1, // Уменьшено для ускорения майнинга
+            difficulty: 1, // Низкая сложность для быстрого майнинга
             pending_transactions: vec![],
         };
         blockchain.create_genesis_block();
@@ -168,6 +167,10 @@ impl Blockchain {
     }
 
     fn add_transaction(&mut self, transaction: Transaction) -> bool {
+        if transaction.sender.is_empty() || transaction.receiver.is_empty() {
+            println!("Ошибка: Пустой адрес отправителя или получателя");
+            return false;
+        }
         if let Some(sender_balance) = self.balances.get(&transaction.sender) {
             if *sender_balance >= transaction.amount {
                 self.pending_transactions.push(transaction);
@@ -191,6 +194,7 @@ impl Node {
 
     fn discover_peers(&mut self) {
         let mut peers = self.peers.lock().unwrap();
+        peers.clear(); // Очищаем, чтобы избежать дубликатов
         peers.push("127.0.0.1:8081".to_string());
         peers.push("127.0.0.1:8082".to_string());
         println!("Обнаружены пиры: {:?}", *peers);
@@ -198,13 +202,19 @@ impl Node {
 
     fn find_wallet_by_ip(&self, ip: &str) -> Option<String> {
         let ip = ip.trim();
-        if ip.parse::<IpAddr>().is_err() {
+        // Проверяем, содержит ли строка порт
+        let ip = if !ip.contains(':') {
+            format!("{}:8081", ip) // Добавляем порт по умолчанию, если не указан
+        } else {
+            ip.to_string()
+        };
+        if ip.parse::<std::net::SocketAddr>().is_err() {
             println!("Некорректный формат IP: {}", ip);
             return None;
         }
         let peers = self.peers.lock().unwrap();
         println!("Список пиров: {:?}", *peers);
-        if peers.contains(&ip.to_string()) {
+        if peers.contains(&ip) {
             let wallet = format!("wallet{}", rand::thread_rng().gen_range(1..3));
             println!("Найден кошелек: {}", wallet);
             Some(wallet)
@@ -234,7 +244,6 @@ impl Node {
         });
     }
 
-    #[allow(dead_code)]
     fn sync_blockchain(&self) {
         let peers = self.peers.lock().unwrap();
         for peer in peers.iter() {
@@ -265,6 +274,8 @@ impl eframe::App for WalletApp {
                     if self.password == "password" {
                         self.is_authenticated = true;
                         self.status = "Успешная аутентификация".to_string();
+                        // Вызываем discover_peers после успешной аутентификации
+                        self.node.discover_peers();
                     } else {
                         self.status = "Неверный пароль".to_string();
                     }
@@ -276,6 +287,7 @@ impl eframe::App for WalletApp {
                 let blockchain = self.node.blockchain.lock().unwrap();
                 let balance = blockchain.balances.get(&self.wallet_address).unwrap_or(&0);
                 ui.label(format!("Баланс: {}", balance));
+                drop(blockchain); // Освобождаем блокировку
 
                 ui.heading("Перевод");
                 ui.text_edit_singleline(&mut self.receiver_address);
@@ -288,7 +300,7 @@ impl eframe::App for WalletApp {
                         MiningStatus::Mining => {
                             ui.label("Майнинг блока в процессе...");
                             ui.spinner();
-                            ctx.request_repaint(); // Обновляем UI во время майнинга
+                            ctx.request_repaint();
                         }
                         MiningStatus::Completed(block) => {
                             self.status = format!("Транзакция отправлена, блок добавлен: {:?}", block);
@@ -302,10 +314,20 @@ impl eframe::App for WalletApp {
                         }
                         MiningStatus::Idle => {
                             if ui.button("Отправить").clicked() {
-                                if let Ok(amount) = self.amount.parse::<u64>() {
+                                if self.receiver_address.trim().is_empty() {
+                                    self.status = "Адрес получателя не может быть пустым".to_string();
+                                    ctx.request_repaint();
+                                    return;
+                                }
+                                if let Ok(amount) = self.amount.trim().parse::<u64>() {
+                                    if amount == 0 {
+                                        self.status = "Сумма должна быть больше нуля".to_string();
+                                        ctx.request_repaint();
+                                        return;
+                                    }
                                     let transaction = Transaction {
                                         sender: self.wallet_address.clone(),
-                                        receiver: self.receiver_address.clone(),
+                                        receiver: self.receiver_address.trim().to_string(),
                                         amount,
                                     };
                                     let blockchain = Arc::clone(&self.node.blockchain);
@@ -321,13 +343,15 @@ impl eframe::App for WalletApp {
                                         }
                                     }
 
-                                    // Запускаем майнинг в отдельном потоке
+                                    // Запускаем майнинг асинхронно
                                     self.status = "Запуск майнинга...".to_string();
                                     {
                                         let mut mining_status = mining_status.lock().unwrap();
                                         *mining_status = MiningStatus::Mining;
                                     }
-                                    thread::spawn(move || {
+                                    let blockchain = Arc::clone(&self.node.blockchain);
+                                    let mining_status = Arc::clone(&self.mining_status);
+                                    task::spawn(async move {
                                         let mut blockchain = blockchain.lock().unwrap();
                                         let result = blockchain.mine_block();
                                         let mut mining_status = mining_status.lock().unwrap();
@@ -351,14 +375,12 @@ impl eframe::App for WalletApp {
                 ui.text_edit_singleline(&mut ip);
                 if ui.button("Найти кошелек").clicked() {
                     let ip = ip.trim();
-                    if ip.parse::<IpAddr>().is_ok() {
-                        if let Some(wallet) = self.node.find_wallet_by_ip(ip) {
-                            self.status = format!("Найден кошелек: {}", wallet);
-                        } else {
-                            self.status = format!("Кошелек не найден для IP: {}", ip);
-                        }
+                    if ip.is_empty() {
+                        self.status = "IP-адрес не может быть пустым".to_string();
+                    } else if let Some(wallet) = self.node.find_wallet_by_ip(ip) {
+                        self.status = format!("Найден кошелек: {}", wallet);
                     } else {
-                        self.status = "Некорректный формат IP-адреса".to_string();
+                        self.status = format!("Кошелек не найден для IP: {}", ip);
                     }
                     ctx.request_repaint();
                 }
@@ -443,7 +465,8 @@ mod tests {
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
     let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
     let config_path = exe_dir.join("config.json");

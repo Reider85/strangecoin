@@ -10,7 +10,9 @@ sha2 = "0.10"
 rand = "0.8"
 eframe = "0.22"
 winapi = { version = "0.3.9", features = ["windef", "winuser"] }
-toml = "0.5" # Added for TOML parsing
+toml = "0.5"
+tokio = { version = "1.47.0",features = ["full"] } # Added for TOML parsing
+
 
 [wallet]
 name = "wallet1"
