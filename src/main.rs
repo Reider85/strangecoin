@@ -155,7 +155,7 @@ impl Blockchain {
             }
             block.nonce += 1;
             // Периодически освобождаем поток, чтобы избежать блокировки
-            thread::sleep(Duration::from_millis(1));
+            //thread::sleep(Duration::from_millis(1));
         }
 
         for tx in &block.transactions {

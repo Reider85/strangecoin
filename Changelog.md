@@ -6,3 +6,4 @@
 0.0.6 send fix and ip fix
 0.0.7 fix thread error
 0.0.8 send fix and ip fix
+0.0.9 sleep fix
