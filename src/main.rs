@@ -147,16 +147,28 @@ impl Blockchain {
             nonce: 0,
         };
 
+        let start_time = SystemTime::now();
+        let mut iteration_count = 0;
         loop {
+            iteration_count += 1;
             let hash = self.calculate_hash(&block);
+            println!("Итерация {}, nonce: {}, хэш: {}", iteration_count, block.nonce, hash);
             if hash.starts_with(&"0".repeat(self.difficulty as usize)) {
                 block.hash = hash;
+                println!("Подходящий хэш найден после {} итераций", iteration_count);
                 break;
             }
             block.nonce += 1;
-            // Периодически освобождаем поток, чтобы избежать блокировки
-            //thread::sleep(Duration::from_millis(1));
+            if iteration_count % 100 == 0 {
+                println!("Прогресс майнинга: {} итераций выполнено", iteration_count);
+            }
         }
+
+        let duration = SystemTime::now()
+            .duration_since(start_time)
+            .unwrap()
+            .as_secs_f64();
+        println!("Майнинг завершен за {} секунд, итераций: {}", duration, iteration_count);
 
         for tx in &block.transactions {
             *self.balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
@@ -280,12 +292,15 @@ impl eframe::App for WalletApp {
                 ui.text_edit_singleline(&mut self.wallet_address);
                 ui.text_edit_singleline(&mut self.password);
                 if ui.button("Войти").clicked() {
+                    println!("Кнопка 'Войти' нажата, пароль: {}", self.password);
                     if self.password == "password" {
                         self.is_authenticated = true;
                         self.status = "Успешная аутентификация".to_string();
                         self.node.discover_peers();
+                        println!("Аутентификация успешна, пиры обнаружены");
                     } else {
                         self.status = "Неверный пароль".to_string();
+                        println!("Аутентификация не удалась: неверный пароль");
                     }
                     ctx.request_repaint();
                 }
@@ -322,14 +337,17 @@ impl eframe::App for WalletApp {
                         }
                         MiningStatus::Idle => {
                             if ui.button("Отправить").clicked() {
+                                println!("Кнопка 'Отправить' нажата, получатель: {}, сумма: {}", self.receiver_address, self.amount);
                                 if self.receiver_address.trim().is_empty() {
                                     self.status = "Адрес получателя не может быть пустым".to_string();
+                                    println!("Ошибка: пустой адрес получателя");
                                     ctx.request_repaint();
                                     return;
                                 }
                                 if let Ok(amount) = self.amount.trim().parse::<u64>() {
                                     if amount == 0 {
                                         self.status = "Сумма должна быть больше нуля".to_string();
+                                        println!("Ошибка: сумма равна нулю");
                                         ctx.request_repaint();
                                         return;
                                     }
@@ -346,31 +364,44 @@ impl eframe::App for WalletApp {
                                         let mut blockchain = blockchain.lock().unwrap();
                                         if !blockchain.add_transaction(transaction) {
                                             self.status = "Недостаточно средств или неверный адрес".to_string();
+                                            println!("Ошибка: недостаточно средств или неверный адрес");
                                             ctx.request_repaint();
                                             return;
                                         }
+                                        println!("Транзакция успешно добавлена в pending_transactions");
                                     }
 
                                     // Запускаем майнинг в отдельном потоке
                                     self.status = "Запуск майнинга...".to_string();
+                                    println!("Запуск майнинга в отдельном потоке");
                                     {
                                         let mut mining_status = mining_status.lock().unwrap();
                                         *mining_status = MiningStatus::Mining;
+                                        println!("Статус майнинга установлен: Mining");
                                     }
                                     let blockchain = Arc::clone(&self.node.blockchain);
                                     let mining_status = Arc::clone(&self.mining_status);
                                     thread::spawn(move || {
+                                        println!("Поток майнинга начат");
                                         let mut blockchain = blockchain.lock().unwrap();
                                         let result = blockchain.mine_block();
                                         let mut mining_status = mining_status.lock().unwrap();
                                         *mining_status = match result {
-                                            Some(block) => MiningStatus::Completed(Some(block)),
-                                            None => MiningStatus::Failed("Нет транзакций для майнинга".to_string()),
+                                            Some(block) => {
+                                                println!("Майнинг успешен, блок добавлен");
+                                                MiningStatus::Completed(Some(block))
+                                            }
+                                            None => {
+                                                println!("Майнинг не удался: нет транзакций");
+                                                MiningStatus::Failed("Нет транзакций для майнинга".to_string())
+                                            }
                                         };
+                                        println!("Статус майнинга обновлён: {:?}", *mining_status);
                                     });
                                     ctx.request_repaint();
                                 } else {
                                     self.status = "Неверный формат суммы".to_string();
+                                    println!("Ошибка: неверный формат суммы");
                                     ctx.request_repaint();
                                 }
                             }
@@ -382,13 +413,17 @@ impl eframe::App for WalletApp {
                 let mut ip = String::new();
                 ui.text_edit_singleline(&mut ip);
                 if ui.button("Найти кошелек").clicked() {
+                    println!("Кнопка 'Найти кошелек' нажата, IP: {}", ip);
                     let ip = ip.trim();
                     if ip.is_empty() {
                         self.status = "IP-адрес не может быть пустым".to_string();
+                        println!("Ошибка: пустой IP-адрес");
                     } else if let Some(wallet) = self.node.find_wallet_by_ip(ip) {
                         self.status = format!("Найден кошелек: {}", wallet);
+                        println!("Кошелек найден: {}", wallet);
                     } else {
                         self.status = format!("Кошелек не найден для IP: {}", ip);
+                        println!("Кошелек не найден для IP: {}", ip);
                     }
                     ctx.request_repaint();
                 }
