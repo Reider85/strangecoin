@@ -3,15 +3,14 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream, IpAddr};
 use std::sync::{Arc, Mutex};
-use std::thread; // Добавлен импорт для thread::spawn
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use eframe::egui;
 use std::io::{Read, Write};
 use rand::Rng;
 use std::fs;
 use std::path::PathBuf;
 use serde_json;
-use tokio::task;
 
 // Структура для конфигурации
 #[derive(Deserialize, Serialize)]
@@ -71,6 +70,7 @@ struct WalletApp {
     amount: String,
     status: String,
     mining_status: Arc<Mutex<MiningStatus>>,
+    last_repaint: f64, // Для отслеживания времени последнего обновления
 }
 
 // Статус майнинга
@@ -154,6 +154,8 @@ impl Blockchain {
                 break;
             }
             block.nonce += 1;
+            // Периодически освобождаем поток, чтобы избежать блокировки
+            thread::sleep(Duration::from_millis(1));
         }
 
         for tx in &block.transactions {
@@ -203,9 +205,8 @@ impl Node {
 
     fn find_wallet_by_ip(&self, ip: &str) -> Option<String> {
         let ip = ip.trim();
-        // Проверяем, содержит ли строка порт
         let ip = if !ip.contains(':') {
-            format!("{}:8081", ip) // Добавляем порт по умолчанию, если не указан
+            format!("{}:8081", ip)
         } else {
             ip.to_string()
         };
@@ -266,6 +267,13 @@ impl Node {
 
 impl eframe::App for WalletApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Периодическое обновление UI для предотвращения зависаний
+        let now = ctx.input(|i| i.time);
+        if now - self.last_repaint > 0.1 {
+            ctx.request_repaint();
+            self.last_repaint = now;
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| {
             if !self.is_authenticated {
                 ui.heading("Аутентификация");
@@ -275,7 +283,6 @@ impl eframe::App for WalletApp {
                     if self.password == "password" {
                         self.is_authenticated = true;
                         self.status = "Успешная аутентификация".to_string();
-                        // Вызываем discover_peers после успешной аутентификации
                         self.node.discover_peers();
                     } else {
                         self.status = "Неверный пароль".to_string();
@@ -288,7 +295,7 @@ impl eframe::App for WalletApp {
                 let blockchain = self.node.blockchain.lock().unwrap();
                 let balance = blockchain.balances.get(&self.wallet_address).unwrap_or(&0);
                 ui.label(format!("Баланс: {}", balance));
-                drop(blockchain); // Освобождаем блокировку
+                drop(blockchain);
 
                 ui.heading("Перевод");
                 ui.text_edit_singleline(&mut self.receiver_address);
@@ -344,7 +351,7 @@ impl eframe::App for WalletApp {
                                         }
                                     }
 
-                                    // Запускаем майнинг асинхронно
+                                    // Запускаем майнинг в отдельном потоке
                                     self.status = "Запуск майнинга...".to_string();
                                     {
                                         let mut mining_status = mining_status.lock().unwrap();
@@ -352,7 +359,7 @@ impl eframe::App for WalletApp {
                                     }
                                     let blockchain = Arc::clone(&self.node.blockchain);
                                     let mining_status = Arc::clone(&self.mining_status);
-                                    task::spawn(async move {
+                                    thread::spawn(move || {
                                         let mut blockchain = blockchain.lock().unwrap();
                                         let result = blockchain.mine_block();
                                         let mut mining_status = mining_status.lock().unwrap();
@@ -419,6 +426,7 @@ mod tests {
             amount: String::new(),
             status: String::new(),
             mining_status: Arc::new(Mutex::new(MiningStatus::Idle)),
+            last_repaint: 0.0,
         };
         thread::spawn(move || {
             eframe::run_native(
@@ -447,6 +455,7 @@ mod tests {
             amount: String::new(),
             status: String::new(),
             mining_status: Arc::new(Mutex::new(MiningStatus::Idle)),
+            last_repaint: 0.0,
         };
         thread::spawn(move || {
             eframe::run_native(
@@ -457,7 +466,7 @@ mod tests {
                 .unwrap();
         });
 
-        thread::sleep(std::time::Duration::from_secs(5));
+        thread::sleep(Duration::from_secs(5));
 
         node1.discover_peers();
         node2.discover_peers();
@@ -466,8 +475,7 @@ mod tests {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
     let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
     let config_path = exe_dir.join("config.json");
@@ -491,6 +499,7 @@ async fn main() {
         amount: String::new(),
         status: String::new(),
         mining_status: Arc::new(Mutex::new(MiningStatus::Idle)),
+        last_repaint: 0.0,
     };
 
     eframe::run_native(
