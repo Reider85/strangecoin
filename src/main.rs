@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream, IpAddr};
 use std::sync::{Arc, Mutex};
+use std::thread; // Добавлен импорт для thread::spawn
 use std::time::{SystemTime, UNIX_EPOCH};
 use eframe::egui;
 use std::io::{Read, Write};
