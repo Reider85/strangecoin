@@ -16,3 +16,4 @@
 0.1.6 mining thread run fix
 0.1.7 mining thread run fix
 0.1.8 mining thread run fix
+0.1.9 mining thread run fix

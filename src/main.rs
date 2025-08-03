@@ -153,7 +153,7 @@ impl Blockchain {
         hash
     }
 
-    fn mine_block(&mir self, progress_tx: mpsc::Sender<String>) -> Option<Block> {
+    fn mine_block(&mut self, progress_tx: mpsc::Sender<String>) -> Option<Block> {
         let total_start_time = SystemTime::now();
         println!("Начало майнинга в потоке {:?}", thread::current().id());
         if self.pending_transactions.is_empty() {
@@ -320,10 +320,11 @@ impl Node {
             println!("Фоновый поток майнинга запущен в потоке {:?}", thread::current().id());
             while let Ok(task) = mining_rx.recv() {
                 println!("Получена задача майнинга в потоке {:?}", thread::current().id());
+                let progress_tx_clone = task.progress_tx.clone(); // Клонируем Sender для использования в mine_block
                 let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let mut blockchain = task.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                     if blockchain.add_transaction(task.transaction.clone()) {
-                        blockchain.mine_block(task.progress_tx)
+                        blockchain.mine_block(progress_tx_clone)
                     } else {
                         let _ = task.progress_tx.send("Ошибка: Не удалось добавить транзакцию".to_string());
                         None
@@ -528,7 +529,7 @@ impl eframe::App for WalletApp {
                 // Проверяем статус майнинга с помощью try_lock
                 let mining_status_result = self.mining_status.try_lock();
                 let is_mining = match &mining_status_result {
-                    Ok(mining_status) => matches!(*mining_status, MiningStatus::Mining),
+                    Ok(mining_status) => matches!(**mining_status, MiningStatus::Mining),
                     Err(e) => {
                         println!("Не удалось захватить Mutex для mining_status в UI: {}", e);
                         self.status = format!("Ошибка: Не удалось проверить статус майнинга: {}", e);
