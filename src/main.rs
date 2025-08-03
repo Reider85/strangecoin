@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use eframe::egui;
@@ -70,6 +70,7 @@ struct WalletApp {
     amount: String,
     status: String,
     mining_status: Arc<Mutex<MiningStatus>>,
+    mining_progress: Arc<Mutex<Option<String>>>, // Для отображения прогресса
     last_repaint: f64,
 }
 
@@ -87,7 +88,7 @@ impl Blockchain {
         let mut blockchain = Blockchain {
             chain: vec![],
             balances: HashMap::new(),
-            difficulty: 2, // Увеличена сложность для ускорения тестов
+            difficulty: 2,
             pending_transactions: vec![],
         };
         blockchain.create_genesis_block();
@@ -140,7 +141,7 @@ impl Blockchain {
         hash
     }
 
-    fn mine_block(&mut self) -> Option<Block> {
+    fn mine_block(&mut self, progress_tx: mpsc::Sender<String>) -> Option<Block> {
         let total_start_time = SystemTime::now();
         println!("Начало майнинга...");
         if self.pending_transactions.is_empty() {
@@ -165,17 +166,19 @@ impl Blockchain {
         };
 
         let start_time = SystemTime::now();
-        let max_iterations = 50_000; // Уменьшено для ускорения
-        let timeout = Duration::from_secs(10); // Таймаут 10 секунд
+        let max_iterations = 10_000; // Уменьшено для тестов
+        let timeout = Duration::from_secs(5); // Таймаут 5 секунд
         let mut iteration_count = 0;
 
         loop {
             if iteration_count >= max_iterations {
                 println!("Достигнуто максимальное количество итераций: {}", max_iterations);
+                let _ = progress_tx.send(format!("Достигнуто максимальное количество итераций: {}", max_iterations));
                 return None;
             }
             if SystemTime::now().duration_since(start_time).unwrap() > timeout {
                 println!("Майнинг прерван: превышен таймаут {} секунд", timeout.as_secs());
+                let _ = progress_tx.send(format!("Майнинг прерван: превышен таймаут {} секунд", timeout.as_secs()));
                 return None;
             }
             iteration_count += 1;
@@ -199,6 +202,7 @@ impl Blockchain {
                     "Подходящий хэш найден после {} итераций за {} секунд",
                     iteration_count, duration
                 );
+                let _ = progress_tx.send(format!("Подходящий хэш найден после {} итераций", iteration_count));
                 break;
             }
             block.nonce += 1;
@@ -211,10 +215,11 @@ impl Blockchain {
                     "Прогресс майнинга: {} итераций выполнено за {} секунд",
                     iteration_count, progress_duration
                 );
+                let _ = progress_tx.send(format!("Прогресс майнинга: {} итераций", iteration_count));
             }
         }
 
-        // Обновляем блокчейн после успешного майнинга
+        // Обновляем блокчейн
         let balance_start_time = SystemTime::now();
         for tx in &block.transactions {
             *self.balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
@@ -377,7 +382,7 @@ impl Node {
 impl eframe::App for WalletApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = ctx.input(|i| i.time);
-        if now - self.last_repaint > 0.01 { // Уменьшено для более частого обновления
+        if now - self.last_repaint > 0.01 {
             ctx.request_repaint();
             self.last_repaint = now;
         }
@@ -426,6 +431,11 @@ impl eframe::App for WalletApp {
                     match &*mining_status {
                         MiningStatus::Mining => {
                             ui.label("Майнинг блока в процессе...");
+                            // Проверяем прогресс
+                            let progress = self.mining_progress.lock().unwrap();
+                            if let Some(progress_msg) = &*progress {
+                                ui.label(format!("Прогресс: {}", progress_msg));
+                            }
                             ui.spinner();
                             ctx.request_repaint();
                         }
@@ -474,6 +484,7 @@ impl eframe::App for WalletApp {
                                     };
                                     let blockchain = Arc::clone(&self.node.blockchain);
                                     let mining_status = Arc::clone(&self.mining_status);
+                                    let mining_progress = Arc::clone(&self.mining_progress);
 
                                     {
                                         let mut blockchain = blockchain.lock().unwrap();
@@ -504,12 +515,15 @@ impl eframe::App for WalletApp {
                                         *mining_status = MiningStatus::Mining;
                                         println!("Статус майнинга установлен: Mining");
                                     }
-                                    let blockchain = Arc::clone(&self.node.blockchain);
-                                    let mining_status = Arc::clone(&self.mining_status);
+                                    let (progress_tx, progress_rx) = mpsc::channel();
+                                    {
+                                        let mut mining_progress = mining_progress.lock().unwrap();
+                                        *mining_progress = None;
+                                    }
                                     thread::spawn(move || {
                                         println!("Поток майнинга начат");
                                         let mut blockchain = blockchain.lock().unwrap();
-                                        let result = blockchain.mine_block();
+                                        let result = blockchain.mine_block(progress_tx);
                                         let mut mining_status = mining_status.lock().unwrap();
                                         *mining_status = match result {
                                             Some(block) => {
@@ -522,6 +536,14 @@ impl eframe::App for WalletApp {
                                             }
                                         };
                                         println!("Статус майнинга обновлён: {:?}", *mining_status);
+                                    });
+                                    // Поток для получения прогресса
+                                    let mining_progress = Arc::clone(&self.mining_progress);
+                                    thread::spawn(move || {
+                                        while let Ok(progress) = progress_rx.recv_timeout(Duration::from_millis(100)) {
+                                            let mut mining_progress = mining_progress.lock().unwrap();
+                                            *mining_progress = Some(progress);
+                                        }
                                     });
                                     let duration = SystemTime::now()
                                         .duration_since(start_time)
@@ -608,6 +630,7 @@ mod tests {
             amount: String::new(),
             status: String::new(),
             mining_status: Arc::new(Mutex::new(MiningStatus::Idle)),
+            mining_progress: Arc::new(Mutex::new(None)),
             last_repaint: 0.0,
         };
         thread::spawn(move || {
@@ -637,6 +660,7 @@ mod tests {
             amount: String::new(),
             status: String::new(),
             mining_status: Arc::new(Mutex::new(MiningStatus::Idle)),
+            mining_progress: Arc::new(Mutex::new(None)),
             last_repaint: 0.0,
         };
         thread::spawn(move || {
@@ -681,6 +705,7 @@ fn main() {
         amount: String::new(),
         status: String::new(),
         mining_status: Arc::new(Mutex::new(MiningStatus::Idle)),
+        mining_progress: Arc::new(Mutex::new(None)),
         last_repaint: 0.0,
     };
 
