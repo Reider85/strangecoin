@@ -11,7 +11,7 @@ use rand::Rng;
 use std::fs;
 use std::path::PathBuf;
 use serde_json;
-use uuid::Uuid; // Добавляем зависимость uuid для уникальных ID транзакций
+use uuid::Uuid;
 
 // Структура для конфигурации
 #[derive(Deserialize, Serialize)]
@@ -40,7 +40,7 @@ struct Block {
 // Структура транзакции
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 struct Transaction {
-    id: String, // Добавляем уникальный ID
+    id: String,
     sender: String,
     receiver: String,
     amount: u64,
@@ -138,11 +138,12 @@ impl Blockchain {
     fn calculate_hash(&self, block: &Block) -> String {
         let start_time = SystemTime::now();
         let input = format!(
-            "{}{}{}{}",
+            "{}{}{}{}{}",
             block.index,
             block.timestamp,
             serde_json::to_string(&block.transactions).unwrap(),
-            block.previous_hash
+            block.previous_hash,
+            block.nonce
         );
         let mut hasher = Sha256::new();
         hasher.update(input);
@@ -168,7 +169,7 @@ impl Blockchain {
         let transactions = self.pending_transactions.clone();
         let difficulty = self.difficulty;
 
-        let block = Self::mine_block_inner(previous_block, transactions, difficulty, progress_tx.clone());
+        let block = self.mine_block_inner(previous_block, transactions, difficulty, progress_tx.clone());
 
         if let Some(mut block) = block {
             let balance_start_time = SystemTime::now();
@@ -203,6 +204,7 @@ impl Blockchain {
     }
 
     fn mine_block_inner(
+        &self,
         previous_block: Block,
         transactions: Vec<Transaction>,
         difficulty: u32,
@@ -222,8 +224,8 @@ impl Blockchain {
             nonce: 0,
         };
 
-        let max_iterations = 50; // Уменьшено для быстрого тестирования
-        let timeout = Duration::from_secs_f32(0.5); // Уменьшено для тестирования
+        let max_iterations = 50;
+        let timeout = Duration::from_secs_f32(0.5);
         let mut iteration_count = 0;
         let mut total_hash_time = 0.0;
 
@@ -248,16 +250,7 @@ impl Blockchain {
             }
             iteration_count += 1;
             let hash_start_time = SystemTime::now();
-            let input = format!(
-                "{}{}{}{}",
-                block.index,
-                block.timestamp,
-                serde_json::to_string(&block.transactions).unwrap(),
-                block.previous_hash
-            );
-            let mut hasher = Sha256::new();
-            hasher.update(input);
-            let hash = format!("{:x}", hasher.finalize());
+            let hash = self.calculate_hash(&block);
             let hash_duration = SystemTime::now()
                 .duration_since(hash_start_time)
                 .unwrap()
@@ -317,7 +310,7 @@ impl Blockchain {
                 .unwrap()
                 .as_secs_f64();
             println!("Транзакция уже существует в pending_transactions, проверка заняла {} секунд", duration);
-            return false; // Позволяем продолжить майнинг существующих транзакций
+            return false;
         }
         if let Some(sender_balance) = self.balances.get(&transaction.sender) {
             println!("Баланс отправителя {}: {}", transaction.sender, sender_balance);
@@ -677,7 +670,7 @@ impl eframe::App for WalletApp {
                             return;
                         }
                         let transaction = Transaction {
-                            id: Uuid::new_v4().to_string(), // Генерируем уникальный ID
+                            id: Uuid::new_v4().to_string(),
                             sender: self.wallet_address.clone(),
                             receiver: self.receiver_address.trim().to_string(),
                             amount,
