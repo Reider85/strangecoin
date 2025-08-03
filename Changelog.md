@@ -28,3 +28,4 @@
 0.2.8 mining ui fix
 0.2.9 sync blockchain
 0.3.0 sync blockchain
+0.3.1 sync blockchain

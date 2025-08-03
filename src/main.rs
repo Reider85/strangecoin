@@ -12,6 +12,7 @@ use std::fs;
 use std::path::PathBuf;
 use serde_json;
 use uuid::Uuid;
+use std::net::SocketAddr;
 
 // Структура для конфигурации
 #[derive(Deserialize, Serialize)]
@@ -420,7 +421,7 @@ impl Node {
                                 println!("Майнинг {} успешен, блок добавлен", mining_count);
                                 let _ = status_tx_clone.send(format!("Транзакция отправлена, блок добавлен: {:?}", block));
                                 // Рассылаем обновлённый блокчейн другим узлам
-                                let node_temp = Node {
+                                let mut node_temp = Node {
                                     blockchain: task.blockchain.clone(),
                                     peers: peers.clone(),
                                     address: address.clone(),
@@ -530,7 +531,7 @@ impl Node {
             for stream in listener.incoming() {
                 match stream {
                     Ok(mut stream) => {
-                        let mut buffer = [0; 1024];
+                        let mut buffer = [0; 4096]; // Увеличенный буфер
                         match stream.read(&mut buffer) {
                             Ok(_) => {
                                 let request = String::from_utf8_lossy(&buffer[..]).to_string();
@@ -573,13 +574,17 @@ impl Node {
         println!("Сервер запущен на порту {} за {} секунд", port, duration);
     }
 
-    fn sync_blockchain(&self, sync_tx: mpsc::Sender<Blockchain>) {
+    fn sync_blockchain(&mut self, sync_tx: mpsc::Sender<Blockchain>) {
         let start_time = SystemTime::now();
+        // Обновляем список пиров
+        self.discover_peers();
         // Захватываем и клонируем список пиров
         let peers: Vec<String> = self.peers.lock().expect("Не удалось захватить Mutex для peers")
             .iter()
             .cloned()
             .collect();
+        println!("Список пиров для синхронизации: {:?}", peers);
+
         // Захватываем текущий хэш и длину цепочки
         let blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
         let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
@@ -587,8 +592,15 @@ impl Node {
         drop(blockchain); // Освобождаем блокировку blockchain
 
         for peer in peers.iter() {
+            let addr: SocketAddr = match peer.parse() {
+                Ok(addr) => addr,
+                Err(e) => {
+                    println!("Некорректный адрес пира {}: {}", peer, e);
+                    continue;
+                }
+            };
             // Отправка текущего блокчейна
-            match TcpStream::connect(peer) {
+            match TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
                 Ok(mut stream) => {
                     let blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                     let response = serde_json::to_string(&*blockchain).unwrap();
@@ -597,14 +609,14 @@ impl Node {
                         Err(e) => println!("Ошибка отправки блокчейна узлу {}: {}", peer, e),
                     }
                 }
-                Err(e) => println!("Ошибка соединения с узлом {}: {}", peer, e),
+                Err(e) => println!("Узел {} недоступен: {}", peer, e),
             }
             // Запрос блокчейна у других узлов
-            match TcpStream::connect(peer) {
+            match TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
                 Ok(mut stream) => {
                     match stream.write_all(b"GET_BLOCKCHAIN") {
                         Ok(_) => {
-                            let mut buffer = [0; 1024];
+                            let mut buffer = [0; 4096]; // Увеличенный буфер
                             match stream.read(&mut buffer) {
                                 Ok(_) => {
                                     let response = String::from_utf8_lossy(&buffer[..]).to_string();
@@ -629,7 +641,7 @@ impl Node {
                         Err(e) => println!("Ошибка отправки GET_BLOCKCHAIN узлу {}: {}", peer, e),
                     }
                 }
-                Err(e) => println!("Ошибка соединения с узлом {}: {}", peer, e),
+                Err(e) => println!("Узел {} недоступен: {}", peer, e),
             }
         }
         let duration = SystemTime::now()
@@ -910,7 +922,7 @@ fn main() {
     node.discover_peers();
 
     // Запуск фонового потока синхронизации
-    let node_clone = Node {
+    let mut node_clone = Node {
         blockchain: Arc::clone(&node.blockchain),
         peers: Arc::clone(&node.peers),
         address: node.address.clone(),
