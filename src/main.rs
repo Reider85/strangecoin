@@ -70,7 +70,7 @@ struct WalletApp {
     amount: String,
     status: String,
     mining_status: Arc<Mutex<MiningStatus>>,
-    last_repaint: f64, // Для отслеживания времени последнего обновления
+    last_repaint: f64,
 }
 
 // Статус майнинга
@@ -87,7 +87,7 @@ impl Blockchain {
         let mut blockchain = Blockchain {
             chain: vec![],
             balances: HashMap::new(),
-            difficulty: 1, // Низкая сложность для быстрого майнинга
+            difficulty: 1,
             pending_transactions: vec![],
         };
         blockchain.create_genesis_block();
@@ -95,6 +95,7 @@ impl Blockchain {
     }
 
     fn create_genesis_block(&mut self) {
+        let start_time = SystemTime::now();
         let genesis_block = Block {
             index: 0,
             timestamp: SystemTime::now()
@@ -112,9 +113,15 @@ impl Blockchain {
         self.chain.push(genesis_block);
         self.balances.insert("wallet1".to_string(), 1000);
         self.balances.insert("wallet2".to_string(), 1000);
+        let duration = SystemTime::now()
+            .duration_since(start_time)
+            .unwrap()
+            .as_secs_f64();
+        println!("Создание генезис-блока завершено за {} секунд", duration);
     }
 
     fn calculate_hash(&self, block: &Block) -> String {
+        let start_time = SystemTime::now();
         let input = format!(
             "{}{}{}{}",
             block.index,
@@ -124,10 +131,17 @@ impl Blockchain {
         );
         let mut hasher = Sha256::new();
         hasher.update(input);
-        format!("{:x}", hasher.finalize())
+        let hash = format!("{:x}", hasher.finalize());
+        let duration = SystemTime::now()
+            .duration_since(start_time)
+            .unwrap()
+            .as_secs_f64();
+        println!("Вычисление хэша завершено за {} секунд", duration);
+        hash
     }
 
     fn mine_block(&mut self) -> Option<Block> {
+        let total_start_time = SystemTime::now();
         println!("Начало майнинга...");
         if self.pending_transactions.is_empty() {
             println!("Нет транзакций для майнинга");
@@ -149,39 +163,71 @@ impl Blockchain {
 
         let start_time = SystemTime::now();
         let mut iteration_count = 0;
+        let max_iterations = 100_000; // Ограничение на количество итераций
         loop {
+            if iteration_count >= max_iterations {
+                println!("Достигнуто максимальное количество итераций: {}", max_iterations);
+                return None;
+            }
             iteration_count += 1;
+            let hash_start_time = SystemTime::now();
             let hash = self.calculate_hash(&block);
-            println!("Итерация {}, nonce: {}, хэш: {}", iteration_count, block.nonce, hash);
+            let hash_duration = SystemTime::now()
+                .duration_since(hash_start_time)
+                .unwrap()
+                .as_secs_f64();
+            println!(
+                "Итерация {}, nonce: {}, хэш: {}, время вычисления хэша: {} секунд",
+                iteration_count, block.nonce, hash, hash_duration
+            );
             if hash.starts_with(&"0".repeat(self.difficulty as usize)) {
                 block.hash = hash;
-                println!("Подходящий хэш найден после {} итераций", iteration_count);
+                let duration = SystemTime::now()
+                    .duration_since(start_time)
+                    .unwrap()
+                    .as_secs_f64();
+                println!(
+                    "Подходящий хэш найден после {} итераций за {} секунд",
+                    iteration_count, duration
+                );
                 break;
             }
             block.nonce += 1;
             if iteration_count % 100 == 0 {
-                println!("Прогресс майнинга: {} итераций выполнено", iteration_count);
+                let progress_duration = SystemTime::now()
+                    .duration_since(start_time)
+                    .unwrap()
+                    .as_secs_f64();
+                println!(
+                    "Прогресс майнинга: {} итераций выполнено за {} секунд",
+                    iteration_count, progress_duration
+                );
             }
         }
 
-        let duration = SystemTime::now()
-            .duration_since(start_time)
-            .unwrap()
-            .as_secs_f64();
-        println!("Майнинг завершен за {} секунд, итераций: {}", duration, iteration_count);
-
+        let balance_start_time = SystemTime::now();
         for tx in &block.transactions {
             *self.balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
             *self.balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
         }
+        let balance_duration = SystemTime::now()
+            .duration_since(balance_start_time)
+            .unwrap()
+            .as_secs_f64();
+        println!("Обновление балансов завершено за {} секунд", balance_duration);
 
         self.pending_transactions.clear();
         self.chain.push(block.clone());
-        println!("Майнинг завершен: {:?}", block);
+        let total_duration = SystemTime::now()
+            .duration_since(total_start_time)
+            .unwrap()
+            .as_secs_f64();
+        println!("Майнинг завершен за {} секунд, итераций: {}", total_duration, iteration_count);
         Some(block)
     }
 
     fn add_transaction(&mut self, transaction: Transaction) -> bool {
+        let start_time = SystemTime::now();
         if transaction.sender.is_empty() || transaction.receiver.is_empty() {
             println!("Ошибка: Пустой адрес отправителя или получателя");
             return false;
@@ -189,11 +235,22 @@ impl Blockchain {
         if let Some(sender_balance) = self.balances.get(&transaction.sender) {
             if *sender_balance >= transaction.amount {
                 self.pending_transactions.push(transaction);
-                println!("Транзакция добавлена: {:?}", self.pending_transactions);
+                let duration = SystemTime::now()
+                    .duration_since(start_time)
+                    .unwrap()
+                    .as_secs_f64();
+                println!("Транзакция добавлена за {} секунд: {:?}", duration, self.pending_transactions);
                 return true;
             }
         }
-        println!("Ошибка: Недостаточно средств или неверный адрес");
+        let duration = SystemTime::now()
+            .duration_since(start_time)
+            .unwrap()
+            .as_secs_f64();
+        println!(
+            "Ошибка: Недостаточно средств или неверный адрес, проверка заняла {} секунд",
+            duration
+        );
         false
     }
 }
@@ -208,14 +265,20 @@ impl Node {
     }
 
     fn discover_peers(&mut self) {
+        let start_time = SystemTime::now();
         let mut peers = self.peers.lock().unwrap();
-        peers.clear(); // Очищаем, чтобы избежать дубликатов
+        peers.clear();
         peers.push("127.0.0.1:8081".to_string());
         peers.push("127.0.0.1:8082".to_string());
-        println!("Обнаружены пиры: {:?}", *peers);
+        let duration = SystemTime::now()
+            .duration_since(start_time)
+            .unwrap()
+            .as_secs_f64();
+        println!("Обнаружение пиров завершено за {} секунд: {:?}", duration, *peers);
     }
 
     fn find_wallet_by_ip(&self, ip: &str) -> Option<String> {
+        let start_time = SystemTime::now();
         let ip = ip.trim();
         let ip = if !ip.contains(':') {
             format!("{}:8081", ip)
@@ -223,22 +286,35 @@ impl Node {
             ip.to_string()
         };
         if ip.parse::<std::net::SocketAddr>().is_err() {
-            println!("Некорректный формат IP: {}", ip);
+            let duration = SystemTime::now()
+                .duration_since(start_time)
+                .unwrap()
+                .as_secs_f64();
+            println!("Некорректный формат IP: {}, проверка заняла {} секунд", ip, duration);
             return None;
         }
         let peers = self.peers.lock().unwrap();
         println!("Список пиров: {:?}", *peers);
         if peers.contains(&ip) {
             let wallet = format!("wallet{}", rand::thread_rng().gen_range(1..3));
-            println!("Найден кошелек: {}", wallet);
+            let duration = SystemTime::now()
+                .duration_since(start_time)
+                .unwrap()
+                .as_secs_f64();
+            println!("Найден кошелек: {}, поиск занял {} секунд", wallet, duration);
             Some(wallet)
         } else {
-            println!("IP {} не найден в списке пиров", ip);
+            let duration = SystemTime::now()
+                .duration_since(start_time)
+                .unwrap()
+                .as_secs_f64();
+            println!("IP {} не найден в списке пиров, поиск занял {} секунд", ip, duration);
             None
         }
     }
 
     fn start_server(&self, port: u16) {
+        let start_time = SystemTime::now();
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
         let blockchain = Arc::clone(&self.blockchain);
 
@@ -256,9 +332,15 @@ impl Node {
                 }
             }
         });
+        let duration = SystemTime::now()
+            .duration_since(start_time)
+            .unwrap()
+            .as_secs_f64();
+        println!("Сервер запущен на порту {} за {} секунд", port, duration);
     }
 
     fn sync_blockchain(&self) {
+        let start_time = SystemTime::now();
         let peers = self.peers.lock().unwrap();
         for peer in peers.iter() {
             if let Ok(mut stream) = TcpStream::connect(peer) {
@@ -274,14 +356,18 @@ impl Node {
                 }
             }
         }
+        let duration = SystemTime::now()
+            .duration_since(start_time)
+            .unwrap()
+            .as_secs_f64();
+        println!("Синхронизация блокчейна завершена за {} секунд", duration);
     }
 }
 
 impl eframe::App for WalletApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Периодическое обновление UI для предотвращения зависаний
         let now = ctx.input(|i| i.time);
-        if now - self.last_repaint > 0.1 {
+        if now - self.last_repaint > 0.05 {
             ctx.request_repaint();
             self.last_repaint = now;
         }
@@ -292,15 +378,24 @@ impl eframe::App for WalletApp {
                 ui.text_edit_singleline(&mut self.wallet_address);
                 ui.text_edit_singleline(&mut self.password);
                 if ui.button("Войти").clicked() {
+                    let start_time = SystemTime::now();
                     println!("Кнопка 'Войти' нажата, пароль: {}", self.password);
                     if self.password == "password" {
                         self.is_authenticated = true;
                         self.status = "Успешная аутентификация".to_string();
                         self.node.discover_peers();
-                        println!("Аутентификация успешна, пиры обнаружены");
+                        let duration = SystemTime::now()
+                            .duration_since(start_time)
+                            .unwrap()
+                            .as_secs_f64();
+                        println!("Аутентификация успешна за {} секунд", duration);
                     } else {
                         self.status = "Неверный пароль".to_string();
-                        println!("Аутентификация не удалась: неверный пароль");
+                        let duration = SystemTime::now()
+                            .duration_since(start_time)
+                            .unwrap()
+                            .as_secs_f64();
+                        println!("Аутентификация не удалась за {} секунд: неверный пароль", duration);
                     }
                     ctx.request_repaint();
                 }
@@ -316,7 +411,6 @@ impl eframe::App for WalletApp {
                 ui.text_edit_singleline(&mut self.receiver_address);
                 ui.text_edit_singleline(&mut self.amount);
 
-                // Проверяем статус майнинга
                 {
                     let mut mining_status = self.mining_status.lock().unwrap();
                     match &*mining_status {
@@ -337,17 +431,29 @@ impl eframe::App for WalletApp {
                         }
                         MiningStatus::Idle => {
                             if ui.button("Отправить").clicked() {
-                                println!("Кнопка 'Отправить' нажата, получатель: {}, сумма: {}", self.receiver_address, self.amount);
+                                let start_time = SystemTime::now();
+                                println!(
+                                    "Кнопка 'Отправить' нажата, получатель: {}, сумма: {}",
+                                    self.receiver_address, self.amount
+                                );
                                 if self.receiver_address.trim().is_empty() {
                                     self.status = "Адрес получателя не может быть пустым".to_string();
-                                    println!("Ошибка: пустой адрес получателя");
+                                    let duration = SystemTime::now()
+                                        .duration_since(start_time)
+                                        .unwrap()
+                                        .as_secs_f64();
+                                    println!("Ошибка: пустой адрес получателя, проверка заняла {} секунд", duration);
                                     ctx.request_repaint();
                                     return;
                                 }
                                 if let Ok(amount) = self.amount.trim().parse::<u64>() {
                                     if amount == 0 {
                                         self.status = "Сумма должна быть больше нуля".to_string();
-                                        println!("Ошибка: сумма равна нулю");
+                                        let duration = SystemTime::now()
+                                            .duration_since(start_time)
+                                            .unwrap()
+                                            .as_secs_f64();
+                                        println!("Ошибка: сумма равна нулю, проверка заняла {} секунд", duration);
                                         ctx.request_repaint();
                                         return;
                                     }
@@ -359,19 +465,28 @@ impl eframe::App for WalletApp {
                                     let blockchain = Arc::clone(&self.node.blockchain);
                                     let mining_status = Arc::clone(&self.mining_status);
 
-                                    // Проверяем возможность добавления транзакции
                                     {
                                         let mut blockchain = blockchain.lock().unwrap();
                                         if !blockchain.add_transaction(transaction) {
                                             self.status = "Недостаточно средств или неверный адрес".to_string();
-                                            println!("Ошибка: недостаточно средств или неверный адрес");
+                                            let duration = SystemTime::now()
+                                                .duration_since(start_time)
+                                                .unwrap()
+                                                .as_secs_f64();
+                                            println!(
+                                                "Ошибка: недостаточно средств или неверный адрес, проверка заняла {} секунд",
+                                                duration
+                                            );
                                             ctx.request_repaint();
                                             return;
                                         }
-                                        println!("Транзакция успешно добавлена в pending_transactions");
+                                        let duration = SystemTime::now()
+                                            .duration_since(start_time)
+                                            .unwrap()
+                                            .as_secs_f64();
+                                        println!("Транзакция успешно добавлена за {} секунд", duration);
                                     }
 
-                                    // Запускаем майнинг в отдельном потоке
                                     self.status = "Запуск майнинга...".to_string();
                                     println!("Запуск майнинга в отдельном потоке");
                                     {
@@ -392,16 +507,25 @@ impl eframe::App for WalletApp {
                                                 MiningStatus::Completed(Some(block))
                                             }
                                             None => {
-                                                println!("Майнинг не удался: нет транзакций");
-                                                MiningStatus::Failed("Нет транзакций для майнинга".to_string())
+                                                println!("Майнинг не удался: нет транзакций или превышен лимит итераций");
+                                                MiningStatus::Failed("Майнинг не удался: нет транзакций или превышен лимит итераций".to_string())
                                             }
                                         };
                                         println!("Статус майнинга обновлён: {:?}", *mining_status);
                                     });
+                                    let duration = SystemTime::now()
+                                        .duration_since(start_time)
+                                        .unwrap()
+                                        .as_secs_f64();
+                                    println!("Запуск майнинга завершен за {} секунд", duration);
                                     ctx.request_repaint();
                                 } else {
                                     self.status = "Неверный формат суммы".to_string();
-                                    println!("Ошибка: неверный формат суммы");
+                                    let duration = SystemTime::now()
+                                        .duration_since(start_time)
+                                        .unwrap()
+                                        .as_secs_f64();
+                                    println!("Ошибка: неверный формат суммы, проверка заняла {} секунд", duration);
                                     ctx.request_repaint();
                                 }
                             }
@@ -413,17 +537,30 @@ impl eframe::App for WalletApp {
                 let mut ip = String::new();
                 ui.text_edit_singleline(&mut ip);
                 if ui.button("Найти кошелек").clicked() {
+                    let start_time = SystemTime::now();
                     println!("Кнопка 'Найти кошелек' нажата, IP: {}", ip);
                     let ip = ip.trim();
                     if ip.is_empty() {
                         self.status = "IP-адрес не может быть пустым".to_string();
-                        println!("Ошибка: пустой IP-адрес");
+                        let duration = SystemTime::now()
+                            .duration_since(start_time)
+                            .unwrap()
+                            .as_secs_f64();
+                        println!("Ошибка: пустой IP-адрес, проверка заняла {} секунд", duration);
                     } else if let Some(wallet) = self.node.find_wallet_by_ip(ip) {
                         self.status = format!("Найден кошелек: {}", wallet);
-                        println!("Кошелек найден: {}", wallet);
+                        let duration = SystemTime::now()
+                            .duration_since(start_time)
+                            .unwrap()
+                            .as_secs_f64();
+                        println!("Кошелек найден: {}, поиск занял {} секунд", wallet, duration);
                     } else {
                         self.status = format!("Кошелек не найден для IP: {}", ip);
-                        println!("Кошелек не найден для IP: {}", ip);
+                        let duration = SystemTime::now()
+                            .duration_since(start_time)
+                            .unwrap()
+                            .as_secs_f64();
+                        println!("Кошелек не найден для IP: {}, поиск занял {} секунд", ip, duration);
                     }
                     ctx.request_repaint();
                 }
