@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex, mpsc};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use eframe::egui;
 use std::io::{Read, Write};
@@ -53,6 +53,15 @@ struct Blockchain {
     pending_transactions: Vec<Transaction>,
 }
 
+// Структура для команды майнинга
+#[derive(Clone)]
+struct MiningTask {
+    blockchain: Arc<Mutex<Blockchain>>,
+    transaction: Transaction,
+    mining_status: Arc<Mutex<MiningStatus>>,
+    progress_tx: mpsc::Sender<String>,
+}
+
 // Структура узла
 struct Node {
     blockchain: Arc<Mutex<Blockchain>>,
@@ -71,7 +80,9 @@ struct WalletApp {
     status: String,
     mining_status: Arc<Mutex<MiningStatus>>,
     mining_progress: Arc<Mutex<Option<String>>>,
-    progress_rx: Option<mpsc::Receiver<String>>, // Храним Receiver для проверки прогресса в update
+    progress_rx: Option<mpsc::Receiver<String>>,
+    mining_tx: mpsc::Sender<MiningTask>,
+    mining_thread: Option<JoinHandle<()>>,
     last_repaint: f64,
 }
 
@@ -297,17 +308,54 @@ impl Blockchain {
 }
 
 impl Node {
-    fn new(address: String) -> Self {
-        Node {
-            blockchain: Arc::new(Mutex::new(Blockchain::new())),
+    fn new(address: String, mining_rx: mpsc::Receiver<MiningTask>) -> Self {
+        let blockchain = Arc::new(Mutex::new(Blockchain::new()));
+        let node = Node {
+            blockchain: blockchain.clone(),
             peers: Arc::new(Mutex::new(vec![])),
             address,
-        }
+        };
+        // Запускаем фоновый поток для обработки задач майнинга
+        thread::spawn(move || {
+            println!("Фоновый поток майнинга запущен в потоке {:?}", thread::current().id());
+            while let Ok(task) = mining_rx.recv() {
+                println!("Получена задача майнинга в потоке {:?}", thread::current().id());
+                let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut blockchain = task.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                    blockchain.mine_block(task.progress_tx)
+                })) {
+                    Ok(result) => result,
+                    Err(panic) => {
+                        let err_msg = match panic.downcast_ref::<&str>() {
+                            Some(s) => s.to_string(),
+                            None => format!("Неизвестная паника: {:?}", panic),
+                        };
+                        println!("Паника в потоке майнинга: {}", err_msg);
+                        None
+                    }
+                };
+                println!("Майнинг завершен с результатом: {:?}", result);
+                let mut mining_status = task.mining_status.lock().expect("Не удалось захватить Mutex для mining_status");
+                *mining_status = match result {
+                    Some(block) => {
+                        println!("Майнинг успешен, блок добавлен");
+                        MiningStatus::Completed(Some(block))
+                    }
+                    None => {
+                        println!("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут");
+                        MiningStatus::Failed("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут".to_string())
+                    }
+                };
+                println!("Статус майнинга обновлён: {:?}", *mining_status);
+            }
+            println!("Фоновый поток майнинга завершен");
+        });
+        node
     }
 
     fn discover_peers(&mut self) {
         let start_time = SystemTime::now();
-        let mut peers = self.peers.lock().unwrap();
+        let mut peers = self.peers.lock().expect("Не удалось захватить Mutex для peers");
         peers.clear();
         peers.push("127.0.0.1:8081".to_string());
         peers.push("127.0.0.1:8082".to_string());
@@ -334,7 +382,7 @@ impl Node {
             println!("Некорректный формат IP: {}, проверка заняла {} секунд", ip, duration);
             return None;
         }
-        let peers = self.peers.lock().unwrap();
+        let peers = self.peers.lock().expect("Не удалось захватить Mutex для peers");
         println!("Список пиров: {:?}", *peers);
         if peers.contains(&ip) {
             let wallet = format!("wallet{}", rand::thread_rng().gen_range(1..3));
@@ -367,7 +415,7 @@ impl Node {
                 let request = String::from_utf8_lossy(&buffer[..]).to_string();
 
                 if request.contains("GET_BLOCKCHAIN") {
-                    let blockchain = blockchain.lock().unwrap();
+                    let blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                     let response = serde_json::to_string(&*blockchain).unwrap();
                     stream.write_all(response.as_bytes()).unwrap();
                 }
@@ -382,7 +430,7 @@ impl Node {
 
     fn sync_blockchain(&self) {
         let start_time = SystemTime::now();
-        let peers = self.peers.lock().unwrap();
+        let peers = self.peers.lock().expect("Не удалось захватить Mutex для peers");
         for peer in peers.iter() {
             if let Ok(mut stream) = TcpStream::connect(peer) {
                 stream.write_all(b"GET_BLOCKCHAIN").unwrap();
@@ -390,7 +438,7 @@ impl Node {
                 stream.read(&mut buffer).unwrap();
                 let response = String::from_utf8_lossy(&buffer[..]).to_string();
                 if let Ok(received_blockchain) = serde_json::from_str::<Blockchain>(&response) {
-                    let mut blockchain = self.blockchain.lock().unwrap();
+                    let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                     if received_blockchain.chain.len() > blockchain.chain.len() {
                         *blockchain = received_blockchain;
                     }
@@ -407,7 +455,7 @@ impl Node {
 
 impl eframe::App for WalletApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        println!("UI обновляется"); // Диагностика
+        println!("UI обновляется в потоке {:?}", thread::current().id());
         let now = ctx.input(|i| i.time);
         if now - self.last_repaint > 0.01 {
             ctx.request_repaint();
@@ -445,9 +493,9 @@ impl eframe::App for WalletApp {
                 ui.heading("Кошелек");
                 ui.label(format!("Адрес: {}", self.wallet_address));
                 let balance = {
-                    let blockchain = self.node.blockchain.lock().unwrap();
+                    let blockchain = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                     *blockchain.balances.get(&self.wallet_address).unwrap_or(&0)
-                }; // Быстро захватываем и освобождаем Mutex
+                };
                 ui.label(format!("Баланс: {}", balance));
 
                 ui.heading("Перевод");
@@ -457,17 +505,17 @@ impl eframe::App for WalletApp {
                 // Проверяем прогресс майнинга без блокировки
                 if let Some(ref progress_rx) = self.progress_rx {
                     while let Ok(progress) = progress_rx.try_recv() {
-                        let mut mining_progress = self.mining_progress.lock().unwrap();
+                        let mut mining_progress = self.mining_progress.lock().expect("Не удалось захватить Mutex для mining_progress");
                         *mining_progress = Some(progress);
                         println!("Прогресс майнинга обновлен в UI: {:?}", *mining_progress);
                     }
                 }
 
-                let mining_status = self.mining_status.lock().unwrap();
+                let mining_status = self.mining_status.lock().expect("Не удалось захватить Mutex для mining_status");
                 match &*mining_status {
                     MiningStatus::Mining => {
                         ui.label("Майнинг блока в процессе...");
-                        let progress = self.mining_progress.lock().unwrap();
+                        let progress = self.mining_progress.lock().expect("Не удалось захватить Mutex для mining_progress");
                         if let Some(progress_msg) = &*progress {
                             ui.label(format!("Прогресс: {}", progress_msg));
                         }
@@ -476,16 +524,16 @@ impl eframe::App for WalletApp {
                     }
                     MiningStatus::Completed(block) => {
                         self.status = format!("Транзакция отправлена, блок добавлен: {:?}", block);
-                        let mut mining_status = self.mining_status.lock().unwrap();
+                        let mut mining_status = self.mining_status.lock().expect("Не удалось захватить Mutex для mining_status");
                         *mining_status = MiningStatus::Idle;
-                        self.progress_rx = None; // Очищаем канал
+                        self.progress_rx = None;
                         ctx.request_repaint();
                     }
                     MiningStatus::Failed(err) => {
                         self.status = err.clone();
-                        let mut mining_status = self.mining_status.lock().unwrap();
+                        let mut mining_status = self.mining_status.lock().expect("Не удалось захватить Mutex для mining_status");
                         *mining_status = MiningStatus::Idle;
-                        self.progress_rx = None; // Очищаем канал
+                        self.progress_rx = None;
                         ctx.request_repaint();
                     }
                     MiningStatus::Idle => {
@@ -525,70 +573,60 @@ impl eframe::App for WalletApp {
                                 let mining_status = Arc::clone(&self.mining_status);
                                 let mining_progress = Arc::clone(&self.mining_progress);
 
-                                // Клонируем blockchain для передачи в поток
-                                let mut blockchain_data = {
-                                    let blockchain = blockchain.lock().unwrap();
-                                    blockchain.clone()
-                                };
-                                println!("Транзакция для добавления: {:?}", transaction);
-                                if !blockchain_data.add_transaction(transaction) {
-                                    self.status = "Недостаточно средств или неверный адрес".to_string();
+                                // Добавляем транзакцию в blockchain
+                                {
+                                    let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                                    println!("Транзакция для добавления: {:?}", transaction);
+                                    if !blockchain.add_transaction(transaction.clone()) {
+                                        self.status = "Недостаточно средств или неверный адрес".to_string();
+                                        let duration = SystemTime::now()
+                                            .duration_since(start_time)
+                                            .unwrap()
+                                            .as_secs_f64();
+                                        println!(
+                                            "Ошибка: недостаточно средств или неверный адрес, проверка заняла {} секунд",
+                                            duration
+                                        );
+                                        ctx.request_repaint();
+                                        return;
+                                    }
                                     let duration = SystemTime::now()
                                         .duration_since(start_time)
                                         .unwrap()
                                         .as_secs_f64();
-                                    println!(
-                                        "Ошибка: недостаточно средств или неверный адрес, проверка заняла {} секунд",
-                                        duration
-                                    );
-                                    ctx.request_repaint();
-                                    return;
+                                    println!("Транзакция успешно добавлена за {} секунд", duration);
                                 }
-                                let duration = SystemTime::now()
-                                    .duration_since(start_time)
-                                    .unwrap()
-                                    .as_secs_f64();
-                                println!("Транзакция успешно добавлена за {} секунд", duration);
 
                                 self.status = "Запуск майнинга...".to_string();
-                                println!("Запуск майнинга в отдельном потоке");
+                                println!("Подготовка к отправке задачи майнинга в потоке {:?}", thread::current().id());
+                                let (progress_tx, progress_rx) = mpsc::channel();
                                 {
-                                    let mut mining_status = self.mining_status.lock().unwrap();
+                                    let mut mining_progress = self.mining_progress.lock().expect("Не удалось захватить Mutex для mining_progress");
+                                    *mining_progress = None;
+                                    self.progress_rx = Some(progress_rx);
+                                }
+                                println!("Канал прогресса создан");
+                                {
+                                    let mut mining_status = self.mining_status.lock().expect("Не удалось захватить Mutex для mining_status");
                                     *mining_status = MiningStatus::Mining;
                                     println!("Статус майнинга установлен: Mining");
                                 }
-                                let (progress_tx, progress_rx) = mpsc::channel();
-                                {
-                                    let mut mining_progress = self.mining_progress.lock().unwrap();
-                                    *mining_progress = None;
-                                    self.progress_rx = Some(progress_rx); // Сохраняем Receiver
+                                println!("Отправка задачи майнинга");
+                                if let Err(e) = self.mining_tx.send(MiningTask {
+                                    blockchain,
+                                    transaction,
+                                    mining_status,
+                                    progress_tx,
+                                }) {
+                                    self.status = format!("Ошибка отправки задачи майнинга: {}", e);
+                                    println!("Ошибка отправки задачи майнинга: {}", e);
+                                    let mut mining_status = self.mining_status.lock().expect("Не удалось захватить Mutex для mining_status");
+                                    *mining_status = MiningStatus::Idle;
+                                    self.progress_rx = None;
+                                    ctx.request_repaint();
+                                    return;
                                 }
-                                println!("Перед созданием потока майнинга");
-                                thread::spawn(move || {
-                                    println!("Поток майнинга начат");
-                                    let result = blockchain_data.mine_block(progress_tx);
-                                    println!("Майнинг завершен с результатом: {:?}", result);
-                                    let mut blockchain = blockchain.lock().unwrap();
-                                    let mut mining_status = mining_status.lock().unwrap();
-                                    *mining_status = match result {
-                                        Some(block) => {
-                                            // Обновляем оригинальный blockchain
-                                            for tx in &block.transactions {
-                                                *blockchain.balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
-                                                *blockchain.balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
-                                            }
-                                            blockchain.pending_transactions.clear();
-                                            blockchain.chain.push(block.clone());
-                                            println!("Майнинг успешен, блок добавлен");
-                                            MiningStatus::Completed(Some(block))
-                                        }
-                                        None => {
-                                            println!("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут");
-                                            MiningStatus::Failed("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут".to_string())
-                                        }
-                                    };
-                                    println!("Статус майнинга обновлён: {:?}", *mining_status);
-                                });
+                                println!("Задача майнинга отправлена");
                                 let duration = SystemTime::now()
                                     .duration_since(start_time)
                                     .unwrap()
@@ -662,7 +700,8 @@ mod tests {
         });
         let config1: Config = serde_json::from_str(&config_content1).expect("Ошибка парсинга конфигурации");
 
-        let node1 = Node::new(format!("127.0.0.1:{}", config1.wallet.port));
+        let (mining_tx1, mining_rx1) = mpsc::channel();
+        let node1 = Node::new(format!("127.0.0.1:{}", config1.wallet.port), mining_rx1);
         node1.start_server(config1.wallet.port);
         let app1 = WalletApp {
             node: node1.clone(),
@@ -675,6 +714,8 @@ mod tests {
             mining_status: Arc::new(Mutex::new(MiningStatus::Idle)),
             mining_progress: Arc::new(Mutex::new(None)),
             progress_rx: None,
+            mining_tx: mining_tx1,
+            mining_thread: None,
             last_repaint: 0.0,
         };
         thread::spawn(move || {
@@ -693,7 +734,8 @@ mod tests {
         });
         let config2: Config = serde_json::from_str(&config_content2).expect("Ошибка парсинга конфигурации");
 
-        let node2 = Node::new(format!("127.0.0.1:{}", config2.wallet.port));
+        let (mining_tx2, mining_rx2) = mpsc::channel();
+        let node2 = Node::new(format!("127.0.0.1:{}", config2.wallet.port), mining_rx2);
         node2.start_server(config2.wallet.port);
         let app2 = WalletApp {
             node: node2.clone(),
@@ -706,6 +748,8 @@ mod tests {
             mining_status: Arc::new(Mutex::new(MiningStatus::Idle)),
             mining_progress: Arc::new(Mutex::new(None)),
             progress_rx: None,
+            mining_tx: mining_tx2,
+            mining_thread: None,
             last_repaint: 0.0,
         };
         thread::spawn(move || {
@@ -737,7 +781,8 @@ fn main() {
     });
     let config: Config = serde_json::from_str(&config_content).expect("Ошибка парсинга конфигурации");
 
-    let mut node = Node::new(format!("127.0.0.1:{}", config.wallet.port));
+    let (mining_tx, mining_rx) = mpsc::channel();
+    let mut node = Node::new(format!("127.0.0.1:{}", config.wallet.port), mining_rx);
     node.start_server(config.wallet.port);
     node.discover_peers();
 
@@ -752,6 +797,8 @@ fn main() {
         mining_status: Arc::new(Mutex::new(MiningStatus::Idle)),
         mining_progress: Arc::new(Mutex::new(None)),
         progress_rx: None,
+        mining_tx,
+        mining_thread: None,
         last_repaint: 0.0,
     };
 
@@ -760,5 +807,5 @@ fn main() {
         eframe::NativeOptions::default(),
         Box::new(|_cc| Box::new(app)),
     )
-        .unwrap();
+        .expect("Ошибка запуска приложения");
 }
