@@ -321,6 +321,7 @@ impl Node {
             while let Ok(task) = mining_rx.recv() {
                 println!("Получена задача майнинга в потоке {:?}", thread::current().id());
                 let progress_tx_clone = task.progress_tx.clone(); // Клонируем Sender для использования в mine_block
+                // Выполняем майнинг и сохраняем результат до захвата Mutex
                 let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let mut blockchain = task.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                     if blockchain.add_transaction(task.transaction.clone()) {
@@ -342,25 +343,22 @@ impl Node {
                     }
                 };
                 println!("Майнинг завершен с результатом: {:?}", result);
-                // Используем try_lock для предотвращения блокировки
-                match task.mining_status.try_lock() {
-                    Ok(mut mining_status) => {
-                        *mining_status = match result {
-                            Some(block) => {
-                                println!("Майнинг успешен, блок добавлен");
-                                MiningStatus::Completed(Some(block))
-                            }
-                            None => {
-                                println!("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут");
-                                MiningStatus::Failed("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут".to_string())
-                            }
-                        };
-                        println!("Статус майнинга обновлён: {:?}", *mining_status);
-                    }
-                    Err(e) => {
-                        println!("Не удалось захватить Mutex для mining_status в фоновом потоке: {}", e);
-                        let _ = task.progress_tx.send(format!("Ошибка: Не удалось обновить статус майнинга: {}", e));
-                    }
+                // Обновляем статус майнинга с минимальным удержанием Mutex
+                if let Ok(mut mining_status) = task.mining_status.try_lock() {
+                    *mining_status = match result {
+                        Some(block) => {
+                            println!("Майнинг успешен, блок добавлен");
+                            MiningStatus::Completed(Some(block))
+                        }
+                        None => {
+                            println!("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут");
+                            MiningStatus::Failed("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут".to_string())
+                        }
+                    };
+                    println!("Статус майнинга обновлён: {:?}", *mining_status);
+                } else {
+                    println!("Не удалось захватить Mutex для mining_status в фоновом потоке");
+                    let _ = task.progress_tx.send("Ошибка: Не удалось обновить статус майнинга".to_string());
                 }
             }
             println!("Фоновый поток майнинга завершен");
@@ -643,19 +641,35 @@ impl eframe::App for WalletApp {
                                             self.progress_rx = Some(progress_rx);
                                             println!("Канал прогресса создан");
                                         }
-                                        // Устанавливаем статус майнинга с помощью try_lock
-                                        match self.mining_status.try_lock() {
-                                            Ok(mut mining_status) => {
-                                                *mining_status = MiningStatus::Mining;
-                                                println!("Статус майнинга установлен: Mining");
+                                        // Пытаемся установить статус майнинга с несколькими попытками
+                                        let mut attempts = 0;
+                                        let max_attempts = 5;
+                                        let mut mining_status_set = false;
+                                        while attempts < max_attempts {
+                                            match self.mining_status.try_lock() {
+                                                Ok(mut mining_status) => {
+                                                    *mining_status = MiningStatus::Mining;
+                                                    println!("Статус майнинга установлен: Mining");
+                                                    mining_status_set = true;
+                                                    break;
+                                                }
+                                                Err(e) => {
+                                                    attempts += 1;
+                                                    println!("Попытка {} не удалась: {}", attempts, e);
+                                                    if attempts == max_attempts {
+                                                        self.status = format!("Ошибка: Не удалось установить статус майнинга после {} попыток: {}", max_attempts, e);
+                                                        println!("Не удалось установить статус майнинга после {} попыток: {}", max_attempts, e);
+                                                        self.progress_rx = None;
+                                                        ctx.request_repaint();
+                                                        return;
+                                                    }
+                                                    // Небольшая задержка перед следующей попыткой
+                                                    std::thread::sleep(Duration::from_millis(100));
+                                                }
                                             }
-                                            Err(e) => {
-                                                self.status = format!("Ошибка: Не удалось установить статус майнинга: {}", e);
-                                                println!("Не удалось установить статус майнинга: {}", e);
-                                                self.progress_rx = None;
-                                                ctx.request_repaint();
-                                                return;
-                                            }
+                                        }
+                                        if !mining_status_set {
+                                            return;
                                         }
                                         println!("Отправка задачи майнинга");
                                         if let Err(e) = self.mining_tx.send(MiningTask {
