@@ -62,6 +62,7 @@ struct MiningTask {
     transaction: Transaction,
     mining_status: Arc<Mutex<MiningStatus>>,
     progress_tx: mpsc::Sender<String>,
+    status_tx: mpsc::Sender<String>, // Канал для отправки статуса в UI
 }
 
 // Структура узла
@@ -83,6 +84,7 @@ struct WalletApp {
     mining_status: Arc<Mutex<MiningStatus>>,
     mining_progress: Arc<Mutex<Option<String>>>,
     progress_rx: Option<mpsc::Receiver<String>>,
+    status_rx: Option<mpsc::Receiver<String>>, // Канал для получения статуса
     mining_tx: mpsc::Sender<MiningTask>,
     mining_thread: Option<JoinHandle<()>>,
     last_repaint: f64,
@@ -363,6 +365,7 @@ impl Node {
                 mining_count += 1;
                 println!("Получена задача майнинга {} в потоке {:?}", mining_count, thread::current().id());
                 let progress_tx_clone = task.progress_tx.clone();
+                let status_tx_clone = task.status_tx.clone();
                 let start_time = SystemTime::now();
                 let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     println!("Попытка захвата Mutex для blockchain в задаче {}", mining_count);
@@ -411,10 +414,12 @@ impl Node {
                             Some(block) => {
                                 successful_mining += 1;
                                 println!("Майнинг {} успешен, блок добавлен", mining_count);
+                                let _ = status_tx_clone.send(format!("Транзакция отправлена, блок добавлен: {:?}", block));
                                 MiningStatus::Completed(Some(block))
                             }
                             None => {
                                 println!("Майнинг {} не удался: нет транзакций или превышен лимит итераций/таймаут", mining_count);
+                                let _ = status_tx_clone.send("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут".to_string());
                                 MiningStatus::Failed("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут".to_string())
                             }
                         };
@@ -430,6 +435,7 @@ impl Node {
                 if !status_updated {
                     println!("Не удалось обновить статус майнинга {} после {} попыток", mining_count, max_attempts);
                     let _ = task.progress_tx.send(format!("Ошибка: Не удалось обновить статус майнинга {} после {} попыток", mining_count, max_attempts));
+                    let _ = status_tx_clone.send(format!("Ошибка: Не удалось обновить статус майнинга после {} попыток", max_attempts));
                 }
                 if mining_count > 0 {
                     let avg_duration = total_duration / mining_count as f64;
@@ -550,7 +556,24 @@ impl eframe::App for WalletApp {
             self.last_repaint = now;
         }
 
+        // Проверяем обновления статуса через канал
+        if let Some(ref status_rx) = self.status_rx {
+            while let Ok(status) = status_rx.try_recv() {
+                self.status = status;
+                if self.status.starts_with("Транзакция отправлена") {
+                    if let Ok(mut mining_status) = self.mining_status.lock() {
+                        *mining_status = MiningStatus::Idle;
+                        println!("Статус майнинга сброшен на Idle");
+                    }
+                    self.progress_rx = None;
+                }
+                println!("Получено обновление статуса: {}", self.status);
+                ctx.request_repaint();
+            }
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| {
+            ui.label(&self.status); // Отображаем статус в начале
             if !self.is_authenticated {
                 ui.heading("Аутентификация");
                 ui.text_edit_singleline(&mut self.wallet_address);
@@ -598,41 +621,7 @@ impl eframe::App for WalletApp {
                     }
                 }
 
-                let is_mining = match self.mining_status.lock() {
-                    Ok(mining_status) => {
-                        println!("Текущий статус майнинга: {:?}", *mining_status);
-                        match &*mining_status {
-                            MiningStatus::Completed(block) => {
-                                self.status = format!("Транзакция отправлена, блок добавлен: {:?}", block);
-                                if let Ok(mut mining_status) = self.mining_status.lock() {
-                                    *mining_status = MiningStatus::Idle;
-                                    println!("Статус майнинга сброшен на Idle");
-                                }
-                                self.progress_rx = None;
-                                ctx.request_repaint();
-                                false
-                            }
-                            MiningStatus::Failed(err) => {
-                                self.status = err.clone();
-                                if let Ok(mut mining_status) = self.mining_status.lock() {
-                                    *mining_status = MiningStatus::Idle;
-                                    println!("Статус майнинга сброшен на Idle");
-                                }
-                                self.progress_rx = None;
-                                ctx.request_repaint();
-                                false
-                            }
-                            MiningStatus::Idle => false,
-                            MiningStatus::Mining => true,
-                        }
-                    }
-                    Err(e) => {
-                        println!("Не удалось захватить Mutex для mining_status в UI: {}", e);
-                        self.status = format!("Ошибка: Не удалось проверить статус майнинга: {}", e);
-                        ctx.request_repaint();
-                        false
-                    }
-                };
+                let is_mining = matches!(*self.mining_status.lock().unwrap(), MiningStatus::Mining);
 
                 if is_mining {
                     ui.label("Майнинг блока в процессе...");
@@ -705,11 +694,13 @@ impl eframe::App for WalletApp {
                         self.status = "Запуск майнинга...".to_string();
                         println!("Подготовка к отправке задачи майнинга в потоке {:?}", thread::current().id());
                         let (progress_tx, progress_rx) = mpsc::channel();
+                        let (status_tx, status_rx) = mpsc::channel();
                         {
                             let mut mining_progress = self.mining_progress.lock().expect("Не удалось захватить Mutex для mining_progress");
                             *mining_progress = None;
                             self.progress_rx = Some(progress_rx);
-                            println!("Канал прогресса создан");
+                            self.status_rx = Some(status_rx);
+                            println!("Каналы прогресса и статуса созданы");
                         }
                         if let Ok(mut mining_status) = self.mining_status.lock() {
                             *mining_status = MiningStatus::Mining;
@@ -718,6 +709,7 @@ impl eframe::App for WalletApp {
                             self.status = "Ошибка: Не удалось установить статус майнинга".to_string();
                             println!("Ошибка: Не удалось установить статус майнинга");
                             self.progress_rx = None;
+                            self.status_rx = None;
                             ctx.request_repaint();
                             return;
                         }
@@ -727,6 +719,7 @@ impl eframe::App for WalletApp {
                             transaction,
                             mining_status,
                             progress_tx,
+                            status_tx,
                         }) {
                             self.status = format!("Ошибка отправки задачи майнинга: {}", e);
                             println!("Ошибка отправки задачи майнинга: {}", e);
@@ -735,6 +728,7 @@ impl eframe::App for WalletApp {
                                 println!("Статус майнинга сброшен на Idle");
                             }
                             self.progress_rx = None;
+                            self.status_rx = None;
                             ctx.request_repaint();
                             return;
                         }
@@ -787,8 +781,6 @@ impl eframe::App for WalletApp {
                     }
                     ctx.request_repaint();
                 }
-
-                ui.label(&self.status);
             }
         });
     }
@@ -827,6 +819,7 @@ fn main() {
         mining_status: Arc::new(Mutex::new(MiningStatus::Idle)),
         mining_progress: Arc::new(Mutex::new(None)),
         progress_rx: None,
+        status_rx: None,
         mining_tx,
         mining_thread: None,
         last_repaint: 0.0,
