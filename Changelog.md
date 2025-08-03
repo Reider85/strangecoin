@@ -27,3 +27,4 @@
 0.2.7 mining one operation one block fix
 0.2.8 mining ui fix
 0.2.9 sync blockchain
+0.3.0 sync blockchain

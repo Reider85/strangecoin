@@ -70,7 +70,7 @@ struct Node {
     blockchain: Arc<Mutex<Blockchain>>,
     peers: Arc<Mutex<Vec<String>>>,
     address: String,
-    sync_rx: mpsc::Receiver<Blockchain>, // Канал для получения обновлённого блокчейна
+    sync_rx: mpsc::Receiver<Blockchain>,
 }
 
 // Структура клиента для GUI
@@ -89,7 +89,7 @@ struct WalletApp {
     mining_tx: mpsc::Sender<MiningTask>,
     mining_thread: Option<JoinHandle<()>>,
     last_repaint: f64,
-    last_sync: f64, // Время последней синхронизации
+    last_sync: f64,
 }
 
 // Статус майнинга
@@ -353,11 +353,12 @@ impl Blockchain {
 impl Node {
     fn new(address: String, mining_rx: mpsc::Receiver<MiningTask>, sync_tx: mpsc::Sender<Blockchain>) -> Self {
         let blockchain = Arc::new(Mutex::new(Blockchain::new()));
+        let peers = Arc::new(Mutex::new(vec![]));
         let node = Node {
             blockchain: blockchain.clone(),
-            peers: Arc::new(Mutex::new(vec![])),
-            address,
-            sync_rx: mpsc::channel().1, // Пустой канал, будет заменён в start_server
+            peers: peers.clone(),
+            address: address.clone(),
+            sync_rx: mpsc::channel().1,
         };
         thread::spawn(move || {
             println!("Фоновый поток майнинга запущен в потоке {:?}", thread::current().id());
@@ -421,11 +422,10 @@ impl Node {
                                 // Рассылаем обновлённый блокчейн другим узлам
                                 let node_temp = Node {
                                     blockchain: task.blockchain.clone(),
-                                    peers: Arc::new(Mutex::new(vec![])),
-                                    address: "".to_string(),
-                                    sync_rx: mpsc::channel().1, // Пустой канал
+                                    peers: peers.clone(),
+                                    address: address.clone(),
+                                    sync_rx: mpsc::channel().1,
                                 };
-                                node_temp.peers.lock().unwrap().extend(vec!["127.0.0.1:8082".to_string()]);
                                 node_temp.sync_blockchain(sync_tx.clone());
                                 MiningStatus::Completed(Some(block))
                             }
@@ -464,8 +464,14 @@ impl Node {
         let start_time = SystemTime::now();
         let mut peers = self.peers.lock().expect("Не удалось захватить Mutex для peers");
         peers.clear();
-        peers.push("127.0.0.1:8081".to_string());
-        peers.push("127.0.0.1:8082".to_string());
+        // Исключаем собственный адрес из списка пиров
+        let own_port = self.address.split(':').last().unwrap_or("0").parse::<u16>().unwrap_or(0);
+        let peer_ports = vec![8081, 8082];
+        for port in peer_ports {
+            if port != own_port {
+                peers.push(format!("127.0.0.1:{}", port));
+            }
+        }
         let duration = SystemTime::now()
             .duration_since(start_time)
             .unwrap()
@@ -492,12 +498,16 @@ impl Node {
         let peers = self.peers.lock().expect("Не удалось захватить Mutex для peers");
         println!("Список пиров: {:?}", *peers);
         if peers.contains(&ip) {
-            let wallet = format!("wallet{}", rand::thread_rng().gen_range(1..3));
+            let wallet = match ip.as_str() {
+                "127.0.0.1:8081" => "wallet1".to_string(),
+                "127.0.0.1:8082" => "wallet2".to_string(),
+                _ => format!("wallet{}", rand::thread_rng().gen_range(1..3)),
+            };
             let duration = SystemTime::now()
                 .duration_since(start_time)
                 .unwrap()
                 .as_secs_f64();
-            println!("Найден кошелек: {}, поиск занял {} секунд", wallet, duration);
+            println!("Найден кошелёк: {}, поиск занял {} секунд", wallet, duration);
             Some(wallet)
         } else {
             let duration = SystemTime::now()
@@ -521,23 +531,35 @@ impl Node {
                 match stream {
                     Ok(mut stream) => {
                         let mut buffer = [0; 1024];
-                        if let Ok(_) = stream.read(&mut buffer) {
-                            let request = String::from_utf8_lossy(&buffer[..]).to_string();
-                            if request.contains("GET_BLOCKCHAIN") {
-                                let blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                                let response = serde_json::to_string(&*blockchain).unwrap();
-                                let _ = stream.write_all(response.as_bytes());
-                            } else if request.starts_with("UPDATE_BLOCKCHAIN:") {
-                                let blockchain_data = request.strip_prefix("UPDATE_BLOCKCHAIN:").unwrap_or("");
-                                if let Ok(received_blockchain) = serde_json::from_str::<Blockchain>(blockchain_data) {
-                                    let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                                    if received_blockchain.chain.len() > blockchain.chain.len() {
-                                        *blockchain = received_blockchain.clone();
-                                        println!("Блокчейн обновлён через UPDATE_BLOCKCHAIN");
-                                        let _ = sync_tx.send(received_blockchain);
+                        match stream.read(&mut buffer) {
+                            Ok(_) => {
+                                let request = String::from_utf8_lossy(&buffer[..]).to_string();
+                                println!("Получен запрос: {}", request);
+                                if request.contains("GET_BLOCKCHAIN") {
+                                    let blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                                    let response = serde_json::to_string(&*blockchain).unwrap();
+                                    let _ = stream.write_all(response.as_bytes());
+                                    println!("Отправлен блокчейн клиенту");
+                                } else if request.starts_with("UPDATE_BLOCKCHAIN:") {
+                                    let blockchain_data = request.strip_prefix("UPDATE_BLOCKCHAIN:").unwrap_or("");
+                                    match serde_json::from_str::<Blockchain>(blockchain_data) {
+                                        Ok(received_blockchain) => {
+                                            let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                                            let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
+                                            let received_hash = received_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
+                                            if received_blockchain.chain.len() > blockchain.chain.len() || current_hash != received_hash {
+                                                *blockchain = received_blockchain.clone();
+                                                println!("Блокчейн обновлён через UPDATE_BLOCKCHAIN");
+                                                let _ = sync_tx.send(received_blockchain);
+                                            } else {
+                                                println!("Полученный блокчейн не новее текущего");
+                                            }
+                                        }
+                                        Err(e) => println!("Ошибка десериализации блокчейна: {}", e),
                                     }
                                 }
                             }
+                            Err(e) => println!("Ошибка чтения запроса: {}", e),
                         }
                     }
                     Err(e) => println!("Ошибка обработки входящего соединения: {}", e),
@@ -553,31 +575,61 @@ impl Node {
 
     fn sync_blockchain(&self, sync_tx: mpsc::Sender<Blockchain>) {
         let start_time = SystemTime::now();
-        let peers = self.peers.lock().expect("Не удалось захватить Mutex для peers");
-        let current_chain_length = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain").chain.len();
+        // Захватываем и клонируем список пиров
+        let peers: Vec<String> = self.peers.lock().expect("Не удалось захватить Mutex для peers")
+            .iter()
+            .cloned()
+            .collect();
+        // Захватываем текущий хэш и длину цепочки
+        let blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+        let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
+        let current_chain_length = blockchain.chain.len();
+        drop(blockchain); // Освобождаем блокировку blockchain
 
         for peer in peers.iter() {
             // Отправка текущего блокчейна
-            if let Ok(mut stream) = TcpStream::connect(peer) {
-                let blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                let response = serde_json::to_string(&*blockchain).unwrap();
-                let _ = stream.write_all(format!("UPDATE_BLOCKCHAIN:{}", response).as_bytes());
-            }
-            // Запрос блокчейна у других узлов
-            if let Ok(mut stream) = TcpStream::connect(peer) {
-                let _ = stream.write_all(b"GET_BLOCKCHAIN");
-                let mut buffer = [0; 1024];
-                if let Ok(_) = stream.read(&mut buffer) {
-                    let response = String::from_utf8_lossy(&buffer[..]).to_string();
-                    if let Ok(received_blockchain) = serde_json::from_str::<Blockchain>(&response) {
-                        let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                        if received_blockchain.chain.len() > blockchain.chain.len() {
-                            *blockchain = received_blockchain.clone();
-                            println!("Блокчейн обновлён с узла {}", peer);
-                            let _ = sync_tx.send(received_blockchain);
-                        }
+            match TcpStream::connect(peer) {
+                Ok(mut stream) => {
+                    let blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                    let response = serde_json::to_string(&*blockchain).unwrap();
+                    match stream.write_all(format!("UPDATE_BLOCKCHAIN:{}", response).as_bytes()) {
+                        Ok(_) => println!("Блокчейн отправлен узлу {}", peer),
+                        Err(e) => println!("Ошибка отправки блокчейна узлу {}: {}", peer, e),
                     }
                 }
+                Err(e) => println!("Ошибка соединения с узлом {}: {}", peer, e),
+            }
+            // Запрос блокчейна у других узлов
+            match TcpStream::connect(peer) {
+                Ok(mut stream) => {
+                    match stream.write_all(b"GET_BLOCKCHAIN") {
+                        Ok(_) => {
+                            let mut buffer = [0; 1024];
+                            match stream.read(&mut buffer) {
+                                Ok(_) => {
+                                    let response = String::from_utf8_lossy(&buffer[..]).to_string();
+                                    match serde_json::from_str::<Blockchain>(&response) {
+                                        Ok(received_blockchain) => {
+                                            let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                                            let received_hash = received_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
+                                            if received_blockchain.chain.len() > blockchain.chain.len() || current_hash != received_hash {
+                                                *blockchain = received_blockchain.clone();
+                                                println!("Блокчейн обновлён с узла {}", peer);
+                                                let _ = sync_tx.send(received_blockchain);
+                                            } else {
+                                                println!("Полученный блокчейн с узла {} не новее текущего", peer);
+                                            }
+                                        }
+                                        Err(e) => println!("Ошибка десериализации блокчейна от узла {}: {}", peer, e),
+                                    }
+                                }
+                                Err(e) => println!("Ошибка чтения ответа от узла {}: {}", peer, e),
+                            }
+                        }
+                        Err(e) => println!("Ошибка отправки GET_BLOCKCHAIN узлу {}: {}", peer, e),
+                    }
+                }
+                Err(e) => println!("Ошибка соединения с узлом {}: {}", peer, e),
             }
         }
         let duration = SystemTime::now()
@@ -599,7 +651,9 @@ impl eframe::App for WalletApp {
         // Проверяем обновления блокчейна через канал
         while let Ok(received_blockchain) = self.node.sync_rx.try_recv() {
             let mut blockchain = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-            if received_blockchain.chain.len() > blockchain.chain.len() {
+            let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
+            let received_hash = received_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
+            if received_blockchain.chain.len() > blockchain.chain.len() || current_hash != received_hash {
                 *blockchain = received_blockchain;
                 println!("UI: Блокчейн обновлён через канал синхронизации");
                 ctx.request_repaint();
@@ -651,7 +705,7 @@ impl eframe::App for WalletApp {
                     ctx.request_repaint();
                 }
             } else {
-                ui.heading("Кошелек");
+                ui.heading("Кошелёк");
                 ui.label(format!("Адрес: {}", self.wallet_address));
                 let balance = {
                     let blockchain = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
@@ -667,7 +721,7 @@ impl eframe::App for WalletApp {
                     while let Ok(progress) = progress_rx.try_recv() {
                         let mut mining_progress = self.mining_progress.lock().expect("Не удалось захватить Mutex для mining_progress");
                         *mining_progress = Some(progress);
-                        println!("Прогресс майнинга обновлен в UI: {:?}", *mining_progress);
+                        println!("Прогресс майнинга обновлён в UI: {:?}", *mining_progress);
                     }
                 }
 
@@ -787,7 +841,7 @@ impl eframe::App for WalletApp {
                             .duration_since(start_time)
                             .unwrap()
                             .as_secs_f64();
-                        println!("Запуск майнинга завершен за {} секунд", duration);
+                        println!("Запуск майнинга завершён за {} секунд", duration);
                         ctx.request_repaint();
                     } else {
                         self.status = "Неверный формат суммы".to_string();
@@ -803,9 +857,9 @@ impl eframe::App for WalletApp {
                 ui.heading("Поиск кошелька по IP");
                 let mut ip = String::new();
                 ui.text_edit_singleline(&mut ip);
-                if ui.button("Найти кошелек").clicked() {
+                if ui.button("Найти кошелёк").clicked() {
                     let start_time = SystemTime::now();
-                    println!("Кнопка 'Найти кошелек' нажата, IP: {}", ip);
+                    println!("Кнопка 'Найти кошелёк' нажата, IP: {}", ip);
                     let ip = ip.trim();
                     if ip.is_empty() {
                         self.status = "IP-адрес не может быть пустым".to_string();
@@ -815,19 +869,19 @@ impl eframe::App for WalletApp {
                             .as_secs_f64();
                         println!("Ошибка: пустой IP-адрес, проверка заняла {} секунд", duration);
                     } else if let Some(wallet) = self.node.find_wallet_by_ip(ip) {
-                        self.status = format!("Найден кошелек: {}", wallet);
+                        self.status = format!("Найден кошелёк: {}", wallet);
                         let duration = SystemTime::now()
                             .duration_since(start_time)
                             .unwrap()
                             .as_secs_f64();
-                        println!("Кошелек найден: {}, поиск занял {} секунд", wallet, duration);
+                        println!("Кошелёк найден: {}, поиск занял {} секунд", wallet, duration);
                     } else {
-                        self.status = format!("Кошелек не найден для IP: {}", ip);
+                        self.status = format!("Кошелёк не найден для IP: {}", ip);
                         let duration = SystemTime::now()
                             .duration_since(start_time)
                             .unwrap()
                             .as_secs_f64();
-                        println!("Кошелек не найден для IP: {}, поиск занял {} секунд", ip, duration);
+                        println!("Кошелёк не найден для IP: {}, поиск занял {} секунд", ip, duration);
                     }
                     ctx.request_repaint();
                 }
@@ -860,7 +914,7 @@ fn main() {
         blockchain: Arc::clone(&node.blockchain),
         peers: Arc::clone(&node.peers),
         address: node.address.clone(),
-        sync_rx: mpsc::channel().1, // Пустой канал, не используется в фоновом потоке
+        sync_rx: mpsc::channel().1,
     };
     thread::spawn(move || {
         loop {
