@@ -22,3 +22,4 @@
 0.2.2 mining status fix
 0.2.3 mining thread run fix
 0.2.4 mining thread run fix
+0.2.5 mining one operation one block fix

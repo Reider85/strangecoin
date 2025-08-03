@@ -37,7 +37,7 @@ struct Block {
 }
 
 // Структура транзакции
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 struct Transaction {
     sender: String,
     receiver: String,
@@ -223,7 +223,7 @@ impl Blockchain {
             nonce: 0,
         };
 
-        let max_iterations = 50; // Уменьшено для более быстрого тестирования
+        let max_iterations = 50; // Уменьшено для быстрого тестирования
         let timeout = Duration::from_secs_f32(0.5); // Уменьшено для тестирования
         let mut iteration_count = 0;
         let mut total_hash_time = 0.0;
@@ -310,6 +310,14 @@ impl Blockchain {
                 .unwrap()
                 .as_secs_f64();
             println!("Ошибка: Пустой адрес отправителя или получателя, проверка заняла {} секунд", duration);
+            return false;
+        }
+        if self.pending_transactions.contains(&transaction) {
+            let duration = SystemTime::now()
+                .duration_since(start_time)
+                .unwrap()
+                .as_secs_f64();
+            println!("Ошибка: Транзакция уже существует в pending_transactions, проверка заняла {} секунд", duration);
             return false;
         }
         if let Some(sender_balance) = self.balances.get(&transaction.sender) {
@@ -422,7 +430,7 @@ impl Node {
                     } else {
                         attempts += 1;
                         println!("Попытка {} обновить статус майнинга {} не удалась", attempts, mining_count);
-                        std::thread::sleep(Duration::from_millis(500)); // Увеличена задержка
+                        std::thread::sleep(Duration::from_millis(500));
                     }
                 }
                 if !status_updated {
@@ -599,22 +607,26 @@ impl eframe::App for WalletApp {
 
                 // Проверяем статус майнинга
                 let is_mining = match self.mining_status.lock() {
-                    Ok(mut mining_status) => {
+                    Ok(mining_status) => {
                         println!("Текущий статус майнинга: {:?}", *mining_status);
                         match &*mining_status {
                             MiningStatus::Completed(block) => {
                                 self.status = format!("Транзакция отправлена, блок добавлен: {:?}", block);
-                                *mining_status = MiningStatus::Idle;
+                                if let Ok(mut mining_status) = self.mining_status.lock() {
+                                    *mining_status = MiningStatus::Idle;
+                                    println!("Статус майнинга сброшен на Idle");
+                                }
                                 self.progress_rx = None;
-                                println!("Статус майнинга сброшен на Idle");
                                 ctx.request_repaint();
                                 false
                             }
                             MiningStatus::Failed(err) => {
                                 self.status = err.clone();
-                                *mining_status = MiningStatus::Idle;
+                                if let Ok(mut mining_status) = self.mining_status.lock() {
+                                    *mining_status = MiningStatus::Idle;
+                                    println!("Статус майнинга сброшен на Idle");
+                                }
                                 self.progress_rx = None;
-                                println!("Статус майнинга сброшен на Idle");
                                 ctx.request_repaint();
                                 false
                             }
@@ -707,19 +719,16 @@ impl eframe::App for WalletApp {
                             self.progress_rx = Some(progress_rx);
                             println!("Канал прогресса создан");
                         }
-                        // Устанавливаем статус майнинга с использованием блокирующего lock
-                        match self.mining_status.lock() {
-                            Ok(mut mining_status) => {
-                                *mining_status = MiningStatus::Mining;
-                                println!("Статус майнинга установлен: Mining");
-                            }
-                            Err(e) => {
-                                self.status = format!("Ошибка: Не удалось установить статус майнинга: {}", e);
-                                println!("Ошибка: Не удалось установить статус майнинга: {}", e);
-                                self.progress_rx = None;
-                                ctx.request_repaint();
-                                return;
-                            }
+                        // Устанавливаем статус майнинга
+                        if let Ok(mut mining_status) = self.mining_status.lock() {
+                            *mining_status = MiningStatus::Mining;
+                            println!("Статус майнинга установлен: Mining");
+                        } else {
+                            self.status = "Ошибка: Не удалось установить статус майнинга".to_string();
+                            println!("Ошибка: Не удалось установить статус майнинга");
+                            self.progress_rx = None;
+                            ctx.request_repaint();
+                            return;
                         }
                         println!("Попытка отправки задачи майнинга");
                         if let Err(e) = self.mining_tx.send(MiningTask {
