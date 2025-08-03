@@ -88,7 +88,7 @@ impl Blockchain {
         let mut blockchain = Blockchain {
             chain: vec![],
             balances: HashMap::new(),
-            difficulty: 2,
+            difficulty: 1, // Уменьшено для тестов
             pending_transactions: vec![],
         };
         blockchain.create_genesis_block();
@@ -203,7 +203,7 @@ impl Blockchain {
             nonce: 0,
         };
 
-        let max_iterations = 5_000; // Уменьшено для тестов
+        let max_iterations = 2_000; // Уменьшено для тестов
         let timeout = Duration::from_secs(3); // Таймаут 3 секунды
         let mut iteration_count = 0;
 
@@ -443,10 +443,11 @@ impl eframe::App for WalletApp {
             } else {
                 ui.heading("Кошелек");
                 ui.label(format!("Адрес: {}", self.wallet_address));
-                let blockchain = self.node.blockchain.lock().unwrap();
-                let balance = blockchain.balances.get(&self.wallet_address).unwrap_or(&0);
+                let balance = {
+                    let blockchain = self.node.blockchain.lock().unwrap();
+                    *blockchain.balances.get(&self.wallet_address).unwrap_or(&0)
+                }; // Быстро захватываем и освобождаем Mutex
                 ui.label(format!("Баланс: {}", balance));
-                drop(blockchain);
 
                 ui.heading("Перевод");
                 ui.text_edit_singleline(&mut self.receiver_address);
@@ -511,27 +512,30 @@ impl eframe::App for WalletApp {
                                     let mining_status = Arc::clone(&self.mining_status);
                                     let mining_progress = Arc::clone(&self.mining_progress);
 
-                                    {
-                                        let mut blockchain = blockchain.lock().unwrap();
-                                        if !blockchain.add_transaction(transaction) {
-                                            self.status = "Недостаточно средств или неверный адрес".to_string();
-                                            let duration = SystemTime::now()
-                                                .duration_since(start_time)
-                                                .unwrap()
-                                                .as_secs_f64();
-                                            println!(
-                                                "Ошибка: недостаточно средств или неверный адрес, проверка заняла {} секунд",
-                                                duration
-                                            );
-                                            ctx.request_repaint();
-                                            return;
-                                        }
+                                    // Клонируем blockchain для передачи в поток
+                                    let mut blockchain_data = {
+                                        let blockchain = blockchain.lock().unwrap();
+                                        blockchain.clone()
+                                    };
+                                    println!("Транзакция для добавления: {:?}", transaction);
+                                    if !blockchain_data.add_transaction(transaction) {
+                                        self.status = "Недостаточно средств или неверный адрес".to_string();
                                         let duration = SystemTime::now()
                                             .duration_since(start_time)
                                             .unwrap()
                                             .as_secs_f64();
-                                        println!("Транзакция успешно добавлена за {} секунд", duration);
+                                        println!(
+                                            "Ошибка: недостаточно средств или неверный адрес, проверка заняла {} секунд",
+                                            duration
+                                        );
+                                        ctx.request_repaint();
+                                        return;
                                     }
+                                    let duration = SystemTime::now()
+                                        .duration_since(start_time)
+                                        .unwrap()
+                                        .as_secs_f64();
+                                    println!("Транзакция успешно добавлена за {} секунд", duration);
 
                                     self.status = "Запуск майнинга...".to_string();
                                     println!("Запуск майнинга в отдельном потоке");
@@ -545,14 +549,22 @@ impl eframe::App for WalletApp {
                                         let mut mining_progress = mining_progress.lock().unwrap();
                                         *mining_progress = None;
                                     }
-                                    let blockchain_clone = blockchain.clone();
+                                    // Передаем клонированные данные в поток
                                     thread::spawn(move || {
                                         println!("Поток майнинга начат");
-                                        let mut blockchain = blockchain_clone.lock().unwrap();
-                                        let result = blockchain.mine_block(progress_tx);
+                                        let result = blockchain_data.mine_block(progress_tx);
+                                        println!("Майнинг завершен с результатом: {:?}", result);
+                                        let mut blockchain = blockchain.lock().unwrap();
                                         let mut mining_status = mining_status.lock().unwrap();
                                         *mining_status = match result {
                                             Some(block) => {
+                                                // Обновляем оригинальный blockchain
+                                                for tx in &block.transactions {
+                                                    *blockchain.balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
+                                                    *blockchain.balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
+                                                }
+                                                blockchain.pending_transactions.clear();
+                                                blockchain.chain.push(block.clone());
                                                 println!("Майнинг успешен, блок добавлен");
                                                 MiningStatus::Completed(Some(block))
                                             }
@@ -565,7 +577,7 @@ impl eframe::App for WalletApp {
                                     });
                                     let mining_progress = Arc::clone(&self.mining_progress);
                                     thread::spawn(move || {
-                                        while let Ok(progress) = progress_rx.recv_timeout(Duration::from_millis(50)) {
+                                        while let Ok(progress) = progress_rx.recv_timeout(Duration::from_millis(20)) {
                                             let mut mining_progress = mining_progress.lock().unwrap();
                                             *mining_progress = Some(progress);
                                             println!("Прогресс майнинга обновлен в UI: {:?}", *mining_progress);

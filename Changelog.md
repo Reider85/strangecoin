@@ -13,3 +13,4 @@
 0.1.3 mining run fix
 0.1.4 mining run fix
 0.1.5 self fix
+0.1.6 mining thread run fix
