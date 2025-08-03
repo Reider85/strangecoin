@@ -11,6 +11,7 @@ use rand::Rng;
 use std::fs;
 use std::path::PathBuf;
 use serde_json;
+use uuid::Uuid; // Добавляем зависимость uuid для уникальных ID транзакций
 
 // Структура для конфигурации
 #[derive(Deserialize, Serialize)]
@@ -39,6 +40,7 @@ struct Block {
 // Структура транзакции
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 struct Transaction {
+    id: String, // Добавляем уникальный ID
     sender: String,
     receiver: String,
     amount: u64,
@@ -100,7 +102,7 @@ impl Blockchain {
         let mut blockchain = Blockchain {
             chain: vec![],
             balances: HashMap::new(),
-            difficulty: 1, // Уменьшено для тестов
+            difficulty: 1,
             pending_transactions: vec![],
         };
         blockchain.create_genesis_block();
@@ -162,16 +164,13 @@ impl Blockchain {
             return None;
         }
 
-        // Клонируем данные для минимизации удержания Mutex
         let previous_block = self.chain.last().unwrap().clone();
         let transactions = self.pending_transactions.clone();
         let difficulty = self.difficulty;
 
-        // Майнинг в отдельной функции без удержания self
         let block = Self::mine_block_inner(previous_block, transactions, difficulty, progress_tx.clone());
 
         if let Some(mut block) = block {
-            // Обновляем блокчейн
             let balance_start_time = SystemTime::now();
             for tx in &block.transactions {
                 *self.balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
@@ -286,7 +285,7 @@ impl Blockchain {
                 return Some(block);
             }
             block.nonce += 1;
-            if iteration_count % 50 == 0 {
+            if iteration_count % 10 == 0 {
                 let progress_duration = SystemTime::now()
                     .duration_since(start_time)
                     .unwrap()
@@ -317,8 +316,8 @@ impl Blockchain {
                 .duration_since(start_time)
                 .unwrap()
                 .as_secs_f64();
-            println!("Ошибка: Транзакция уже существует в pending_transactions, проверка заняла {} секунд", duration);
-            return false;
+            println!("Транзакция уже существует в pending_transactions, проверка заняла {} секунд", duration);
+            return false; // Позволяем продолжить майнинг существующих транзакций
         }
         if let Some(sender_balance) = self.balances.get(&transaction.sender) {
             println!("Баланс отправителя {}: {}", transaction.sender, sender_balance);
@@ -362,7 +361,6 @@ impl Node {
             peers: Arc::new(Mutex::new(vec![])),
             address,
         };
-        // Запускаем фоновый поток для обработки задач майнинга
         thread::spawn(move || {
             println!("Фоновый поток майнинга запущен в потоке {:?}", thread::current().id());
             let mut mining_count = 0;
@@ -373,7 +371,6 @@ impl Node {
                 println!("Получена задача майнинга {} в потоке {:?}", mining_count, thread::current().id());
                 let progress_tx_clone = task.progress_tx.clone();
                 let start_time = SystemTime::now();
-                // Выполняем майнинг и сохраняем результат до захвата Mutex
                 let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     println!("Попытка захвата Mutex для blockchain в задаче {}", mining_count);
                     let lock_start_time = SystemTime::now();
@@ -385,9 +382,14 @@ impl Node {
                         println!("Транзакция в задаче {} успешно добавлена, начало майнинга", mining_count);
                         blockchain.mine_block(progress_tx_clone)
                     } else {
-                        let _ = task.progress_tx.send(format!("Ошибка: Не удалось добавить транзакцию в задаче {}", mining_count));
-                        println!("Ошибка: Не удалось добавить транзакцию в задаче {}", mining_count);
-                        None
+                        println!("Транзакция в задаче {} отклонена, попытка майнить существующие транзакции", mining_count);
+                        if !blockchain.pending_transactions.is_empty() {
+                            blockchain.mine_block(progress_tx_clone)
+                        } else {
+                            let _ = task.progress_tx.send(format!("Ошибка: Нет транзакций для майнинга в задаче {}", mining_count));
+                            println!("Ошибка: Нет транзакций для майнинга в задаче {}", mining_count);
+                            None
+                        }
                     }
                 })) {
                     Ok(result) => result,
@@ -407,7 +409,6 @@ impl Node {
                     .as_secs_f64();
                 total_duration += duration;
                 println!("Майнинг {} завершен за {} секунд с результатом: {:?}", mining_count, duration, result);
-                // Обновляем статус майнинга с несколькими попытками
                 let mut attempts = 0;
                 let max_attempts = 5;
                 let mut status_updated = false;
@@ -596,7 +597,6 @@ impl eframe::App for WalletApp {
                 ui.text_edit_singleline(&mut self.receiver_address);
                 ui.text_edit_singleline(&mut self.amount);
 
-                // Проверяем прогресс майнинга без блокировки
                 if let Some(ref progress_rx) = self.progress_rx {
                     while let Ok(progress) = progress_rx.try_recv() {
                         let mut mining_progress = self.mining_progress.lock().expect("Не удалось захватить Mutex для mining_progress");
@@ -605,7 +605,6 @@ impl eframe::App for WalletApp {
                     }
                 }
 
-                // Проверяем статус майнинга
                 let is_mining = match self.mining_status.lock() {
                     Ok(mining_status) => {
                         println!("Текущий статус майнинга: {:?}", *mining_status);
@@ -678,6 +677,7 @@ impl eframe::App for WalletApp {
                             return;
                         }
                         let transaction = Transaction {
+                            id: Uuid::new_v4().to_string(), // Генерируем уникальный ID
                             sender: self.wallet_address.clone(),
                             receiver: self.receiver_address.trim().to_string(),
                             amount,
@@ -686,7 +686,6 @@ impl eframe::App for WalletApp {
                         let mining_status = Arc::clone(&self.mining_status);
                         let mining_progress = Arc::clone(&self.mining_progress);
 
-                        // Добавляем транзакцию в blockchain
                         {
                             let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                             println!("Транзакция для добавления: {:?}", transaction);
@@ -719,7 +718,6 @@ impl eframe::App for WalletApp {
                             self.progress_rx = Some(progress_rx);
                             println!("Канал прогресса создан");
                         }
-                        // Устанавливаем статус майнинга
                         if let Ok(mut mining_status) = self.mining_status.lock() {
                             *mining_status = MiningStatus::Mining;
                             println!("Статус майнинга установлен: Mining");
