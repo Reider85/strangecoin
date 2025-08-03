@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::net::{TcpListener, TcpStream, IpAddr};
+use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
@@ -87,7 +87,7 @@ impl Blockchain {
         let mut blockchain = Blockchain {
             chain: vec![],
             balances: HashMap::new(),
-            difficulty: 1,
+            difficulty: 2, // Увеличена сложность для ускорения тестов
             pending_transactions: vec![],
         };
         blockchain.create_genesis_block();
@@ -148,25 +148,34 @@ impl Blockchain {
             return None;
         }
 
-        let previous_block = self.chain.last().unwrap();
+        // Клонируем данные для минимизации удержания Mutex
+        let previous_block = self.chain.last().unwrap().clone();
+        let transactions = self.pending_transactions.clone();
+        let difficulty = self.difficulty;
         let mut block = Block {
             index: previous_block.index + 1,
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
-            transactions: self.pending_transactions.clone(),
+            transactions,
             previous_hash: previous_block.hash.clone(),
             hash: String::new(),
             nonce: 0,
         };
 
         let start_time = SystemTime::now();
+        let max_iterations = 50_000; // Уменьшено для ускорения
+        let timeout = Duration::from_secs(10); // Таймаут 10 секунд
         let mut iteration_count = 0;
-        let max_iterations = 100_000; // Ограничение на количество итераций
+
         loop {
             if iteration_count >= max_iterations {
                 println!("Достигнуто максимальное количество итераций: {}", max_iterations);
+                return None;
+            }
+            if SystemTime::now().duration_since(start_time).unwrap() > timeout {
+                println!("Майнинг прерван: превышен таймаут {} секунд", timeout.as_secs());
                 return None;
             }
             iteration_count += 1;
@@ -180,7 +189,7 @@ impl Blockchain {
                 "Итерация {}, nonce: {}, хэш: {}, время вычисления хэша: {} секунд",
                 iteration_count, block.nonce, hash, hash_duration
             );
-            if hash.starts_with(&"0".repeat(self.difficulty as usize)) {
+            if hash.starts_with(&"0".repeat(difficulty as usize)) {
                 block.hash = hash;
                 let duration = SystemTime::now()
                     .duration_since(start_time)
@@ -205,6 +214,7 @@ impl Blockchain {
             }
         }
 
+        // Обновляем блокчейн после успешного майнинга
         let balance_start_time = SystemTime::now();
         for tx in &block.transactions {
             *self.balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
@@ -367,7 +377,7 @@ impl Node {
 impl eframe::App for WalletApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = ctx.input(|i| i.time);
-        if now - self.last_repaint > 0.05 {
+        if now - self.last_repaint > 0.01 { // Уменьшено для более частого обновления
             ctx.request_repaint();
             self.last_repaint = now;
         }
@@ -507,8 +517,8 @@ impl eframe::App for WalletApp {
                                                 MiningStatus::Completed(Some(block))
                                             }
                                             None => {
-                                                println!("Майнинг не удался: нет транзакций или превышен лимит итераций");
-                                                MiningStatus::Failed("Майнинг не удался: нет транзакций или превышен лимит итераций".to_string())
+                                                println!("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут");
+                                                MiningStatus::Failed("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут".to_string())
                                             }
                                         };
                                         println!("Статус майнинга обновлён: {:?}", *mining_status);

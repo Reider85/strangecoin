@@ -9,3 +9,4 @@
 0.0.9 sleep fix
 0.1.0 mining logging
 0.1.1 mining timing
+0.1.2 mining run fix
