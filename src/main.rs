@@ -223,8 +223,8 @@ impl Blockchain {
             nonce: 0,
         };
 
-        let max_iterations = 100; // Уменьшено для тестирования
-        let timeout = Duration::from_secs(1); // Уменьшено для тестирования
+        let max_iterations = 50; // Уменьшено для более быстрого тестирования
+        let timeout = Duration::from_secs_f32(0.5); // Уменьшено для тестирования
         let mut iteration_count = 0;
         let mut total_hash_time = 0.0;
 
@@ -597,10 +597,31 @@ impl eframe::App for WalletApp {
                     }
                 }
 
-                // Проверяем статус майнинга с помощью try_lock
-                let mining_status_result = self.mining_status.try_lock();
-                let is_mining = match &mining_status_result {
-                    Ok(mining_status) => matches!(**mining_status, MiningStatus::Mining),
+                // Проверяем статус майнинга
+                let is_mining = match self.mining_status.lock() {
+                    Ok(mut mining_status) => {
+                        println!("Текущий статус майнинга: {:?}", *mining_status);
+                        match &*mining_status {
+                            MiningStatus::Completed(block) => {
+                                self.status = format!("Транзакция отправлена, блок добавлен: {:?}", block);
+                                *mining_status = MiningStatus::Idle;
+                                self.progress_rx = None;
+                                println!("Статус майнинга сброшен на Idle");
+                                ctx.request_repaint();
+                                false
+                            }
+                            MiningStatus::Failed(err) => {
+                                self.status = err.clone();
+                                *mining_status = MiningStatus::Idle;
+                                self.progress_rx = None;
+                                println!("Статус майнинга сброшен на Idle");
+                                ctx.request_repaint();
+                                false
+                            }
+                            MiningStatus::Idle => false,
+                            MiningStatus::Mining => true,
+                        }
+                    }
                     Err(e) => {
                         println!("Не удалось захватить Mutex для mining_status в UI: {}", e);
                         self.status = format!("Ошибка: Не удалось проверить статус майнинга: {}", e);
@@ -617,186 +638,121 @@ impl eframe::App for WalletApp {
                     }
                     ui.spinner();
                     ctx.request_repaint();
-                } else {
-                    match mining_status_result {
-                        Ok(mining_status) => match &*mining_status {
-                            MiningStatus::Completed(block) => {
-                                self.status = format!("Транзакция отправлена, блок добавлен: {:?}", block);
-                                if let Ok(mut mining_status) = self.mining_status.try_lock() {
-                                    *mining_status = MiningStatus::Idle;
-                                    self.progress_rx = None;
-                                    println!("Статус майнинга сброшен на Idle");
-                                } else {
-                                    println!("Не удалось сбросить статус майнинга: Mutex занят");
-                                    self.status = "Ошибка: Не удалось сбросить статус майнинга".to_string();
-                                }
-                                ctx.request_repaint();
-                            }
-                            MiningStatus::Failed(err) => {
-                                self.status = err.clone();
-                                if let Ok(mut mining_status) = self.mining_status.try_lock() {
-                                    *mining_status = MiningStatus::Idle;
-                                    self.progress_rx = None;
-                                    println!("Статус майнинга сброшен на Idle");
-                                } else {
-                                    println!("Не удалось сбросить статус майнинга: Mutex занят");
-                                    self.status = "Ошибка: Не удалось сбросить статус майнинга".to_string();
-                                }
-                                ctx.request_repaint();
-                            }
-                            MiningStatus::Idle => {
-                                if is_mining {
-                                    ui.add_enabled(false, egui::Button::new("Отправить"));
-                                } else if ui.button("Отправить").clicked() {
-                                    let start_time = SystemTime::now();
-                                    println!(
-                                        "Кнопка 'Отправить' нажата, получатель: {}, сумма: {}",
-                                        self.receiver_address, self.amount
-                                    );
-                                    if self.receiver_address.trim().is_empty() {
-                                        self.status = "Адрес получателя не может быть пустым".to_string();
-                                        let duration = SystemTime::now()
-                                            .duration_since(start_time)
-                                            .unwrap()
-                                            .as_secs_f64();
-                                        println!("Ошибка: пустой адрес получателя, проверка заняла {} секунд", duration);
-                                        ctx.request_repaint();
-                                        return;
-                                    }
-                                    if let Ok(amount) = self.amount.trim().parse::<u64>() {
-                                        if amount == 0 {
-                                            self.status = "Сумма должна быть больше нуля".to_string();
-                                            let duration = SystemTime::now()
-                                                .duration_since(start_time)
-                                                .unwrap()
-                                                .as_secs_f64();
-                                            println!("Ошибка: сумма равна нулю, проверка заняла {} секунд", duration);
-                                            ctx.request_repaint();
-                                            return;
-                                        }
-                                        let transaction = Transaction {
-                                            sender: self.wallet_address.clone(),
-                                            receiver: self.receiver_address.trim().to_string(),
-                                            amount,
-                                        };
-                                        let blockchain = Arc::clone(&self.node.blockchain);
-                                        let mining_status = Arc::clone(&self.mining_status);
-                                        let mining_progress = Arc::clone(&self.mining_progress);
-
-                                        // Добавляем транзакцию в blockchain
-                                        {
-                                            let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                                            println!("Транзакция для добавления: {:?}", transaction);
-                                            if !blockchain.add_transaction(transaction.clone()) {
-                                                self.status = "Недостаточно средств или неверный адрес".to_string();
-                                                let duration = SystemTime::now()
-                                                    .duration_since(start_time)
-                                                    .unwrap()
-                                                    .as_secs_f64();
-                                                println!(
-                                                    "Ошибка: недостаточно средств или неверный адрес, проверка заняла {} секунд",
-                                                    duration
-                                                );
-                                                ctx.request_repaint();
-                                                return;
-                                            }
-                                            let duration = SystemTime::now()
-                                                .duration_since(start_time)
-                                                .unwrap()
-                                                .as_secs_f64();
-                                            println!("Транзакция успешно добавлена за {} секунд", duration);
-                                        }
-
-                                        self.status = "Запуск майнинга...".to_string();
-                                        println!("Подготовка к отправке задачи майнинга в потоке {:?}", thread::current().id());
-                                        let (progress_tx, progress_rx) = mpsc::channel();
-                                        {
-                                            let mut mining_progress = self.mining_progress.lock().expect("Не удалось захватить Mutex для mining_progress");
-                                            *mining_progress = None;
-                                            self.progress_rx = Some(progress_rx);
-                                            println!("Канал прогресса создан");
-                                        }
-                                        // Проверяем статус перед отправкой
-                                        if let Ok(mining_status) = self.mining_status.lock() {
-                                            if matches!(*mining_status, MiningStatus::Mining) {
-                                                self.status = "Ошибка: Майнинг уже выполняется".to_string();
-                                                println!("Ошибка: Майнинг уже выполняется, задача не отправлена");
-                                                self.progress_rx = None;
-                                                ctx.request_repaint();
-                                                return;
-                                            }
-                                        }
-                                        // Пытаемся установить статус майнинга
-                                        let mut attempts = 0;
-                                        let max_attempts = 5;
-                                        let mut mining_status_set = false;
-                                        while attempts < max_attempts {
-                                            match self.mining_status.try_lock() {
-                                                Ok(mut mining_status) => {
-                                                    *mining_status = MiningStatus::Mining;
-                                                    println!("Статус майнинга установлен: Mining");
-                                                    mining_status_set = true;
-                                                    break;
-                                                }
-                                                Err(e) => {
-                                                    attempts += 1;
-                                                    println!("Попытка {} не удалась: {}", attempts, e);
-                                                    if attempts == max_attempts {
-                                                        self.status = format!("Ошибка: Не удалось установить статус майнинга после {} попыток: {}", max_attempts, e);
-                                                        println!("Не удалось установить статус майнинга после {} попыток: {}", max_attempts, e);
-                                                        self.progress_rx = None;
-                                                        ctx.request_repaint();
-                                                        return;
-                                                    }
-                                                    std::thread::sleep(Duration::from_millis(500)); // Увеличена задержка
-                                                }
-                                            }
-                                        }
-                                        if !mining_status_set {
-                                            return;
-                                        }
-                                        println!("Попытка отправки задачи майнинга");
-                                        if let Err(e) = self.mining_tx.send(MiningTask {
-                                            blockchain,
-                                            transaction,
-                                            mining_status,
-                                            progress_tx,
-                                        }) {
-                                            self.status = format!("Ошибка отправки задачи майнинга: {}", e);
-                                            println!("Ошибка отправки задачи майнинга: {}", e);
-                                            if let Ok(mut mining_status) = self.mining_status.try_lock() {
-                                                *mining_status = MiningStatus::Idle;
-                                                println!("Статус майнинга сброшен на Idle");
-                                            }
-                                            self.progress_rx = None;
-                                            ctx.request_repaint();
-                                            return;
-                                        }
-                                        println!("Задача майнинга успешно отправлена");
-                                        let duration = SystemTime::now()
-                                            .duration_since(start_time)
-                                            .unwrap()
-                                            .as_secs_f64();
-                                        println!("Запуск майнинга завершен за {} секунд", duration);
-                                        ctx.request_repaint();
-                                    } else {
-                                        self.status = "Неверный формат суммы".to_string();
-                                        let duration = SystemTime::now()
-                                            .duration_since(start_time)
-                                            .unwrap()
-                                            .as_secs_f64();
-                                        println!("Ошибка: неверный формат суммы, проверка заняла {} секунд", duration);
-                                        ctx.request_repaint();
-                                    }
-                                }
-                            }
-                            MiningStatus::Mining => {}
-                        },
-                        Err(e) => {
-                            self.status = format!("Ошибка: Не удалось проверить статус майнинга: {}", e);
-                            println!("Не удалось проверить статус майнинга: {}", e);
+                } else if ui.button("Отправить").clicked() {
+                    let start_time = SystemTime::now();
+                    println!(
+                        "Кнопка 'Отправить' нажата, получатель: {}, сумма: {}",
+                        self.receiver_address, self.amount
+                    );
+                    if self.receiver_address.trim().is_empty() {
+                        self.status = "Адрес получателя не может быть пустым".to_string();
+                        let duration = SystemTime::now()
+                            .duration_since(start_time)
+                            .unwrap()
+                            .as_secs_f64();
+                        println!("Ошибка: пустой адрес получателя, проверка заняла {} секунд", duration);
+                        ctx.request_repaint();
+                        return;
+                    }
+                    if let Ok(amount) = self.amount.trim().parse::<u64>() {
+                        if amount == 0 {
+                            self.status = "Сумма должна быть больше нуля".to_string();
+                            let duration = SystemTime::now()
+                                .duration_since(start_time)
+                                .unwrap()
+                                .as_secs_f64();
+                            println!("Ошибка: сумма равна нулю, проверка заняла {} секунд", duration);
                             ctx.request_repaint();
+                            return;
                         }
+                        let transaction = Transaction {
+                            sender: self.wallet_address.clone(),
+                            receiver: self.receiver_address.trim().to_string(),
+                            amount,
+                        };
+                        let blockchain = Arc::clone(&self.node.blockchain);
+                        let mining_status = Arc::clone(&self.mining_status);
+                        let mining_progress = Arc::clone(&self.mining_progress);
+
+                        // Добавляем транзакцию в blockchain
+                        {
+                            let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                            println!("Транзакция для добавления: {:?}", transaction);
+                            if !blockchain.add_transaction(transaction.clone()) {
+                                self.status = "Недостаточно средств или неверный адрес".to_string();
+                                let duration = SystemTime::now()
+                                    .duration_since(start_time)
+                                    .unwrap()
+                                    .as_secs_f64();
+                                println!(
+                                    "Ошибка: недостаточно средств или неверный адрес, проверка заняла {} секунд",
+                                    duration
+                                );
+                                ctx.request_repaint();
+                                return;
+                            }
+                            let duration = SystemTime::now()
+                                .duration_since(start_time)
+                                .unwrap()
+                                .as_secs_f64();
+                            println!("Транзакция успешно добавлена за {} секунд", duration);
+                        }
+
+                        self.status = "Запуск майнинга...".to_string();
+                        println!("Подготовка к отправке задачи майнинга в потоке {:?}", thread::current().id());
+                        let (progress_tx, progress_rx) = mpsc::channel();
+                        {
+                            let mut mining_progress = self.mining_progress.lock().expect("Не удалось захватить Mutex для mining_progress");
+                            *mining_progress = None;
+                            self.progress_rx = Some(progress_rx);
+                            println!("Канал прогресса создан");
+                        }
+                        // Устанавливаем статус майнинга с использованием блокирующего lock
+                        match self.mining_status.lock() {
+                            Ok(mut mining_status) => {
+                                *mining_status = MiningStatus::Mining;
+                                println!("Статус майнинга установлен: Mining");
+                            }
+                            Err(e) => {
+                                self.status = format!("Ошибка: Не удалось установить статус майнинга: {}", e);
+                                println!("Ошибка: Не удалось установить статус майнинга: {}", e);
+                                self.progress_rx = None;
+                                ctx.request_repaint();
+                                return;
+                            }
+                        }
+                        println!("Попытка отправки задачи майнинга");
+                        if let Err(e) = self.mining_tx.send(MiningTask {
+                            blockchain,
+                            transaction,
+                            mining_status,
+                            progress_tx,
+                        }) {
+                            self.status = format!("Ошибка отправки задачи майнинга: {}", e);
+                            println!("Ошибка отправки задачи майнинга: {}", e);
+                            if let Ok(mut mining_status) = self.mining_status.lock() {
+                                *mining_status = MiningStatus::Idle;
+                                println!("Статус майнинга сброшен на Idle");
+                            }
+                            self.progress_rx = None;
+                            ctx.request_repaint();
+                            return;
+                        }
+                        println!("Задача майнинга успешно отправлена");
+                        let duration = SystemTime::now()
+                            .duration_since(start_time)
+                            .unwrap()
+                            .as_secs_f64();
+                        println!("Запуск майнинга завершен за {} секунд", duration);
+                        ctx.request_repaint();
+                    } else {
+                        self.status = "Неверный формат суммы".to_string();
+                        let duration = SystemTime::now()
+                            .duration_since(start_time)
+                            .unwrap()
+                            .as_secs_f64();
+                        println!("Ошибка: неверный формат суммы, проверка заняла {} секунд", duration);
+                        ctx.request_repaint();
                     }
                 }
 
@@ -855,6 +811,7 @@ fn main() {
     let config: Config = serde_json::from_str(&config_content).expect("Ошибка парсинга конфигурации");
 
     let (mining_tx, mining_rx) = mpsc::channel();
+    println!("Канал майнинга создан");
     let mut node = Node::new(format!("127.0.0.1:{}", config.wallet.port), mining_rx);
     node.start_server(config.wallet.port);
     node.discover_peers();
