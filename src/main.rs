@@ -215,8 +215,8 @@ impl Blockchain {
             nonce: 0,
         };
 
-        let max_iterations = 2_000; // Уменьшено для тестов
-        let timeout = Duration::from_secs(3); // Таймаут 3 секунды
+        let max_iterations = 100; // Уменьшено для тестирования
+        let timeout = Duration::from_secs(1); // Уменьшено для тестирования
         let mut iteration_count = 0;
 
         loop {
@@ -318,9 +318,14 @@ impl Node {
         // Запускаем фоновый поток для обработки задач майнинга
         thread::spawn(move || {
             println!("Фоновый поток майнинга запущен в потоке {:?}", thread::current().id());
+            let mut mining_count = 0;
+            let mut total_duration = 0.0;
+            let mut successful_mining = 0;
             while let Ok(task) = mining_rx.recv() {
-                println!("Получена задача майнинга в потоке {:?}", thread::current().id());
+                mining_count += 1;
+                println!("Получена задача майнинга {} в потоке {:?}", mining_count, thread::current().id());
                 let progress_tx_clone = task.progress_tx.clone(); // Клонируем Sender для использования в mine_block
+                let start_time = SystemTime::now();
                 // Выполняем майнинг и сохраняем результат до захвата Mutex
                 let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let mut blockchain = task.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
@@ -342,23 +347,45 @@ impl Node {
                         None
                     }
                 };
-                println!("Майнинг завершен с результатом: {:?}", result);
-                // Обновляем статус майнинга с минимальным удержанием Mutex
-                if let Ok(mut mining_status) = task.mining_status.try_lock() {
-                    *mining_status = match result {
-                        Some(block) => {
-                            println!("Майнинг успешен, блок добавлен");
-                            MiningStatus::Completed(Some(block))
-                        }
-                        None => {
-                            println!("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут");
-                            MiningStatus::Failed("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут".to_string())
-                        }
-                    };
-                    println!("Статус майнинга обновлён: {:?}", *mining_status);
-                } else {
-                    println!("Не удалось захватить Mutex для mining_status в фоновом потоке");
-                    let _ = task.progress_tx.send("Ошибка: Не удалось обновить статус майнинга".to_string());
+                let duration = SystemTime::now()
+                    .duration_since(start_time)
+                    .unwrap()
+                    .as_secs_f64();
+                total_duration += duration;
+                println!("Майнинг {} завершен за {} секунд с результатом: {:?}", mining_count, duration, result);
+                // Обновляем статус майнинга с несколькими попытками
+                let mut attempts = 0;
+                let max_attempts = 5;
+                let mut status_updated = false;
+                while attempts < max_attempts {
+                    if let Ok(mut mining_status) = task.mining_status.try_lock() {
+                        *mining_status = match result {
+                            Some(block) => {
+                                successful_mining += 1;
+                                println!("Майнинг {} успешен, блок добавлен", mining_count);
+                                MiningStatus::Completed(Some(block))
+                            }
+                            None => {
+                                println!("Майнинг {} не удался: нет транзакций или превышен лимит итераций/таймаут", mining_count);
+                                MiningStatus::Failed("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут".to_string())
+                            }
+                        };
+                        status_updated = true;
+                        println!("Статус майнинга {} обновлён: {:?}", mining_count, *mining_status);
+                        break;
+                    } else {
+                        attempts += 1;
+                        println!("Попытка {} обновить статус майнинга {} не удалась", attempts, mining_count);
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                }
+                if !status_updated {
+                    println!("Не удалось обновить статус майнинга {} после {} попыток", mining_count, max_attempts);
+                    let _ = task.progress_tx.send(format!("Ошибка: Не удалось обновить статус майнинга {} после {} попыток", mining_count, max_attempts));
+                }
+                if mining_count > 0 {
+                    println!("Среднее время майнинга после {} задач: {} секунд", mining_count, total_duration / mining_count as f64);
+                    println!("Успешных майнингов: {}, Неуспешных: {}", successful_mining, mining_count - successful_mining);
                 }
             }
             println!("Фоновый поток майнинга завершен");
@@ -572,7 +599,10 @@ impl eframe::App for WalletApp {
                                 ctx.request_repaint();
                             }
                             MiningStatus::Idle => {
-                                if ui.button("Отправить").clicked() {
+                                // Отключаем кнопку, если майнинг уже идет
+                                if is_mining {
+                                    ui.add_enabled(false, egui::Button::new("Отправить"));
+                                } else if ui.button("Отправить").clicked() {
                                     let start_time = SystemTime::now();
                                     println!(
                                         "Кнопка 'Отправить' нажата, получатель: {}, сумма: {}",
