@@ -70,7 +70,7 @@ struct WalletApp {
     amount: String,
     status: String,
     mining_status: Arc<Mutex<MiningStatus>>,
-    mining_progress: Arc<Mutex<Option<String>>>, // Для отображения прогресса
+    mining_progress: Arc<Mutex<Option<String>>>,
     last_repaint: f64,
 }
 
@@ -146,6 +146,7 @@ impl Blockchain {
         println!("Начало майнинга...");
         if self.pending_transactions.is_empty() {
             println!("Нет транзакций для майнинга");
+            let _ = progress_tx.send("Нет транзакций для майнинга".to_string());
             return None;
         }
 
@@ -153,6 +154,43 @@ impl Blockchain {
         let previous_block = self.chain.last().unwrap().clone();
         let transactions = self.pending_transactions.clone();
         let difficulty = self.difficulty;
+
+        // Майнинг в отдельной функции без удержания self
+        let block = Self::mine_block_inner(previous_block, transactions, difficulty, progress_tx);
+
+        if let Some(mut block) = block {
+            // Обновляем блокчейн
+            let balance_start_time = SystemTime::now();
+            for tx in &block.transactions {
+                *self.balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
+                *self.balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
+            }
+            let balance_duration = SystemTime::now()
+                .duration_since(balance_start_time)
+                .unwrap()
+                .as_secs_f64();
+            println!("Обновление балансов завершено за {} секунд", balance_duration);
+
+            self.pending_transactions.clear();
+            self.chain.push(block.clone());
+            let total_duration = SystemTime::now()
+                .duration_since(total_start_time)
+                .unwrap()
+                .as_secs_f64();
+            println!("Майнинг завершен за {} секунд", total_duration);
+            Some(block)
+        } else {
+            None
+        }
+    }
+
+    fn mine_block_inner(
+        previous_block: Block,
+        transactions: Vec<Transaction>,
+        difficulty: u32,
+        progress_tx: mpsc::Sender<String>,
+    ) -> Option<Block> {
+        let start_time = SystemTime::now();
         let mut block = Block {
             index: previous_block.index + 1,
             timestamp: SystemTime::now()
@@ -165,9 +203,8 @@ impl Blockchain {
             nonce: 0,
         };
 
-        let start_time = SystemTime::now();
-        let max_iterations = 10_000; // Уменьшено для тестов
-        let timeout = Duration::from_secs(5); // Таймаут 5 секунд
+        let max_iterations = 5_000; // Уменьшено для тестов
+        let timeout = Duration::from_secs(3); // Таймаут 3 секунды
         let mut iteration_count = 0;
 
         loop {
@@ -183,7 +220,16 @@ impl Blockchain {
             }
             iteration_count += 1;
             let hash_start_time = SystemTime::now();
-            let hash = self.calculate_hash(&block);
+            let input = format!(
+                "{}{}{}{}",
+                block.index,
+                block.timestamp,
+                serde_json::to_string(&block.transactions).unwrap(),
+                block.previous_hash
+            );
+            let mut hasher = Sha256::new();
+            hasher.update(input);
+            let hash = format!("{:x}", hasher.finalize());
             let hash_duration = SystemTime::now()
                 .duration_since(hash_start_time)
                 .unwrap()
@@ -203,10 +249,10 @@ impl Blockchain {
                     iteration_count, duration
                 );
                 let _ = progress_tx.send(format!("Подходящий хэш найден после {} итераций", iteration_count));
-                break;
+                return Some(block);
             }
             block.nonce += 1;
-            if iteration_count % 100 == 0 {
+            if iteration_count % 50 == 0 {
                 let progress_duration = SystemTime::now()
                     .duration_since(start_time)
                     .unwrap()
@@ -218,27 +264,6 @@ impl Blockchain {
                 let _ = progress_tx.send(format!("Прогресс майнинга: {} итераций", iteration_count));
             }
         }
-
-        // Обновляем блокчейн
-        let balance_start_time = SystemTime::now();
-        for tx in &block.transactions {
-            *self.balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
-            *self.balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
-        }
-        let balance_duration = SystemTime::now()
-            .duration_since(balance_start_time)
-            .unwrap()
-            .as_secs_f64();
-        println!("Обновление балансов завершено за {} секунд", balance_duration);
-
-        self.pending_transactions.clear();
-        self.chain.push(block.clone());
-        let total_duration = SystemTime::now()
-            .duration_since(total_start_time)
-            .unwrap()
-            .as_secs_f64();
-        println!("Майнинг завершен за {} секунд, итераций: {}", total_duration, iteration_count);
-        Some(block)
     }
 
     fn add_transaction(&mut self, transaction: Transaction) -> bool {
@@ -381,6 +406,7 @@ impl Node {
 
 impl eframe::App for WalletApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        println!("UI обновляется"); // Диагностика
         let now = ctx.input(|i| i.time);
         if now - self.last_repaint > 0.01 {
             ctx.request_repaint();
@@ -431,7 +457,6 @@ impl eframe::App for WalletApp {
                     match &*mining_status {
                         MiningStatus::Mining => {
                             ui.label("Майнинг блока в процессе...");
-                            // Проверяем прогресс
                             let progress = self.mining_progress.lock().unwrap();
                             if let Some(progress_msg) = &*progress {
                                 ui.label(format!("Прогресс: {}", progress_msg));
@@ -520,9 +545,10 @@ impl eframe::App for WalletApp {
                                         let mut mining_progress = mining_progress.lock().unwrap();
                                         *mining_progress = None;
                                     }
+                                    let blockchain_clone = blockchain.clone();
                                     thread::spawn(move || {
                                         println!("Поток майнинга начат");
-                                        let mut blockchain = blockchain.lock().unwrap();
+                                        let mut blockchain = blockchain_clone.lock().unwrap();
                                         let result = blockchain.mine_block(progress_tx);
                                         let mut mining_status = mining_status.lock().unwrap();
                                         *mining_status = match result {
@@ -537,13 +563,14 @@ impl eframe::App for WalletApp {
                                         };
                                         println!("Статус майнинга обновлён: {:?}", *mining_status);
                                     });
-                                    // Поток для получения прогресса
                                     let mining_progress = Arc::clone(&self.mining_progress);
                                     thread::spawn(move || {
-                                        while let Ok(progress) = progress_rx.recv_timeout(Duration::from_millis(100)) {
+                                        while let Ok(progress) = progress_rx.recv_timeout(Duration::from_millis(50)) {
                                             let mut mining_progress = mining_progress.lock().unwrap();
                                             *mining_progress = Some(progress);
+                                            println!("Прогресс майнинга обновлен в UI: {:?}", *mining_progress);
                                         }
+                                        println!("Поток прогресса завершен");
                                     });
                                     let duration = SystemTime::now()
                                         .duration_since(start_time)

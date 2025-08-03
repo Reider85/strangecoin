@@ -11,3 +11,5 @@
 0.1.1 mining timing
 0.1.2 mining run fix
 0.1.3 mining run fix
+0.1.4 mining run fix
+0.1.5 self fix
