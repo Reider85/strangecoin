@@ -168,7 +168,7 @@ impl Blockchain {
         let difficulty = self.difficulty;
 
         // Майнинг в отдельной функции без удержания self
-        let block = Self::mine_block_inner(previous_block, transactions, difficulty, progress_tx);
+        let block = Self::mine_block_inner(previous_block, transactions, difficulty, progress_tx.clone());
 
         if let Some(mut block) = block {
             // Обновляем блокчейн
@@ -190,8 +190,15 @@ impl Blockchain {
                 .unwrap()
                 .as_secs_f64();
             println!("Майнинг завершен за {} секунд", total_duration);
+            let _ = progress_tx.send(format!("Майнинг завершен за {} секунд", total_duration));
             Some(block)
         } else {
+            let total_duration = SystemTime::now()
+                .duration_since(total_start_time)
+                .unwrap()
+                .as_secs_f64();
+            println!("Майнинг не удался за {} секунд", total_duration);
+            let _ = progress_tx.send(format!("Майнинг не удался за {} секунд", total_duration));
             None
         }
     }
@@ -203,6 +210,7 @@ impl Blockchain {
         progress_tx: mpsc::Sender<String>,
     ) -> Option<Block> {
         let start_time = SystemTime::now();
+        println!("Начало mine_block_inner в потоке {:?}", thread::current().id());
         let mut block = Block {
             index: previous_block.index + 1,
             timestamp: SystemTime::now()
@@ -218,16 +226,25 @@ impl Blockchain {
         let max_iterations = 100; // Уменьшено для тестирования
         let timeout = Duration::from_secs(1); // Уменьшено для тестирования
         let mut iteration_count = 0;
+        let mut total_hash_time = 0.0;
 
         loop {
             if iteration_count >= max_iterations {
-                println!("Достигнуто максимальное количество итераций: {}", max_iterations);
-                let _ = progress_tx.send(format!("Достигнуто максимальное количество итераций: {}", max_iterations));
+                let total_duration = SystemTime::now()
+                    .duration_since(start_time)
+                    .unwrap()
+                    .as_secs_f64();
+                println!("Достигнуто максимальное количество итераций: {} за {} секунд", max_iterations, total_duration);
+                let _ = progress_tx.send(format!("Достигнуто максимальное количество итераций: {} за {} секунд", max_iterations, total_duration));
                 return None;
             }
             if SystemTime::now().duration_since(start_time).unwrap() > timeout {
-                println!("Майнинг прерван: превышен таймаут {} секунд", timeout.as_secs());
-                let _ = progress_tx.send(format!("Майнинг прерван: превышен таймаут {} секунд", timeout.as_secs()));
+                let total_duration = SystemTime::now()
+                    .duration_since(start_time)
+                    .unwrap()
+                    .as_secs_f64();
+                println!("Майнинг прерван: превышен таймаут {} секунд, всего итераций: {}", timeout.as_secs(), iteration_count);
+                let _ = progress_tx.send(format!("Майнинг прерван: превышен таймаут {} секунд, всего итераций: {}", timeout.as_secs(), iteration_count));
                 return None;
             }
             iteration_count += 1;
@@ -246,21 +263,26 @@ impl Blockchain {
                 .duration_since(hash_start_time)
                 .unwrap()
                 .as_secs_f64();
+            total_hash_time += hash_duration;
             println!(
                 "Итерация {}, nonce: {}, хэш: {}, время вычисления хэша: {} секунд",
                 iteration_count, block.nonce, hash, hash_duration
             );
             if hash.starts_with(&"0".repeat(difficulty as usize)) {
                 block.hash = hash;
-                let duration = SystemTime::now()
+                let total_duration = SystemTime::now()
                     .duration_since(start_time)
                     .unwrap()
                     .as_secs_f64();
+                let avg_hash_time = if iteration_count > 0 { total_hash_time / iteration_count as f64 } else { 0.0 };
                 println!(
-                    "Подходящий хэш найден после {} итераций за {} секунд",
-                    iteration_count, duration
+                    "Подходящий хэш найден после {} итераций за {} секунд, среднее время хэширования: {} секунд",
+                    iteration_count, total_duration, avg_hash_time
                 );
-                let _ = progress_tx.send(format!("Подходящий хэш найден после {} итераций", iteration_count));
+                let _ = progress_tx.send(format!(
+                    "Подходящий хэш найден после {} итераций за {} секунд",
+                    iteration_count, total_duration
+                ));
                 return Some(block);
             }
             block.nonce += 1;
@@ -269,19 +291,25 @@ impl Blockchain {
                     .duration_since(start_time)
                     .unwrap()
                     .as_secs_f64();
+                let avg_hash_time = if iteration_count > 0 { total_hash_time / iteration_count as f64 } else { 0.0 };
                 println!(
-                    "Прогресс майнинга: {} итераций выполнено за {} секунд",
-                    iteration_count, progress_duration
+                    "Прогресс майнинга: {} итераций выполнено за {} секунд, среднее время хэширования: {} секунд",
+                    iteration_count, progress_duration, avg_hash_time
                 );
-                let _ = progress_tx.send(format!("Прогресс майнинга: {} итераций", iteration_count));
+                let _ = progress_tx.send(format!("Прогресс майнинга: {} итераций за {} секунд", iteration_count, progress_duration));
             }
         }
     }
 
     fn add_transaction(&mut self, transaction: Transaction) -> bool {
         let start_time = SystemTime::now();
+        println!("Начало добавления транзакции: {:?}", transaction);
         if transaction.sender.is_empty() || transaction.receiver.is_empty() {
-            println!("Ошибка: Пустой адрес отправителя или получателя");
+            let duration = SystemTime::now()
+                .duration_since(start_time)
+                .unwrap()
+                .as_secs_f64();
+            println!("Ошибка: Пустой адрес отправителя или получателя, проверка заняла {} секунд", duration);
             return false;
         }
         if let Some(sender_balance) = self.balances.get(&transaction.sender) {
@@ -324,7 +352,7 @@ impl Node {
             while let Ok(task) = mining_rx.recv() {
                 mining_count += 1;
                 println!("Получена задача майнинга {} в потоке {:?}", mining_count, thread::current().id());
-                let progress_tx_clone = task.progress_tx.clone(); // Клонируем Sender для использования в mine_block
+                let progress_tx_clone = task.progress_tx.clone();
                 let start_time = SystemTime::now();
                 // Выполняем майнинг и сохраняем результат до захвата Mutex
                 let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -342,8 +370,8 @@ impl Node {
                             Some(s) => s.to_string(),
                             None => format!("Неизвестная паника: {:?}", panic),
                         };
-                        println!("Паника в потоке майнинга: {}", err_msg);
-                        let _ = task.progress_tx.send(format!("Паника в потоке майнинга: {}", err_msg));
+                        println!("Паника в потоке майнинга {}: {}", mining_count, err_msg);
+                        let _ = task.progress_tx.send(format!("Паника в потоке майнинга {}: {}", mining_count, err_msg));
                         None
                     }
                 };
@@ -376,7 +404,7 @@ impl Node {
                     } else {
                         attempts += 1;
                         println!("Попытка {} обновить статус майнинга {} не удалась", attempts, mining_count);
-                        std::thread::sleep(Duration::from_millis(100));
+                        std::thread::sleep(Duration::from_millis(200)); // Увеличена задержка
                     }
                 }
                 if !status_updated {
@@ -384,7 +412,8 @@ impl Node {
                     let _ = task.progress_tx.send(format!("Ошибка: Не удалось обновить статус майнинга {} после {} попыток", mining_count, max_attempts));
                 }
                 if mining_count > 0 {
-                    println!("Среднее время майнинга после {} задач: {} секунд", mining_count, total_duration / mining_count as f64);
+                    let avg_duration = total_duration / mining_count as f64;
+                    println!("Среднее время майнинга после {} задач: {} секунд", mining_count, avg_duration);
                     println!("Успешных майнингов: {}, Неуспешных: {}", successful_mining, mining_count - successful_mining);
                 }
             }
@@ -495,7 +524,7 @@ impl Node {
 
 impl eframe::App for WalletApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        println!("UI обновляется в потоке {:?}", thread::current().id());
+        //println!("UI обновляется в потоке {:?}", thread::current().id());
         let now = ctx.input(|i| i.time);
         if now - self.last_repaint > 0.01 {
             ctx.request_repaint();
@@ -599,7 +628,6 @@ impl eframe::App for WalletApp {
                                 ctx.request_repaint();
                             }
                             MiningStatus::Idle => {
-                                // Отключаем кнопку, если майнинг уже идет
                                 if is_mining {
                                     ui.add_enabled(false, egui::Button::new("Отправить"));
                                 } else if ui.button("Отправить").clicked() {
@@ -693,8 +721,8 @@ impl eframe::App for WalletApp {
                                                         ctx.request_repaint();
                                                         return;
                                                     }
-                                                    // Небольшая задержка перед следующей попыткой
-                                                    std::thread::sleep(Duration::from_millis(100));
+                                                    // Увеличена задержка
+                                                    std::thread::sleep(Duration::from_millis(200));
                                                 }
                                             }
                                         }
@@ -736,7 +764,7 @@ impl eframe::App for WalletApp {
                                     }
                                 }
                             }
-                            MiningStatus::Mining => {} // Уже обработано выше
+                            MiningStatus::Mining => {}
                         },
                         Err(e) => {
                             self.status = format!("Ошибка: Не удалось проверить статус майнинга: {}", e);
