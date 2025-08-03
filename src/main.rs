@@ -82,6 +82,8 @@ struct WalletApp {
     is_authenticated: bool,
     receiver_address: String,
     amount: String,
+    ip: String,
+    port: String,
     status: String,
     mining_status: Arc<Mutex<MiningStatus>>,
     mining_progress: Arc<Mutex<Option<String>>>,
@@ -480,26 +482,30 @@ impl Node {
         println!("Обнаружение пиров завершено за {} секунд: {:?}", duration, *peers);
     }
 
-    fn find_wallet_by_ip(&self, ip: &str) -> Option<String> {
+    fn find_wallet_by_ip(&self, ip: &str, port: u16) -> Option<String> {
         let start_time = SystemTime::now();
         let ip = ip.trim();
-        let ip = if !ip.contains(':') {
-            format!("{}:8081", ip)
-        } else {
-            ip.to_string()
-        };
-        if ip.parse::<std::net::SocketAddr>().is_err() {
+        if ip.is_empty() {
             let duration = SystemTime::now()
                 .duration_since(start_time)
                 .unwrap()
                 .as_secs_f64();
-            println!("Некорректный формат IP: {}, проверка заняла {} секунд", ip, duration);
+            println!("Ошибка: Пустой IP-адрес, проверка заняла {} секунд", duration);
+            return None;
+        }
+        let address = format!("{}:{}", ip, port);
+        if address.parse::<std::net::SocketAddr>().is_err() {
+            let duration = SystemTime::now()
+                .duration_since(start_time)
+                .unwrap()
+                .as_secs_f64();
+            println!("Некорректный формат адреса {}:{}", ip, port);
             return None;
         }
         let peers = self.peers.lock().expect("Не удалось захватить Mutex для peers");
         println!("Список пиров: {:?}", *peers);
-        if peers.contains(&ip) {
-            let wallet = match ip.as_str() {
+        if peers.contains(&address) {
+            let wallet = match address.as_str() {
                 "127.0.0.1:8081" => "wallet1".to_string(),
                 "127.0.0.1:8082" => "wallet2".to_string(),
                 _ => format!("wallet{}", rand::thread_rng().gen_range(1..3)),
@@ -508,14 +514,14 @@ impl Node {
                 .duration_since(start_time)
                 .unwrap()
                 .as_secs_f64();
-            println!("Найден кошелёк: {}, поиск занял {} секунд", wallet, duration);
+            println!("Найден кошелёк: {} для адреса {}:{}, поиск занял {} секунд", wallet, ip, port, duration);
             Some(wallet)
         } else {
             let duration = SystemTime::now()
                 .duration_since(start_time)
                 .unwrap()
                 .as_secs_f64();
-            println!("IP {} не найден в списке пиров, поиск занял {} секунд", ip, duration);
+            println!("Адрес {}:{} не найден в списке пиров, поиск занял {} секунд", ip, port, duration);
             None
         }
     }
@@ -867,13 +873,17 @@ impl eframe::App for WalletApp {
                     }
                 }
 
-                ui.heading("Поиск кошелька по IP");
-                let mut ip = String::new();
-                ui.text_edit_singleline(&mut ip);
+                ui.heading("Поиск кошелька по IP и порту");
+                ui.horizontal(|ui| {
+                    ui.label("IP: ");
+                    ui.text_edit_singleline(&mut self.ip);
+                    ui.label("Порт: ");
+                    ui.add(egui::TextEdit::singleline(&mut self.port).desired_width(50.0));
+                });
                 if ui.button("Найти кошелёк").clicked() {
                     let start_time = SystemTime::now();
-                    println!("Кнопка 'Найти кошелёк' нажата, IP: {}", ip);
-                    let ip = ip.trim();
+                    println!("Кнопка 'Найти кошелёк' нажата, IP: {}, Порт: {}", self.ip, self.port);
+                    let ip = self.ip.trim();
                     if ip.is_empty() {
                         self.status = "IP-адрес не может быть пустым".to_string();
                         let duration = SystemTime::now()
@@ -881,20 +891,29 @@ impl eframe::App for WalletApp {
                             .unwrap()
                             .as_secs_f64();
                         println!("Ошибка: пустой IP-адрес, проверка заняла {} секунд", duration);
-                    } else if let Some(wallet) = self.node.find_wallet_by_ip(ip) {
-                        self.status = format!("Найден кошелёк: {}", wallet);
-                        let duration = SystemTime::now()
-                            .duration_since(start_time)
-                            .unwrap()
-                            .as_secs_f64();
-                        println!("Кошелёк найден: {}, поиск занял {} секунд", wallet, duration);
+                    } else if let Ok(port_num) = self.port.trim().parse::<u16>() {
+                        if let Some(wallet) = self.node.find_wallet_by_ip(ip, port_num) {
+                            self.status = format!("Найден кошелёк: {} для {}:{}", wallet, ip, port_num);
+                            let duration = SystemTime::now()
+                                .duration_since(start_time)
+                                .unwrap()
+                                .as_secs_f64();
+                            println!("Кошелёк найден: {} для {}:{}, поиск занял {} секунд", wallet, ip, port_num, duration);
+                        } else {
+                            self.status = format!("Кошелёк не найден для {}:{}", ip, port_num);
+                            let duration = SystemTime::now()
+                                .duration_since(start_time)
+                                .unwrap()
+                                .as_secs_f64();
+                            println!("Кошелёк не найден для {}:{}, поиск занял {} секунд", ip, port_num, duration);
+                        }
                     } else {
-                        self.status = format!("Кошелёк не найден для IP: {}", ip);
+                        self.status = "Неверный формат порта".to_string();
                         let duration = SystemTime::now()
                             .duration_since(start_time)
                             .unwrap()
                             .as_secs_f64();
-                        println!("Кошелёк не найден для IP: {}, поиск занял {} секунд", ip, duration);
+                        println!("Ошибка: неверный формат порта {}, проверка заняла {} секунд", self.port, duration);
                     }
                     ctx.request_repaint();
                 }
@@ -948,6 +967,8 @@ fn main() {
         is_authenticated: false,
         receiver_address: String::new(),
         amount: String::new(),
+        ip: String::new(),
+        port: String::new(),
         status: String::new(),
         mining_status: Arc::new(Mutex::new(MiningStatus::Idle)),
         mining_progress: Arc::new(Mutex::new(None)),
