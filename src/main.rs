@@ -313,6 +313,7 @@ impl Blockchain {
             return false;
         }
         if let Some(sender_balance) = self.balances.get(&transaction.sender) {
+            println!("Баланс отправителя {}: {}", transaction.sender, sender_balance);
             if *sender_balance >= transaction.amount {
                 self.pending_transactions.push(transaction);
                 let duration = SystemTime::now()
@@ -321,6 +322,16 @@ impl Blockchain {
                     .as_secs_f64();
                 println!("Транзакция добавлена за {} секунд: {:?}", duration, self.pending_transactions);
                 return true;
+            } else {
+                let duration = SystemTime::now()
+                    .duration_since(start_time)
+                    .unwrap()
+                    .as_secs_f64();
+                println!(
+                    "Ошибка: Недостаточно средств (баланс: {}, требуется: {}), проверка заняла {} секунд",
+                    sender_balance, transaction.amount, duration
+                );
+                return false;
             }
         }
         let duration = SystemTime::now()
@@ -328,8 +339,8 @@ impl Blockchain {
             .unwrap()
             .as_secs_f64();
         println!(
-            "Ошибка: Недостаточно средств или неверный адрес, проверка заняла {} секунд",
-            duration
+            "Ошибка: Адрес отправителя {} не найден, проверка заняла {} секунд",
+            transaction.sender, duration
         );
         false
     }
@@ -356,11 +367,18 @@ impl Node {
                 let start_time = SystemTime::now();
                 // Выполняем майнинг и сохраняем результат до захвата Mutex
                 let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    println!("Попытка захвата Mutex для blockchain в задаче {}", mining_count);
+                    let lock_start_time = SystemTime::now();
                     let mut blockchain = task.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                    let lock_duration = SystemTime::now().duration_since(lock_start_time).unwrap().as_secs_f64();
+                    println!("Захват Mutex для blockchain в задаче {} занял {} секунд", mining_count, lock_duration);
+                    println!("Проверка транзакции в задаче {}: {:?}", mining_count, task.transaction);
                     if blockchain.add_transaction(task.transaction.clone()) {
+                        println!("Транзакция в задаче {} успешно добавлена, начало майнинга", mining_count);
                         blockchain.mine_block(progress_tx_clone)
                     } else {
-                        let _ = task.progress_tx.send("Ошибка: Не удалось добавить транзакцию".to_string());
+                        let _ = task.progress_tx.send(format!("Ошибка: Не удалось добавить транзакцию в задаче {}", mining_count));
+                        println!("Ошибка: Не удалось добавить транзакцию в задаче {}", mining_count);
                         None
                     }
                 })) {
@@ -404,7 +422,7 @@ impl Node {
                     } else {
                         attempts += 1;
                         println!("Попытка {} обновить статус майнинга {} не удалась", attempts, mining_count);
-                        std::thread::sleep(Duration::from_millis(200)); // Увеличена задержка
+                        std::thread::sleep(Duration::from_millis(500)); // Увеличена задержка
                     }
                 }
                 if !status_updated {
@@ -524,7 +542,6 @@ impl Node {
 
 impl eframe::App for WalletApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        //println!("UI обновляется в потоке {:?}", thread::current().id());
         let now = ctx.input(|i| i.time);
         if now - self.last_repaint > 0.01 {
             ctx.request_repaint();
@@ -699,7 +716,17 @@ impl eframe::App for WalletApp {
                                             self.progress_rx = Some(progress_rx);
                                             println!("Канал прогресса создан");
                                         }
-                                        // Пытаемся установить статус майнинга с несколькими попытками
+                                        // Проверяем статус перед отправкой
+                                        if let Ok(mining_status) = self.mining_status.lock() {
+                                            if matches!(*mining_status, MiningStatus::Mining) {
+                                                self.status = "Ошибка: Майнинг уже выполняется".to_string();
+                                                println!("Ошибка: Майнинг уже выполняется, задача не отправлена");
+                                                self.progress_rx = None;
+                                                ctx.request_repaint();
+                                                return;
+                                            }
+                                        }
+                                        // Пытаемся установить статус майнинга
                                         let mut attempts = 0;
                                         let max_attempts = 5;
                                         let mut mining_status_set = false;
@@ -721,15 +748,14 @@ impl eframe::App for WalletApp {
                                                         ctx.request_repaint();
                                                         return;
                                                     }
-                                                    // Увеличена задержка
-                                                    std::thread::sleep(Duration::from_millis(200));
+                                                    std::thread::sleep(Duration::from_millis(500)); // Увеличена задержка
                                                 }
                                             }
                                         }
                                         if !mining_status_set {
                                             return;
                                         }
-                                        println!("Отправка задачи майнинга");
+                                        println!("Попытка отправки задачи майнинга");
                                         if let Err(e) = self.mining_tx.send(MiningTask {
                                             blockchain,
                                             transaction,
@@ -746,7 +772,7 @@ impl eframe::App for WalletApp {
                                             ctx.request_repaint();
                                             return;
                                         }
-                                        println!("Задача майнинга отправлена");
+                                        println!("Задача майнинга успешно отправлена");
                                         let duration = SystemTime::now()
                                             .duration_since(start_time)
                                             .unwrap()

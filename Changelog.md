@@ -20,3 +20,4 @@
 0.2.0 mining status fix
 0.2.1 mining status fix
 0.2.2 mining status fix
+0.2.3 mining thread run fix
