@@ -533,8 +533,8 @@ impl Node {
                     Ok(mut stream) => {
                         let mut buffer = [0; 4096]; // Увеличенный буфер
                         match stream.read(&mut buffer) {
-                            Ok(_) => {
-                                let request = String::from_utf8_lossy(&buffer[..]).to_string();
+                            Ok(n) => {
+                                let request = String::from_utf8_lossy(&buffer[..n]).to_string();
                                 println!("Получен запрос: {}", request);
                                 if request.contains("GET_BLOCKCHAIN") {
                                     let blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
@@ -618,8 +618,9 @@ impl Node {
                         Ok(_) => {
                             let mut buffer = [0; 4096]; // Увеличенный буфер
                             match stream.read(&mut buffer) {
-                                Ok(_) => {
-                                    let response = String::from_utf8_lossy(&buffer[..]).to_string();
+                                Ok(n) => {
+                                    let response = String::from_utf8_lossy(&buffer[..n]).to_string();
+                                    println!("Получен ответ от узла {}: {}", peer, response);
                                     match serde_json::from_str::<Blockchain>(&response) {
                                         Ok(received_blockchain) => {
                                             let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");

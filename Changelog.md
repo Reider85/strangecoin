@@ -29,3 +29,4 @@
 0.2.9 sync blockchain
 0.3.0 sync blockchain
 0.3.1 sync blockchain
+0.3.2 sync blockchain
