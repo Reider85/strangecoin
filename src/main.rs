@@ -27,6 +27,12 @@ struct WalletConfig {
     port: u16,
 }
 
+// Структура для network.json
+#[derive(Deserialize, Serialize)]
+struct NetworkConfig {
+    peers: Vec<String>,
+}
+
 // Структура блока
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Block {
@@ -467,12 +473,20 @@ impl Node {
         let start_time = SystemTime::now();
         let mut peers = self.peers.lock().expect("Не удалось захватить Mutex для peers");
         peers.clear();
+        // Читаем network.json
+        let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
+        let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
+        let network_path = exe_dir.join("network.json");
+        let network_config: NetworkConfig = match fs::read_to_string(&network_path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| NetworkConfig { peers: vec![] }),
+            Err(_) => NetworkConfig { peers: vec![] },
+        };
         // Исключаем собственный адрес из списка пиров
         let own_port = self.address.split(':').last().unwrap_or("0").parse::<u16>().unwrap_or(0);
-        let peer_ports = vec![8081, 8082];
-        for port in peer_ports {
-            if port != own_port {
-                peers.push(format!("127.0.0.1:{}", port));
+        for peer in network_config.peers {
+            let peer_port = peer.split(':').last().unwrap_or("0").parse::<u16>().unwrap_or(0);
+            if peer_port != own_port {
+                peers.push(peer);
             }
         }
         let duration = SystemTime::now()
@@ -480,6 +494,38 @@ impl Node {
             .unwrap()
             .as_secs_f64();
         println!("Обнаружение пиров завершено за {} секунд: {:?}", duration, *peers);
+    }
+
+    fn add_peer(&mut self, address: String) -> bool {
+        let start_time = SystemTime::now();
+        let mut peers = self.peers.lock().expect("Не удалось захватить Mutex для peers");
+        if peers.contains(&address) {
+            let duration = SystemTime::now()
+                .duration_since(start_time)
+                .unwrap()
+                .as_secs_f64();
+            println!("Пир {} уже существует, добавление не требуется, заняло {} секунд", address, duration);
+            return false;
+        }
+        peers.push(address.clone()); // Clone here to keep ownership
+        let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
+        let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
+        let network_path = exe_dir.join("network.json");
+        let mut network_config = match fs::read_to_string(&network_path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| NetworkConfig { peers: vec![] }),
+            Err(_) => NetworkConfig { peers: vec![] },
+        };
+        if !network_config.peers.contains(&address) {
+            network_config.peers.push(address.clone()); // Clone here as well
+            let content = serde_json::to_string_pretty(&network_config).expect("Ошибка сериализации network.json");
+            fs::write(&network_path, content).expect("Ошибка записи в network.json");
+        }
+        let duration = SystemTime::now()
+            .duration_since(start_time)
+            .unwrap()
+            .as_secs_f64();
+        println!("Пир {} добавлен за {} секунд", address, duration);
+        true
     }
 
     fn find_wallet_by_ip(&self, ip: &str, port: u16) -> Option<String> {
@@ -892,13 +938,23 @@ impl eframe::App for WalletApp {
                             .as_secs_f64();
                         println!("Ошибка: пустой IP-адрес, проверка заняла {} секунд", duration);
                     } else if let Ok(port_num) = self.port.trim().parse::<u16>() {
+                        let address = format!("{}:{}", ip, port_num);
                         if let Some(wallet) = self.node.find_wallet_by_ip(ip, port_num) {
-                            self.status = format!("Найден кошелёк: {} для {}:{}", wallet, ip, port_num);
-                            let duration = SystemTime::now()
-                                .duration_since(start_time)
-                                .unwrap()
-                                .as_secs_f64();
-                            println!("Кошелёк найден: {} для {}:{}, поиск занял {} секунд", wallet, ip, port_num, duration);
+                            if self.node.add_peer(address.clone()) {
+                                self.status = format!("Найден кошелёк: {} для {}:{} и добавлен в network.json", wallet, ip, port_num);
+                                let duration = SystemTime::now()
+                                    .duration_since(start_time)
+                                    .unwrap()
+                                    .as_secs_f64();
+                                println!("Кошелёк найден: {} для {}:{} и добавлен в network.json, поиск занял {} секунд", wallet, ip, port_num, duration);
+                            } else {
+                                self.status = format!("Найден кошелёк: {} для {}:{}, уже существует в network.json", wallet, ip, port_num);
+                                let duration = SystemTime::now()
+                                    .duration_since(start_time)
+                                    .unwrap()
+                                    .as_secs_f64();
+                                println!("Кошелёк найден: {} для {}:{}, уже существует в network.json, поиск занял {} секунд", wallet, ip, port_num, duration);
+                            }
                         } else {
                             self.status = format!("Кошелёк не найден для {}:{}", ip, port_num);
                             let duration = SystemTime::now()
@@ -932,6 +988,14 @@ fn main() {
         r#"{"wallet": {"name": "wallet1", "password": "password", "port": 8081}}"#.to_string()
     });
     let config: Config = serde_json::from_str(&config_content).expect("Ошибка парсинга конфигурации");
+
+    // Создаем или обновляем network.json с начальными пирами
+    let network_path = exe_dir.join("network.json");
+    let network_config = NetworkConfig {
+        peers: vec!["127.0.0.1:8081".to_string(), "127.0.0.1:8082".to_string()],
+    };
+    let network_content = serde_json::to_string_pretty(&network_config).expect("Ошибка сериализации network.json");
+    fs::write(&network_path, network_content).expect("Ошибка записи в network.json");
 
     let (mining_tx, mining_rx) = mpsc::channel();
     let (sync_tx, sync_rx) = mpsc::channel();
