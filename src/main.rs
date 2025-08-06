@@ -296,6 +296,11 @@ impl Blockchain {
             let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
             for tx in &self.pending_transactions {
                 let key = tx.id.as_bytes();
+                println!("Удаление ключа: {:?}", key); // Для отладки
+                if key.is_empty() {
+                    println!("Ошибка: пустой ключ для транзакции {}", tx.id);
+                    continue;
+                }
                 if let Err(e) = db.delete(key) {
                     println!("Ошибка удаления транзакции {} из LevelDB: {}", tx.id, e);
                 }
