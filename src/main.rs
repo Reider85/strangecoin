@@ -71,7 +71,7 @@ struct Blockchain {
     difficulty: u32,
     pending_transactions: Vec<Transaction>,
     #[serde(skip)]
-    db: Arc<Mutex<DB>>, // Используем Arc<Mutex<DB>>
+    db: Arc<Mutex<DB>>,
 }
 
 impl<'de> Deserialize<'de> for Blockchain {
@@ -79,7 +79,6 @@ impl<'de> Deserialize<'de> for Blockchain {
     where
         D: Deserializer<'de>,
     {
-        // Десериализуем промежуточную структуру
         let BlockchainDeserialize {
             chain,
             balances,
@@ -87,44 +86,17 @@ impl<'de> Deserialize<'de> for Blockchain {
             pending_transactions,
         } = BlockchainDeserialize::deserialize(deserializer)?;
 
-        // Инициализируем LevelDB
-        let exe_path = std::env::current_exe().map_err(serde::de::Error::custom)?;
-        let exe_dir = exe_path
-            .parent()
-            .ok_or_else(|| serde::de::Error::custom("Не удалось получить директорию исполняемого файла"))?;
-        let db_path = exe_dir.join("blockchain_db");
-        let db = DB::open(db_path, Options::default()).map_err(serde::de::Error::custom)?;
-        let db = Arc::new(Mutex::new(db));
-
-        // Загружаем сохранённые транзакции из LevelDB
-        let mut stored_transactions = vec![];
-        let mut db_locked = db.lock().map_err(serde::de::Error::custom)?;
-        let mut iterator = db_locked
-            .new_iter()
-            .map_err(serde::de::Error::custom)?;
-        while let Some((key, value)) = iterator.next() {
-            if let Ok(transaction) = serde_json::from_slice::<Transaction>(&value) {
-                stored_transactions.push(transaction);
-            } else {
-                println!("Ошибка десериализации транзакции для ключа {:?}", key);
-            }
-        }
-        drop(db_locked);
-
-        // Объединяем десериализованные и сохранённые транзакции
-        let mut final_pending_transactions = pending_transactions;
-        for tx in stored_transactions {
-            if !final_pending_transactions.contains(&tx) {
-                final_pending_transactions.push(tx);
-            }
-        }
-
+        // Не открываем базу данных здесь, чтобы избежать конфликтов блокировки
+        // Вместо этого база данных будет передана из внешнего контекста
         Ok(Blockchain {
             chain,
             balances,
             difficulty,
-            pending_transactions: final_pending_transactions,
-            db,
+            pending_transactions,
+            db: Arc::new(Mutex::new(DB::open(
+                PathBuf::from("temp_blockchain_db"), // Временная заглушка, будет заменена
+                Options::default(),
+            ).map_err(serde::de::Error::custom)?)),
         })
     }
 }
@@ -178,12 +150,19 @@ enum MiningStatus {
 }
 
 impl Blockchain {
-    fn new() -> Self {
+    fn new(port: u16) -> Self {
         let start_time = SystemTime::now();
-        // Инициализация LevelDB
+        // Уникальная директория для базы данных на основе порта
         let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
         let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
-        let db_path = exe_dir.join("blockchain_db");
+        let db_path = exe_dir.join(format!("blockchain_db_{}", port));
+
+        // Очистка файла LOCK, если он существует
+        let lock_file = db_path.join("LOCK");
+        if lock_file.exists() {
+            fs::remove_file(&lock_file).expect("Не удалось удалить файл LOCK");
+        }
+
         let db = DB::open(db_path, Options::default()).expect("Не удалось открыть LevelDB");
         let db = Arc::new(Mutex::new(db));
 
@@ -296,7 +275,7 @@ impl Blockchain {
             let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
             for tx in &self.pending_transactions {
                 let key = tx.id.as_bytes();
-                println!("Удаление ключа: {:?}", key); // Для отладки
+                println!("Удаление ключа: {:?}", key);
                 if key.is_empty() {
                     println!("Ошибка: пустой ключ для транзакции {}", tx.id);
                     continue;
@@ -438,7 +417,6 @@ impl Blockchain {
         if let Some(sender_balance) = self.balances.get(&transaction.sender) {
             println!("Баланс отправителя {}: {}", transaction.sender, sender_balance);
             if *sender_balance >= transaction.amount {
-                // Сохраняем транзакцию в LevelDB
                 let key = transaction.id.as_bytes();
                 let value = serde_json::to_vec(&transaction).expect("Ошибка сериализации транзакции");
                 let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
@@ -476,11 +454,28 @@ impl Blockchain {
         );
         false
     }
+
+    fn validate_chain(&self) -> bool {
+        for i in 1..self.chain.len() {
+            let current = &self.chain[i];
+            let previous = &self.chain[i - 1];
+            if current.previous_hash != previous.hash {
+                println!("Ошибка валидации: неверный previous_hash для блока {}", current.index);
+                return false;
+            }
+            let calculated_hash = self.calculate_hash(current);
+            if current.hash != calculated_hash {
+                println!("Ошибка валидации: неверный хэш для блока {}", current.index);
+                return false;
+            }
+        }
+        true
+    }
 }
 
 impl Node {
-    fn new(address: String, mining_rx: mpsc::Receiver<MiningTask>, sync_tx: mpsc::Sender<Blockchain>) -> Self {
-        let blockchain = Arc::new(Mutex::new(Blockchain::new()));
+    fn new(address: String, mining_rx: mpsc::Receiver<MiningTask>, sync_tx: mpsc::Sender<Blockchain>, port: u16) -> Self {
+        let blockchain = Arc::new(Mutex::new(Blockchain::new(port)));
         let peers = Arc::new(Mutex::new(vec![]));
         let node = Node {
             blockchain: blockchain.clone(),
@@ -547,7 +542,6 @@ impl Node {
                                 successful_mining += 1;
                                 println!("Майнинг {} успешен, блок добавлен", mining_count);
                                 let _ = status_tx_clone.send(format!("Транзакция отправлена, блок добавлен: {:?}", block));
-                                // Рассылаем обновлённый блокчейн другим узлам
                                 let mut node_temp = Node {
                                     blockchain: task.blockchain.clone(),
                                     peers: peers.clone(),
@@ -592,7 +586,6 @@ impl Node {
         let start_time = SystemTime::now();
         let mut peers = self.peers.lock().expect("Не удалось захватить Mutex для peers");
         peers.clear();
-        // Читаем network.json
         let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
         let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
         let network_path = exe_dir.join("network.json");
@@ -600,7 +593,6 @@ impl Node {
             Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| NetworkConfig { peers: vec![] }),
             Err(_) => NetworkConfig { peers: vec![] },
         };
-        // Исключаем собственный адрес из списка пиров
         let own_port = self.address.split(':').last().unwrap_or("0").parse::<u16>().unwrap_or(0);
         for peer in network_config.peers {
             let peer_port = peer.split(':').last().unwrap_or("0").parse::<u16>().unwrap_or(0);
@@ -714,41 +706,48 @@ impl Node {
                                     println!("Отправлен блокчейн клиенту");
                                 } else if request.starts_with("UPDATE_BLOCKCHAIN:") {
                                     let blockchain_data = request.strip_prefix("UPDATE_BLOCKCHAIN:").unwrap_or("");
-                                    match serde_json::from_str::<Blockchain>(blockchain_data) {
-                                        Ok(received_blockchain) => {
-                                            let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                                            let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
-                                            let received_hash = received_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
-                                            if received_blockchain.chain.len() > blockchain.chain.len() || current_hash != received_hash {
-                                                // Клонируем pending_transactions и balances для сохранения в LevelDB и обновления блокчейна
-                                                let pending_transactions = received_blockchain.pending_transactions.clone();
-                                                let balances = received_blockchain.balances.clone();
-                                                let chain = received_blockchain.chain.clone();
-                                                let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
-                                                for tx in &pending_transactions {
-                                                    let key = tx.id.as_bytes();
-                                                    let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
-                                                    if let Err(e) = db.put(key, &value) {
-                                                        println!("Ошибка сохранения транзакции {} в LevelDB: {}", tx.id, e);
-                                                    }
-                                                }
-                                                drop(db);
-                                                // Сохраняем существующую БД
-                                                let existing_db = blockchain.db.clone();
-                                                *blockchain = Blockchain {
-                                                    chain,
-                                                    balances,
-                                                    difficulty: received_blockchain.difficulty,
-                                                    pending_transactions,
-                                                    db: existing_db,
-                                                };
-                                                println!("Блокчейн обновлён через UPDATE_BLOCKCHAIN");
-                                                let _ = sync_tx.send(received_blockchain);
-                                            } else {
-                                                println!("Полученный блокчейн не новее текущего");
-                                            }
+                                    let mut temp_blockchain: BlockchainDeserialize = match serde_json::from_str(blockchain_data) {
+                                        Ok(data) => data,
+                                        Err(e) => {
+                                            println!("Ошибка десериализации данных блокчейна: {}", e);
+                                            continue;
                                         }
-                                        Err(e) => println!("Ошибка десериализации блокчейна: {}", e),
+                                    };
+                                    let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                                    let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
+                                    let received_hash = temp_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
+                                    if temp_blockchain.chain.len() > blockchain.chain.len() || current_hash != received_hash {
+                                        let new_blockchain = Blockchain {
+                                            chain: temp_blockchain.chain.clone(),
+                                            balances: temp_blockchain.balances.clone(),
+                                            difficulty: temp_blockchain.difficulty,
+                                            pending_transactions: temp_blockchain.pending_transactions.clone(),
+                                            db: blockchain.db.clone(),
+                                        };
+                                        if new_blockchain.validate_chain() {
+                                            let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+                                            for tx in &new_blockchain.pending_transactions {
+                                                let key = tx.id.as_bytes();
+                                                let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
+                                                if let Err(e) = db.put(key, &value) {
+                                                    println!("Ошибка сохранения транзакции {} в LevelDB: {}", tx.id, e);
+                                                }
+                                            }
+                                            drop(db);
+                                            *blockchain = new_blockchain;
+                                            println!("Блокчейн обновлён через UPDATE_BLOCKCHAIN");
+                                            let _ = sync_tx.send(Blockchain {
+                                                chain: temp_blockchain.chain,
+                                                balances: temp_blockchain.balances,
+                                                difficulty: temp_blockchain.difficulty,
+                                                pending_transactions: temp_blockchain.pending_transactions,
+                                                db: blockchain.db.clone(),
+                                            });
+                                        } else {
+                                            println!("Полученный блокчейн не прошёл валидацию");
+                                        }
+                                    } else {
+                                        println!("Полученный блокчейн не новее текущего");
                                     }
                                 }
                             }
@@ -809,34 +808,40 @@ impl Node {
                                 Ok(n) => {
                                     let response = String::from_utf8_lossy(&buffer[..n]).to_string();
                                     println!("Получен ответ от узла {}: {}", peer, response);
-                                    match serde_json::from_str::<Blockchain>(&response) {
+                                    match serde_json::from_str::<BlockchainDeserialize>(&response) {
                                         Ok(received_blockchain) => {
                                             let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                                             let received_hash = received_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
                                             if received_blockchain.chain.len() > blockchain.chain.len() || current_hash != received_hash {
-                                                // Клонируем поля для сохранения в LevelDB и обновления блокчейна
-                                                let pending_transactions = received_blockchain.pending_transactions.clone();
-                                                let chain = received_blockchain.chain.clone();
-                                                let balances = received_blockchain.balances.clone();
-                                                let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
-                                                for tx in &pending_transactions {
-                                                    let key = tx.id.as_bytes();
-                                                    let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
-                                                    if let Err(e) = db.put(key, &value) {
-                                                        println!("Ошибка сохранения транзакции {} в LevelDB: {}", tx.id, e);
-                                                    }
-                                                }
-                                                drop(db);
-                                                // Сохраняем существующую БД
-                                                *blockchain = Blockchain {
-                                                    chain,
-                                                    balances,
+                                                let new_blockchain = Blockchain {
+                                                    chain: received_blockchain.chain.clone(),
+                                                    balances: received_blockchain.balances.clone(),
                                                     difficulty: received_blockchain.difficulty,
-                                                    pending_transactions,
+                                                    pending_transactions: received_blockchain.pending_transactions.clone(),
                                                     db: existing_db.clone(),
                                                 };
-                                                println!("Блокчейн обновлён с узла {}", peer);
-                                                let _ = sync_tx.send(received_blockchain);
+                                                if new_blockchain.validate_chain() {
+                                                    let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+                                                    for tx in &new_blockchain.pending_transactions {
+                                                        let key = tx.id.as_bytes();
+                                                        let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
+                                                        if let Err(e) = db.put(key, &value) {
+                                                            println!("Ошибка сохранения транзакции {} в LevelDB: {}", tx.id, e);
+                                                        }
+                                                    }
+                                                    drop(db);
+                                                    *blockchain = new_blockchain;
+                                                    println!("Блокчейн обновлён с узла {}", peer);
+                                                    let _ = sync_tx.send(Blockchain {
+                                                        chain: received_blockchain.chain,
+                                                        balances: received_blockchain.balances,
+                                                        difficulty: received_blockchain.difficulty,
+                                                        pending_transactions: received_blockchain.pending_transactions,
+                                                        db: existing_db.clone(),
+                                                    });
+                                                } else {
+                                                    println!("Полученный блокчейн с узла {} не прошёл валидацию", peer);
+                                                }
                                             } else {
                                                 println!("Полученный блокчейн с узла {} не новее текущего", peer);
                                             }
@@ -874,26 +879,22 @@ impl eframe::App for WalletApp {
             let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
             let received_hash = received_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
             if received_blockchain.chain.len() > blockchain.chain.len() || current_hash != received_hash {
-                let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
-                for tx in &received_blockchain.pending_transactions {
-                    let key = tx.id.as_bytes();
-                    let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
-                    if let Err(e) = db.put(key, &value) {
-                        println!("Ошибка сохранения транзакции {} в LevelDB: {}", tx.id, e);
+                if received_blockchain.validate_chain() {
+                    let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+                    for tx in &received_blockchain.pending_transactions {
+                        let key = tx.id.as_bytes();
+                        let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
+                        if let Err(e) = db.put(key, &value) {
+                            println!("Ошибка сохранения транзакции {} в LevelDB: {}", tx.id, e);
+                        }
                     }
+                    drop(db);
+                    *blockchain = received_blockchain;
+                    println!("UI: Блокчейн обновлён через канал синхронизации");
+                    ctx.request_repaint();
+                } else {
+                    println!("Полученный блокчейн через канал синхронизации не прошёл валидацию");
                 }
-                drop(db);
-                // Сохраняем существующую БД
-                let existing_db = blockchain.db.clone();
-                *blockchain = Blockchain {
-                    chain: received_blockchain.chain,
-                    balances: received_blockchain.balances,
-                    difficulty: received_blockchain.difficulty,
-                    pending_transactions: received_blockchain.pending_transactions,
-                    db: existing_db,
-                };
-                println!("UI: Блокчейн обновлён через канал синхронизации");
-                ctx.request_repaint();
             }
         }
 
@@ -1171,7 +1172,7 @@ fn main() {
     let (sync_tx, sync_rx) = mpsc::channel();
     println!("Каналы майнинга и синхронизации созданы");
 
-    let mut node = Node::new(format!("127.0.0.1:{}", config.wallet.port), mining_rx, sync_tx.clone());
+    let mut node = Node::new(format!("127.0.0.1:{}", config.wallet.port), mining_rx, sync_tx.clone(), config.wallet.port);
     node.start_server(config.wallet.port, sync_tx.clone());
     node.discover_peers();
 

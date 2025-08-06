@@ -33,4 +33,5 @@
 0.3.3 find by ip
 0.3.4 network save ip
 0.3.5 save transaction level db
-0.3.6 crached fix
+0.3.6 crashed fix
+0.3.7 synchronized fix
