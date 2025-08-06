@@ -35,3 +35,4 @@
 0.3.5 save transaction level db
 0.3.6 crashed fix
 0.3.7 synchronized fix
+0.3.8 sync blockchain many operations

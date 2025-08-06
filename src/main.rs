@@ -86,15 +86,13 @@ impl<'de> Deserialize<'de> for Blockchain {
             pending_transactions,
         } = BlockchainDeserialize::deserialize(deserializer)?;
 
-        // Не открываем базу данных здесь, чтобы избежать конфликтов блокировки
-        // Вместо этого база данных будет передана из внешнего контекста
         Ok(Blockchain {
             chain,
             balances,
             difficulty,
             pending_transactions,
             db: Arc::new(Mutex::new(DB::open(
-                PathBuf::from("temp_blockchain_db"), // Временная заглушка, будет заменена
+                PathBuf::from("temp_blockchain_db"),
                 Options::default(),
             ).map_err(serde::de::Error::custom)?)),
         })
@@ -152,12 +150,10 @@ enum MiningStatus {
 impl Blockchain {
     fn new(port: u16) -> Self {
         let start_time = SystemTime::now();
-        // Уникальная директория для базы данных на основе порта
         let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
         let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
         let db_path = exe_dir.join(format!("blockchain_db_{}", port));
 
-        // Очистка файла LOCK, если он существует
         let lock_file = db_path.join("LOCK");
         if lock_file.exists() {
             fs::remove_file(&lock_file).expect("Не удалось удалить файл LOCK");
@@ -174,7 +170,6 @@ impl Blockchain {
             db,
         };
 
-        // Загружаем сохранённые транзакции из LevelDB
         let mut pending_transactions = vec![];
         let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
         let mut iterator = db.new_iter().expect("Не удалось создать итератор LevelDB");
@@ -240,7 +235,7 @@ impl Blockchain {
             .duration_since(start_time)
             .unwrap()
             .as_secs_f64();
-        println!("Вычисление хэша завершено за {} секунд", hash);
+        println!("Вычисление хэша завершено за {} секунд: {}", duration, hash);
         hash
     }
 
@@ -262,8 +257,32 @@ impl Blockchain {
         if let Some(mut block) = block {
             let balance_start_time = SystemTime::now();
             for tx in &block.transactions {
-                *self.balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
-                *self.balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
+                // Проверяем и обновляем баланс отправителя
+                let sender_balance = {
+                    let sender_balance = self.balances.entry(tx.sender.clone()).or_insert(0);
+                    if *sender_balance >= tx.amount {
+                        *sender_balance -= tx.amount;
+                        *sender_balance // Сохраняем значение баланса отправителя
+                    } else {
+                        println!("Ошибка: Недостаточно средств у {} для транзакции {}", tx.sender, tx.id);
+                        return None;
+                    }
+                }; // sender_balance выходит из области видимости
+
+                // Обновляем баланс получателя
+                let receiver_balance = {
+                    let receiver_balance = self.balances.entry(tx.receiver.clone()).or_insert(0);
+                    *receiver_balance += tx.amount;
+                    *receiver_balance // Сохраняем значение баланса получателя
+                }; // receiver_balance выходит из области видимости
+
+                println!(
+                    "Обновлён баланс: {} -> {}, {} -> {}",
+                    tx.sender,
+                    sender_balance,
+                    tx.receiver,
+                    receiver_balance
+                );
             }
             let balance_duration = SystemTime::now()
                 .duration_since(balance_start_time)
@@ -271,7 +290,6 @@ impl Blockchain {
                 .as_secs_f64();
             println!("Обновление балансов завершено за {} секунд", balance_duration);
 
-            // Очищаем pending_transactions и удаляем их из LevelDB
             let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
             for tx in &self.pending_transactions {
                 let key = tx.id.as_bytes();
@@ -291,7 +309,7 @@ impl Blockchain {
                 .duration_since(total_start_time)
                 .unwrap()
                 .as_secs_f64();
-            println!("Майнинг завершен за {} секунд", total_duration);
+            println!("Майнинг завершен за {} секунд, блок добавлен: {:?}", total_duration, block);
             let _ = progress_tx.send(format!("Майнинг завершен за {} секунд", total_duration));
             Some(block)
         } else {
@@ -304,7 +322,6 @@ impl Blockchain {
             None
         }
     }
-
     fn mine_block_inner(
         &self,
         previous_block: Block,
@@ -326,8 +343,8 @@ impl Blockchain {
             nonce: 0,
         };
 
-        let max_iterations = 50;
-        let timeout = Duration::from_secs_f32(0.5);
+        let max_iterations = 1000; // Увеличено с 50 до 1000
+        let timeout = Duration::from_secs(5); // Увеличено с 0.5 до 5 секунд
         let mut iteration_count = 0;
         let mut total_hash_time = 0.0;
 
@@ -380,7 +397,7 @@ impl Blockchain {
                 return Some(block);
             }
             block.nonce += 1;
-            if iteration_count % 10 == 0 {
+            if iteration_count % 100 == 0 { // Обновлено с 10 до 100 для меньшей частоты логов
                 let progress_duration = SystemTime::now()
                     .duration_since(start_time)
                     .unwrap()
@@ -540,7 +557,7 @@ impl Node {
                         *mining_status = match result {
                             Some(block) => {
                                 successful_mining += 1;
-                                println!("Майнинг {} успешен, блок добавлен", mining_count);
+                                println!("Майнинг {} успешен, блок добавлен: {:?}", mining_count, block);
                                 let _ = status_tx_clone.send(format!("Транзакция отправлена, блок добавлен: {:?}", block));
                                 let mut node_temp = Node {
                                     blockchain: task.blockchain.clone(),
