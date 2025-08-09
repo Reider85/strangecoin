@@ -36,3 +36,4 @@
 0.3.6 crashed fix
 0.3.7 synchronized fix
 0.3.8 sync blockchain many operations
+0.3.9 db load fix
