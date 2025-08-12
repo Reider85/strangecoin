@@ -239,6 +239,9 @@ impl Blockchain {
         self.chain.push(genesis_block);
         self.balances.insert("wallet1".to_string(), 1000);
         self.balances.insert("wallet2".to_string(), 1000);
+        self.balances.insert("wallet3".to_string(), 0);
+        self.balances.insert("wallet4".to_string(), 0);
+        self.balances.insert("wallet5".to_string(), 0);
         let duration = SystemTime::now()
             .duration_since(start_time)
             .unwrap()
@@ -733,7 +736,10 @@ impl Node {
             let wallet = match address.as_str() {
                 "127.0.0.1:8081" => "wallet1".to_string(),
                 "127.0.0.1:8082" => "wallet2".to_string(),
-                _ => format!("wallet{}", rand::thread_rng().gen_range(1..3)),
+                "127.0.0.1:8083" => "wallet3".to_string(),
+                "192.168.0.197:8084" => "wallet4".to_string(),
+                "10.2.0.2:8085" => "wallet5".to_string(),
+                _ => format!("wallet{}", rand::thread_rng().gen_range(1..6)),
             };
             let duration = SystemTime::now()
                 .duration_since(start_time)
@@ -1274,7 +1280,7 @@ fn main() {
 
     let network_path = exe_dir.join("network.json");
     let network_config = NetworkConfig {
-        peers: vec!["127.0.0.1:8081".to_string(), "127.0.0.1:8082".to_string()],
+        peers: vec!["127.0.0.1:8081".to_string(), "127.0.0.1:8082".to_string(),"127.0.0.1:8083".to_string()],
     };
     let network_content = serde_json::to_string_pretty(&network_config).expect("Ошибка сериализации network.json");
     fs::write(&network_path, network_content).expect("Ошибка записи в network.json");
