@@ -2,6 +2,7 @@
   "wallet": {
     "name": "wallet1",
     "password": "password",
-    "port": 8081
+    "port": 8081,
+    "ip": "127.0.0.1"
   }
 }

@@ -38,3 +38,4 @@
 0.3.8 sync blockchain many operations
 0.3.9 db load fix
 0.4.0 several wallets test
+0.4.1 ip in config

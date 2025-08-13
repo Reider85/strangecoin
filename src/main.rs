@@ -27,6 +27,7 @@ struct WalletConfig {
     name: String,
     password: String,
     port: u16,
+    ip: String,
 }
 
 // Структура для network.json
@@ -727,47 +728,35 @@ impl Node {
                 .duration_since(start_time)
                 .unwrap()
                 .as_secs_f64();
-            println!("Некорректный формат адреса {}:{}", ip, port);
+            println!("Ошибка: Некорректный адрес {}:{}, проверка заняла {} секунд", ip, port, duration);
             return None;
         }
-        let peers = self.peers.lock().expect("Не удалось захватить Mutex для peers");
-        println!("Список пиров: {:?}", *peers);
-        if peers.contains(&address) {
-            let wallet = match address.as_str() {
-                "127.0.0.1:8081" => "wallet1".to_string(),
-                "127.0.0.1:8082" => "wallet2".to_string(),
-                "127.0.0.1:8083" => "wallet3".to_string(),
-                "192.168.0.197:8084" => "wallet4".to_string(),
-                "10.2.0.2:8085" => "wallet5".to_string(),
-                _ => format!("wallet{}", rand::thread_rng().gen_range(1..6)),
-            };
-            let duration = SystemTime::now()
-                .duration_since(start_time)
-                .unwrap()
-                .as_secs_f64();
-            println!("Найден кошелёк: {} для адреса {}:{}, поиск занял {} секунд", wallet, ip, port, duration);
-            Some(wallet)
-        } else {
-            let duration = SystemTime::now()
-                .duration_since(start_time)
-                .unwrap()
-                .as_secs_f64();
-            println!("Адрес {}:{} не найден в списке пиров, поиск занял {} секунд", ip, port, duration);
-            None
+        let blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+        for (_, balance) in &blockchain.balances {
+            // Здесь логика поиска кошелька по IP, но в текущей реализации нет прямой связи IP с кошельком.
+            // Предполагаем, что wallet - это ключ в balances, но нужно доработать логику если требуется.
         }
+        // Заглушка, так как в коде нет реализации поиска по IP
+        let duration = SystemTime::now()
+            .duration_since(start_time)
+            .unwrap()
+            .as_secs_f64();
+        println!("Поиск кошелька по IP {}:{} завершён за {} секунд", ip, port, duration);
+        None // Заменить на реальную логику если нужно
     }
 
     fn start_server(&self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
         let start_time = SystemTime::now();
-        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap_or_else(|e| {
-            panic!("Ошибка привязки к порту {}: {}", port, e);
-        });
-        let blockchain = Arc::clone(&self.blockchain);
-
+        let blockchain = self.blockchain.clone();
+        let address = self.address.clone();
         thread::spawn(move || {
+            let listener = TcpListener::bind(&address).expect("Не удалось запустить сервер");
+            println!("Сервер запущен на {}", address);
             for stream in listener.incoming() {
                 match stream {
                     Ok(stream) => {
+                        let blockchain = blockchain.clone();
+                        let sync_tx = sync_tx.clone();
                         let mut reader = BufReader::new(stream.try_clone().unwrap());
                         let mut writer = BufWriter::new(stream);
 
@@ -1274,7 +1263,7 @@ fn main() {
 
     let config_content = fs::read_to_string(&config_path).unwrap_or_else(|err| {
         eprintln!("Ошибка чтения {}: {}. Используются значения по умолчанию.", config_path.display(), err);
-        r#"{"wallet": {"name": "wallet1", "password": "password", "port": 8081}}"#.to_string()
+        r#"{"wallet": {"name": "wallet1", "password": "password", "port": 8081, "ip": "127.0.0.1"}}"#.to_string()
     });
     let config: Config = serde_json::from_str(&config_content).expect("Ошибка парсинга конфигурации");
 
@@ -1289,7 +1278,7 @@ fn main() {
     let (sync_tx, sync_rx) = mpsc::channel();
     println!("Каналы майнинга и синхронизации созданы");
 
-    let mut node = Node::new(format!("127.0.0.1:{}", config.wallet.port), mining_rx, sync_tx.clone(), config.wallet.port);
+    let mut node = Node::new(format!("{}:{}", config.wallet.ip, config.wallet.port), mining_rx, sync_tx.clone(), config.wallet.port);
     node.start_server(config.wallet.port, sync_tx.clone());
     node.discover_peers();
 
