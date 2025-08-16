@@ -1268,11 +1268,25 @@ fn main() {
     let config: Config = serde_json::from_str(&config_content).expect("Ошибка парсинга конфигурации");
 
     let network_path = exe_dir.join("network.json");
-    let network_config = NetworkConfig {
-        peers: vec!["127.0.0.1:8081".to_string(), "127.0.0.1:8082".to_string(),"127.0.0.1:8083".to_string()],
+    let network_config: NetworkConfig = match fs::read_to_string(&network_path) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_else(|err| {
+            eprintln!("Ошибка парсинга network.json: {}. Используются значения по умолчанию.", err);
+            NetworkConfig {
+                peers: vec!["127.0.0.1:8081".to_string(), "127.0.0.1:8082".to_string(), "127.0.0.1:8083".to_string()],
+            }
+        }),
+        Err(err) => {
+            eprintln!("Ошибка чтения network.json: {}. Используются значения по умолчанию.", err);
+            NetworkConfig {
+                peers: vec!["127.0.0.1:8081".to_string(), "127.0.0.1:8082".to_string(), "127.0.0.1:8083".to_string()],
+            }
+        }
     };
-    let network_content = serde_json::to_string_pretty(&network_config).expect("Ошибка сериализации network.json");
-    fs::write(&network_path, network_content).expect("Ошибка записи в network.json");
+    // Записываем network_config обратно в файл только если он был создан с значениями по умолчанию
+    if network_config.peers == vec!["127.0.0.1:8081".to_string(), "127.0.0.1:8082".to_string(), "127.0.0.1:8083".to_string()] {
+        let network_content = serde_json::to_string_pretty(&network_config).expect("Ошибка сериализации network.json");
+        fs::write(&network_path, network_content).expect("Ошибка записи в network.json");
+    }
 
     let (mining_tx, mining_rx) = mpsc::channel();
     let (sync_tx, sync_rx) = mpsc::channel();
