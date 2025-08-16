@@ -181,23 +181,38 @@ impl Blockchain {
             let mut db_guard = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
 
             chain_opt = db_guard.get(b"chain").and_then(|v| serde_json::from_slice::<Vec<Block>>(&v).ok());
+            println!("chain_opt: {:?}", chain_opt);
 
             balances_opt = db_guard.get(b"balances").and_then(|v| serde_json::from_slice::<HashMap<String, u64>>(&v).ok());
+            println!("balances_opt: {:?}", balances_opt);
 
             difficulty_opt = db_guard.get(b"difficulty").and_then(|v| serde_json::from_slice::<u32>(&v).ok());
+            println!("difficulty_opt: {:?}", difficulty_opt);
 
             let mut iterator = db_guard.new_iter().expect("Не удалось создать итератор LevelDB");
+            println!("Все ключи в базе данных:");
             while let Some((key, value)) = iterator.next() {
-                // Пропускаем ключи, которые не являются транзакциями
                 if key == b"chain" || key == b"balances" || key == b"difficulty" {
+                    println!("Пропущен системный ключ: {:?}", key);
                     continue;
                 }
-                // Проверяем, что ключ имеет длину UUID (36 байт)
                 if key.len() == 36 {
-                    if let Ok(transaction) = serde_json::from_slice::<Transaction>(&value) {
-                        pending.push(transaction);
+                    if let Ok(uuid_str) = std::str::from_utf8(&key) {
+                        if Uuid::parse_str(uuid_str).is_ok() {
+                            match serde_json::from_slice::<Transaction>(&value) {
+                                Ok(transaction) => {
+                                    println!("Найдена транзакция для ключа {}: {:?}", uuid_str, transaction);
+                                    pending.push(transaction);
+                                }
+                                Err(e) => {
+                                    println!("Ошибка десериализации транзакции для ключа {}: {}", uuid_str, e);
+                                }
+                            }
+                        } else {
+                            println!("Ключ {:?} не является валидным UUID", key);
+                        }
                     } else {
-                        println!("Ошибка десериализации транзакции для ключа {:?}", key);
+                        println!("Ключ {:?} не является валидной UTF-8 строкой", key);
                     }
                 } else {
                     println!("Пропущен ключ с неверной длиной: {:?}", key);
@@ -221,6 +236,7 @@ impl Blockchain {
         }
 
         blockchain.pending_transactions = pending;
+        println!("Загруженные pending_transactions: {:?}", blockchain.pending_transactions);
 
         let duration = SystemTime::now()
             .duration_since(start_time)
@@ -486,6 +502,11 @@ impl Blockchain {
             println!("Баланс отправителя {}: {}", transaction.sender, sender_balance);
             if *sender_balance >= transaction.amount {
                 let key = transaction.id.as_bytes();
+                if key.len() != 36 {
+                    println!("Ошибка: Ключ транзакции {} имеет неверную длину: {}", transaction.id, key.len());
+                    return false;
+                }
+                println!("Сохранение транзакции с ключом: {:?}", key);
                 let value = serde_json::to_vec(&transaction).expect("Ошибка сериализации транзакции");
                 let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
                 if let Err(e) = db.put(key, &value) {
@@ -522,7 +543,6 @@ impl Blockchain {
         );
         false
     }
-
     fn validate_chain(&self) -> bool {
         for i in 1..self.chain.len() {
             let current = &self.chain[i];
