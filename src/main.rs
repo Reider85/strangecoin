@@ -192,30 +192,33 @@ impl Blockchain {
             let mut iterator = db_guard.new_iter().expect("Не удалось создать итератор LevelDB");
             println!("Все ключи в базе данных:");
             while let Some((key, value)) = iterator.next() {
+                // Пропускаем системные ключи
                 if key == b"chain" || key == b"balances" || key == b"difficulty" {
                     println!("Пропущен системный ключ: {:?}", key);
                     continue;
                 }
-                if key.len() == 36 {
-                    if let Ok(uuid_str) = std::str::from_utf8(&key) {
-                        if Uuid::parse_str(uuid_str).is_ok() {
-                            match serde_json::from_slice::<Transaction>(&value) {
-                                Ok(transaction) => {
-                                    println!("Найдена транзакция для ключа {}: {:?}", uuid_str, transaction);
+                // Проверяем, является ли ключ валидным UUID
+                if let Ok(key_str) = std::str::from_utf8(&key) {
+                    if Uuid::parse_str(key_str).is_ok() {
+                        match serde_json::from_slice::<Transaction>(&value) {
+                            Ok(transaction) => {
+                                println!("Найдена транзакция для ключа {}: {:?}", key_str, transaction);
+                                // Проверяем, что транзакция не дублируется
+                                if !pending.contains(&transaction) {
                                     pending.push(transaction);
-                                }
-                                Err(e) => {
-                                    println!("Ошибка десериализации транзакции для ключа {}: {}", uuid_str, e);
+                                } else {
+                                    println!("Транзакция с ключом {} уже существует в pending_transactions", key_str);
                                 }
                             }
-                        } else {
-                            println!("Ключ {:?} не является валидным UUID", key);
+                            Err(e) => {
+                                println!("Ошибка десериализации транзакции для ключа {}: {}", key_str, e);
+                            }
                         }
                     } else {
-                        println!("Ключ {:?} не является валидной UTF-8 строкой", key);
+                        println!("Ключ {} не является валидным UUID", key_str);
                     }
                 } else {
-                    println!("Пропущен ключ с неверной длиной: {:?}", key);
+                    println!("Ключ {:?} не является валидной UTF-8 строкой", key);
                 }
             }
         } // drop db_guard

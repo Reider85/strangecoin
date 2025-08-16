@@ -42,3 +42,4 @@
 0.4.2 ip in config
 0.4.3 db load fix
 0.4.4 db load fix
+0.4.5 db load fix
