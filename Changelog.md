@@ -40,3 +40,4 @@
 0.4.0 several wallets test
 0.4.1 ip in config
 0.4.2 ip in config
+0.4.3 db load fix

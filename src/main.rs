@@ -188,10 +188,19 @@ impl Blockchain {
 
             let mut iterator = db_guard.new_iter().expect("Не удалось создать итератор LevelDB");
             while let Some((key, value)) = iterator.next() {
-                if let Ok(transaction) = serde_json::from_slice::<Transaction>(&value) {
-                    pending.push(transaction);
+                // Пропускаем ключи, которые не являются транзакциями
+                if key == b"chain" || key == b"balances" || key == b"difficulty" {
+                    continue;
+                }
+                // Проверяем, что ключ имеет длину UUID (36 байт)
+                if key.len() == 36 {
+                    if let Ok(transaction) = serde_json::from_slice::<Transaction>(&value) {
+                        pending.push(transaction);
+                    } else {
+                        println!("Ошибка десериализации транзакции для ключа {:?}", key);
+                    }
                 } else {
-                    println!("Ошибка десериализации транзакции для ключа {:?}", key);
+                    println!("Пропущен ключ с неверной длиной: {:?}", key);
                 }
             }
         } // drop db_guard
