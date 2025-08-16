@@ -190,11 +190,9 @@ impl Blockchain {
             println!("difficulty_opt: {:?}", difficulty_opt);
 
             let mut iterator = db_guard.new_iter().expect("Не удалось создать итератор LevelDB");
-            println!("Все ключи в базе данных:");
             while let Some((key, value)) = iterator.next() {
                 // Пропускаем системные ключи
                 if key == b"chain" || key == b"balances" || key == b"difficulty" {
-                    println!("Пропущен системный ключ: {:?}", key);
                     continue;
                 }
                 // Проверяем, является ли ключ валидным UUID
@@ -202,32 +200,21 @@ impl Blockchain {
                     if Uuid::parse_str(key_str).is_ok() {
                         match serde_json::from_slice::<Transaction>(&value) {
                             Ok(transaction) => {
-                                println!("Найдена транзакция для ключа {}: {:?}", key_str, transaction);
-                                // Проверяем, что транзакция не дублируется
-                                if !pending.contains(&transaction) {
+                                if !pending.iter().any(|t: &Transaction| t.id == transaction.id) {
                                     pending.push(transaction);
-                                } else {
-                                    println!("Транзакция с ключом {} уже существует в pending_transactions", key_str);
                                 }
                             }
-                            Err(e) => {
-                                println!("Ошибка десериализации транзакции для ключа {}: {}", key_str, e);
-                            }
+                            Err(e) => println!("Ошибка десериализации транзакции для ключа {}: {}", key_str, e),
                         }
-                    } else {
-                        println!("Ключ {} не является валидным UUID", key_str);
                     }
-                } else {
-                    println!("Ключ {:?} не является валидной UTF-8 строкой", key);
                 }
             }
-        } // drop db_guard
+        }
 
         if let Some(chain) = chain_opt {
             blockchain.chain = chain;
         } else {
             blockchain.create_genesis_block();
-            blockchain.save_state();
         }
 
         if let Some(balances) = balances_opt {
@@ -239,7 +226,7 @@ impl Blockchain {
         }
 
         blockchain.pending_transactions = pending;
-        println!("Загруженные pending_transactions: {:?}", blockchain.pending_transactions);
+        blockchain.save_state();
 
         let duration = SystemTime::now()
             .duration_since(start_time)
@@ -573,6 +560,19 @@ impl Blockchain {
         }
         if let Err(e) = db.put(b"difficulty", &serde_json::to_vec(&self.difficulty).unwrap()) {
             println!("Ошибка сохранения сложности в LevelDB: {}", e);
+        }
+        // Сохраняем только новые транзакции
+        for tx in &self.pending_transactions {
+            let key = tx.id.as_bytes();
+            match db.get(key) {
+                Some(_) => continue, // Transaction already exists
+                None => {
+                    let value = serde_json::to_vec(tx).expect("Error serializing transaction");
+                    if let Err(e) = db.put(key, &value) {
+                        println!("Error saving transaction {} in LevelDB: {}", tx.id, e);
+                    }
+                }
+            }
         }
     }
 }
