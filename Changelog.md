@@ -44,3 +44,4 @@
 0.4.4 db load fix
 0.4.5 db load fix
 0.4.6 db load fix
+0.4.7 db logging

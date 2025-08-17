@@ -1053,6 +1053,15 @@ impl eframe::App for WalletApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.label(&self.status);
+            ui.label(format!(
+                "Количество транзакций в базе данных: {}",
+                self.node
+                    .blockchain
+                    .lock()
+                    .expect("Не удалось захватить Mutex для blockchain")
+                    .pending_transactions
+                    .len()
+            ));
             if !self.is_authenticated {
                 ui.heading("Аутентификация");
                 ui.text_edit_singleline(&mut self.wallet_address);
