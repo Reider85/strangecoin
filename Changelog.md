@@ -48,3 +48,4 @@
 0.4.8 db save fix
 0.4.9 sync blockchain
 0.5.0 debug save transactions
+0.5.1 debug save transactions

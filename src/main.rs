@@ -88,13 +88,18 @@ impl<'de> Deserialize<'de> for Blockchain {
             pending_transactions,
         } = BlockchainDeserialize::deserialize(deserializer)?;
 
+        let port = std::env::var("PORT").unwrap_or("8081".to_string()).parse::<u16>().unwrap_or(8081);
+        let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
+        let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
+        let db_path = exe_dir.join(format!("blockchain_db_{}", port));
+
         Ok(Blockchain {
             chain,
             balances,
             difficulty,
             pending_transactions,
             db: Arc::new(Mutex::new(DB::open(
-                PathBuf::from("temp_blockchain_db"),
+                db_path,
                 Options::default(),
             ).map_err(serde::de::Error::custom)?)),
         })
@@ -150,6 +155,25 @@ enum MiningStatus {
 }
 
 impl Blockchain {
+
+    fn debug_db(&self) {
+        let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+        let mut iterator = db.new_iter().expect("Не удалось создать итератор LevelDB");
+        println!("Содержимое базы данных:");
+        while let Some((key, value)) = iterator.next() {
+            let key_str = std::str::from_utf8(&key).unwrap_or("невалидный ключ");
+            println!("Ключ: {}", key_str);
+            if key == b"chain" {
+                println!("Значение (chain): {:?}", serde_json::from_slice::<Vec<Block>>(&value));
+            } else if key == b"balances" {
+                println!("Значение (balances): {:?}", serde_json::from_slice::<HashMap<String, u64>>(&value));
+            } else if key == b"difficulty" {
+                println!("Значение (difficulty): {:?}", serde_json::from_slice::<u32>(&value));
+            } else {
+                println!("Значение (transaction): {:?}", serde_json::from_slice::<Transaction>(&value));
+            }
+        }
+    }
     fn new(port: u16) -> Self {
         let start_time = SystemTime::now();
         let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
@@ -161,7 +185,12 @@ impl Blockchain {
         }
         let lock_file = db_path.join("LOCK");
         if lock_file.exists() {
-            fs::remove_file(&lock_file).expect("Не удалось удалить файл LOCK");
+            println!("Файл LOCK существует, база данных может быть открыта другим процессом");
+            // Можно добавить ожидание или обработку ошибки
+            std::thread::sleep(Duration::from_millis(1000));
+            if lock_file.exists() {
+                panic!("Не удалось открыть базу данных: файл LOCK всё ещё существует");
+            }
         }
 
         let db = DB::open(db_path, Options::default()).expect("Не удалось открыть LevelDB");
@@ -232,7 +261,7 @@ impl Blockchain {
 
         blockchain.pending_transactions = pending;
         blockchain.save_state();
-
+        blockchain.debug_db();
         let duration = SystemTime::now()
             .duration_since(start_time)
             .unwrap()
@@ -969,6 +998,7 @@ impl Node {
                                         if !merged_pending.iter().any(|t| t.id == tx.id) {
                                             println!("Добавление новой транзакции из узла {}: {:?}", peer, tx);
                                             if new_blockchain.add_transaction(tx.clone()) {
+                                                println!("Транзакция {} успешно добавлена и сохранена", tx.id);
                                                 merged_pending.push(tx);
                                             } else {
                                                 println!("Не удалось добавить транзакцию из узла {}: {:?}", peer, tx);
