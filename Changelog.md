@@ -46,7 +46,3 @@
 0.4.6 db load fix
 0.4.7 db logging
 0.4.8 db save fix
-0.4.9 sync blockchain
-0.5.0 sync blockchain
-0.5.1 sync blockchain
-0.5.2 empty peers
