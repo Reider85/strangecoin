@@ -861,15 +861,26 @@ impl Node {
                                     };
                                     let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                                     let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
+                                    let current_pending = blockchain.pending_transactions.clone(); // Сохраняем текущие транзакции
                                     let received_hash = temp_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
                                     if temp_blockchain.chain.len() > blockchain.chain.len() || current_hash != received_hash {
-                                        let new_blockchain = Blockchain {
+                                        let mut new_blockchain = Blockchain {
                                             chain: temp_blockchain.chain.clone(),
                                             balances: temp_blockchain.balances.clone(),
                                             difficulty: temp_blockchain.difficulty,
-                                            pending_transactions: temp_blockchain.pending_transactions.clone(),
+                                            pending_transactions: vec![],
                                             db: blockchain.db.clone(),
                                         };
+                                        // Объединяем pending_transactions
+                                        let mut merged_pending = temp_blockchain.pending_transactions.clone();
+                                        for tx in current_pending.iter() {
+                                            if !merged_pending.iter().any(|t| t.id == tx.id) {
+                                                if new_blockchain.add_transaction(tx.clone()) {
+                                                    merged_pending.push(tx.clone());
+                                                }
+                                            }
+                                        }
+                                        new_blockchain.pending_transactions = merged_pending;
                                         if new_blockchain.validate_chain() {
                                             let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
                                             for tx in &new_blockchain.pending_transactions {
@@ -887,14 +898,29 @@ impl Node {
                                                 chain: temp_blockchain.chain,
                                                 balances: temp_blockchain.balances,
                                                 difficulty: temp_blockchain.difficulty,
-                                                pending_transactions: temp_blockchain.pending_transactions,
+                                                pending_transactions: blockchain.pending_transactions.clone(),
                                                 db: blockchain.db.clone(),
                                             });
                                         } else {
                                             println!("Полученный блокчейн не прошёл валидацию");
                                         }
                                     } else {
-                                        println!("Полученный блокчейн не новее текущего");
+                                        // Обновляем только pending_transactions
+                                        let mut new_pending = blockchain.pending_transactions.clone();
+                                        for tx in temp_blockchain.pending_transactions {
+                                            if !new_pending.iter().any(|t| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
+                                                new_pending.push(tx);
+                                            }
+                                        }
+                                        // Добавляем локальные транзакции обратно
+                                        for tx in current_pending.iter() {
+                                            if !new_pending.iter().any(|t| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
+                                                new_pending.push(tx.clone());
+                                            }
+                                        }
+                                        blockchain.pending_transactions = new_pending;
+                                        blockchain.save_state();
+                                        println!("Обновлены pending_transactions через UPDATE_BLOCKCHAIN");
                                     }
                                 }
                             }
@@ -923,7 +949,7 @@ impl Node {
         let blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
         let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
         let current_chain_length = blockchain.chain.len();
-        let current_pending = blockchain.pending_transactions.clone();
+        let current_pending = blockchain.pending_transactions.clone(); // Сохраняем текущие неподтверждённые транзакции
         let existing_db = blockchain.db.clone();
         drop(blockchain);
 
@@ -990,7 +1016,7 @@ impl Node {
                                         db: existing_db.clone(),
                                     };
                                     // Объединяем pending_transactions
-                                    let mut merged_pending = current_pending.clone();
+                                    let mut merged_pending = current_pending.clone(); // Используем сохранённые локальные транзакции
                                     for tx in received_blockchain.pending_transactions {
                                         if !merged_pending.iter().any(|t| t.id == tx.id) {
                                             println!("Добавление новой транзакции из узла {}: {:?}", peer, tx);
@@ -999,6 +1025,17 @@ impl Node {
                                                 merged_pending.push(tx);
                                             } else {
                                                 println!("Не удалось добавить транзакцию из узла {}: {:?}", peer, tx);
+                                            }
+                                        }
+                                    }
+                                    // Добавляем обратно локальные транзакции
+                                    for tx in current_pending.iter() {
+                                        if !merged_pending.iter().any(|t| t.id == tx.id) {
+                                            if new_blockchain.add_transaction(tx.clone()) {
+                                                println!("Локальная транзакция {} восстановлена", tx.id);
+                                                merged_pending.push(tx.clone());
+                                            } else {
+                                                println!("Не удалось восстановить локальную транзакцию {}", tx.id);
                                             }
                                         }
                                     }
@@ -1034,6 +1071,12 @@ impl Node {
                                             new_pending.push(tx);
                                         }
                                     }
+                                    // Добавляем локальные транзакции обратно
+                                    for tx in current_pending.iter() {
+                                        if !new_pending.iter().any(|t| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
+                                            new_pending.push(tx.clone());
+                                        }
+                                    }
                                     blockchain.pending_transactions = new_pending;
                                     blockchain.save_state();
                                     println!("Обновлены pending_transactions с узла {}", peer);
@@ -1054,7 +1097,6 @@ impl Node {
         println!("Синхронизация блокчейна завершена за {} секунд", duration);
     }
 }
-
 impl eframe::App for WalletApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = ctx.input(|i| i.time);

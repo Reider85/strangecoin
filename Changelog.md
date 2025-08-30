@@ -51,3 +51,4 @@
 0.5.1 debug save transactions
 0.5.2 debug save transactions
 0.5.3 debug save transactions
+0.5.4 debug save transactions
