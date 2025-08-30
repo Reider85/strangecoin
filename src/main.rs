@@ -299,33 +299,29 @@ impl Blockchain {
         let transactions = self.pending_transactions.clone();
         let difficulty = self.difficulty;
 
+        println!("Транзакции для майнинга: {:?}", transactions);
         let block = self.mine_block_inner(previous_block, transactions, difficulty, progress_tx.clone());
 
         if let Some(mut block) = block {
             let balance_start_time = SystemTime::now();
+            println!("Начало обновления балансов для блока: {:?}", block);
             for tx in &block.transactions {
-                // Получаем копию баланса отправителя (неизменяемое заимствование)
                 let sender_balance = self.balances.get(&tx.sender).cloned().unwrap_or(0);
                 if sender_balance < tx.amount {
-                    println!("Ошибка: Недостаточно средств у {} для транзакции {}", tx.sender, tx.id);
+                    println!("Ошибка: Недостаточно средств у {} для транзакции {} (баланс: {}, требуется: {})",
+                             tx.sender, tx.id, sender_balance, tx.amount);
                     return None;
                 }
                 let sender_final = sender_balance - tx.amount;
-                // Мутация баланса отправителя
                 *self.balances.entry(tx.sender.clone()).or_insert(0) = sender_final;
 
-                // Получаем копию баланса получателя (неизменяемое заимствование)
                 let receiver_balance = self.balances.get(&tx.receiver).cloned().unwrap_or(0);
                 let receiver_final = receiver_balance + tx.amount;
-                // Мутация баланса получателя
                 *self.balances.entry(tx.receiver.clone()).or_insert(0) = receiver_final;
 
                 println!(
                     "Обновлён баланс: {} -> {}, {} -> {}",
-                    tx.sender,
-                    sender_final,
-                    tx.receiver,
-                    receiver_final
+                    tx.sender, sender_final, tx.receiver, receiver_final
                 );
             }
             let balance_duration = SystemTime::now()
@@ -333,6 +329,7 @@ impl Blockchain {
                 .unwrap()
                 .as_secs_f64();
             println!("Обновление балансов завершено за {} секунд", balance_duration);
+
 
             // Добавляем блок в цепочку перед сохранением
             self.chain.push(block.clone());
@@ -477,7 +474,8 @@ impl Blockchain {
                 .duration_since(start_time)
                 .unwrap()
                 .as_secs_f64();
-            println!("Ошибка: Пустой адрес отправителя или получателя, проверка заняла {} секунд", duration);
+            println!("Ошибка: Пустой адрес отправителя или получателя (sender: {}, receiver: {}), проверка заняла {} секунд",
+                     transaction.sender, transaction.receiver, duration);
             return false;
         }
         if self.pending_transactions.contains(&transaction) {
@@ -485,18 +483,19 @@ impl Blockchain {
                 .duration_since(start_time)
                 .unwrap()
                 .as_secs_f64();
-            println!("Транзакция уже существует в pending_transactions, проверка заняла {} секунд", duration);
+            println!("Транзакция уже существует в pending_transactions (ID: {}), проверка заняла {} секунд",
+                     transaction.id, duration);
             return false;
         }
         let key = transaction.id.as_bytes();
         let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
-        // Проверка на существование транзакции в LevelDB
         if db.get(key).is_some() {
             let duration = SystemTime::now()
                 .duration_since(start_time)
                 .unwrap()
                 .as_secs_f64();
-            println!("Транзакция с ID {} уже существует в LevelDB, проверка заняла {} секунд", transaction.id, duration);
+            println!("Транзакция с ID {} уже существует в LevelDB, проверка заняла {} секунд",
+                     transaction.id, duration);
             return false;
         }
         if let Some(sender_balance) = self.balances.get(&transaction.sender) {
@@ -509,7 +508,8 @@ impl Blockchain {
                             .duration_since(start_time)
                             .unwrap()
                             .as_secs_f64();
-                        println!("Ошибка сериализации транзакции {}: {}, проверка заняла {} секунд", transaction.id, e, duration);
+                        println!("Ошибка сериализации транзакции {}: {}, проверка заняла {} секунд",
+                                 transaction.id, e, duration);
                         return false;
                     }
                 };
@@ -518,7 +518,8 @@ impl Blockchain {
                         .duration_since(start_time)
                         .unwrap()
                         .as_secs_f64();
-                    println!("Ошибка сохранения транзакции {} в LevelDB: {}, проверка заняла {} секунд", transaction.id, e, duration);
+                    println!("Ошибка сохранения транзакции {} в LevelDB: {}, проверка заняла {} секунд",
+                             transaction.id, e, duration);
                     return false;
                 }
                 drop(db);
@@ -527,7 +528,8 @@ impl Blockchain {
                     .duration_since(start_time)
                     .unwrap()
                     .as_secs_f64();
-                println!("Транзакция добавлена и сохранена в LevelDB за {} секунд: {:?}", duration, self.pending_transactions);
+                println!("Транзакция добавлена и сохранена в LevelDB за {} секунд: {:?}",
+                         duration, self.pending_transactions);
                 return true;
             } else {
                 let duration = SystemTime::now()
@@ -546,12 +548,11 @@ impl Blockchain {
             .unwrap()
             .as_secs_f64();
         println!(
-            "Ошибка: Адрес отправителя {} не найден, проверка заняла {} секунд",
+            "Ошибка: Адрес отправителя {} не найден в balances, проверка заняла {} секунд",
             transaction.sender, duration
         );
         false
     }
-
     fn validate_chain(&self) -> bool {
         for i in 1..self.chain.len() {
             let current = &self.chain[i];
@@ -1021,19 +1022,44 @@ impl eframe::App for WalletApp {
             let received_hash = received_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
             if received_blockchain.chain.len() > blockchain.chain.len() || current_hash != received_hash {
                 if received_blockchain.validate_chain() {
-                    let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
-                    for tx in &received_blockchain.pending_transactions {
-                        let key = tx.id.as_bytes();
-                        let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
-                        if let Err(e) = db.put(key, &value) {
-                            println!("Ошибка сохранения транзакции {} в LevelDB: {}", tx.id, e);
+                    let mut valid_balances = true;
+                    for (address, balance) in &received_blockchain.balances {
+                        if let Some(current_balance) = blockchain.balances.get(address) {
+                            if *balance > *current_balance {
+                                let mut total_received = 0;
+                                for block in &received_blockchain.chain {
+                                    for tx in &block.transactions {
+                                        if tx.receiver == *address {
+                                            total_received += tx.amount;
+                                        }
+                                    }
+                                }
+                                if total_received < *balance {
+                                    valid_balances = false;
+                                    println!("Недопустимый баланс для {}: получено {}, но указано {}",
+                                             address, total_received, balance);
+                                    break;
+                                }
+                            }
                         }
                     }
-                    drop(db);
-                    *blockchain = received_blockchain;
-                    blockchain.save_state();
-                    println!("UI: Блокчейн обновлён через канал синхронизации");
-                    ctx.request_repaint();
+                    if valid_balances {
+                        let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+                        for tx in &received_blockchain.pending_transactions {
+                            let key = tx.id.as_bytes();
+                            let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
+                            if let Err(e) = db.put(key, &value) {
+                                println!("Ошибка сохранения транзакции {} в LevelDB: {}", tx.id, e);
+                            }
+                        }
+                        drop(db);
+                        *blockchain = received_blockchain;
+                        blockchain.save_state();
+                        println!("UI: Блокчейн обновлён через канал синхронизации");
+                        ctx.request_repaint();
+                    } else {
+                        println!("Полученный блокчейн через канал синхронизации отклонён из-за некорректных балансов");
+                    }
                 } else {
                     println!("Полученный блокчейн через канал синхронизации не прошёл валидацию");
                 }
