@@ -185,11 +185,13 @@ impl Blockchain {
         }
         let lock_file = db_path.join("LOCK");
         if lock_file.exists() {
-            println!("Файл LOCK существует, база данных может быть открыта другим процессом");
-            // Можно добавить ожидание или обработку ошибки
+            println!("Файл LOCK существует, ожидание освобождения базы данных");
             std::thread::sleep(Duration::from_millis(1000));
             if lock_file.exists() {
-                panic!("Не удалось открыть базу данных: файл LOCK всё ещё существует");
+                println!("Файл LOCK всё ещё существует, попытка удаления");
+                if let Err(e) = fs::remove_file(&lock_file) {
+                    panic!("Не удалось удалить файл LOCK: {}", e);
+                }
             }
         }
 
@@ -604,18 +606,8 @@ impl Blockchain {
         true
     }
 
-    fn save_state(&self) {
+    fn save_state(&mut self) {
         let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
-        if let Err(e) = db.put(b"chain", &serde_json::to_vec(&self.chain).unwrap()) {
-            println!("Ошибка сохранения цепочки блоков в LevelDB: {}", e);
-        }
-        if let Err(e) = db.put(b"balances", &serde_json::to_vec(&self.balances).unwrap()) {
-            println!("Ошибка сохранения балансов в LevelDB: {}", e);
-        }
-        if let Err(e) = db.put(b"difficulty", &serde_json::to_vec(&self.difficulty).unwrap()) {
-            println!("Ошибка сохранения сложности в LevelDB: {}", e);
-        }
-        // Сохраняем только новые транзакции
         for tx in &self.pending_transactions {
             let key = tx.id.as_bytes();
             println!("Сохранение транзакции с ID {} в LevelDB", tx.id);
@@ -633,6 +625,17 @@ impl Blockchain {
                 }
             }
         }
+        if let Err(e) = db.put(b"chain", &serde_json::to_vec(&self.chain).unwrap()) {
+            println!("Ошибка сохранения цепочки блоков в LevelDB: {}", e);
+        }
+        if let Err(e) = db.put(b"balances", &serde_json::to_vec(&self.balances).unwrap()) {
+            println!("Ошибка сохранения балансов в LevelDB: {}", e);
+        }
+        if let Err(e) = db.put(b"difficulty", &serde_json::to_vec(&self.difficulty).unwrap()) {
+            println!("Ошибка сохранения сложности в LevelDB: {}", e);
+        }
+        drop(db);
+        self.debug_db(); // Проверяем содержимое базы данных после сохранения
     }
 }
 
