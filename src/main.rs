@@ -155,7 +155,10 @@ impl Blockchain {
         let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
         let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
         let db_path = exe_dir.join(format!("blockchain_db_{}", port));
-
+        println!("Проверка базы данных по пути: {}", db_path.display());
+        if !db_path.exists() {
+            println!("База данных не существует, создаётся новая");
+        }
         let lock_file = db_path.join("LOCK");
         if lock_file.exists() {
             fs::remove_file(&lock_file).expect("Не удалось удалить файл LOCK");
@@ -191,22 +194,24 @@ impl Blockchain {
 
             let mut iterator = db_guard.new_iter().expect("Не удалось создать итератор LevelDB");
             while let Some((key, value)) = iterator.next() {
-                // Пропускаем системные ключи
                 if key == b"chain" || key == b"balances" || key == b"difficulty" {
+                    println!("Пропуск системного ключа: {:?}", key);
                     continue;
                 }
-                // Проверяем, является ли ключ валидным UUID
-                if let Ok(key_str) = std::str::from_utf8(&key) {
-                    if Uuid::parse_str(key_str).is_ok() {
-                        match serde_json::from_slice::<Transaction>(&value) {
-                            Ok(transaction) => {
-                                if !pending.iter().any(|t: &Transaction| t.id == transaction.id) {
-                                    pending.push(transaction);
-                                }
+                let key_str = std::str::from_utf8(&key).unwrap_or("невалидный ключ");
+                println!("Обработка ключа: {}", key_str);
+                if Uuid::parse_str(key_str).is_ok() {
+                    match serde_json::from_slice::<Transaction>(&value) {
+                        Ok(transaction) => {
+                            println!("Транзакция загружена: {:?}", transaction);
+                            if !pending.iter().any(|t: &Transaction| t.id == transaction.id) {
+                                pending.push(transaction);
                             }
-                            Err(e) => println!("Ошибка десериализации транзакции для ключа {}: {}", key_str, e),
                         }
+                        Err(e) => println!("Ошибка десериализации транзакции для ключа {}: {}", key_str, e),
                     }
+                } else {
+                    println!("Невалидный UUID ключ: {}", key_str);
                 }
             }
         }
@@ -523,6 +528,7 @@ impl Blockchain {
                 }
                 drop(db);
                 self.pending_transactions.push(transaction);
+                self.save_state();
                 let duration = SystemTime::now()
                     .duration_since(start_time)
                     .unwrap()
@@ -583,12 +589,17 @@ impl Blockchain {
         // Сохраняем только новые транзакции
         for tx in &self.pending_transactions {
             let key = tx.id.as_bytes();
+            println!("Сохранение транзакции с ID {} в LevelDB", tx.id);
             match db.get(key) {
-                Some(_) => continue, // Transaction already exists
+                Some(_) => {
+                    println!("Транзакция {} уже существует в LevelDB, пропуск", tx.id);
+                    continue;
+                }
                 None => {
-                    let value = serde_json::to_vec(tx).expect("Error serializing transaction");
-                    if let Err(e) = db.put(key, &value) {
-                        println!("Error saving transaction {} in LevelDB: {}", tx.id, e);
+                    let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
+                    match db.put(key, &value) {
+                        Ok(_) => println!("Транзакция {} успешно сохранена в LevelDB", tx.id),
+                        Err(e) => println!("Ошибка сохранения транзакции {} в LevelDB: {}", tx.id, e),
                     }
                 }
             }
@@ -955,8 +966,13 @@ impl Node {
                                     // Объединяем pending_transactions
                                     let mut merged_pending = current_pending.clone();
                                     for tx in received_blockchain.pending_transactions {
-                                        if !merged_pending.iter().any(|t| t.id == tx.id) && new_blockchain.add_transaction(tx.clone()) {
-                                            merged_pending.push(tx);
+                                        if !merged_pending.iter().any(|t| t.id == tx.id) {
+                                            println!("Добавление новой транзакции из узла {}: {:?}", peer, tx);
+                                            if new_blockchain.add_transaction(tx.clone()) {
+                                                merged_pending.push(tx);
+                                            } else {
+                                                println!("Не удалось добавить транзакцию из узла {}: {:?}", peer, tx);
+                                            }
                                         }
                                     }
                                     new_blockchain.pending_transactions = merged_pending;
