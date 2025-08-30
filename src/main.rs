@@ -224,17 +224,18 @@ impl Blockchain {
             println!("difficulty_opt: {:?}", difficulty_opt);
 
             let mut iterator = db_guard.new_iter().expect("Не удалось создать итератор LevelDB");
+            println!("Загрузка транзакций из LevelDB...");
             while let Some((key, value)) = iterator.next() {
+                let key_str = std::str::from_utf8(&key).unwrap_or("невалидный ключ");
+                println!("Найден ключ: {}", key_str);
                 if key == b"chain" || key == b"balances" || key == b"difficulty" {
                     println!("Пропуск системного ключа: {:?}", key);
                     continue;
                 }
-                let key_str = std::str::from_utf8(&key).unwrap_or("невалидный ключ");
-                println!("Обработка ключа: {}", key_str);
                 if Uuid::parse_str(key_str).is_ok() {
                     match serde_json::from_slice::<Transaction>(&value) {
                         Ok(transaction) => {
-                            println!("Транзакция загружена: {:?}", transaction);
+                            println!("Успешно загружена транзакция: {:?}", transaction);
                             if !pending.iter().any(|t: &Transaction| t.id == transaction.id) {
                                 pending.push(transaction);
                             }
@@ -245,6 +246,7 @@ impl Blockchain {
                     println!("Невалидный UUID ключ: {}", key_str);
                 }
             }
+            println!("Загружено {} транзакций", pending.len());
         }
 
         if let Some(chain) = chain_opt {
@@ -618,24 +620,16 @@ impl Blockchain {
                 }
                 None => {
                     let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
-                    match db.put(key, &value) {
-                        Ok(_) => println!("Транзакция {} успешно сохранена в LevelDB", tx.id),
-                        Err(e) => println!("Ошибка сохранения транзакции {} в LevelDB: {}", tx.id, e),
-                    }
+                    db.put(key, &value).expect("Ошибка сохранения транзакции в LevelDB");
                 }
             }
         }
-        if let Err(e) = db.put(b"chain", &serde_json::to_vec(&self.chain).unwrap()) {
-            println!("Ошибка сохранения цепочки блоков в LevelDB: {}", e);
-        }
-        if let Err(e) = db.put(b"balances", &serde_json::to_vec(&self.balances).unwrap()) {
-            println!("Ошибка сохранения балансов в LevelDB: {}", e);
-        }
-        if let Err(e) = db.put(b"difficulty", &serde_json::to_vec(&self.difficulty).unwrap()) {
-            println!("Ошибка сохранения сложности в LevelDB: {}", e);
-        }
+        db.put(b"chain", &serde_json::to_vec(&self.chain).unwrap()).expect("Ошибка сохранения цепочки блоков");
+        db.put(b"balances", &serde_json::to_vec(&self.balances).unwrap()).expect("Ошибка сохранения балансов");
+        db.put(b"difficulty", &serde_json::to_vec(&self.difficulty).unwrap()).expect("Ошибка сохранения сложности");
+        db.flush().expect("Ошибка при фиксации данных в LevelDB");
         drop(db);
-        self.debug_db(); // Проверяем содержимое базы данных после сохранения
+        self.debug_db();
     }
 }
 
@@ -1381,7 +1375,6 @@ fn main() {
             }
         }
     };
-    // Записываем network_config обратно в файл только если он был создан с значениями по умолчанию
     if network_config.peers == vec!["127.0.0.1:8081".to_string(), "127.0.0.1:8082".to_string(), "127.0.0.1:8083".to_string()] {
         let network_content = serde_json::to_string_pretty(&network_config).expect("Ошибка сериализации network.json");
         fs::write(&network_path, network_content).expect("Ошибка записи в network.json");
@@ -1408,9 +1401,12 @@ fn main() {
         }
     });
 
+    // Клонируем blockchain перед созданием app
+    let blockchain = Arc::clone(&node.blockchain);
+
     let app = WalletApp {
         node: Node {
-            blockchain: node.blockchain,
+            blockchain: Arc::clone(&node.blockchain), // Используем клон, чтобы не перемещать оригинал
             peers: node.peers,
             address: node.address,
             sync_rx,
@@ -1433,10 +1429,22 @@ fn main() {
         last_sync: 0.0,
     };
 
+    // Теперь используем уже клонированный blockchain
+    ctrlc::set_handler(move || {
+        println!("Получен сигнал завершения, сохранение состояния...");
+        save_on_exit(blockchain.clone());
+        println!("Состояние сохранено, выход...");
+        std::process::exit(0);
+    }).expect("Ошибка установки обработчика завершения");
+
     eframe::run_native(
         "Blockchain Wallet",
         eframe::NativeOptions::default(),
         Box::new(|_cc| Box::new(app)),
-    )
-        .expect("Ошибка запуска приложения");
+    ).expect("Ошибка запуска приложения");
+}
+
+fn save_on_exit(blockchain: Arc<Mutex<Blockchain>>) {
+    let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+    blockchain.save_state();
 }

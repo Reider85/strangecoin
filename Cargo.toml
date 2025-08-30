@@ -1,9 +1,10 @@
 [package]
 name = "strangecoin"
-version = "0.5.0"
+version = "0.5.3"
 edition = "2021"
 
 [dependencies]
+ctrlc = "3.4"
 rusty-leveldb="4.0.0"
 uuid = { version = "1.17.0", features = ["v4"] }
 serde = { version = "1.0", features = ["derive"] }
