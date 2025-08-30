@@ -49,3 +49,4 @@
 0.4.9 sync blockchain
 0.5.0 sync blockchain
 0.5.1 sync blockchain
+0.5.2 empty peers
