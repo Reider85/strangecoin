@@ -186,7 +186,12 @@ impl Blockchain {
         let lock_file = db_path.join("LOCK");
         if lock_file.exists() {
             println!("Файл LOCK существует, ожидание освобождения базы данных");
-            std::thread::sleep(Duration::from_millis(1000));
+            let max_attempts = 5;
+            let mut attempts = 0;
+            while lock_file.exists() && attempts < max_attempts {
+                std::thread::sleep(Duration::from_millis(1000));
+                attempts += 1;
+            }
             if lock_file.exists() {
                 println!("Файл LOCK всё ещё существует, попытка удаления");
                 if let Err(e) = fs::remove_file(&lock_file) {
@@ -198,13 +203,15 @@ impl Blockchain {
         let db = DB::open(db_path, Options::default()).expect("Не удалось открыть LevelDB");
         let db = Arc::new(Mutex::new(db));
 
+        // Создаём blockchain здесь, чтобы она была доступна во всём методе
         let mut blockchain = Blockchain {
             chain: vec![],
             balances: HashMap::new(),
             difficulty: 1,
             pending_transactions: vec![],
-            db,
+            db: db.clone(),
         };
+        blockchain.debug_db(); // Логирование содержимого базы данных
 
         let mut chain_opt: Option<Vec<Block>> = None;
         let mut balances_opt: Option<HashMap<String, u64>> = None;
