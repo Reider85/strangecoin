@@ -1017,45 +1017,42 @@ impl Node {
                             total_read += read;
                         }
                         let response = String::from_utf8_lossy(&buffer[..total_read]).to_string();
-                        println!("Получен ответ от узла {}: {}", peer, response);
+                        println!("Получен ответ от узла {}: длина {}", peer, response.len());
                         match serde_json::from_str::<BlockchainDeserialize>(&response) {
                             Ok(received_blockchain) => {
-                                // Добавлено: Проверка на пустую цепочку
-                                if received_blockchain.chain.is_empty() {
-                                    println!("Получена пустая цепочка от узла {}, игнорируем", peer);
+                                // Проверка на пустую или минимальную цепочку
+                                if received_blockchain.chain.is_empty() || received_blockchain.chain.len() <= 1 {
+                                    println!("Получена пустая или минимальная цепочка (длина {}) от узла {}, игнорируем", received_blockchain.chain.len(), peer);
                                     continue;
                                 }
-                                // Конец добавления
+                                // Преобразуем BlockchainDeserialize в Blockchain
+                                let temp_blockchain = Blockchain {
+                                    chain: received_blockchain.chain.clone(),
+                                    balances: received_blockchain.balances.clone(),
+                                    difficulty: received_blockchain.difficulty,
+                                    pending_transactions: received_blockchain.pending_transactions.clone(),
+                                    db: existing_db.clone(),
+                                };
                                 let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                                let received_hash = received_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
-                                if received_blockchain.chain.len() > blockchain.chain.len() || current_hash != received_hash {
+                                let received_hash = temp_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
+                                // Проверяем, что полученная цепочка длиннее и валидна
+                                if temp_blockchain.chain.len() > blockchain.chain.len() && temp_blockchain.validate_chain() {
                                     let mut new_blockchain = Blockchain {
-                                        chain: received_blockchain.chain.clone(),
-                                        balances: received_blockchain.balances.clone(),
-                                        difficulty: received_blockchain.difficulty,
+                                        chain: temp_blockchain.chain.clone(),
+                                        balances: temp_blockchain.balances.clone(),
+                                        difficulty: temp_blockchain.difficulty,
                                         pending_transactions: vec![],
                                         db: existing_db.clone(),
                                     };
                                     let mut merged_pending = current_pending.clone();
-                                    for tx in received_blockchain.pending_transactions {
-                                        if !merged_pending.iter().any(|t| t.id == tx.id) {
-                                            println!("Добавление новой транзакции из узла {}: {:?}", peer, tx);
-                                            if new_blockchain.add_transaction(tx.clone()) {
-                                                println!("Транзакция {} успешно добавлена и сохранена", tx.id);
-                                                merged_pending.push(tx);
-                                            } else {
-                                                println!("Не удалось добавить транзакцию из узла {}: {:?}", peer, tx);
-                                            }
+                                    for tx in temp_blockchain.pending_transactions.iter() {
+                                        if !merged_pending.iter().any(|t| t.id == tx.id) && new_blockchain.add_transaction(tx.clone()) {
+                                            merged_pending.push(tx.clone());
                                         }
                                     }
                                     for tx in current_pending.iter() {
-                                        if !merged_pending.iter().any(|t| t.id == tx.id) {
-                                            if new_blockchain.add_transaction(tx.clone()) {
-                                                println!("Локальная транзакция {} восстановлена", tx.id);
-                                                merged_pending.push(tx.clone());
-                                            } else {
-                                                println!("Не удалось восстановить локальную транзакцию {}", tx.id);
-                                            }
+                                        if !merged_pending.iter().any(|t| t.id == tx.id) && new_blockchain.add_transaction(tx.clone()) {
+                                            merged_pending.push(tx.clone());
                                         }
                                     }
                                     new_blockchain.pending_transactions = merged_pending;
@@ -1083,10 +1080,11 @@ impl Node {
                                         println!("Полученный блокчейн с узла {} не прошёл валидацию", peer);
                                     }
                                 } else {
+                                    // Обновляем только неподтверждённые транзакции
                                     let mut new_pending = blockchain.pending_transactions.clone();
-                                    for tx in received_blockchain.pending_transactions {
+                                    for tx in temp_blockchain.pending_transactions.iter() {
                                         if !new_pending.iter().any(|t| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
-                                            new_pending.push(tx);
+                                            new_pending.push(tx.clone());
                                         }
                                     }
                                     for tx in current_pending.iter() {
@@ -1126,24 +1124,28 @@ impl eframe::App for WalletApp {
             let mut blockchain = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
             let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
             let received_hash = received_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
-            if received_blockchain.chain.len() > blockchain.chain.len() || current_hash != received_hash {
-                if received_blockchain.validate_chain() {
-                    let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
-                    for tx in &received_blockchain.pending_transactions {
-                        let key = tx.id.as_bytes();
-                        let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
-                        if let Err(e) = db.put(key, &value) {
-                            println!("Ошибка сохранения транзакции {} в LevelDB: {}", tx.id, e);
-                        }
+            // Проверка на пустую или минимальную цепочку
+            if received_blockchain.chain.is_empty() || received_blockchain.chain.len() <= 1 {
+                println!("Получена пустая или минимальная цепочка через sync_rx, игнорируем");
+                continue;
+            }
+            // Проверяем, что полученная цепочка длиннее и валидна
+            if received_blockchain.chain.len() > blockchain.chain.len() && received_blockchain.validate_chain() {
+                let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+                for tx in &received_blockchain.pending_transactions {
+                    let key = tx.id.as_bytes();
+                    let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
+                    if let Err(e) = db.put(key, &value) {
+                        println!("Ошибка сохранения транзакции {} в LevelDB: {}", tx.id, e);
                     }
-                    drop(db);
-                    *blockchain = received_blockchain;
-                    blockchain.save_state();
-                    println!("UI: Блокчейн обновлён через канал синхронизации");
-                    ctx.request_repaint();
-                } else {
-                    println!("Полученный блокчейн через канал синхронизации не прошёл валидацию");
                 }
+                drop(db);
+                *blockchain = received_blockchain;
+                blockchain.save_state();
+                println!("UI: Блокчейн обновлён через канал синхронизации");
+                ctx.request_repaint();
+            } else {
+                println!("Полученный блокчейн через канал синхронизации не длиннее или не прошёл валидацию");
             }
         }
 
