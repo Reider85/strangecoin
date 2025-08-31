@@ -53,3 +53,4 @@
 0.5.3 debug save transactions
 0.5.4 debug save transactions
 0.5.5 sync blockchain
+0.5.6 sync blockchain
