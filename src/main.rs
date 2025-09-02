@@ -980,8 +980,8 @@ impl Node {
         let current_chain_length = blockchain.chain.len();
         let current_pending = blockchain.pending_transactions.clone();
         let current_balances = blockchain.balances.clone(); // Сохраняем текущие балансы
-        let existing_db = blockchain.db.clone();
         let wallet_address = self.address.clone();
+        let existing_db = blockchain.db.clone();
         drop(blockchain);
 
         for peer in peers.iter() {
@@ -994,7 +994,6 @@ impl Node {
             };
             // Отправка UPDATE_BLOCKCHAIN
             if let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut writer = BufWriter::new(stream.try_clone().unwrap());
                 let blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                 let response = serde_json::to_string(&*blockchain).unwrap();
@@ -1036,6 +1035,7 @@ impl Node {
                         println!("Получен ответ от узла {}: длина {}", peer, response.len());
                         match serde_json::from_str::<BlockchainDeserialize>(&response) {
                             Ok(received_blockchain) => {
+                                // Проверяем, что цепочка не пустая и содержит больше одного блока
                                 if received_blockchain.chain.is_empty() || received_blockchain.chain.len() <= 1 {
                                     println!("Получена пустая или минимальная цепочка (длина {}) от узла {}, игнорируем", received_blockchain.chain.len(), peer);
                                     continue;
@@ -1047,9 +1047,9 @@ impl Node {
                                     pending_transactions: received_blockchain.pending_transactions.clone(),
                                     db: existing_db.clone(),
                                 };
-                                let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                                 let received_hash = temp_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
-                                if temp_blockchain.chain.len() > blockchain.chain.len() && temp_blockchain.validate_chain() {
+                                // Проверяем, что цепочка длиннее текущей и валидна
+                                if temp_blockchain.chain.len() > current_chain_length && temp_blockchain.validate_chain() {
                                     let mut new_blockchain = Blockchain {
                                         chain: temp_blockchain.chain.clone(),
                                         balances: temp_blockchain.balances.clone(),
@@ -1057,25 +1057,51 @@ impl Node {
                                         pending_transactions: vec![],
                                         db: existing_db.clone(),
                                     };
-                                    // Сохраняем баланс локального кошелька, если он был в текущем блокчейне
-                                    if let Some(local_balance) = current_balances.get(&wallet_address) {
-                                        new_blockchain.balances.entry(wallet_address.clone()).or_insert(*local_balance);
-                                    }
-                                    let mut merged_pending = vec![];
-                                    for tx in current_pending.iter() {
-                                        if tx.sender == wallet_address || tx.receiver == wallet_address {
-                                            if new_blockchain.add_transaction(tx.clone()) {
-                                                merged_pending.push(tx.clone());
+                                    // Проверяем, содержит ли цепочка транзакции локального кошелька
+                                    let mut has_local_transactions = false;
+                                    for block in &new_blockchain.chain {
+                                        for tx in &block.transactions {
+                                            if tx.sender == wallet_address || tx.receiver == wallet_address {
+                                                has_local_transactions = true;
+                                                break;
                                             }
                                         }
+                                        if has_local_transactions {
+                                            break;
+                                        }
                                     }
+                                    // Если локальный кошелёк имеет баланс, но цепочка не содержит его транзакций, игнорируем
+                                    if !has_local_transactions && current_balances.contains_key(&wallet_address) {
+                                        println!("Полученная цепочка от узла {} не содержит транзакций локального кошелька {}, игнорируем", peer, wallet_address);
+                                        continue;
+                                    }
+                                    // Сохраняем баланс локального кошелька
+                                    if let Some(local_balance) = current_balances.get(&wallet_address) {
+                                        new_blockchain.balances.entry(wallet_address.clone())
+                                            .or_insert(*local_balance);
+                                        println!("Сохранён баланс локального кошелька {}: {}", wallet_address, *local_balance);
+                                    }
+                                    // Сохраняем локальные pending-транзакции
+                                    let mut merged_pending = vec![];
+                                    for tx in current_pending.iter() {
+                                        if (tx.sender == wallet_address || tx.receiver == wallet_address) &&
+                                            !new_blockchain.pending_transactions.iter().any(|t| t.id == tx.id) &&
+                                            new_blockchain.add_transaction(tx.clone()) {
+                                            merged_pending.push(tx.clone());
+                                            println!("Сохранена локальная транзакция: {:?}", tx);
+                                        }
+                                    }
+                                    // Добавляем новые транзакции от другой ноды
                                     for tx in temp_blockchain.pending_transactions.iter() {
-                                        if !merged_pending.iter().any(|t| t.id == tx.id) && new_blockchain.add_transaction(tx.clone()) {
+                                        if !merged_pending.iter().any(|t| t.id == tx.id) &&
+                                            new_blockchain.add_transaction(tx.clone()) {
                                             merged_pending.push(tx.clone());
                                         }
                                     }
                                     new_blockchain.pending_transactions = merged_pending;
+                                    // Проверяем валидность объединённого блокчейна
                                     if new_blockchain.validate_chain() {
+                                        let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                                         let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
                                         for tx in &new_blockchain.pending_transactions {
                                             let key = tx.id.as_bytes();
@@ -1096,18 +1122,22 @@ impl Node {
                                             db: existing_db.clone(),
                                         });
                                     } else {
-                                        println!("Полученный блокчейн с узла {} не прошёл валидацию", peer);
+                                        println!("Полученный блокчейн с узла {} не прошёл валидацию после объединения", peer);
                                     }
                                 } else {
+                                    // Обновляем только pending-транзакции, если цепочка не длиннее
+                                    let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                                     let mut new_pending = blockchain.pending_transactions.clone();
                                     for tx in temp_blockchain.pending_transactions.iter() {
-                                        if !new_pending.iter().any(|t| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
+                                        if !new_pending.iter().any(|t| t.id == tx.id) &&
+                                            blockchain.add_transaction(tx.clone()) {
                                             new_pending.push(tx.clone());
                                         }
                                     }
                                     for tx in current_pending.iter() {
                                         if (tx.sender == wallet_address || tx.receiver == wallet_address) &&
-                                            !new_pending.iter().any(|t| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
+                                            !new_pending.iter().any(|t| t.id == tx.id) &&
+                                            blockchain.add_transaction(tx.clone()) {
                                             new_pending.push(tx.clone());
                                         }
                                     }
