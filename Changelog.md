@@ -58,3 +58,4 @@
 0.5.8 sync transaction
 0.5.9 sync transaction
 0.6.0 sync transaction
+0.6.1 sync transaction

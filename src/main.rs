@@ -301,6 +301,9 @@ impl Blockchain {
         // Инициализация только кошельков с ненулевым балансом
         self.balances.insert("wallet1".to_string(), 1000);
         self.balances.insert("wallet2".to_string(), 1000);
+        self.balances.insert("wallet3".to_string(), 0);
+        self.balances.insert("wallet4".to_string(), 0);
+        self.balances.insert("wallet5".to_string(), 0);
         let duration = SystemTime::now()
             .duration_since(start_time)
             .unwrap()
@@ -613,30 +616,66 @@ impl Blockchain {
         false
     }
     fn validate_chain(&self) -> bool {
+        let start_time = SystemTime::now();
         if self.chain.is_empty() {
-            println!("Ошибка валидации: цепочка пуста");
+            println!("Цепочка пуста, невалидна");
             return false;
         }
-        if self.chain[0].index != 0 || self.chain[0].previous_hash != "0" {
-            println!("Ошибка валидации: некорректный генезис-блок");
+
+        // Проверяем генезис-блок
+        let genesis_block = &self.chain[0];
+        if genesis_block.index != 0 || genesis_block.previous_hash != "0" {
+            println!("Некорректный генезис-блок: {:?}", genesis_block);
             return false;
         }
+        if genesis_block.hash != self.calculate_hash(genesis_block) {
+            println!("Некорректный хэш генезис-блока: {:?}", genesis_block);
+            return false;
+        }
+
+        // Проверяем остальные блоки
         for i in 1..self.chain.len() {
-            let current = &self.chain[i];
-            let previous = &self.chain[i - 1];
-            if current.previous_hash != previous.hash {
-                println!("Ошибка валидации: неверный previous_hash для блока {}", current.index);
+            let current_block = &self.chain[i];
+            let previous_block = &self.chain[i - 1];
+
+            // Проверяем индекс
+            if current_block.index != previous_block.index + 1 {
+                println!("Некорректный индекс блока {}: {:?}", i, current_block);
                 return false;
             }
-            let calculated_hash = self.calculate_hash(current);
-            if current.hash != calculated_hash {
-                println!("Ошибка валидации: неверный хэш для блока {}", current.index);
+
+            // Проверяем связь по previous_hash
+            if current_block.previous_hash != previous_block.hash {
+                println!("Некорректный previous_hash в блоке {}: {:?}", i, current_block);
+                return false;
+            }
+
+            // Проверяем хэш блока
+            if current_block.hash != self.calculate_hash(current_block) {
+                println!("Некорректный хэш в блоке {}: {:?}", i, current_block);
+                return false;
+            }
+
+            // Проверяем, что блок (кроме генезис-блока) содержит транзакции
+            if i > 0 && current_block.transactions.is_empty() {
+                println!("Блок {} пуст (без транзакций), невалиден", i);
+                return false;
+            }
+
+            // Проверяем сложность
+            if !current_block.hash.starts_with(&"0".repeat(self.difficulty as usize)) {
+                println!("Хэш блока {} не соответствует сложности: {}", i, current_block.hash);
                 return false;
             }
         }
+
+        let duration = SystemTime::now()
+            .duration_since(start_time)
+            .unwrap()
+            .as_secs_f64();
+        println!("Валидация цепочки завершена за {} секунд, валидна: true", duration);
         true
     }
-
     fn save_state(&mut self) {
         let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
         for tx in &self.pending_transactions {
