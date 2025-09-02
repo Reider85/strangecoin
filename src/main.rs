@@ -544,7 +544,7 @@ impl Blockchain {
         // Проверка на конфликт с существующими транзакциями локального кошелька
         for existing_tx in &self.pending_transactions {
             if (existing_tx.sender == transaction.sender || existing_tx.receiver == transaction.sender) &&
-                (transaction.sender != transaction.receiver) { // Предотвращаем конфликт для одного и того же кошелька
+                (transaction.sender != transaction.receiver) {
                 let duration = SystemTime::now()
                     .duration_since(start_time)
                     .unwrap()
@@ -556,9 +556,12 @@ impl Blockchain {
                 return false;
             }
         }
+        // Проверяем баланс отправителя, если отправитель не существует, отклоняем
         if let Some(sender_balance) = self.balances.get(&transaction.sender) {
             println!("Баланс отправителя {}: {}", transaction.sender, sender_balance);
             if *sender_balance >= transaction.amount {
+                // Инициализируем получателя с нулевым балансом, если его нет
+                self.balances.entry(transaction.receiver.clone()).or_insert(0);
                 let value = match serde_json::to_vec(&transaction) {
                     Ok(value) => value,
                     Err(e) => {
@@ -976,8 +979,9 @@ impl Node {
         let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
         let current_chain_length = blockchain.chain.len();
         let current_pending = blockchain.pending_transactions.clone();
+        let current_balances = blockchain.balances.clone(); // Сохраняем текущие балансы
         let existing_db = blockchain.db.clone();
-        let wallet_address = self.address.clone(); // Предполагается, что address содержит адрес кошелька
+        let wallet_address = self.address.clone();
         drop(blockchain);
 
         for peer in peers.iter() {
@@ -1053,8 +1057,11 @@ impl Node {
                                         pending_transactions: vec![],
                                         db: existing_db.clone(),
                                     };
+                                    // Сохраняем баланс локального кошелька, если он был в текущем блокчейне
+                                    if let Some(local_balance) = current_balances.get(&wallet_address) {
+                                        new_blockchain.balances.entry(wallet_address.clone()).or_insert(*local_balance);
+                                    }
                                     let mut merged_pending = vec![];
-                                    // Сохраняем транзакции, связанные с локальным кошельком
                                     for tx in current_pending.iter() {
                                         if tx.sender == wallet_address || tx.receiver == wallet_address {
                                             if new_blockchain.add_transaction(tx.clone()) {
@@ -1062,7 +1069,6 @@ impl Node {
                                             }
                                         }
                                     }
-                                    // Добавляем транзакции из полученной цепочки
                                     for tx in temp_blockchain.pending_transactions.iter() {
                                         if !merged_pending.iter().any(|t| t.id == tx.id) && new_blockchain.add_transaction(tx.clone()) {
                                             merged_pending.push(tx.clone());
@@ -1093,14 +1099,12 @@ impl Node {
                                         println!("Полученный блокчейн с узла {} не прошёл валидацию", peer);
                                     }
                                 } else {
-                                    // Обновляем только неподтверждённые транзакции, сохраняя локальные
                                     let mut new_pending = blockchain.pending_transactions.clone();
                                     for tx in temp_blockchain.pending_transactions.iter() {
                                         if !new_pending.iter().any(|t| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
                                             new_pending.push(tx.clone());
                                         }
                                     }
-                                    // Сохраняем локальные транзакции
                                     for tx in current_pending.iter() {
                                         if (tx.sender == wallet_address || tx.receiver == wallet_address) &&
                                             !new_pending.iter().any(|t| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
@@ -1119,12 +1123,12 @@ impl Node {
                     }
                 }
             }
-            let duration = SystemTime::now()
-                .duration_since(start_time)
-                .unwrap()
-                .as_secs_f64();
-            println!("Синхронизация блокчейна завершена за {} секунд", duration);
         }
+        let duration = SystemTime::now()
+            .duration_since(start_time)
+            .unwrap()
+            .as_secs_f64();
+        println!("Синхронизация блокчейна завершена за {} секунд", duration);
     }
 }
 impl eframe::App for WalletApp {
