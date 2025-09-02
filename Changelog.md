@@ -55,3 +55,4 @@
 0.5.5 sync blockchain
 0.5.6 sync blockchain
 0.5.7 sync blockchain
+0.5.8 sync transaction

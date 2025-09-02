@@ -298,11 +298,9 @@ impl Blockchain {
         let mut genesis_block = genesis_block;
         genesis_block.hash = hash;
         self.chain.push(genesis_block);
+        // Инициализация только кошельков с ненулевым балансом
         self.balances.insert("wallet1".to_string(), 1000);
         self.balances.insert("wallet2".to_string(), 1000);
-        self.balances.insert("wallet3".to_string(), 0);
-        self.balances.insert("wallet4".to_string(), 0);
-        self.balances.insert("wallet5".to_string(), 0);
         let duration = SystemTime::now()
             .duration_since(start_time)
             .unwrap()
@@ -535,7 +533,6 @@ impl Blockchain {
         }
         let key = transaction.id.as_bytes();
         let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
-        // Проверка на существование транзакции в LevelDB
         if db.get(key).is_some() {
             let duration = SystemTime::now()
                 .duration_since(start_time)
@@ -543,6 +540,21 @@ impl Blockchain {
                 .as_secs_f64();
             println!("Транзакция с ID {} уже существует в LevelDB, проверка заняла {} секунд", transaction.id, duration);
             return false;
+        }
+        // Проверка на конфликт с существующими транзакциями локального кошелька
+        for existing_tx in &self.pending_transactions {
+            if (existing_tx.sender == transaction.sender || existing_tx.receiver == transaction.sender) &&
+                (transaction.sender != transaction.receiver) { // Предотвращаем конфликт для одного и того же кошелька
+                let duration = SystemTime::now()
+                    .duration_since(start_time)
+                    .unwrap()
+                    .as_secs_f64();
+                println!(
+                    "Ошибка: Конфликт транзакции {} с существующей транзакцией {} для кошелька {}, проверка заняла {} секунд",
+                    transaction.id, existing_tx.id, transaction.sender, duration
+                );
+                return false;
+            }
         }
         if let Some(sender_balance) = self.balances.get(&transaction.sender) {
             println!("Баланс отправителя {}: {}", transaction.sender, sender_balance);
@@ -597,7 +609,6 @@ impl Blockchain {
         );
         false
     }
-
     fn validate_chain(&self) -> bool {
         if self.chain.is_empty() {
             println!("Ошибка валидации: цепочка пуста");
@@ -966,6 +977,7 @@ impl Node {
         let current_chain_length = blockchain.chain.len();
         let current_pending = blockchain.pending_transactions.clone();
         let existing_db = blockchain.db.clone();
+        let wallet_address = self.address.clone(); // Предполагается, что address содержит адрес кошелька
         drop(blockchain);
 
         for peer in peers.iter() {
@@ -1020,12 +1032,10 @@ impl Node {
                         println!("Получен ответ от узла {}: длина {}", peer, response.len());
                         match serde_json::from_str::<BlockchainDeserialize>(&response) {
                             Ok(received_blockchain) => {
-                                // Проверка на пустую или минимальную цепочку
                                 if received_blockchain.chain.is_empty() || received_blockchain.chain.len() <= 1 {
                                     println!("Получена пустая или минимальная цепочка (длина {}) от узла {}, игнорируем", received_blockchain.chain.len(), peer);
                                     continue;
                                 }
-                                // Преобразуем BlockchainDeserialize в Blockchain
                                 let temp_blockchain = Blockchain {
                                     chain: received_blockchain.chain.clone(),
                                     balances: received_blockchain.balances.clone(),
@@ -1035,7 +1045,6 @@ impl Node {
                                 };
                                 let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                                 let received_hash = temp_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
-                                // Проверяем, что полученная цепочка длиннее и валидна
                                 if temp_blockchain.chain.len() > blockchain.chain.len() && temp_blockchain.validate_chain() {
                                     let mut new_blockchain = Blockchain {
                                         chain: temp_blockchain.chain.clone(),
@@ -1044,13 +1053,17 @@ impl Node {
                                         pending_transactions: vec![],
                                         db: existing_db.clone(),
                                     };
-                                    let mut merged_pending = current_pending.clone();
-                                    for tx in temp_blockchain.pending_transactions.iter() {
-                                        if !merged_pending.iter().any(|t| t.id == tx.id) && new_blockchain.add_transaction(tx.clone()) {
-                                            merged_pending.push(tx.clone());
+                                    let mut merged_pending = vec![];
+                                    // Сохраняем транзакции, связанные с локальным кошельком
+                                    for tx in current_pending.iter() {
+                                        if tx.sender == wallet_address || tx.receiver == wallet_address {
+                                            if new_blockchain.add_transaction(tx.clone()) {
+                                                merged_pending.push(tx.clone());
+                                            }
                                         }
                                     }
-                                    for tx in current_pending.iter() {
+                                    // Добавляем транзакции из полученной цепочки
+                                    for tx in temp_blockchain.pending_transactions.iter() {
                                         if !merged_pending.iter().any(|t| t.id == tx.id) && new_blockchain.add_transaction(tx.clone()) {
                                             merged_pending.push(tx.clone());
                                         }
@@ -1080,15 +1093,17 @@ impl Node {
                                         println!("Полученный блокчейн с узла {} не прошёл валидацию", peer);
                                     }
                                 } else {
-                                    // Обновляем только неподтверждённые транзакции
+                                    // Обновляем только неподтверждённые транзакции, сохраняя локальные
                                     let mut new_pending = blockchain.pending_transactions.clone();
                                     for tx in temp_blockchain.pending_transactions.iter() {
                                         if !new_pending.iter().any(|t| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
                                             new_pending.push(tx.clone());
                                         }
                                     }
+                                    // Сохраняем локальные транзакции
                                     for tx in current_pending.iter() {
-                                        if !new_pending.iter().any(|t| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
+                                        if (tx.sender == wallet_address || tx.receiver == wallet_address) &&
+                                            !new_pending.iter().any(|t| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
                                             new_pending.push(tx.clone());
                                         }
                                     }
@@ -1104,12 +1119,12 @@ impl Node {
                     }
                 }
             }
+            let duration = SystemTime::now()
+                .duration_since(start_time)
+                .unwrap()
+                .as_secs_f64();
+            println!("Синхронизация блокчейна завершена за {} секунд", duration);
         }
-        let duration = SystemTime::now()
-            .duration_since(start_time)
-            .unwrap()
-            .as_secs_f64();
-        println!("Синхронизация блокчейна завершена за {} секунд", duration);
     }
 }
 impl eframe::App for WalletApp {
