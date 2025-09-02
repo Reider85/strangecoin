@@ -60,3 +60,4 @@
 0.6.0 sync transaction
 0.6.1 sync transaction
 0.6.2 sync transaction
+0.6.3 sync transaction
