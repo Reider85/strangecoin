@@ -1109,67 +1109,33 @@ impl Node {
                                 if temp_blockchain.chain.len() > current_chain_length && temp_blockchain.validate_chain() {
                                     let mut new_blockchain = Blockchain {
                                         chain: temp_blockchain.chain.clone(),
-                                        balances: current_balances.clone(), // Копируем текущие балансы, а не из temp_blockchain
+                                        balances: temp_blockchain.balances.clone(), // Используем балансы из temp_blockchain
                                         difficulty: temp_blockchain.difficulty,
                                         pending_transactions: vec![],
                                         db: existing_db.clone(),
                                     };
-                                    // Проверяем, содержит ли цепочка транзакции локального кошелька
-                                    let mut has_local_transactions = false;
-                                    for block in &new_blockchain.chain {
-                                        for tx in &block.transactions {
-                                            if tx.sender == wallet_address || tx.receiver == wallet_address {
-                                                has_local_transactions = true;
-                                                break;
-                                            }
-                                        }
-                                        if has_local_transactions {
-                                            break;
-                                        }
-                                    }
-                                    // Если локальный кошелёк имеет баланс, но цепочка не содержит его транзакций, игнорируем
-                                    if !has_local_transactions && current_balances.contains_key(&wallet_address) {
-                                        println!("Полученная цепочка от узла {} не содержит транзакций локального кошелька {}, игнорируем", peer, wallet_address);
-                                        continue;
-                                    }
-                                    // Объединяем pending_transactions
                                     let mut merged_pending = vec![];
                                     let mut added_transactions = 0;
-                                    // Добавляем транзакции от другого узла
                                     for tx in temp_blockchain.pending_transactions.iter() {
                                         if !merged_pending.iter().any(|t: &Transaction| t.id == tx.id) {
                                             if new_blockchain.add_transaction(tx.clone()) {
                                                 merged_pending.push(tx.clone());
                                                 added_transactions += 1;
                                                 println!("Добавлена транзакция от узла {}: {:?}", peer, tx);
-                                            } else {
-                                                println!("Транзакция от узла {} отклонена: {:?}", peer, tx);
                                             }
                                         }
                                     }
-                                    // Добавляем локальные транзакции
                                     for tx in current_pending.iter() {
-                                        if (tx.sender == wallet_address || tx.receiver == wallet_address) &&
-                                            !merged_pending.iter().any(|t: &Transaction| t.id == tx.id) {
+                                        if !merged_pending.iter().any(|t: &Transaction| t.id == tx.id) {
                                             if new_blockchain.add_transaction(tx.clone()) {
                                                 merged_pending.push(tx.clone());
                                                 added_transactions += 1;
                                                 println!("Сохранена локальная транзакция: {:?}", tx);
-                                            } else {
-                                                println!("Локальная транзакция отклонена: {:?}", tx);
-                                                // Сохраняем транзакцию для повторной попытки позже
-                                                let mut db = new_blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
-                                                let key = tx.id.as_bytes();
-                                                let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
-                                                if let Err(e) = db.put(key, &value) {
-                                                    println!("Ошибка сохранения отклонённой транзакции {} в LevelDB: {}", tx.id, e);
-                                                }
                                             }
                                         }
                                     }
                                     new_blockchain.pending_transactions = merged_pending;
                                     println!("Обновлено {} pending_transactions с узла {}", added_transactions, peer);
-                                    // Проверяем валидность объединённого блокчейна
                                     if new_blockchain.validate_chain() {
                                         let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                                         let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
