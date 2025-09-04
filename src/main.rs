@@ -629,7 +629,15 @@ impl Blockchain {
             return false;
         }
 
+        // Инициализация expected_balances начальными балансами из create_genesis_block
         let mut expected_balances = HashMap::new();
+        expected_balances.insert("wallet1".to_string(), 1000); // Начальный баланс из create_genesis_block
+        expected_balances.insert("wallet2".to_string(), 1000);
+        expected_balances.insert("wallet3".to_string(), 0);
+        expected_balances.insert("wallet4".to_string(), 0);
+        expected_balances.insert("wallet5".to_string(), 0);
+
+        // Проверка транзакций в цепочке
         for block in &self.chain {
             for tx in &block.transactions {
                 let sender_balance = expected_balances.get(&tx.sender).unwrap_or(&0);
@@ -654,6 +662,7 @@ impl Blockchain {
             *temp_balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
         }
 
+        // Проверка соответствия текущих балансов
         for (wallet, balance) in &self.balances {
             let expected = expected_balances.get(wallet).unwrap_or(&0);
             if balance != expected {
@@ -662,14 +671,13 @@ impl Blockchain {
             }
         }
 
+        // Проверка структуры цепочки
         for i in 1..self.chain.len() {
             let current_block = &self.chain[i];
             let previous_block = &self.chain[i - 1];
             if current_block.index != previous_block.index + 1 {
                 println!("Некорректный индекс блока {}: {:?}", i, current_block);
-                return
-
-                    false;
+                return false;
             }
             if current_block.previous_hash != previous_block.hash {
                 println!("Некорректный previous_hash в блоке {}: {:?}", i, current_block);
