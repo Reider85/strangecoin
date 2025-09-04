@@ -544,7 +544,6 @@ impl Blockchain {
             println!("Транзакция с ID {} уже существует в LevelDB, проверка заняла {} секунд", transaction.id, duration);
             return false;
         }
-        // Проверка на конфликт с существующими транзакциями локального кошелька
         for existing_tx in &self.pending_transactions {
             if (existing_tx.sender == transaction.sender || existing_tx.receiver == transaction.sender) &&
                 (transaction.sender != transaction.receiver) {
@@ -559,11 +558,9 @@ impl Blockchain {
                 return false;
             }
         }
-        // Проверяем баланс отправителя, если отправитель не существует, отклоняем
         if let Some(sender_balance) = self.balances.get(&transaction.sender) {
             println!("Баланс отправителя {}: {}", transaction.sender, sender_balance);
             if *sender_balance >= transaction.amount {
-                // Инициализируем получателя с нулевым балансом, если его нет
                 self.balances.entry(transaction.receiver.clone()).or_insert(0);
                 let value = match serde_json::to_vec(&transaction) {
                     Ok(value) => value,
@@ -599,8 +596,8 @@ impl Blockchain {
                     .unwrap()
                     .as_secs_f64();
                 println!(
-                    "Ошибка: Недостаточно средств (баланс: {}, требуется: {}), проверка заняла {} секунд",
-                    sender_balance, transaction.amount, duration
+                    "Ошибка: Недостаточно средств у {} (баланс: {}, требуется: {}), проверка заняла {} секунд",
+                    transaction.sender, sender_balance, transaction.amount, duration
                 );
                 return false;
             }
@@ -622,7 +619,6 @@ impl Blockchain {
             return false;
         }
 
-        // Проверяем генезис-блок
         let genesis_block = &self.chain[0];
         if genesis_block.index != 0 || genesis_block.previous_hash != "0" {
             println!("Некорректный генезис-блок: {:?}", genesis_block);
@@ -633,7 +629,6 @@ impl Blockchain {
             return false;
         }
 
-        // Проверяем балансы
         let mut expected_balances = HashMap::new();
         for block in &self.chain {
             for tx in &block.transactions {
@@ -646,7 +641,19 @@ impl Blockchain {
                 *expected_balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
             }
         }
-        // Проверяем соответствие текущих балансов
+
+        // Проверка pending_transactions
+        let mut temp_balances = expected_balances.clone();
+        for tx in &self.pending_transactions {
+            let sender_balance = temp_balances.get(&tx.sender).unwrap_or(&0);
+            if *sender_balance < tx.amount {
+                println!("Недостаточно средств у {} в pending_transactions для транзакции {}", tx.sender, tx.id);
+                return false;
+            }
+            *temp_balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
+            *temp_balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
+        }
+
         for (wallet, balance) in &self.balances {
             let expected = expected_balances.get(wallet).unwrap_or(&0);
             if balance != expected {
@@ -655,13 +662,14 @@ impl Blockchain {
             }
         }
 
-        // Проверяем остальные блоки
         for i in 1..self.chain.len() {
             let current_block = &self.chain[i];
             let previous_block = &self.chain[i - 1];
             if current_block.index != previous_block.index + 1 {
                 println!("Некорректный индекс блока {}: {:?}", i, current_block);
-                return false;
+                return
+
+                    false;
             }
             if current_block.previous_hash != previous_block.hash {
                 println!("Некорректный previous_hash в блоке {}: {:?}", i, current_block);
@@ -941,8 +949,9 @@ impl Node {
                                     };
                                     let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                                     let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
-                                    let current_pending = blockchain.pending_transactions.clone(); // Сохраняем текущие транзакции
+                                    let current_pending = blockchain.pending_transactions.clone();
                                     let received_hash = temp_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
+
                                     if temp_blockchain.chain.len() > blockchain.chain.len() || current_hash != received_hash {
                                         let mut new_blockchain = Blockchain {
                                             chain: temp_blockchain.chain.clone(),
@@ -951,13 +960,18 @@ impl Node {
                                             pending_transactions: vec![],
                                             db: blockchain.db.clone(),
                                         };
-                                        // Объединяем pending_transactions
-                                        let mut merged_pending = temp_blockchain.pending_transactions.clone();
+                                        // Объединяем pending_transactions, добавляя только валидные
+                                        let mut merged_pending = vec![];
+                                        for tx in temp_blockchain.pending_transactions.iter() {
+                                            if !merged_pending.iter().any(|t: &Transaction| t.id == tx.id) && new_blockchain.add_transaction(tx.clone()) {
+                                                merged_pending.push(tx.clone());
+                                                println!("Добавлена транзакция от узла: {:?}", tx);
+                                            }
+                                        }
                                         for tx in current_pending.iter() {
-                                            if !merged_pending.iter().any(|t| t.id == tx.id) {
-                                                if new_blockchain.add_transaction(tx.clone()) {
-                                                    merged_pending.push(tx.clone());
-                                                }
+                                            if !merged_pending.iter().any(|t| t.id == tx.id) && new_blockchain.add_transaction(tx.clone()) {
+                                                merged_pending.push(tx.clone());
+                                                println!("Сохранена локальная транзакция: {:?}", tx);
                                             }
                                         }
                                         new_blockchain.pending_transactions = merged_pending;
@@ -985,17 +999,18 @@ impl Node {
                                             println!("Полученный блокчейн не прошёл валидацию");
                                         }
                                     } else {
-                                        // Обновляем только pending_transactions
+                                        // Обновляем только pending_transactions, добавляя только валидные
                                         let mut new_pending = blockchain.pending_transactions.clone();
-                                        for tx in temp_blockchain.pending_transactions {
+                                        for tx in temp_blockchain.pending_transactions.iter() {
                                             if !new_pending.iter().any(|t| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
-                                                new_pending.push(tx);
+                                                new_pending.push(tx.clone());
+                                                println!("Добавлена транзакция от узла: {:?}", tx);
                                             }
                                         }
-                                        // Добавляем локальные транзакции обратно
                                         for tx in current_pending.iter() {
                                             if !new_pending.iter().any(|t| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
                                                 new_pending.push(tx.clone());
+                                                println!("Сохранена локальная транзакция: {:?}", tx);
                                             }
                                         }
                                         blockchain.pending_transactions = new_pending;
@@ -1091,7 +1106,6 @@ impl Node {
                         println!("Получен ответ от узла {}: длина {} байт", peer, response.len());
                         match serde_json::from_str::<BlockchainDeserialize>(&response) {
                             Ok(received_blockchain) => {
-                                // Проверяем, что цепочка не пустая и содержит больше одного блока
                                 if received_blockchain.chain.is_empty() || received_blockchain.chain.len() <= 1 {
                                     println!("Получена пустая или минимальная цепочка (длина {}) от узла {}, игнорируем", received_blockchain.chain.len(), peer);
                                     continue;
@@ -1105,7 +1119,6 @@ impl Node {
                                 };
                                 println!("Полученная цепочка от узла {}: длина {}, содержимое: {:?}", peer, temp_blockchain.chain.len(), temp_blockchain.chain);
                                 let received_hash = temp_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
-                                // Проверяем, что цепочка длиннее текущей и валидна
                                 if temp_blockchain.chain.len() > current_chain_length && temp_blockchain.validate_chain() {
                                     let mut new_blockchain = Blockchain {
                                         chain: temp_blockchain.chain.clone(),
@@ -1117,33 +1130,19 @@ impl Node {
                                     let mut merged_pending = vec![];
                                     let mut added_transactions = 0;
 
-                                    // Добавляем транзакции из полученного блокчейна
                                     for tx in temp_blockchain.pending_transactions.iter() {
-                                        if !merged_pending.iter().any(|t: &Transaction| t.id == tx.id) {
-                                            if new_blockchain.add_transaction(tx.clone()) {
-                                                merged_pending.push(tx.clone());
-                                                added_transactions += 1;
-                                                println!("Добавлена транзакция от узла {}: {:?}", peer, tx);
-                                            } else {
-                                                // Сохраняем даже отклонённые транзакции
-                                                merged_pending.push(tx.clone());
-                                                println!("Транзакция от узла {} отклонена, но сохранена: {:?}", peer, tx);
-                                            }
+                                        if !merged_pending.iter().any(|t: &Transaction| t.id == tx.id) && new_blockchain.add_transaction(tx.clone()) {
+                                            merged_pending.push(tx.clone());
+                                            added_transactions += 1;
+                                            println!("Добавлена транзакция от узла {}: {:?}", peer, tx);
                                         }
                                     }
 
-                                    // Добавляем локальные транзакции
                                     for tx in current_pending.iter() {
-                                        if !merged_pending.iter().any(|t: &Transaction| t.id == tx.id) {
-                                            if new_blockchain.add_transaction(tx.clone()) {
-                                                merged_pending.push(tx.clone());
-                                                added_transactions += 1;
-                                                println!("Сохранена локальная транзакция: {:?}", tx);
-                                            } else {
-                                                // Сохраняем даже отклонённые локальные транзакции
-                                                merged_pending.push(tx.clone());
-                                                println!("Локальная транзакция отклонена, но сохранена: {:?}", tx);
-                                            }
+                                        if !merged_pending.iter().any(|t: &Transaction| t.id == tx.id) && new_blockchain.add_transaction(tx.clone()) {
+                                            merged_pending.push(tx.clone());
+                                            added_transactions += 1;
+                                            println!("Сохранена локальная транзакция: {:?}", tx);
                                         }
                                     }
 
@@ -1187,34 +1186,21 @@ impl Node {
                                         println!("Полученный блокчейн с узла {} не прошёл валидацию после объединения", peer);
                                     }
                                 } else {
-                                    // Обновляем только pending_transactions
                                     let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                                     let mut new_pending = blockchain.pending_transactions.clone();
                                     let mut added_transactions = 0;
                                     for tx in temp_blockchain.pending_transactions.iter() {
-                                        if !new_pending.iter().any(|t: &Transaction| t.id == tx.id) {
-                                            if blockchain.add_transaction(tx.clone()) {
-                                                new_pending.push(tx.clone());
-                                                added_transactions += 1;
-                                                println!("Добавлена транзакция от узла {}: {:?}", peer, tx);
-                                            } else {
-                                                // Сохраняем даже отклонённые транзакции
-                                                new_pending.push(tx.clone());
-                                                println!("Транзакция от узла {} отклонена, но сохранена: {:?}", peer, tx);
-                                            }
+                                        if !new_pending.iter().any(|t: &Transaction| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
+                                            new_pending.push(tx.clone());
+                                            added_transactions += 1;
+                                            println!("Добавлена транзакция от узла {}: {:?}", peer, tx);
                                         }
                                     }
                                     for tx in current_pending.iter() {
-                                        if !new_pending.iter().any(|t: &Transaction| t.id == tx.id) {
-                                            if blockchain.add_transaction(tx.clone()) {
-                                                new_pending.push(tx.clone());
-                                                added_transactions += 1;
-                                                println!("Сохранена локальная транзакция: {:?}", tx);
-                                            } else {
-                                                // Сохраняем даже отклонённые локальные транзакции
-                                                new_pending.push(tx.clone());
-                                                println!("Локальная транзакция отклонена, но сохранена: {:?}", tx);
-                                            }
+                                        if !new_pending.iter().any(|t: &Transaction| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
+                                            new_pending.push(tx.clone());
+                                            added_transactions += 1;
+                                            println!("Сохранена локальная транзакция: {:?}", tx);
                                         }
                                     }
                                     blockchain.pending_transactions = new_pending;
