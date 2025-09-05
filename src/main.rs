@@ -1054,6 +1054,7 @@ impl Node {
         let blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
         let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
         let current_chain_length = blockchain.chain.len();
+        let current_timestamp = blockchain.chain.last().map(|b| b.timestamp).unwrap_or(0);
         let current_pending = blockchain.pending_transactions.clone();
         let current_balances = blockchain.balances.clone(); // Сохраняем текущие балансы
         let wallet_address = self.address.clone();
@@ -1127,7 +1128,9 @@ impl Node {
                                 };
                                 println!("Полученная цепочка от узла {}: длина {}, содержимое: {:?}", peer, temp_blockchain.chain.len(), temp_blockchain.chain);
                                 let received_hash = temp_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
-                                if temp_blockchain.chain.len() > current_chain_length && temp_blockchain.validate_chain() {
+                                
+                                let received_timestamp = temp_blockchain.chain.last().map(|b| b.timestamp).unwrap_or(0);
+                                if temp_blockchain.chain.len() > current_chain_length && received_timestamp > current_timestamp && temp_blockchain.validate_chain() {
                                     let mut new_blockchain = Blockchain {
                                         chain: temp_blockchain.chain.clone(),
                                         balances: temp_blockchain.balances.clone(),
