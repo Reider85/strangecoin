@@ -1056,6 +1056,7 @@ impl Node {
         let current_chain_length = blockchain.chain.len();
         let current_timestamp = blockchain.chain.last().map(|b| b.timestamp).unwrap_or(0);
         let current_pending = blockchain.pending_transactions.clone();
+        let current_block_count = blockchain.chain.iter().filter(|b| !b.transactions.is_empty()).count();
         let current_balances = blockchain.balances.clone(); // Сохраняем текущие балансы
         let wallet_address = self.address.clone();
         let existing_db = blockchain.db.clone();
@@ -1070,7 +1071,10 @@ impl Node {
                     continue;
                 }
             };
-
+            if current_chain_length <= 1 {
+                println!("Новый узел, только получение данных, отправка цепочки запрещена");
+                continue; // Пропускаем отправку UPDATE_BLOCKCHAIN
+            }
             // Отправка UPDATE_BLOCKCHAIN
             if let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
                 let mut writer = BufWriter::new(stream.try_clone().unwrap());
@@ -1128,9 +1132,9 @@ impl Node {
                                 };
                                 println!("Полученная цепочка от узла {}: длина {}, содержимое: {:?}", peer, temp_blockchain.chain.len(), temp_blockchain.chain);
                                 let received_hash = temp_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
-                                
                                 let received_timestamp = temp_blockchain.chain.last().map(|b| b.timestamp).unwrap_or(0);
-                                if temp_blockchain.chain.len() > current_chain_length && received_timestamp > current_timestamp && temp_blockchain.validate_chain() {
+                                let received_block_count = temp_blockchain.chain.iter().filter(|b| !b.transactions.is_empty()).count();
+                                if temp_blockchain.chain.len() > current_chain_length && received_block_count > current_block_count && temp_blockchain.validate_chain() {
                                     let mut new_blockchain = Blockchain {
                                         chain: temp_blockchain.chain.clone(),
                                         balances: temp_blockchain.balances.clone(),
