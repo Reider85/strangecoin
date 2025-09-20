@@ -67,3 +67,4 @@
 0.6.7 sync transaction
 0.6.8 sync transaction
 0.6.9 sync first transaction
+0.7.0 repaint fix

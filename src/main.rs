@@ -1256,6 +1256,8 @@ impl eframe::App for WalletApp {
                 continue;
             }
             // Проверяем, что полученная цепочка длиннее и валидна
+            let current_balance = blockchain.balances.get(&self.wallet_address).cloned().unwrap_or(0);
+            let received_balance = received_blockchain.balances.get(&self.wallet_address).cloned().unwrap_or(0);
             if received_blockchain.chain.len() > blockchain.chain.len() && received_blockchain.validate_chain() {
                 let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
                 for tx in &received_blockchain.pending_transactions {
@@ -1269,7 +1271,13 @@ impl eframe::App for WalletApp {
                 *blockchain = received_blockchain;
                 blockchain.save_state();
                 println!("UI: Блокчейн обновлён через канал синхронизации");
-                ctx.request_repaint();
+                // Запрашиваем перерисовку только если баланс изменился
+                if current_balance != received_balance {
+                    println!("Баланс кошелька {} изменился с {} на {}, запрашивается перерисовка", self.wallet_address, current_balance, received_balance);
+                    ctx.request_repaint();
+                } else {
+                    println!("Баланс кошелька {} не изменился ({}), перерисовка не требуется", self.wallet_address, current_balance);
+                }
             } else {
                 println!("Полученный блокчейн через канал синхронизации не длиннее или не прошёл валидацию");
             }
