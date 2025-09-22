@@ -14,6 +14,12 @@ rand = "0.8"
 eframe = "0.22"
 winapi = { version = "0.3.9", features = ["windef", "winuser"] }
 toml = "0.5"
+pbkdf2 = { version = "0.12.2", features = ["simple"] }
+rand_core = "0.6.4"
+base64 = "0.22.1"
+aes-gcm = "0.10"
+ed25519-dalek =  { version = "2.2.0", features = ["rand_core", "pem", "pkcs8","serde","alloc","std"] }
+
 
 
 [wallet]
