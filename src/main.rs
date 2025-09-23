@@ -914,39 +914,14 @@ impl Node {
     }
 
     fn find_wallet_by_ip(&self, ip: &str, port: u16) -> Option<String> {
-        let address = format!("{}:{}", ip, port);
-        let start_time = SystemTime::now();
-        println!("Поиск кошелька по адресу: {}", address);
-        if let Ok(stream) = TcpStream::connect_timeout(&address.parse::<SocketAddr>().unwrap(), Duration::from_secs(1)) {
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut writer = BufWriter::new(stream);
-            let message = "GET_WALLET_ADDRESS";
-            let length = message.len() as u32;
-            let mut data = length.to_be_bytes().to_vec();
-            data.extend_from_slice(message.as_bytes());
-            if writer.write_all(&data).is_ok() {
-                writer.flush().ok();
-                let mut length_buf = [0; 4];
-                if reader.read_exact(&mut length_buf).is_ok() {
-                    let length = u32::from_be_bytes(length_buf) as usize;
-                    let mut buffer = vec![0; length];
-                    if reader.read_exact(&mut buffer).is_ok() {
-                        let wallet_address = String::from_utf8_lossy(&buffer).to_string();
-                        let duration = SystemTime::now()
-                            .duration_since(start_time)
-                            .unwrap()
-                            .as_secs_f64();
-                        println!("Кошелёк найден: {} для {} за {} секунд", wallet_address, address, duration);
-                        return Some(wallet_address);
-                    }
-                }
+        let addr = format!("{}:{}", ip, port);
+        let peers = self.peers.lock().expect("Не удалось захватить Mutex для peers");
+        if peers.contains(&addr) {
+            let blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+            for (wallet, _) in blockchain.balances.iter() {
+                return Some(wallet.clone());
             }
         }
-        let duration = SystemTime::now()
-            .duration_since(start_time)
-            .unwrap()
-            .as_secs_f64();
-        println!("Кошелёк не найден для {}, поиск занял {} секунд", address, duration);
         None
     }
 
@@ -1291,7 +1266,7 @@ impl eframe::App for WalletApp {
                                         .as_secs_f64();
                                     println!("Регистрация успешна за {} секунд, адрес: {}", duration, self.wallet_address);
                                     let mut blockchain = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                                    blockchain.balances.entry(self.wallet_address.clone()).or_insert(100000);
+                                    blockchain.balances.entry(self.wallet_address.clone()).or_insert(0);
                                     blockchain.save_state();
                                 }
                                 Err(e) => {
