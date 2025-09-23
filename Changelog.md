@@ -70,3 +70,4 @@
 0.7.0 repaint fix
 0.7.1 register
 0.7.2 wrong symbols
+0.7.3 sync transaction
