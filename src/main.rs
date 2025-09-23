@@ -337,7 +337,16 @@ impl Blockchain {
         }
 
         let previous_block = self.chain.last().unwrap().clone();
-        let transactions = self.pending_transactions.clone();
+        let transactions: Vec<Transaction> = self.pending_transactions
+            .iter()
+            .filter(|tx| !self.chain.iter().any(|block| block.transactions.iter().any(|t| t.id == tx.id)))
+            .cloned()
+            .collect();
+        if transactions.is_empty() {
+            println!("Все pending_transactions уже включены в блоки");
+            let _ = progress_tx.send("Все pending_transactions уже включены в блоки".to_string());
+            return None;
+        }
         let difficulty = self.difficulty;
 
         let block = self.mine_block_inner(previous_block, transactions, difficulty, progress_tx.clone());
@@ -359,10 +368,7 @@ impl Blockchain {
 
                 println!(
                     "Обновлён баланс: {} -> {}, {} -> {}",
-                    tx.sender,
-                    sender_final,
-                    tx.receiver,
-                    receiver_final
+                    tx.sender, sender_final, tx.receiver, receiver_final
                 );
             }
             let balance_duration = SystemTime::now()
@@ -619,10 +625,12 @@ impl Blockchain {
             return false;
         }
 
-        let mut expected_balances = HashMap::new();
+        let mut expected_balances = self.balances.clone();
+        println!("Начальные expected_balances: {:?}", expected_balances);
 
         for block in &self.chain {
             for tx in &block.transactions {
+                println!("Обработка транзакции {} в блоке {}: {:?}", tx.id, block.index, tx);
                 let sender_balance = expected_balances.get(&tx.sender).unwrap_or(&0);
                 if *sender_balance < tx.amount {
                     println!("Недостаточно средств у {} в блоке {} для транзакции {}", tx.sender, block.index, tx.id);
@@ -630,11 +638,13 @@ impl Blockchain {
                 }
                 *expected_balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
                 *expected_balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
+                println!("Обновлённые expected_balances после транзакции {}: {:?}", tx.id, expected_balances);
             }
         }
 
         let mut temp_balances = expected_balances.clone();
         for tx in &self.pending_transactions {
+            println!("Обработка pending транзакции {}: {:?}", tx.id, tx);
             let sender_balance = temp_balances.get(&tx.sender).unwrap_or(&0);
             if *sender_balance < tx.amount {
                 println!("Недостаточно средств у {} в pending_transactions для транзакции {}", tx.sender, tx.id);
@@ -642,6 +652,7 @@ impl Blockchain {
             }
             *temp_balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
             *temp_balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
+            println!("Обновлённые temp_balances после pending транзакции {}: {:?}", tx.id, temp_balances);
         }
 
         for (wallet, balance) in &self.balances {
@@ -819,98 +830,61 @@ impl Node {
         node
     }
 
-    fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
-        let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).expect("Не удалось запустить сервер");
-        println!("Сервер запущен на порту {}", port);
-        let blockchain = Arc::clone(&self.blockchain);
-        thread::spawn(move || {
-            for stream in listener.incoming() {
-                let stream = stream.expect("Ошибка подключения");
-                let blockchain = Arc::clone(&blockchain);
-                let sync_tx = sync_tx.clone();
-                thread::spawn(move || {
-                    let mut reader = BufReader::new(stream.try_clone().unwrap());
-                    let mut writer = BufWriter::new(stream);
-                    let mut length_buf = [0; 4];
-                    if reader.read_exact(&mut length_buf).is_ok() {
-                        let length = u32::from_be_bytes(length_buf) as usize;
-                        let mut buffer = vec![0; length];
-                        if reader.read_exact(&mut buffer).is_ok() {
-                            let message = String::from_utf8_lossy(&buffer).to_string();
-                            println!("Получено сообщение: {}", message);
-                            if message == "GET_BLOCKCHAIN" {
-                                let blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                                let response = serde_json::to_string(&BlockchainDeserialize {
-                                    chain: blockchain.chain.clone(),
-                                    balances: blockchain.balances.clone(),
-                                    difficulty: blockchain.difficulty,
-                                    pending_transactions: blockchain.pending_transactions.clone(),
-                                }).expect("Ошибка сериализации блокчейна");
-                                let length = response.len() as u32;
-                                let mut data = length.to_be_bytes().to_vec();
-                                data.extend_from_slice(response.as_bytes());
-                                if writer.write_all(&data).is_ok() {
-                                    writer.flush().expect("Ошибка отправки ответа");
-                                    println!("Отправлен блокчейн: {} байт", data.len());
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-        });
-    }
-
-    fn add_peer(&mut self, address: String) -> bool {
-        let mut peers = self.peers.lock().expect("Не удалось захватить Mutex для peers");
-        if !peers.contains(&address) {
-            peers.push(address.clone());
-            let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
-            let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
-            let network_path = exe_dir.join("network.json");
-            let network_config = NetworkConfig {
-                peers: peers.clone(),
-            };
-            let network_content = serde_json::to_string_pretty(&network_config).expect("Ошибка сериализации network.json");
-            fs::write(&network_path, network_content).expect("Ошибка записи в network.json");
-            println!("Добавлен пир: {}, обновлён network.json", address);
-            true
-        } else {
-            println!("Пир {} уже существует", address);
-            false
-        }
-    }
-
     fn discover_peers(&mut self) {
         let start_time = SystemTime::now();
+        let mut peers = self.peers.lock().expect("Не удалось захватить Mutex для peers");
+        peers.clear();
         let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
         let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
         let network_path = exe_dir.join("network.json");
         let network_config: NetworkConfig = match fs::read_to_string(&network_path) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|err| {
-                println!("Ошибка парсинга network.json: {}. Используются значения по умолчанию.", err);
-                NetworkConfig {
-                    peers: vec!["127.0.0.1:8081".to_string(), "127.0.0.1:8082".to_string(), "127.0.0.1:8083".to_string()],
-                }
-            }),
-            Err(err) => {
-                println!("Ошибка чтения network.json: {}. Используются значения по умолчанию.", err);
-                NetworkConfig {
-                    peers: vec!["127.0.0.1:8081".to_string(), "127.0.0.1:8082".to_string(), "127.0.0.1:8083".to_string()],
-                }
-            }
+            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| NetworkConfig { peers: vec![] }),
+            Err(_) => NetworkConfig { peers: vec![] },
         };
-        let mut peers = self.peers.lock().expect("Не удалось захватить Mutex для peers");
-        let new_peers: Vec<String> = network_config.peers.into_iter().filter(|p| !peers.contains(p)).collect();
-        for peer in &new_peers {
-            println!("Обнаружен пир: {}", peer);
+        let own_port = self.address.split(':').last().unwrap_or("0").parse::<u16>().unwrap_or(0);
+        for peer in network_config.peers {
+            let peer_port = peer.split(':').last().unwrap_or("0").parse::<u16>().unwrap_or(0);
+            if peer_port != own_port {
+                peers.push(peer);
+            }
         }
-        peers.extend(new_peers);
         let duration = SystemTime::now()
             .duration_since(start_time)
             .unwrap()
             .as_secs_f64();
-        println!("Поиск пиров завершён за {} секунд, найдено пиров: {}", duration, peers.len());
+        println!("Обнаружение пиров завершено за {} секунд: {:?}", duration, *peers);
+    }
+
+    fn add_peer(&mut self, address: String) -> bool {
+        let start_time = SystemTime::now();
+        let mut peers = self.peers.lock().expect("Не удалось захватить Mutex для peers");
+        if peers.contains(&address) {
+            let duration = SystemTime::now()
+                .duration_since(start_time)
+                .unwrap()
+                .as_secs_f64();
+            println!("Пир {} уже существует, добавление не требуется, заняло {} секунд", address, duration);
+            return false;
+        }
+        peers.push(address.clone());
+        let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
+        let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
+        let network_path = exe_dir.join("network.json");
+        let mut network_config: NetworkConfig = match fs::read_to_string(&network_path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| NetworkConfig { peers: vec![] }),
+            Err(_) => NetworkConfig { peers: vec![] },
+        };
+        if !network_config.peers.contains(&address) {
+            network_config.peers.push(address.clone());
+            let network_content = serde_json::to_string_pretty(&network_config).expect("Ошибка сериализации network.json");
+            fs::write(&network_path, network_content).expect("Ошибка записи в network.json");
+        }
+        let duration = SystemTime::now()
+            .duration_since(start_time)
+            .unwrap()
+            .as_secs_f64();
+        println!("Пир {} добавлен за {} секунд", address, duration);
+        true
     }
 
     fn find_wallet_by_ip(&self, ip: &str, port: u16) -> Option<String> {
@@ -923,6 +897,139 @@ impl Node {
             }
         }
         None
+    }
+
+    fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
+        let start_time = SystemTime::now();
+        let blockchain = Arc::clone(&self.blockchain);
+        let address = format!("0.0.0.0:{}", port);
+        let listener = TcpListener::bind(&address).expect("Не удалось запустить сервер");
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(stream) => {
+                        let blockchain = Arc::clone(&blockchain);
+                        let sync_tx = sync_tx.clone();
+                        thread::spawn(move || {
+                            let mut reader = BufReader::new(stream.try_clone().unwrap());
+                            let mut writer = BufWriter::new(stream);
+                            let mut length_buf = [0; 4];
+                            if reader.read_exact(&mut length_buf).is_ok() {
+                                let length = u32::from_be_bytes(length_buf) as usize;
+                                let mut buffer = vec![0; length];
+                                let mut total_read = 0;
+                                while total_read < length {
+                                    let read = reader.read(&mut buffer[total_read..]).unwrap_or(0);
+                                    if read == 0 {
+                                        break;
+                                    }
+                                    total_read += read;
+                                }
+                                let request = String::from_utf8_lossy(&buffer[..total_read]).to_string();
+                                println!("Получен запрос: {}", request);
+
+                                if request == "GET_BLOCKCHAIN" {
+                                    let blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                                    let response = serde_json::to_string(&*blockchain).unwrap();
+                                    let length = response.len() as u32;
+                                    let mut data = length.to_be_bytes().to_vec();
+                                    data.extend_from_slice(response.as_bytes());
+                                    if writer.write_all(&data).is_ok() {
+                                        writer.flush().ok();
+                                        println!("Отправлен блокчейн клиенту");
+                                    }
+                                } else if request.starts_with("UPDATE_BLOCKCHAIN:") {
+                                    let blockchain_data = request.strip_prefix("UPDATE_BLOCKCHAIN:").unwrap_or("");
+                                    let mut temp_blockchain: BlockchainDeserialize = match serde_json::from_str(blockchain_data) {
+                                        Ok(data) => data,
+                                        Err(e) => {
+                                            println!("Ошибка десериализации данных блокчейна: {}", e);
+                                            return;
+                                        }
+                                    };
+                                    let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                                    let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
+                                    let current_pending = blockchain.pending_transactions.clone();
+                                    let received_hash = temp_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
+
+                                    if temp_blockchain.chain.len() > blockchain.chain.len() || current_hash != received_hash {
+                                        let mut new_blockchain = Blockchain {
+                                            chain: temp_blockchain.chain.clone(),
+                                            balances: temp_blockchain.balances.clone(),
+                                            difficulty: temp_blockchain.difficulty,
+                                            pending_transactions: vec![],
+                                            db: blockchain.db.clone(),
+                                        };
+                                        // Объединяем pending_transactions, добавляя только валидные
+                                        let mut merged_pending = vec![];
+                                        for tx in temp_blockchain.pending_transactions.iter() {
+                                            if !merged_pending.iter().any(|t: &Transaction| t.id == tx.id) && new_blockchain.add_transaction(tx.clone()) {
+                                                merged_pending.push(tx.clone());
+                                                println!("Добавлена транзакция от узла: {:?}", tx);
+                                            }
+                                        }
+                                        for tx in current_pending.iter() {
+                                            if !merged_pending.iter().any(|t| t.id == tx.id) && new_blockchain.add_transaction(tx.clone()) {
+                                                merged_pending.push(tx.clone());
+                                                println!("Сохранена локальная транзакция: {:?}", tx);
+                                            }
+                                        }
+                                        new_blockchain.pending_transactions = merged_pending;
+                                        if new_blockchain.validate_chain() {
+                                            let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+                                            for tx in &new_blockchain.pending_transactions {
+                                                let key = tx.id.as_bytes();
+                                                let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
+                                                if let Err(e) = db.put(key, &value) {
+                                                    println!("Ошибка сохранения транзакции {} в LevelDB: {}", tx.id, e);
+                                                }
+                                            }
+                                            drop(db);
+                                            *blockchain = new_blockchain;
+                                            blockchain.save_state();
+                                            println!("Блокчейн обновлён через UPDATE_BLOCKCHAIN");
+                                            let _ = sync_tx.send(Blockchain {
+                                                chain: temp_blockchain.chain,
+                                                balances: temp_blockchain.balances,
+                                                difficulty: temp_blockchain.difficulty,
+                                                pending_transactions: blockchain.pending_transactions.clone(),
+                                                db: blockchain.db.clone(),
+                                            });
+                                        } else {
+                                            println!("Полученный блокчейн не прошёл валидацию");
+                                        }
+                                    } else {
+                                        // Обновляем только pending_transactions, добавляя только валидные
+                                        let mut new_pending = blockchain.pending_transactions.clone();
+                                        for tx in temp_blockchain.pending_transactions.iter() {
+                                            if !new_pending.iter().any(|t| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
+                                                new_pending.push(tx.clone());
+                                                println!("Добавлена транзакция от узла: {:?}", tx);
+                                            }
+                                        }
+                                        for tx in current_pending.iter() {
+                                            if !new_pending.iter().any(|t| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
+                                                new_pending.push(tx.clone());
+                                                println!("Сохранена локальная транзакция: {:?}", tx);
+                                            }
+                                        }
+                                        blockchain.pending_transactions = new_pending;
+                                        blockchain.save_state();
+                                        println!("Обновлены pending_transactions через UPDATE_BLOCKCHAIN");
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => println!("Ошибка обработки входящего соединения: {}", e),
+                }
+            }
+        });
+        let duration = SystemTime::now()
+            .duration_since(start_time)
+            .unwrap()
+            .as_secs_f64();
+        println!("Сервер запущен на порту {} за {} секунд", port, duration);
     }
 
     fn sync_blockchain(&mut self, sync_tx: mpsc::Sender<Blockchain>) {
@@ -1031,7 +1138,9 @@ impl Node {
                                     let mut added_transactions = 0;
 
                                     for tx in temp_blockchain.pending_transactions.iter() {
-                                        if !merged_pending.iter().any(|t: &Transaction| t.id == tx.id) && new_blockchain.add_transaction(tx.clone()) {
+                                        if !new_blockchain.chain.iter().any(|block| block.transactions.iter().any(|t| t.id == tx.id)) &&
+                                            !merged_pending.iter().any(|t: &Transaction| t.id == tx.id) &&
+                                            new_blockchain.add_transaction(tx.clone()) {
                                             merged_pending.push(tx.clone());
                                             added_transactions += 1;
                                             println!("Добавлена транзакция от узла {}: {:?}", peer, tx);
@@ -1039,7 +1148,9 @@ impl Node {
                                     }
 
                                     for tx in current_pending.iter() {
-                                        if !merged_pending.iter().any(|t: &Transaction| t.id == tx.id) && new_blockchain.add_transaction(tx.clone()) {
+                                        if !new_blockchain.chain.iter().any(|block| block.transactions.iter().any(|t| t.id == tx.id)) &&
+                                            !merged_pending.iter().any(|t: &Transaction| t.id == tx.id) &&
+                                            new_blockchain.add_transaction(tx.clone()) {
                                             merged_pending.push(tx.clone());
                                             added_transactions += 1;
                                             println!("Сохранена локальная транзакция: {:?}", tx);
@@ -1090,14 +1201,18 @@ impl Node {
                                     let mut new_pending = blockchain.pending_transactions.clone();
                                     let mut added_transactions = 0;
                                     for tx in temp_blockchain.pending_transactions.iter() {
-                                        if !new_pending.iter().any(|t: &Transaction| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
+                                        if !blockchain.chain.iter().any(|block| block.transactions.iter().any(|t| t.id == tx.id)) &&
+                                            !new_pending.iter().any(|t: &Transaction| t.id == tx.id) &&
+                                            blockchain.add_transaction(tx.clone()) {
                                             new_pending.push(tx.clone());
                                             added_transactions += 1;
                                             println!("Добавлена транзакция от узла {}: {:?}", peer, tx);
                                         }
                                     }
                                     for tx in current_pending.iter() {
-                                        if !new_pending.iter().any(|t: &Transaction| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
+                                        if !blockchain.chain.iter().any(|block| block.transactions.iter().any(|t| t.id == tx.id)) &&
+                                            !new_pending.iter().any(|t: &Transaction| t.id == tx.id) &&
+                                            blockchain.add_transaction(tx.clone()) {
                                             new_pending.push(tx.clone());
                                             added_transactions += 1;
                                             println!("Сохранена локальная транзакция: {:?}", tx);
@@ -1266,7 +1381,7 @@ impl eframe::App for WalletApp {
                                         .as_secs_f64();
                                     println!("Регистрация успешна за {} секунд, адрес: {}", duration, self.wallet_address);
                                     let mut blockchain = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                                    blockchain.balances.entry(self.wallet_address.clone()).or_insert(0);
+                                    blockchain.balances.entry(self.wallet_address.clone()).or_insert(10000);
                                     blockchain.save_state();
                                 }
                                 Err(e) => {

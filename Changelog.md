@@ -72,3 +72,4 @@
 0.7.2 wrong symbols
 0.7.3 sync transaction
 0.7.4 find by ip
+0.7.5 balances problem
