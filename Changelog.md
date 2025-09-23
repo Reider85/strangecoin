@@ -69,3 +69,4 @@
 0.6.9 sync first transaction
 0.7.0 repaint fix
 0.7.1 register
+0.7.2 wrong symbols
