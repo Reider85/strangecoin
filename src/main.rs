@@ -1337,7 +1337,7 @@ impl eframe::App for WalletApp {
                                         .as_secs_f64();
                                     println!("Аутентификация успешна за {} секунд", duration);
                                     let mut blockchain = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                                    blockchain.balances.entry(self.wallet_address.clone()).or_insert(0);
+                                    blockchain.balances.entry(self.wallet_address.clone()).or_insert(10000);
                                     blockchain.save_state();
                                 } else {
                                     self.status = "Неверный адрес кошелька".to_string();
