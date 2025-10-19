@@ -74,3 +74,4 @@
 0.7.4 find by ip
 0.7.5 balances problem
 0.7.6 balances problem
+0.7.7 balances problem

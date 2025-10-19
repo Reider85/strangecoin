@@ -1336,9 +1336,7 @@ impl eframe::App for WalletApp {
                                         .unwrap()
                                         .as_secs_f64();
                                     println!("Аутентификация успешна за {} секунд", duration);
-                                    let mut blockchain = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                                    blockchain.balances.entry(self.wallet_address.clone()).or_insert(10000);
-                                    blockchain.save_state();
+                                    // Баланс не устанавливается при входе
                                 } else {
                                     self.status = "Неверный адрес кошелька".to_string();
                                     let duration = SystemTime::now()
@@ -1386,8 +1384,10 @@ impl eframe::App for WalletApp {
                                         .as_secs_f64();
                                     println!("Регистрация успешна за {} секунд, адрес: {}", duration, self.wallet_address);
                                     let mut blockchain = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                                    blockchain.balances.entry(self.wallet_address.clone()).or_insert(10000);
-                                    blockchain.save_state();
+                                    if !blockchain.balances.contains_key(&self.wallet_address) {
+                                        blockchain.balances.entry(self.wallet_address.clone()).or_insert(10000);
+                                        blockchain.save_state();
+                                    }
                                 }
                                 Err(e) => {
                                     self.status = format!("Ошибка регистрации: {}", e);
