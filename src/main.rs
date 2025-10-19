@@ -625,9 +625,11 @@ impl Blockchain {
             return false;
         }
 
-        let mut expected_balances = self.balances.clone();
+        // Инициализируем expected_balances как пустую коллекцию
+        let mut expected_balances: HashMap<String, u64> = HashMap::new();
         println!("Начальные expected_balances: {:?}", expected_balances);
 
+        // Применяем все транзакции из цепочки блоков
         for block in &self.chain {
             for tx in &block.transactions {
                 println!("Обработка транзакции {} в блоке {}: {:?}", tx.id, block.index, tx);
@@ -642,6 +644,7 @@ impl Blockchain {
             }
         }
 
+        // Проверяем неподтверждённые транзакции
         let mut temp_balances = expected_balances.clone();
         for tx in &self.pending_transactions {
             println!("Обработка pending транзакции {}: {:?}", tx.id, tx);
@@ -655,6 +658,7 @@ impl Blockchain {
             println!("Обновлённые temp_balances после pending транзакции {}: {:?}", tx.id, temp_balances);
         }
 
+        // Сравниваем expected_balances с текущими self.balances
         for (wallet, balance) in &self.balances {
             let expected = expected_balances.get(wallet).unwrap_or(&0);
             if balance != expected {
@@ -663,6 +667,7 @@ impl Blockchain {
             }
         }
 
+        // Проверяем корректность структуры цепочки
         for i in 1..self.chain.len() {
             let current_block = &self.chain[i];
             let previous_block = &self.chain[i - 1];
