@@ -266,16 +266,8 @@ impl Blockchain {
         if let Some(balances) = balances_opt {
             blockchain.balances = balances;
         } else {
-            // Инициализация начальных балансов для известных кошельков
-            let config_path = exe_dir.join("config.json");
-            if let Ok(config_content) = fs::read_to_string(&config_path) {
-                if let Ok(config) = serde_json::from_str::<Config>(&config_content) {
-                    if !config.wallet.name.is_empty() {
-                        blockchain.balances.insert(config.wallet.name.clone(), 10000);
-                        println!("Инициализирован начальный баланс для кошелька {}: 10000", config.wallet.name);
-                    }
-                }
-            }
+            blockchain.balances = HashMap::new();
+            println!("Балансы не найдены в LevelDB, инициализирован пустой HashMap");
         }
 
         if let Some(difficulty) = difficulty_opt {
@@ -295,13 +287,19 @@ impl Blockchain {
 
     fn create_genesis_block(&mut self) {
         let start_time = SystemTime::now();
+        let genesis_transaction = Transaction {
+            id: Uuid::new_v4().to_string(),
+            sender: "genesis".to_string(),
+            receiver: "initial_wallet_address".to_string(),
+            amount: 10000,
+        };
         let genesis_block = Block {
             index: 0,
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
-            transactions: vec![],
+            transactions: vec![genesis_transaction],
             previous_hash: "0".to_string(),
             hash: String::new(),
             nonce: 0,
@@ -309,7 +307,12 @@ impl Blockchain {
         let hash = self.calculate_hash(&genesis_block);
         let mut genesis_block = genesis_block;
         genesis_block.hash = hash;
-        self.chain.push(genesis_block);
+        self.chain.push(genesis_block.clone());
+        // Обновляем балансы на основе транзакций генезис-блока
+        for tx in &genesis_block.transactions {
+            *self.balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
+            *self.balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
+        }
         let duration = SystemTime::now()
             .duration_since(start_time)
             .unwrap()
@@ -636,20 +639,17 @@ impl Blockchain {
             return false;
         }
 
-        // Инициализируем expected_balances с начальными значениями из конфигурации
-        let mut expected_balances: HashMap<String, u64> = HashMap::new();
-        let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
-        let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
-        let config_path = exe_dir.join("config.json");
-        if let Ok(config_content) = fs::read_to_string(&config_path) {
-            if let Ok(config) = serde_json::from_str::<Config>(&config_content) {
-                if !config.wallet.name.is_empty() {
-                    expected_balances.insert(config.wallet.name.clone(), 10000);
-                    println!("Инициализирован начальный баланс для кошелька {}: 10000", config.wallet.name);
-                }
-            }
-        }
-        println!("Начальные expected_balances: {:?}", expected_balances);
+        // Инициализируем expected_balances из LevelDB
+        let mut expected_balances: HashMap<String, u64> = {
+            let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+            db.get(b"balances")
+                .and_then(|v| serde_json::from_slice::<HashMap<String, u64>>(&v).ok())
+                .unwrap_or_else(|| {
+                    println!("Балансы не найдены в LevelDB, инициализируем пустой HashMap");
+                    HashMap::new()
+                })
+        };
+        println!("Начальные expected_balances из LevelDB: {:?}", expected_balances);
 
         // Применяем все транзакции из цепочки блоков
         for block in &self.chain {
@@ -688,8 +688,14 @@ impl Blockchain {
                 return false;
             }
         }
+        for (wallet, expected) in &expected_balances {
+            if !self.balances.contains_key(wallet) {
+                println!("Кошелёк {} есть в expected_balances ({}), но отсутствует в self.balances", wallet, expected);
+                return false;
+            }
+        }
 
-        // Проверяем корректность структуры цепочки
+        // Проверяем структуру цепочки
         for i in 1..self.chain.len() {
             let current_block = &self.chain[i];
             let previous_block = &self.chain[i - 1];
