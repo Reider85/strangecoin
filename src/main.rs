@@ -636,8 +636,8 @@ impl Blockchain {
             return false;
         }
 
-        // Инициализируем expected_balances как пустую коллекцию
-        let mut expected_balances: HashMap<String, u64> = HashMap::new();
+        // Инициализируем expected_balances из self.balances вместо пустого словаря
+        let mut expected_balances: HashMap<String, u64> = self.balances.clone();
         println!("Начальные expected_balances: {:?}", expected_balances);
 
         // Применяем все транзакции из цепочки блоков
