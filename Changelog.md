@@ -75,3 +75,4 @@
 0.7.5 balances problem
 0.7.6 balances problem
 0.7.7 balances problem
+0.7.8 balances problem

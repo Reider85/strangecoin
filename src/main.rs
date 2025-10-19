@@ -265,6 +265,17 @@ impl Blockchain {
 
         if let Some(balances) = balances_opt {
             blockchain.balances = balances;
+        } else {
+            // Инициализация начальных балансов для известных кошельков
+            let config_path = exe_dir.join("config.json");
+            if let Ok(config_content) = fs::read_to_string(&config_path) {
+                if let Ok(config) = serde_json::from_str::<Config>(&config_content) {
+                    if !config.wallet.name.is_empty() {
+                        blockchain.balances.insert(config.wallet.name.clone(), 10000);
+                        println!("Инициализирован начальный баланс для кошелька {}: 10000", config.wallet.name);
+                    }
+                }
+            }
         }
 
         if let Some(difficulty) = difficulty_opt {
