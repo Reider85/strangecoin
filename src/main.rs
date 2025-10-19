@@ -144,7 +144,7 @@ struct WalletApp {
     mining_thread: Option<JoinHandle<()>>,
     last_repaint: f64,
     last_sync: f64,
-    new_wallet_password: String, // Поле для пароля нового кошелька
+    new_wallet_password: String,
 }
 
 // Статус майнинга
@@ -636,8 +636,19 @@ impl Blockchain {
             return false;
         }
 
-        // Инициализируем expected_balances из self.balances вместо пустого словаря
-        let mut expected_balances: HashMap<String, u64> = self.balances.clone();
+        // Инициализируем expected_balances с начальными значениями из конфигурации
+        let mut expected_balances: HashMap<String, u64> = HashMap::new();
+        let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
+        let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
+        let config_path = exe_dir.join("config.json");
+        if let Ok(config_content) = fs::read_to_string(&config_path) {
+            if let Ok(config) = serde_json::from_str::<Config>(&config_content) {
+                if !config.wallet.name.is_empty() {
+                    expected_balances.insert(config.wallet.name.clone(), 10000);
+                    println!("Инициализирован начальный баланс для кошелька {}: 10000", config.wallet.name);
+                }
+            }
+        }
         println!("Начальные expected_balances: {:?}", expected_balances);
 
         // Применяем все транзакции из цепочки блоков
@@ -1065,7 +1076,7 @@ impl Node {
         let current_timestamp = blockchain.chain.last().map(|b| b.timestamp).unwrap_or(0);
         let current_pending = blockchain.pending_transactions.clone();
         let current_block_count = blockchain.chain.iter().filter(|b| !b.transactions.is_empty()).count();
-        let current_balances = blockchain.balances.clone(); // Сохраняем текущие балансы
+        let current_balances = blockchain.balances.clone();
         let wallet_address = self.address.clone();
         let existing_db = blockchain.db.clone();
         println!("Текущая длина chain: {}, содержимое: {:?}", current_chain_length, blockchain.chain);
