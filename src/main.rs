@@ -661,12 +661,15 @@ impl Blockchain {
         for block in &self.chain {
             for tx in &block.transactions {
                 println!("Обработка транзакции {} в блоке {}: {:?}", tx.id, block.index, tx);
-                let sender_balance = expected_balances.get(&tx.sender).unwrap_or(&0);
-                if *sender_balance < tx.amount {
-                    println!("Недостаточно средств у {} в блоке {} для транзакции {}", tx.sender, block.index, tx.id);
-                    return false;
+                // Пропускаем проверку баланса для отправителя "genesis"
+                if tx.sender != "genesis" {
+                    let sender_balance = expected_balances.get(&tx.sender).unwrap_or(&0);
+                    if *sender_balance < tx.amount {
+                        println!("Недостаточно средств у {} в блоке {} для транзакции {}", tx.sender, block.index, tx.id);
+                        return false;
+                    }
+                    *expected_balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
                 }
-                *expected_balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
                 *expected_balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
                 println!("Обновлённые expected_balances после транзакции {}: {:?}", tx.id, expected_balances);
             }

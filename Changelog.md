@@ -81,3 +81,4 @@
 0.8.1 balances problem
 0.8.2 balances problem
 0.8.3 genesis block problem
+0.8.4 genesis block problem
