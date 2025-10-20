@@ -83,3 +83,4 @@
 0.8.3 genesis block problem
 0.8.4 genesis block problem
 0.8.5 sync problem
+0.8.6 validate chain
