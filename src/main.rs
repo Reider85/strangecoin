@@ -267,7 +267,22 @@ impl Blockchain {
             blockchain.balances = balances;
         } else {
             blockchain.balances = HashMap::new();
-            println!("Балансы не найдены в LevelDB, инициализирован пустой HashMap");
+            println!("Балансы не найдены в LevelDB, инициализация на основе цепочки блоков");
+            // Инициализируем балансы на основе транзакций
+            for block in &blockchain.chain {
+                for tx in &block.transactions {
+                    if tx.sender != "genesis" {
+                        *blockchain.balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
+                    }
+                    *blockchain.balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
+                }
+            }
+            // Сохраняем инициализированные балансы в LevelDB
+            let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+            if let Err(e) = db.put(b"balances", &serde_json::to_vec(&blockchain.balances).unwrap()) {
+                println!("Ошибка сохранения балансов в LevelDB: {}", e);
+            }
+            db.flush().expect("Ошибка при фиксации данных в LevelDB");
         }
 
         if let Some(difficulty) = difficulty_opt {
@@ -630,68 +645,76 @@ impl Blockchain {
 
     fn validate_chain(&self) -> bool {
         let start_time = SystemTime::now();
+        println!("Начало валидации цепочки блоков");
         if self.chain.is_empty() {
             println!("Цепочка пуста, невалидна");
             return false;
         }
 
         let genesis_block = &self.chain[0];
+        println!("Проверка генезис-блока: index={}, previous_hash={}", genesis_block.index, genesis_block.previous_hash);
         if genesis_block.index != 0 || genesis_block.previous_hash != "0" {
             println!("Некорректный генезис-блок: {:?}", genesis_block);
             return false;
         }
-        if genesis_block.hash != self.calculate_hash(genesis_block) {
+        let genesis_hash = self.calculate_hash(genesis_block);
+        println!("Вычисленный хэш генезис-блока: {}, сохранённый хэш: {}", genesis_hash, genesis_block.hash);
+        if genesis_block.hash != genesis_hash {
             println!("Некорректный хэш генезис-блока: {:?}", genesis_block);
             return false;
         }
 
-        // Инициализируем expected_balances из LevelDB
-        let mut expected_balances: HashMap<String, u64> = {
-            let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
-            db.get(b"balances")
-                .and_then(|v| serde_json::from_slice::<HashMap<String, u64>>(&v).ok())
-                .unwrap_or_else(|| {
-                    println!("Балансы не найдены в LevelDB, инициализируем пустой HashMap");
-                    HashMap::new()
-                })
-        };
-        println!("Начальные expected_balances из LevelDB: {:?}", expected_balances);
+        // Инициализируем expected_balances
+        let mut expected_balances: HashMap<String, u64> = HashMap::new();
+        println!("Инициализированы пустые expected_balances: {:?}", expected_balances);
 
         // Применяем все транзакции из цепочки блоков
         for block in &self.chain {
+            println!("Обработка блока {} с {} транзакциями", block.index, block.transactions.len());
             for tx in &block.transactions {
-                println!("Обработка транзакции {} в блоке {}: {:?}", tx.id, block.index, tx);
+                println!("Обработка транзакции {}: sender={}, receiver={}, amount={}", tx.id, tx.sender, tx.receiver, tx.amount);
                 // Пропускаем проверку баланса для отправителя "genesis"
                 if tx.sender != "genesis" {
                     let sender_balance = expected_balances.get(&tx.sender).unwrap_or(&0);
+                    println!("Текущий баланс отправителя {}: {}", tx.sender, sender_balance);
                     if *sender_balance < tx.amount {
-                        println!("Недостаточно средств у {} в блоке {} для транзакции {}", tx.sender, block.index, tx.id);
+                        println!("Недостаточно средств у {} в блоке {} для транзакции {}: требуется {}, доступно {}", tx.sender, block.index, tx.id, tx.amount, sender_balance);
                         return false;
                     }
                     *expected_balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
+                    println!("Баланс отправителя {} уменьшен на {}: новый баланс {}", tx.sender, tx.amount, expected_balances.get(&tx.sender).unwrap_or(&0));
+                } else {
+                    println!("Отправитель 'genesis', пропуск проверки баланса");
                 }
                 *expected_balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
+                println!("Баланс получателя {} увеличен на {}: новый баланс {}", tx.receiver, tx.amount, expected_balances.get(&tx.receiver).unwrap_or(&0));
                 println!("Обновлённые expected_balances после транзакции {}: {:?}", tx.id, expected_balances);
             }
         }
 
         // Проверяем неподтверждённые транзакции
         let mut temp_balances = expected_balances.clone();
+        println!("Проверка неподтверждённых транзакций, начальные temp_balances: {:?}", temp_balances);
         for tx in &self.pending_transactions {
-            println!("Обработка pending транзакции {}: {:?}", tx.id, tx);
+            println!("Обработка неподтверждённой транзакции {}: sender={}, receiver={}, amount={}", tx.id, tx.sender, tx.receiver, tx.amount);
             let sender_balance = temp_balances.get(&tx.sender).unwrap_or(&0);
+            println!("Текущий баланс отправителя {} в temp_balances: {}", tx.sender, sender_balance);
             if *sender_balance < tx.amount {
-                println!("Недостаточно средств у {} в pending_transactions для транзакции {}", tx.sender, tx.id);
+                println!("Недостаточно средств у {} в pending_transactions для транзакции {}: требуется {}, доступно {}", tx.sender, tx.id, tx.amount, sender_balance);
                 return false;
             }
             *temp_balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
             *temp_balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
+            println!("Баланс отправителя {} уменьшен на {}: новый баланс {}", tx.sender, tx.amount, temp_balances.get(&tx.sender).unwrap_or(&0));
+            println!("Баланс получателя {} увеличен на {}: новый баланс {}", tx.receiver, tx.amount, temp_balances.get(&tx.receiver).unwrap_or(&0));
             println!("Обновлённые temp_balances после pending транзакции {}: {:?}", tx.id, temp_balances);
         }
 
         // Сравниваем expected_balances с текущими self.balances
+        println!("Сравнение expected_balances с self.balances");
         for (wallet, balance) in &self.balances {
             let expected = expected_balances.get(wallet).unwrap_or(&0);
+            println!("Кошелёк {}: текущий баланс {}, ожидаемый баланс {}", wallet, balance, expected);
             if balance != expected {
                 println!("Несоответствие баланса для {}: текущий {}, ожидалось {}", wallet, balance, expected);
                 return false;
@@ -708,15 +731,18 @@ impl Blockchain {
         for i in 1..self.chain.len() {
             let current_block = &self.chain[i];
             let previous_block = &self.chain[i - 1];
+            println!("Проверка блока {}: index={}, previous_hash={}", i, current_block.index, current_block.previous_hash);
             if current_block.index != previous_block.index + 1 {
-                println!("Некорректный индекс блока {}: {:?}", i, current_block);
+                println!("Некорректный индекс блока {}: ожидалось {}, получено {}", i, previous_block.index + 1, current_block.index);
                 return false;
             }
             if current_block.previous_hash != previous_block.hash {
-                println!("Некорректный previous_hash в блоке {}: {:?}", i, current_block);
+                println!("Некорректный previous_hash в блоке {}: ожидалось {}, получено {}", i, previous_block.hash, current_block.previous_hash);
                 return false;
             }
-            if current_block.hash != self.calculate_hash(current_block) {
+            let calculated_hash = self.calculate_hash(current_block);
+            println!("Блок {}: вычисленный хэш {}, сохранённый хэш {}", i, calculated_hash, current_block.hash);
+            if current_block.hash != calculated_hash {
                 println!("Некорректный хэш в блоке {}: {:?}", i, current_block);
                 return false;
             }
@@ -725,7 +751,7 @@ impl Blockchain {
                 return false;
             }
             if !current_block.hash.starts_with(&"0".repeat(self.difficulty as usize)) {
-                println!("Хэш блока {} не соответствует сложности: {}", i, current_block.hash);
+                println!("Хэш блока {} не соответствует сложности {}: {}", i, self.difficulty, current_block.hash);
                 return false;
             }
         }
@@ -1423,7 +1449,13 @@ impl eframe::App for WalletApp {
                                     let mut blockchain = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                                     if !blockchain.balances.contains_key(&self.wallet_address) {
                                         blockchain.balances.entry(self.wallet_address.clone()).or_insert(10000);
-                                        blockchain.save_state();
+                                        blockchain.save_state(); // Уже есть
+                                        // Дополнительно сохраняем балансы в LevelDB явно
+                                        let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+                                        if let Err(e) = db.put(b"balances", &serde_json::to_vec(&blockchain.balances).unwrap()) {
+                                            println!("Ошибка сохранения балансов в LevelDB: {}", e);
+                                        }
+                                        db.flush().expect("Ошибка при фиксации данных в LevelDB");
                                     }
                                 }
                                 Err(e) => {
