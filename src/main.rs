@@ -308,9 +308,15 @@ impl Blockchain {
         let mut genesis_block = genesis_block;
         genesis_block.hash = hash;
         self.chain.push(genesis_block.clone());
-        // Обновляем балансы на основе транзакций генезис-блока
+        // Обновляем балансы на основе транзакций генезис-блока, только для получателя
         for tx in &genesis_block.transactions {
-            *self.balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
+            if tx.sender != "genesis" {
+                let sender_balance = self.balances.get(&tx.sender).cloned().unwrap_or(0);
+                if sender_balance < tx.amount {
+                    panic!("Недостаточно средств у {} для транзакции {}", tx.sender, tx.id);
+                }
+                *self.balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
+            }
             *self.balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
         }
         let duration = SystemTime::now()
