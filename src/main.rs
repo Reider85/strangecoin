@@ -265,7 +265,7 @@ impl Blockchain {
 
         if let Some(balances) = balances_opt {
             blockchain.balances = balances;
-        } else {
+        } else {/*
             blockchain.balances = HashMap::new();
             println!("Балансы не найдены в LevelDB, инициализация на основе цепочки блоков");
             // Инициализируем балансы на основе транзакций
@@ -282,12 +282,14 @@ impl Blockchain {
             if let Err(e) = db.put(b"balances", &serde_json::to_vec(&blockchain.balances).unwrap()) {
                 println!("Ошибка сохранения балансов в LevelDB: {}", e);
             }
-            db.flush().expect("Ошибка при фиксации данных в LevelDB");
+            db.flush().expect("Ошибка при фиксации данных в LevelDB");*/
         }
 
         if let Some(difficulty) = difficulty_opt {
             blockchain.difficulty = difficulty;
         }
+
+        blockchain.migrate_initial_wallet_balance();
 
         blockchain.pending_transactions = pending;
         blockchain.save_state();
@@ -339,6 +341,84 @@ impl Blockchain {
             .unwrap()
             .as_secs_f64();
         println!("Создание генезис-блока завершено за {} секунд", duration);
+    }
+
+    // Создаёт блок первичной эмиссии: переводит 10000 с генезис-адреса на первый реальный кошелёк
+    fn create_grant_block(&mut self, wallet_address: &str, amount: u64) {
+        let previous_block = self.chain.last().unwrap().clone();
+        let transaction = Transaction {
+            id: Uuid::new_v4().to_string(),
+            sender: "initial_wallet_address".to_string(),
+            receiver: wallet_address.to_string(),
+            amount,
+        };
+        let mut block = Block {
+            index: previous_block.index + 1,
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            transactions: vec![transaction],
+            previous_hash: previous_block.hash.clone(),
+            hash: String::new(),
+            nonce: 0,
+        };
+        block.hash = self.calculate_hash(&block);
+        self.chain.push(block);
+        self.balances.remove("initial_wallet_address");
+        *self.balances.entry(wallet_address.to_string()).or_insert(0) += amount;
+        println!(
+            "Создан блок первичной эмиссии: initial_wallet_address -> {}, сумма {}",
+            wallet_address, amount
+        );
+    }
+
+    // Начисляет первоначальный баланс (10000 из генезис-блока) первому реальному кошельку
+    fn grant_initial_balance_to_first_wallet(&mut self, wallet_address: &str) -> bool {
+        if self.chain.len() != 1 {
+            return false;
+        }
+        if self.balances.contains_key(wallet_address) {
+            return false;
+        }
+        let is_first_wallet = self.balances.len() == 1 && self.balances.contains_key("initial_wallet_address");
+        if !is_first_wallet {
+            return false;
+        }
+        match self.balances.get("initial_wallet_address") {
+            Some(amount) if *amount > 0 => {
+                let amount = *amount;
+                self.create_grant_block(wallet_address, amount);
+                println!("Первому кошельку {} начислен первоначальный баланс {}", wallet_address, amount);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    // Миграция для существующих баз: переносит баланс генезис-кошелька на единственный реальный кошелёк с нулевым балансом
+    fn migrate_initial_wallet_balance(&mut self) {
+        if self.chain.len() != 1 {
+            return;
+        }
+        let placeholder_amount = match self.balances.get("initial_wallet_address") {
+            Some(amount) => *amount,
+            None => return,
+        };
+        let real_wallets: Vec<String> = self.balances
+            .keys()
+            .filter(|k| k.as_str() != "initial_wallet_address")
+            .cloned()
+            .collect();
+        if real_wallets.len() != 1 {
+            return;
+        }
+        let wallet = &real_wallets[0];
+        if self.balances.get(wallet).cloned().unwrap_or(0) != 0 {
+            return;
+        }
+        self.create_grant_block(&wallet, placeholder_amount);
+        println!("Первоначальный баланс {} перенесён первому кошельку {}", placeholder_amount, wallet);
     }
 
     fn calculate_hash(&self, block: &Block) -> String {
@@ -664,9 +744,9 @@ impl Blockchain {
             return false;
         }
 
-        // Инициализируем expected_balances с текущими балансами из self.balances
-        let mut expected_balances: HashMap<String, u64> = self.balances.clone();
-        println!("Инициализированы expected_balances с текущими балансами: {:?}", expected_balances);
+        // Восстанавливаем балансы из цепочки блоков, начиная с пустого состояния
+        let mut expected_balances: HashMap<String, u64> = HashMap::new();
+        println!("Начальная инициализация expected_balances: {:?}", expected_balances);
 
         // Применяем все транзакции из цепочки блоков
         for block in &self.chain {
@@ -729,6 +809,23 @@ impl Blockchain {
                 println!("Некорректный хэш в блоке {}: {:?}", i, current_block);
                 return false;
             }
+        }
+
+        // Сверяем восстановленные балансы с хранимыми, игнорируя нулевые остатки
+        let reconstructed: HashMap<String, u64> = expected_balances
+            .iter()
+            .filter(|(_, v)| **v != 0)
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        let stored: HashMap<String, u64> = self.balances
+            .iter()
+            .filter(|(_, v)| **v != 0)
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        println!("Сверка восстановленных балансов: {:?} с хранимыми: {:?}", reconstructed, stored);
+        if reconstructed != stored {
+            println!("Восстановленные балансы не совпадают с хранимыми");
+            return false;
         }
 
         let duration = SystemTime::now()
@@ -1422,7 +1519,9 @@ impl eframe::App for WalletApp {
                                     println!("Регистрация успешна за {} секунд, адрес: {}", duration, self.wallet_address);
                                     let mut blockchain = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                                     if !blockchain.balances.contains_key(&self.wallet_address) {
-                                        blockchain.balances.entry(self.wallet_address.clone()).or_insert(10000);
+                                        if !blockchain.grant_initial_balance_to_first_wallet(&self.wallet_address) {
+                                            blockchain.balances.entry(self.wallet_address.clone()).or_insert(0);
+                                        }
                                         blockchain.save_state(); // Уже есть
                                         // Дополнительно сохраняем балансы в LevelDB явно
                                         let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
@@ -1753,4 +1852,170 @@ fn main() {
 fn save_on_exit(blockchain: Arc<Mutex<Blockchain>>) {
     let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
     blockchain.save_state();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+    use ed25519_dalek::SigningKey;
+    use rand::rngs::OsRng;
+
+    // Создаёт уникальную временную директорию для БД кошелька
+    fn temp_db_dir(tag: &str) -> PathBuf {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("strangecoin_test_{}_{}", tag, Uuid::new_v4()));
+        dir
+    }
+
+    // Создаёт блокчейн с собственной БД (отдельная для каждого кошелька)
+    fn create_test_blockchain(db_path: &Path) -> Blockchain {
+        fs::create_dir_all(db_path).expect("Не удалось создать директорию тестовой БД");
+        let db = DB::open(db_path, Options::default()).expect("Не удалось открыть тестовую БД");
+        let mut bc = Blockchain {
+            chain: vec![],
+            balances: HashMap::new(),
+            difficulty: 0,
+            pending_transactions: vec![],
+            db: Arc::new(Mutex::new(db)),
+        };
+        bc.create_genesis_block();
+        bc
+    }
+
+    // Майнит все ожидающие транзакции в новый блок
+    fn mine_current(blockchain: &mut Blockchain) {
+        let (progress_tx, _progress_rx) = mpsc::channel();
+        let block = blockchain.mine_block(progress_tx);
+        assert!(block.is_some(), "Майнинг текущей транзакции не удался");
+    }
+
+    // Синхронизирует все кошельки: самая длинная цепочка распространяется на остальные
+    fn sync_to_longest(wallets: &[Arc<Mutex<Blockchain>>]) {
+        let (idx, len) = wallets
+            .iter()
+            .enumerate()
+            .map(|(i, w)| (i, w.lock().unwrap().chain.len()))
+            .max_by_key(|(_, l)| *l)
+            .expect("Список кошельков пуст");
+        let (chain, balances, difficulty, pending) = {
+            let w = wallets[idx].lock().unwrap();
+            (
+                w.chain.clone(),
+                w.balances.clone(),
+                w.difficulty,
+                w.pending_transactions.clone(),
+            )
+        };
+        for (i, w) in wallets.iter().enumerate() {
+            let mut guard = w.lock().unwrap();
+            if i != idx && guard.chain.len() < len {
+                guard.chain = chain.clone();
+                guard.balances = balances.clone();
+                guard.difficulty = difficulty;
+                guard.pending_transactions = pending.clone();
+                guard.save_state();
+            }
+        }
+    }
+
+    // Сверяет балансы всех кошельков с эталонной моделью
+    fn assert_balances(wallets: &[Arc<Mutex<Blockchain>>], addrs: &[String], expected: &[u64]) {
+        for (i, w) in wallets.iter().enumerate() {
+            let bc = w.lock().unwrap();
+            let bal = bc.balances.get(&addrs[i]).copied().unwrap_or(0);
+            assert_eq!(bal, expected[i], "Баланс кошелька {} не совпадает", addrs[i]);
+        }
+    }
+
+    // Сумма транзакции для ребра (0: w0->w1, 1: w1->w2, 2: w2->w3, 3: w3->w4) на проходе pass (1..=25).
+    // Все 100 сумм попарно различны, а сумма по каждому ребру за 25 проходов равна 10000.
+    fn amount_for(edge: usize, pass: usize) -> u64 {
+        match edge {
+            0 => 387 + pass as u64,                              // 388..=412
+            1 => if pass <= 24 { 199 + pass as u64 } else { 4924 }, // 200..=223, 4924
+            2 => if pass <= 24 { 149 + pass as u64 } else { 6124 }, // 150..=173, 6124
+            3 => if pass <= 24 { 99 + pass as u64 } else { 7324 },  // 100..=123, 7324
+            _ => panic!("Неизвестное ребро"),
+        }
+    }
+
+    #[test]
+    fn hundred_transactions_five_wallets() {
+        // Создаём адреса 5 кошельков (ed25519) и отдельную БД для каждого в начале теста
+        let addrs: Vec<String> = (0..5)
+            .map(|_| {
+                let sk = SigningKey::generate(&mut OsRng);
+                base64::encode(sk.verifying_key().to_bytes())
+            })
+            .collect();
+
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        let mut wallets: Vec<Arc<Mutex<Blockchain>>> = Vec::new();
+        for i in 0..5 {
+            let dir = temp_db_dir(&format!("wallet_{}", i));
+            dirs.push(dir.clone());
+            wallets.push(Arc::new(Mutex::new(create_test_blockchain(&dir))));
+        }
+
+        // Первый кошелёк получает 10000 из генезис-блока, у остальных 0
+        {
+            let mut bc = wallets[0].lock().unwrap();
+            assert!(bc.grant_initial_balance_to_first_wallet(&addrs[0]));
+        }
+        sync_to_longest(&wallets);
+        assert_balances(&wallets, &addrs, &[10000, 0, 0, 0, 0]);
+
+        let mut ref_balances = [10000u64, 0, 0, 0, 0];
+        let edges = [(0usize, 1usize), (1, 2), (2, 3), (3, 4)];
+
+        // 100 транзакций: 25 проходов по цепочке w0->w1->w2->w3->w4
+        for tx_index in 1..=100u64 {
+            let pass = ((tx_index - 1) / 4 + 1) as usize; // 1..=25
+            let edge = ((tx_index - 1) % 4) as usize;      // 0..=3
+            let (s, r) = edges[edge];
+            let amount = amount_for(edge, pass);
+
+            let transaction = Transaction {
+                id: Uuid::new_v4().to_string(),
+                sender: addrs[s].clone(),
+                receiver: addrs[r].clone(),
+                amount,
+            };
+
+            {
+                let mut bc = wallets[s].lock().unwrap();
+                assert!(
+                    bc.add_transaction(transaction),
+                    "Транзакция {} отклонена (недостаточно средств?)",
+                    tx_index
+                );
+                mine_current(&mut bc);
+            }
+            sync_to_longest(&wallets);
+
+            // Эталонная модель учёта
+            ref_balances[s] -= amount;
+            ref_balances[r] += amount;
+
+            // Проверяем балансы каждую 10-ю транзакцию
+            if tx_index % 10 == 0 {
+                assert_balances(&wallets, &addrs, &ref_balances);
+            }
+        }
+
+        // В конце у последнего кошелька 10000, у остальных 0
+        assert_balances(&wallets, &addrs, &[0, 0, 0, 0, 10000]);
+
+        for w in &wallets {
+            let bc = w.lock().unwrap();
+            assert_eq!(bc.chain.len(), 102, "Цепочка должна содержать генезис-блок, блок первичной эмиссии и 100 блоков транзакций");
+            assert!(bc.validate_chain(), "Цепочка не прошла валидацию");
+        }
+
+        // Очищаем временные БД
+        for dir in &dirs {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
 }
