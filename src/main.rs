@@ -304,18 +304,17 @@ impl Blockchain {
 
     fn create_genesis_block(&mut self) {
         let start_time = SystemTime::now();
+        // Детерминированный генезис-блок: одинаков для всех узлов сети,
+        // чтобы цепочки разных инстансов были совместимы
         let genesis_transaction = Transaction {
-            id: Uuid::new_v4().to_string(),
+            id: "genesis".to_string(),
             sender: "genesis".to_string(),
             receiver: "initial_wallet_address".to_string(),
             amount: 10000,
         };
         let genesis_block = Block {
             index: 0,
-            timestamp: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            timestamp: 0,
             transactions: vec![genesis_transaction],
             previous_hash: "0".to_string(),
             hash: String::new(),
@@ -1088,11 +1087,10 @@ impl Node {
                                         }
                                     };
                                     let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                                    let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
                                     let current_pending = blockchain.pending_transactions.clone();
-                                    let received_hash = temp_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
 
-                                    if temp_blockchain.chain.len() > blockchain.chain.len() || current_hash != received_hash {
+                                    // Принимаем только строго более длинную цепочку, чтобы не откатывать уже намайненные блоки
+                                    if temp_blockchain.chain.len() > blockchain.chain.len() {
                                         let mut new_blockchain = Blockchain {
                                             chain: temp_blockchain.chain.clone(),
                                             balances: temp_blockchain.balances.clone(),
@@ -2017,5 +2015,170 @@ mod tests {
         for dir in &dirs {
             let _ = fs::remove_dir_all(dir);
         }
+    }
+
+    // Воспроизводит обработку UPDATE_BLOCKCHAIN: принятие чужой (более длинной) цепочки после валидации
+    fn adopt_from(target: &Arc<Mutex<Blockchain>>, source: &Arc<Mutex<Blockchain>>) -> bool {
+        let src = source.lock().unwrap();
+        let (src_chain, src_balances, src_difficulty, src_pending) = (
+            src.chain.clone(),
+            src.balances.clone(),
+            src.difficulty,
+            src.pending_transactions.clone(),
+        );
+        drop(src);
+
+        let mut tgt = target.lock().unwrap();
+        let current_len = tgt.chain.len();
+        if src_chain.is_empty() || src_chain.len() <= 1 {
+            return false;
+        }
+        // Принимаем только строго более длинную цепочку (как в UPDATE_BLOCKCHAIN)
+        if src_chain.len() <= current_len {
+            return false;
+        }
+
+        let mut new_blockchain = Blockchain {
+            chain: src_chain,
+            balances: src_balances,
+            difficulty: src_difficulty,
+            pending_transactions: vec![],
+            db: tgt.db.clone(),
+        };
+        let mut merged_pending = vec![];
+        for tx in src_pending.iter() {
+            if !new_blockchain.chain.iter().any(|b| b.transactions.iter().any(|t| t.id == tx.id))
+                && !merged_pending.iter().any(|t: &Transaction| t.id == tx.id)
+                && new_blockchain.add_transaction(tx.clone())
+            {
+                merged_pending.push(tx.clone());
+            }
+        }
+        let current_pending = tgt.pending_transactions.clone();
+        for tx in current_pending.iter() {
+            if !new_blockchain.chain.iter().any(|b| b.transactions.iter().any(|t| t.id == tx.id))
+                && !merged_pending.iter().any(|t: &Transaction| t.id == tx.id)
+                && new_blockchain.add_transaction(tx.clone())
+            {
+                merged_pending.push(tx.clone());
+            }
+        }
+        new_blockchain.pending_transactions = merged_pending;
+
+        if new_blockchain.validate_chain() {
+            *tgt = new_blockchain;
+            true
+        } else {
+            false
+        }
+    }
+
+    #[test]
+    fn three_instances_receive_transfer() {
+        // Три инстанса (как три запущенных приложения) с отдельными БД и разными генезис-блоками
+        let addrs: Vec<String> = (0..3)
+            .map(|_| {
+                let sk = SigningKey::generate(&mut OsRng);
+                base64::encode(sk.verifying_key().to_bytes())
+            })
+            .collect();
+
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        let mut instances: Vec<Arc<Mutex<Blockchain>>> = Vec::new();
+        for i in 0..3 {
+            let dir = temp_db_dir(&format!("inst_{}", i));
+            dirs.push(dir.clone());
+            instances.push(Arc::new(Mutex::new(create_test_blockchain(&dir))));
+        }
+
+        // Регистрация кошелька в инстансе 1: грант 10000
+        {
+            let mut bc = instances[0].lock().unwrap();
+            assert!(bc.grant_initial_balance_to_first_wallet(&addrs[0]));
+        }
+
+        // Инстанс 1 распространяет свою цепочку (UPDATE_BLOCKCHAIN), остальные принимают
+        for i in 1..3 {
+            assert!(adopt_from(&instances[i], &instances[0]), "Инстанс {} не принял цепочку инстанса 1", i + 1);
+        }
+        assert_balances(&instances, &addrs, &[10000, 0, 0]);
+
+        // Регистрация кошельков в инстансах 2 и 3 (поведение GUI-обработчика)
+        for i in 1..3 {
+            let mut bc = instances[i].lock().unwrap();
+            if !bc.balances.contains_key(&addrs[i]) {
+                if !bc.grant_initial_balance_to_first_wallet(&addrs[i]) {
+                    bc.balances.entry(addrs[i].clone()).or_insert(0);
+                }
+            }
+        }
+        assert_balances(&instances, &addrs, &[10000, 0, 0]);
+
+        // Перевод 1000 с кошелька 1 на кошелёк 2 и майнинг
+        let amount = 1000u64;
+        {
+            let mut bc = instances[0].lock().unwrap();
+            let tx = Transaction {
+                id: Uuid::new_v4().to_string(),
+                sender: addrs[0].clone(),
+                receiver: addrs[1].clone(),
+                amount,
+            };
+            assert!(bc.add_transaction(tx), "Транзакция отклонена");
+            mine_current(&mut bc);
+        }
+
+        // Инстанс 1 распространяет цепочку с транзакцией
+        for i in 1..3 {
+            assert!(adopt_from(&instances[i], &instances[0]), "Инстанс {} не принял цепочку с транзакцией", i + 1);
+        }
+
+        // У 1 убыло, у 2 появилась сумма, у 3 - 0
+        let expected = [10000 - amount, amount, 0];
+        assert_balances(&instances, &addrs, &expected);
+
+        for dir in &dirs {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn no_rollback_on_shorter_chain() {
+        let dir1 = temp_db_dir("norb_1");
+        let dir2 = temp_db_dir("norb_2");
+        let bc1 = Arc::new(Mutex::new(create_test_blockchain(&dir1)));
+        let bc2 = Arc::new(Mutex::new(create_test_blockchain(&dir2)));
+        let a1: String = base64::encode(SigningKey::generate(&mut OsRng).verifying_key().to_bytes());
+        let a2: String = base64::encode(SigningKey::generate(&mut OsRng).verifying_key().to_bytes());
+
+        // bc1: грант + намайненная транзакция -> [g, gr1, b1]
+        {
+            let mut bc = bc1.lock().unwrap();
+            assert!(bc.grant_initial_balance_to_first_wallet(&a1));
+            let tx = Transaction {
+                id: Uuid::new_v4().to_string(),
+                sender: a1.clone(),
+                receiver: a2.clone(),
+                amount: 1000,
+            };
+            assert!(bc.add_transaction(tx), "Транзакция отклонена");
+            mine_current(&mut bc);
+        }
+        // bc2: только грант -> [g, gr2] (короче, другая история)
+        {
+            let mut bc = bc2.lock().unwrap();
+            assert!(bc.grant_initial_balance_to_first_wallet(&a2));
+        }
+
+        // bc1 не должен откатываться на более короткую цепочку bc2
+        assert!(!adopt_from(&bc1, &bc2), "Узел откатился на более короткую цепочку");
+        let bc1_guard = bc1.lock().unwrap();
+        assert_eq!(bc1_guard.chain.len(), 3, "Узел потерял намайненный блок");
+        let received = bc1_guard.balances.get(&a2).copied().unwrap_or(0);
+        assert_eq!(received, 1000, "Баланс получателя изменился при отказе от отката");
+        drop(bc1_guard);
+
+        let _ = fs::remove_dir_all(&dir1);
+        let _ = fs::remove_dir_all(&dir2);
     }
 }
