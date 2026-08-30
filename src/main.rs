@@ -1859,6 +1859,10 @@ mod tests {
     use ed25519_dalek::SigningKey;
     use rand::rngs::OsRng;
 
+    // Сетевые тесты пишут network.json рядом с тестовым exe; блокируем их взаимный запуск,
+    // чтобы не затирать файл друг друга при параллельном выполнении.
+    static NETWORK_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     // Создаёт уникальную временную директорию для БД кошелька
     fn temp_db_dir(tag: &str) -> PathBuf {
         let mut dir = std::env::temp_dir();
@@ -2180,5 +2184,236 @@ mod tests {
 
         let _ = fs::remove_dir_all(&dir1);
         let _ = fs::remove_dir_all(&dir2);
+    }
+
+    // Полный сетевой сценарий с реальными TCP-серверами: 3 узла, регистрация кошельков,
+    // распространение грант-блока, передача и проверка балансов на всех узлах.
+    #[test]
+    fn real_network_three_nodes() {
+        let _net_lock = NETWORK_TEST_LOCK.lock().unwrap();
+        let exe_dir = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
+        let net_path = exe_dir.join("network.json");
+        let saved_net = fs::read_to_string(&net_path).ok();
+        let net_content = r#"{"peers":["127.0.0.1:18281","127.0.0.1:18282","127.0.0.1:18283"]}"#;
+        fs::write(&net_path, net_content).unwrap();
+
+        let ports = [18281u16, 18282, 18283];
+        let (sync_tx, _sync_rx) = mpsc::channel::<Blockchain>();
+        let mut nodes: Vec<(Node, PathBuf, Arc<Mutex<Blockchain>>)> = Vec::new();
+        let mut dirs = Vec::new();
+        for (i, p) in ports.iter().enumerate() {
+            let dir = temp_db_dir(&format!("net_{}", i));
+            dirs.push(dir.clone());
+            let bc = Arc::new(Mutex::new(create_test_blockchain(&dir)));
+            let node = Node {
+                blockchain: Arc::clone(&bc),
+                peers: Arc::new(Mutex::new(vec![])),
+                address: format!("127.0.0.1:{}", p),
+                sync_rx: mpsc::channel().1,
+            };
+            nodes.push((node, dir.clone(), bc));
+        }
+
+        for i in 0..3 {
+            nodes[i].0.discover_peers();
+            nodes[i].0.start_server(ports[i], sync_tx.clone());
+        }
+
+        // Регистрация первого кошелька на узле 1 -> грант 10000
+        let addrs: Vec<String> = (0..3)
+            .map(|_| base64::encode(SigningKey::generate(&mut OsRng).verifying_key().to_bytes()))
+            .collect();
+        {
+            let mut bc = nodes[0].2.lock().unwrap();
+            assert!(bc.grant_initial_balance_to_first_wallet(&addrs[0]), "Грант не создан");
+        }
+
+        // Распространяем цепочку гранта между узлами
+        for round in 0..4 {
+            for i in 0..3 {
+                let mut sync_node = Node {
+                    blockchain: Arc::clone(&nodes[i].2),
+                    peers: Arc::clone(&nodes[i].0.peers),
+                    address: nodes[i].0.address.clone(),
+                    sync_rx: mpsc::channel().1,
+                };
+                sync_node.sync_blockchain(sync_tx.clone());
+            }
+            std::thread::sleep(Duration::from_millis(150));
+            let _ = round;
+        }
+
+        // Регистрация кошельков 2 и 3 (грант уже потрачен на первый кошелёк)
+        for i in 1..3 {
+            let mut bc = nodes[i].2.lock().unwrap();
+            if !bc.balances.contains_key(&addrs[i]) {
+                if !bc.grant_initial_balance_to_first_wallet(&addrs[i]) {
+                    bc.balances.entry(addrs[i].clone()).or_insert(0);
+                }
+                bc.save_state();
+            }
+        }
+
+        // Передача 1000 с узла 1 на кошелёк 2 (намайнивается блок)
+        {
+            let mut bc = nodes[0].2.lock().unwrap();
+            let tx = Transaction {
+                id: Uuid::new_v4().to_string(),
+                sender: addrs[0].clone(),
+                receiver: addrs[1].clone(),
+                amount: 1000,
+            };
+            assert!(bc.add_transaction(tx), "Транзакция отклонена");
+            assert!(bc.mine_block(mpsc::channel().0).is_some(), "Майнинг не удался");
+        }
+
+        // Распространяем цепочку с транзакцией
+        for round in 0..6 {
+            for i in 0..3 {
+                let mut sync_node = Node {
+                    blockchain: Arc::clone(&nodes[i].2),
+                    peers: Arc::clone(&nodes[i].0.peers),
+                    address: nodes[i].0.address.clone(),
+                    sync_rx: mpsc::channel().1,
+                };
+                sync_node.sync_blockchain(sync_tx.clone());
+            }
+            std::thread::sleep(Duration::from_millis(200));
+            let _ = round;
+        }
+
+        let expected = [10000u64 - 1000, 1000, 0];
+        for i in 0..3 {
+            let bc = nodes[i].2.lock().unwrap();
+            let bal = bc.balances.get(&addrs[i]).copied().unwrap_or(0);
+            assert_eq!(bal, expected[i], "Узел {}: баланс кошелька не совпал", i + 1);
+            assert!(bc.validate_chain(), "Узел {}: цепочка не прошла валидацию", i + 1);
+            println!("Узел {}: баланс кошелька = {}, длина цепочки = {}", i + 1, bal, bc.chain.len());
+        }
+
+        if let Some(saved) = saved_net {
+            fs::write(&net_path, saved).unwrap();
+        } else {
+            let _ = fs::remove_file(&net_path);
+        }
+        for dir in &dirs {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    // Сценарий "быстрой" регистрации: все три кошелька регистрируются до первого
+    // раунда синхронизации. Каждый инстанс успевает создать собственный грант-блок.
+    // После этого гранты не должны перетирать друг друга, а передача должна дойти.
+    #[test]
+    fn real_network_fast_registration_race() {
+        let _net_lock = NETWORK_TEST_LOCK.lock().unwrap();
+        let exe_dir = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
+        let net_path = exe_dir.join("network.json");
+        let saved_net = fs::read_to_string(&net_path).ok();
+        let net_content = r#"{"peers":["127.0.0.1:18291","127.0.0.1:18292","127.0.0.1:18293"]}"#;
+        fs::write(&net_path, net_content).unwrap();
+
+        let ports = [18291u16, 18292, 18293];
+        let (sync_tx, _sync_rx) = mpsc::channel::<Blockchain>();
+        let mut nodes: Vec<(Node, Arc<Mutex<Blockchain>>, Arc<Mutex<Vec<String>>>)> = Vec::new();
+        let mut dirs = Vec::new();
+        for (i, p) in ports.iter().enumerate() {
+            let dir = temp_db_dir(&format!("fast_{}", i));
+            dirs.push(dir.clone());
+            let bc = Arc::new(Mutex::new(create_test_blockchain(&dir)));
+            let peers = Arc::new(Mutex::new(vec![]));
+            let node = Node {
+                blockchain: Arc::clone(&bc),
+                peers: Arc::clone(&peers),
+                address: format!("127.0.0.1:{}", p),
+                sync_rx: mpsc::channel().1,
+            };
+            nodes.push((node, bc, peers));
+        }
+
+        for i in 0..3 {
+            nodes[i].0.discover_peers();
+            nodes[i].0.start_server(ports[i], sync_tx.clone());
+        }
+
+        // Регистрируем все три кошелька сразу, без ожидания синхронизации
+        let addrs: Vec<String> = (0..3)
+            .map(|_| base64::encode(SigningKey::generate(&mut OsRng).verifying_key().to_bytes()))
+            .collect();
+        for i in 0..3 {
+            let mut bc = nodes[i].1.lock().unwrap();
+            if !bc.balances.contains_key(&addrs[i]) {
+                if !bc.grant_initial_balance_to_first_wallet(&addrs[i]) {
+                    bc.balances.entry(addrs[i].clone()).or_insert(0);
+                }
+                bc.save_state();
+            }
+        }
+
+        // Распространяем грант-блоки (раунды синхронизации вместо фоновых потоков)
+        for round in 0..6 {
+            for i in 0..3 {
+                let mut sync_node = Node {
+                    blockchain: Arc::clone(&nodes[i].1),
+                    peers: Arc::clone(&nodes[i].2),
+                    address: nodes[i].0.address.clone(),
+                    sync_rx: mpsc::channel().1,
+                };
+                sync_node.sync_blockchain(sync_tx.clone());
+            }
+            std::thread::sleep(Duration::from_millis(250));
+            let _ = round;
+        }
+
+        // Передача 1000 с кошелька 1 на кошелёк 2
+        {
+            let mut bc = nodes[0].1.lock().unwrap();
+            let tx = Transaction {
+                id: Uuid::new_v4().to_string(),
+                sender: addrs[0].clone(),
+                receiver: addrs[1].clone(),
+                amount: 1000,
+            };
+            assert!(bc.add_transaction(tx), "Передача отклонена на узле 1");
+            assert!(bc.mine_block(mpsc::channel().0).is_some(), "Майнинг не удался");
+        }
+
+        // Распространяем блок с транзакцией
+        for round in 0..6 {
+            for i in 0..3 {
+                let mut sync_node = Node {
+                    blockchain: Arc::clone(&nodes[i].1),
+                    peers: Arc::clone(&nodes[i].2),
+                    address: nodes[i].0.address.clone(),
+                    sync_rx: mpsc::channel().1,
+                };
+                sync_node.sync_blockchain(sync_tx.clone());
+            }
+            std::thread::sleep(Duration::from_millis(250));
+            let _ = round;
+        }
+
+        let expected = [10000u64 - 1000, 1000, 0];
+        for i in 0..3 {
+            let bc = nodes[i].1.lock().unwrap();
+            let bal = bc.balances.get(&addrs[i]).copied().unwrap_or(0);
+            assert!(bc.validate_chain(), "Узел {}: цепочка не прошла валидацию", i + 1);
+            println!("Узел {}: баланс кошелька = {}, длина цепочки = {}", i + 1, bal, bc.chain.len());
+            if bal != expected[i] {
+                println!("НЕВЕРНЫЙ БАЛАНС узла {}: ожидалось {}, получено {}", i + 1, expected[i], bal);
+                println!("Балансы узла {}: {:?}", i + 1, bc.balances);
+                println!("Цепочка узла {}: {:?}", i + 1, bc.chain);
+                panic!("Узел {}: баланс кошелька не совпал: ожидалось {}, получено {}", i + 1, expected[i], bal);
+            }
+        }
+
+        if let Some(saved) = saved_net {
+            fs::write(&net_path, saved).unwrap();
+        } else {
+            let _ = fs::remove_file(&net_path);
+        }
+        for dir in &dirs {
+            let _ = fs::remove_dir_all(dir);
+        }
     }
 }
