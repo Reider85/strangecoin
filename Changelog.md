@@ -84,3 +84,7 @@
 0.8.4 genesis block problem
 0.8.5 sync problem
 0.8.6 validate chain
+0.8.7 grant block + validate_chain + test
+0.8.8 run 3 wallets script
+0.8.9 deterministic genesis
+0.9.0 analytics
