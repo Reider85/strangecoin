@@ -88,3 +88,4 @@
 0.8.8 run 3 wallets script
 0.8.9 deterministic genesis
 0.9.0 analytics
+0.9.1 analytics
