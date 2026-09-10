@@ -90,3 +90,4 @@
 0.9.0 analytics
 0.9.1 analytics
 0.9.2 analytics
+0.9.3 repo setup: LICENSE (MIT/Apache-2.0), ADR-0004/0005, .gitignore, CONTRIBUTING.md, removed [wallet] from Cargo.toml

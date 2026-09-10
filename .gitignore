@@ -1,3 +1,23 @@
 /target
 /remote_repo.git
 /instances
+
+# Build artifacts
+*.lock
+Cargo.lock
+
+# Blockchain database
+blockchain_db_*
+
+# Keystore (encrypted private keys)
+keystore/*.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
