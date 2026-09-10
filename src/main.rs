@@ -16,6 +16,18 @@ use std::net::SocketAddr;
 use rusty_leveldb::{DB, Options, LdbIterator};
 use std::io::{BufReader, BufWriter};
 mod wallet;
+mod error;
+mod blockchain;
+mod consensus;
+mod network;
+mod mempool;
+mod storage;
+mod api;
+mod cli;
+#[cfg(feature = "gui")]
+mod gui;
+mod economics;
+mod governance;
 
 // Структура для конфигурации
 #[derive(Deserialize, Serialize)]
