@@ -1479,7 +1479,7 @@ impl eframe::App for WalletApp {
                         let config_path = exe_dir.join("config.json");
                         match wallet::Wallet::load(&self.password, &config_path) {
                             Ok(wallet) => {
-                                if base64::encode(wallet.public_key.to_bytes()) == self.wallet_address {
+                                if base64::encode(wallet.public_key.serialize()) == self.wallet_address {
                                     self.is_authenticated = true;
                                     self.status = "Успешная аутентификация".to_string();
                                     self.node.discover_peers();
@@ -1525,7 +1525,7 @@ impl eframe::App for WalletApp {
                         } else {
                             match wallet::Wallet::new(&self.new_wallet_password, &config_path) {
                                 Ok(wallet) => {
-                                    self.wallet_address = base64::encode(wallet.public_key.to_bytes());
+                                    self.wallet_address = base64::encode(wallet.public_key.serialize());
                                     self.password = self.new_wallet_password.clone();
                                     self.is_authenticated = true;
                                     self.status = format!("Кошелёк успешно создан: {}", self.wallet_address);
@@ -1874,8 +1874,8 @@ fn save_on_exit(blockchain: Arc<Mutex<Blockchain>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use secp256k1::{PublicKey, Secp256k1, SecretKey};
     use std::path::Path;
-    use ed25519_dalek::SigningKey;
     use rand::rngs::OsRng;
 
     // Сетевые тесты пишут network.json рядом с тестовым exe; блокируем их взаимный запуск,
@@ -1963,11 +1963,13 @@ mod tests {
 
     #[test]
     fn hundred_transactions_five_wallets() {
-        // Создаём адреса 5 кошельков (ed25519) и отдельную БД для каждого в начале теста
+        // Создаём адреса 5 кошельков (secp256k1) и отдельную БД для каждого в начале теста
         let addrs: Vec<String> = (0..5)
             .map(|_| {
-                let sk = SigningKey::generate(&mut OsRng);
-                base64::encode(sk.verifying_key().to_bytes())
+                let secp = Secp256k1::new();
+                let sk = SecretKey::new(&mut OsRng);
+                let pk = PublicKey::from_secret_key(&secp, &sk);
+                base64::encode(pk.serialize())
             })
             .collect();
 
@@ -2101,8 +2103,10 @@ mod tests {
         // Три инстанса (как три запущенных приложения) с отдельными БД и разными генезис-блоками
         let addrs: Vec<String> = (0..3)
             .map(|_| {
-                let sk = SigningKey::generate(&mut OsRng);
-                base64::encode(sk.verifying_key().to_bytes())
+                let secp = Secp256k1::new();
+                let sk = SecretKey::new(&mut OsRng);
+                let pk = PublicKey::from_secret_key(&secp, &sk);
+                base64::encode(pk.serialize())
             })
             .collect();
 
@@ -2171,8 +2175,17 @@ mod tests {
         let dir2 = temp_db_dir("norb_2");
         let bc1 = Arc::new(Mutex::new(create_test_blockchain(&dir1)));
         let bc2 = Arc::new(Mutex::new(create_test_blockchain(&dir2)));
-        let a1: String = base64::encode(SigningKey::generate(&mut OsRng).verifying_key().to_bytes());
-        let a2: String = base64::encode(SigningKey::generate(&mut OsRng).verifying_key().to_bytes());
+        let secp = Secp256k1::new();
+        let a1: String = {
+            let sk = SecretKey::new(&mut OsRng);
+            let pk = PublicKey::from_secret_key(&secp, &sk);
+            base64::encode(pk.serialize())
+        };
+        let a2: String = {
+            let sk = SecretKey::new(&mut OsRng);
+            let pk = PublicKey::from_secret_key(&secp, &sk);
+            base64::encode(pk.serialize())
+        };
 
         // bc1: грант + намайненная транзакция -> [g, gr1, b1]
         {
@@ -2240,7 +2253,12 @@ mod tests {
 
         // Регистрация первого кошелька на узле 1 -> грант 10000
         let addrs: Vec<String> = (0..3)
-            .map(|_| base64::encode(SigningKey::generate(&mut OsRng).verifying_key().to_bytes()))
+            .map(|_| {
+                let secp = Secp256k1::new();
+                let sk = SecretKey::new(&mut OsRng);
+                let pk = PublicKey::from_secret_key(&secp, &sk);
+                base64::encode(pk.serialize())
+            })
             .collect();
         {
             let mut bc = nodes[0].2.lock().unwrap();
@@ -2357,7 +2375,12 @@ mod tests {
 
         // Регистрируем все три кошелька сразу, без ожидания синхронизации
         let addrs: Vec<String> = (0..3)
-            .map(|_| base64::encode(SigningKey::generate(&mut OsRng).verifying_key().to_bytes()))
+            .map(|_| {
+                let secp = Secp256k1::new();
+                let sk = SecretKey::new(&mut OsRng);
+                let pk = PublicKey::from_secret_key(&secp, &sk);
+                base64::encode(pk.serialize())
+            })
             .collect();
         for i in 0..3 {
             let mut bc = nodes[i].1.lock().unwrap();

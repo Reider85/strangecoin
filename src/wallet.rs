@@ -2,7 +2,6 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
-use ed25519_dalek::{Signer, SigningKey, VerifyingKey, SIGNATURE_LENGTH};
 use pbkdf2::{
     password_hash::{
         rand_core::RngCore, PasswordHash, PasswordHasher, SaltString,
@@ -10,6 +9,7 @@ use pbkdf2::{
     Pbkdf2,
 };
 use rand::rngs::OsRng;
+use secp256k1::{Message, PublicKey, SecretKey, Secp256k1, ecdsa::Signature};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
@@ -29,18 +29,20 @@ pub struct Keystore {
 }
 
 pub struct Wallet {
-    pub public_key: VerifyingKey,
-    pub private_key: Option<SigningKey>,
+    pub public_key: PublicKey,
+    pub private_key: Option<SecretKey>,
 }
 
 impl Wallet {
     pub fn new(password: &str, config_path: &Path) -> Result<Self, String> {
         let start_time = std::time::SystemTime::now();
-        // Generate Ed25519 key pair
+        let secp = Secp256k1::new();
         let mut csprng = OsRng;
-        let signing_key: SigningKey = SigningKey::generate(&mut csprng);
-        let public_key = signing_key.verifying_key();
-        let private_key_bytes = signing_key.to_bytes();
+
+        // Generate secp256k1 key pair
+        let secret_key = SecretKey::new(&mut csprng);
+        let public_key = PublicKey::from_secret_key(&secp, &secret_key);
+        let private_key_bytes = secret_key.secret_bytes();
 
         // Generate salt for PBKDF2
         let salt = SaltString::generate(&mut csprng);
@@ -63,7 +65,7 @@ impl Wallet {
             .map_err(|e| format!("Private key encryption error: {}", e))?;
 
         // Encode data in Base64 for storage
-        let public_key_base64 = BASE64.encode(public_key.as_bytes());
+        let public_key_base64 = BASE64.encode(public_key.serialize());
         let encrypted_private_key_base64 = BASE64.encode(&ciphertext);
         let nonce_base64 = BASE64.encode(nonce.as_slice());
 
@@ -111,7 +113,7 @@ impl Wallet {
 
         Ok(Wallet {
             public_key,
-            private_key: Some(signing_key),
+            private_key: Some(secret_key),
         })
     }
 
@@ -151,10 +153,8 @@ impl Wallet {
             .map_err(|e| format!("Error parsing salt: {}", e))?;
 
         // Restore public key
-        let public_key_array: [u8; 32] = public_key_bytes
-            .try_into()
-            .map_err(|_| "Public key has invalid length (expected 32 bytes)")?;
-        let public_key = VerifyingKey::from_bytes(&public_key_array)
+        let secp = Secp256k1::new();
+        let public_key = PublicKey::from_slice(&public_key_bytes)
             .map_err(|e| format!("Error restoring public key: {}", e))?;
 
         // Derive key from password
@@ -171,11 +171,12 @@ impl Wallet {
             .decrypt(nonce, encrypted_private_key.as_ref())
             .map_err(|e| format!("Error decrypting private key: {}", e))?;
 
-        // Convert Vec<u8> to [u8; 32]
+        // Convert Vec<u8> to [u8; 32] and create SecretKey
         let private_key_array: [u8; 32] = private_key_bytes
             .try_into()
             .map_err(|_| "Private key has invalid length (expected 32 bytes)")?;
-        let signing_key = SigningKey::from_bytes(&private_key_array);
+        let secret_key = SecretKey::from_slice(&private_key_array)
+            .map_err(|e| format!("Error creating secret key: {}", e))?;
 
         let duration = std::time::SystemTime::now()
             .duration_since(start_time)
@@ -185,12 +186,33 @@ impl Wallet {
 
         Ok(Wallet {
             public_key,
-            private_key: Some(signing_key),
+            private_key: Some(secret_key),
         })
     }
 
+    pub fn sign(&self, message: &[u8]) -> Result<[u8; 64], String> {
+        let secret_key = self.private_key.as_ref().ok_or("Private key is missing")?;
+        let secp = Secp256k1::new();
+        let msg = Message::from_digest_slice(message)
+            .map_err(|e| format!("Invalid message for signing: {}", e))?;
+        let sig: Signature = secp.sign_ecdsa(&msg, secret_key);
+        Ok(sig.serialize_compact())
+    }
+
+    pub fn verify(sig: &[u8; 64], message: &[u8], pk: &PublicKey) -> bool {
+        let secp = Secp256k1::new();
+        let msg = match Message::from_digest_slice(message) {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+        let signature = match Signature::from_compact(sig) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        secp.verify_ecdsa(&msg, &signature, pk).is_ok()
+    }
+
     pub fn sign_transaction(&self, transaction: &super::Transaction) -> Result<String, String> {
-        let signing_key = self.private_key.as_ref().ok_or("Private key is missing")?;
         let message = format!(
             "{}{}{}{}",
             transaction.id,
@@ -198,9 +220,7 @@ impl Wallet {
             transaction.receiver,
             transaction.amount
         );
-        let signature = signing_key
-            .sign(message.as_bytes())
-            .to_bytes();
+        let signature = self.sign(message.as_bytes())?;
         Ok(BASE64.encode(signature))
     }
 }
