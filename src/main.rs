@@ -15,6 +15,7 @@ use uuid::Uuid;
 use std::net::SocketAddr;
 use rusty_leveldb::{DB, Options, LdbIterator};
 use std::io::{BufReader, BufWriter};
+use tracing::{info, warn, error, debug};
 mod wallet;
 mod error;
 mod blockchain;
@@ -172,18 +173,18 @@ impl Blockchain {
     fn debug_db(&self) {
         let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
         let mut iterator = db.new_iter().expect("Не удалось создать итератор LevelDB");
-        println!("Содержимое базы данных:");
+        debug!("Содержимое базы данных:");
         while let Some((key, value)) = iterator.next() {
             let key_str = std::str::from_utf8(&key).unwrap_or("невалидный ключ");
-            println!("Ключ: {}", key_str);
+            debug!(key = %key_str, "Ключ");
             if key == b"chain" {
-                println!("Значение (chain): {:?}", serde_json::from_slice::<Vec<Block>>(&value));
+                debug!(value = ?serde_json::from_slice::<Vec<Block>>(&value), "Значение (chain)");
             } else if key == b"balances" {
-                println!("Значение (balances): {:?}", serde_json::from_slice::<HashMap<String, u64>>(&value));
+                debug!(value = ?serde_json::from_slice::<HashMap<String, u64>>(&value), "Значение (balances)");
             } else if key == b"difficulty" {
-                println!("Значение (difficulty): {:?}", serde_json::from_slice::<u32>(&value));
+                debug!(value = ?serde_json::from_slice::<u32>(&value), "Значение (difficulty)");
             } else {
-                println!("Значение (transaction): {:?}", serde_json::from_slice::<Transaction>(&value));
+                debug!(value = ?serde_json::from_slice::<Transaction>(&value), "Значение (transaction)");
             }
         }
     }
@@ -193,13 +194,13 @@ impl Blockchain {
         let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
         let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
         let db_path = exe_dir.join(format!("blockchain_db_{}", port));
-        println!("Проверка базы данных по пути: {}", db_path.display());
+        debug!(path = %db_path.display(), "Проверка базы данных");
         if !db_path.exists() {
-            println!("База данных не существует, создаётся новая");
+            info!("База данных не существует, создаётся новая");
         }
         let lock_file = db_path.join("LOCK");
         if lock_file.exists() {
-            println!("Файл LOCK существует, ожидание освобождения базы данных");
+            warn!("Файл LOCK существует, ожидание освобождения базы данных");
             let max_attempts = 5;
             let mut attempts = 0;
             while lock_file.exists() && attempts < max_attempts {
@@ -207,7 +208,7 @@ impl Blockchain {
                 attempts += 1;
             }
             if lock_file.exists() {
-                println!("Файл LOCK всё ещё существует, попытка удаления");
+                warn!("Файл LOCK всё ещё существует, попытка удаления");
                 if let Err(e) = fs::remove_file(&lock_file) {
                     panic!("Не удалось удалить файл LOCK: {}", e);
                 }
@@ -235,38 +236,38 @@ impl Blockchain {
             let mut db_guard = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
 
             chain_opt = db_guard.get(b"chain").and_then(|v| serde_json::from_slice::<Vec<Block>>(&v).ok());
-            println!("chain_opt: {:?}", chain_opt);
+            debug!(?chain_opt, "chain_opt");
 
             balances_opt = db_guard.get(b"balances").and_then(|v| serde_json::from_slice::<HashMap<String, u64>>(&v).ok());
-            println!("balances_opt: {:?}", balances_opt);
+            debug!(?balances_opt, "balances_opt");
 
             difficulty_opt = db_guard.get(b"difficulty").and_then(|v| serde_json::from_slice::<u32>(&v).ok());
-            println!("difficulty_opt: {:?}", difficulty_opt);
+            debug!(?difficulty_opt, "difficulty_opt");
 
             let mut iterator = db_guard.new_iter().expect("Не удалось создать итератор LevelDB");
-            println!("Загрузка транзакций из LevelDB...");
+            debug!("Загрузка транзакций из LevelDB...");
             while let Some((key, value)) = iterator.next() {
                 let key_str = std::str::from_utf8(&key).unwrap_or("невалидный ключ");
-                println!("Найден ключ: {}", key_str);
+                debug!(key = %key_str, "Найден ключ");
                 if key == b"chain" || key == b"balances" || key == b"difficulty" {
-                    println!("Пропуск системного ключа: {:?}", key);
+                    debug!(?key, "Пропуск системного ключа");
                     continue;
                 }
                 if Uuid::parse_str(key_str).is_ok() {
                     match serde_json::from_slice::<Transaction>(&value) {
                         Ok(transaction) => {
-                            println!("Успешно загружена транзакция: {:?}", transaction);
+                            debug!(?transaction, "Успешно загружена транзакция");
                             if !pending.iter().any(|t: &Transaction| t.id == transaction.id) {
                                 pending.push(transaction);
                             }
                         }
-                        Err(e) => println!("Ошибка десериализации транзакции для ключа {}: {}", key_str, e),
+                        Err(e) => debug!(key = %key_str, error = %e, "Ошибка десериализации транзакции"),
                     }
                 } else {
-                    println!("Невалидный UUID ключ: {}", key_str);
+                    debug!(key = %key_str, "Невалидный UUID ключ");
                 }
             }
-            println!("Загружено {} транзакций", pending.len());
+            debug!(count = pending.len(), "Загружено транзакций");
         }
 
         if let Some(chain) = chain_opt {
@@ -279,7 +280,7 @@ impl Blockchain {
             blockchain.balances = balances;
         } else {/*
             blockchain.balances = HashMap::new();
-            println!("Балансы не найдены в LevelDB, инициализация на основе цепочки блоков");
+            debug!("Балансы не найдены в LevelDB, инициализация на основе цепочки блоков");
             // Инициализируем балансы на основе транзакций
             for block in &blockchain.chain {
                 for tx in &block.transactions {
@@ -292,7 +293,7 @@ impl Blockchain {
             // Сохраняем инициализированные балансы в LevelDB
             let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
             if let Err(e) = db.put(b"balances", &serde_json::to_vec(&blockchain.balances).unwrap()) {
-                println!("Ошибка сохранения балансов в LevelDB: {}", e);
+                error!(error = %e, "Ошибка сохранения балансов в LevelDB");
             }
             db.flush().expect("Ошибка при фиксации данных в LevelDB");*/
         }
@@ -310,7 +311,7 @@ impl Blockchain {
             .duration_since(start_time)
             .unwrap()
             .as_secs_f64();
-        println!("Создание блокчейна завершено за {} секунд", duration);
+        info!(duration_secs = duration, "Создание блокчейна завершено");
         blockchain
     }
 
@@ -351,7 +352,7 @@ impl Blockchain {
             .duration_since(start_time)
             .unwrap()
             .as_secs_f64();
-        println!("Создание генезис-блока завершено за {} секунд", duration);
+        info!(duration_secs = duration, "Создание генезис-блока завершено");
     }
 
     // Создаёт блок первичной эмиссии: переводит 10000 с генезис-адреса на первый реальный кошелёк
@@ -378,10 +379,7 @@ impl Blockchain {
         self.chain.push(block);
         self.balances.remove("initial_wallet_address");
         *self.balances.entry(wallet_address.to_string()).or_insert(0) += amount;
-        println!(
-            "Создан блок первичной эмиссии: initial_wallet_address -> {}, сумма {}",
-            wallet_address, amount
-        );
+        info!(from = "initial_wallet_address", to = %wallet_address, amount, "Создан блок первичной эмиссии");
     }
 
     // Начисляет первоначальный баланс (10000 из генезис-блока) первому реальному кошельку
@@ -400,7 +398,7 @@ impl Blockchain {
             Some(amount) if *amount > 0 => {
                 let amount = *amount;
                 self.create_grant_block(wallet_address, amount);
-                println!("Первому кошельку {} начислен первоначальный баланс {}", wallet_address, amount);
+                info!(wallet = %wallet_address, amount, "Первому кошельку начислен первоначальный баланс");
                 true
             }
             _ => false,
@@ -429,7 +427,7 @@ impl Blockchain {
             return;
         }
         self.create_grant_block(&wallet, placeholder_amount);
-        println!("Первоначальный баланс {} перенесён первому кошельку {}", placeholder_amount, wallet);
+        info!(amount = placeholder_amount, wallet = %wallet, "Первоначальный баланс перенесён первому кошельку");
     }
 
     fn calculate_hash(&self, block: &Block) -> String {
@@ -449,15 +447,15 @@ impl Blockchain {
             .duration_since(start_time)
             .unwrap()
             .as_secs_f64();
-        println!("Вычисление хэша завершено за {} секунд: {}", duration, hash);
+        debug!(duration_secs = duration, hash = %hash, "Вычисление хэша завершено");
         hash
     }
 
     fn mine_block(&mut self, progress_tx: mpsc::Sender<String>) -> Option<Block> {
         let total_start_time = SystemTime::now();
-        println!("Начало майнинга в потоке {:?}", thread::current().id());
+        info!("Начало майнинга");
         if self.pending_transactions.is_empty() {
-            println!("Нет транзакций для майнинга");
+            warn!("Нет транзакций для майнинга");
             let _ = progress_tx.send("Нет транзакций для майнинга".to_string());
             return None;
         }
@@ -469,7 +467,7 @@ impl Blockchain {
             .cloned()
             .collect();
         if transactions.is_empty() {
-            println!("Все pending_transactions уже включены в блоки");
+            warn!("Все pending_transactions уже включены в блоки");
             let _ = progress_tx.send("Все pending_transactions уже включены в блоки".to_string());
             return None;
         }
@@ -482,7 +480,7 @@ impl Blockchain {
             for tx in &block.transactions {
                 let sender_balance = self.balances.get(&tx.sender).cloned().unwrap_or(0);
                 if sender_balance < tx.amount {
-                    println!("Ошибка: Недостаточно средств у {} для транзакции {}", tx.sender, tx.id);
+                    error!(sender = %tx.sender, txid = %tx.id, "Недостаточно средств для транзакции");
                     return None;
                 }
                 let sender_final = sender_balance - tx.amount;
@@ -492,39 +490,35 @@ impl Blockchain {
                 let receiver_final = receiver_balance + tx.amount;
                 *self.balances.entry(tx.receiver.clone()).or_insert(0) = receiver_final;
 
-                println!(
-                    "Обновлён баланс: {} -> {}, {} -> {}",
-                    tx.sender, sender_final, tx.receiver, receiver_final
-                );
+                info!(sender = %tx.sender, sender_final, receiver = %tx.receiver, receiver_final, "Обновлён баланс");
             }
             let balance_duration = SystemTime::now()
                 .duration_since(balance_start_time)
                 .unwrap()
                 .as_secs_f64();
-            println!("Обновление балансов завершено за {} секунд", balance_duration);
+            debug!(duration_secs = balance_duration, "Обновление балансов завершено");
 
             self.chain.push(block.clone());
-
             let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
             for tx in &self.pending_transactions {
                 let key = tx.id.as_bytes();
-                println!("Удаление ключа: {:?}", key);
+                debug!(key = ?key, "Удаление ключа");
                 if key.is_empty() {
-                    println!("Ошибка: пустой ключ для транзакции {}", tx.id);
+                    error!(txid = %tx.id, "Пустой ключ для транзакции");
                     continue;
                 }
                 if let Err(e) = db.delete(key) {
-                    println!("Ошибка удаления транзакции {} из LevelDB: {}", tx.id, e);
+                    error!(txid = %tx.id, error = %e, "Ошибка удаления транзакции из LevelDB");
                 }
             }
             if let Err(e) = db.put(b"chain", &serde_json::to_vec(&self.chain).unwrap()) {
-                println!("Ошибка сохранения цепочки блоков в LevelDB: {}", e);
+                error!(error = %e, "Ошибка сохранения цепочки блоков в LevelDB");
             }
             if let Err(e) = db.put(b"balances", &serde_json::to_vec(&self.balances).unwrap()) {
-                println!("Ошибка сохранения балансов в LevelDB: {}", e);
+                error!(error = %e, "Ошибка сохранения балансов в LevelDB");
             }
             if let Err(e) = db.put(b"difficulty", &serde_json::to_vec(&self.difficulty).unwrap()) {
-                println!("Ошибка сохранения сложности в LevelDB: {}", e);
+                error!(error = %e, "Ошибка сохранения сложности в LevelDB");
             }
             drop(db);
             self.pending_transactions.clear();
@@ -532,7 +526,7 @@ impl Blockchain {
                 .duration_since(total_start_time)
                 .unwrap()
                 .as_secs_f64();
-            println!("Майнинг завершен за {} секунд, блок добавлен: {:?}", total_duration, block);
+            info!(duration_secs = total_duration, block = ?block, "Майнинг завершен, блок добавлен");
             let _ = progress_tx.send(format!("Майнинг завершен за {} секунд", total_duration));
             Some(block)
         } else {
@@ -540,7 +534,7 @@ impl Blockchain {
                 .duration_since(total_start_time)
                 .unwrap()
                 .as_secs_f64();
-            println!("Майнинг не удался за {} секунд", total_duration);
+            warn!(duration_secs = total_duration, "Майнинг не удался");
             let _ = progress_tx.send(format!("Майнинг не удался за {} секунд", total_duration));
             None
         }
@@ -554,7 +548,7 @@ impl Blockchain {
         progress_tx: mpsc::Sender<String>,
     ) -> Option<Block> {
         let start_time = SystemTime::now();
-        println!("Начало mine_block_inner в потоке {:?}", thread::current().id());
+        debug!("Начало mine_block_inner");
         let mut block = Block {
             index: previous_block.index + 1,
             timestamp: SystemTime::now()
@@ -578,7 +572,7 @@ impl Blockchain {
                     .duration_since(start_time)
                     .unwrap()
                     .as_secs_f64();
-                println!("Достигнуто максимальное количество итераций: {} за {} секунд", max_iterations, total_duration);
+                warn!(max_iterations, duration_secs = total_duration, "Достигнуто максимальное количество итераций");
                 let _ = progress_tx.send(format!("Достигнуто максимальное количество итераций: {} за {} секунд", max_iterations, total_duration));
                 return None;
             }
@@ -587,7 +581,7 @@ impl Blockchain {
                     .duration_since(start_time)
                     .unwrap()
                     .as_secs_f64();
-                println!("Майнинг прерван: превышен таймаут {} секунд, всего итераций: {}", timeout.as_secs(), iteration_count);
+                warn!(timeout_secs = timeout.as_secs(), iteration_count, "Майнинг прерван: превышен таймаут");
                 let _ = progress_tx.send(format!("Майнинг прерван: превышен таймаут {} секунд, всего итераций: {}", timeout.as_secs(), iteration_count));
                 return None;
             }
@@ -599,9 +593,12 @@ impl Blockchain {
                 .unwrap()
                 .as_secs_f64();
             total_hash_time += hash_duration;
-            println!(
-                "Итерация {}, nonce: {}, хэш: {}, время вычисления хэша: {} секунд",
-                iteration_count, block.nonce, hash, hash_duration
+            debug!(
+                iteration = iteration_count,
+                nonce = block.nonce,
+                hash = %hash,
+                hash_duration_secs = hash_duration,
+                "Итерация майнинга"
             );
             if hash.starts_with(&"0".repeat(difficulty as usize)) {
                 block.hash = hash;
@@ -610,9 +607,11 @@ impl Blockchain {
                     .unwrap()
                     .as_secs_f64();
                 let avg_hash_time = if iteration_count > 0 { total_hash_time / iteration_count as f64 } else { 0.0 };
-                println!(
-                    "Подходящий хэш найден после {} итераций за {} секунд, среднее время хэширования: {} секунд",
-                    iteration_count, total_duration, avg_hash_time
+                info!(
+                    iterations = iteration_count,
+                    duration_secs = total_duration,
+                    avg_hash_time_secs = avg_hash_time,
+                    "Подходящий хэш найден"
                 );
                 let _ = progress_tx.send(format!(
                     "Подходящий хэш найден после {} итераций за {} секунд",
@@ -627,9 +626,11 @@ impl Blockchain {
                     .unwrap()
                     .as_secs_f64();
                 let avg_hash_time = if iteration_count > 0 { total_hash_time / iteration_count as f64 } else { 0.0 };
-                println!(
-                    "Прогресс майнинга: {} итераций выполнено за {} секунд, среднее время хэширования: {} секунд",
-                    iteration_count, progress_duration, avg_hash_time
+                debug!(
+                    iterations = iteration_count,
+                    progress_duration_secs = progress_duration,
+                    avg_hash_time_secs = avg_hash_time,
+                    "Прогресс майнинга"
                 );
                 let _ = progress_tx.send(format!("Прогресс майнинга: {} итераций за {} секунд", iteration_count, progress_duration));
             }
@@ -638,13 +639,13 @@ impl Blockchain {
 
     fn add_transaction(&mut self, transaction: Transaction) -> bool {
         let start_time = SystemTime::now();
-        println!("Начало добавления транзакции: {:?}", transaction);
+        debug!(?transaction, "Начало добавления транзакции");
         if transaction.sender.is_empty() || transaction.receiver.is_empty() {
             let duration = SystemTime::now()
                 .duration_since(start_time)
                 .unwrap()
                 .as_secs_f64();
-            println!("Ошибка: Пустой адрес отправителя или получателя, проверка заняла {} секунд", duration);
+            warn!(duration_secs = duration, "Пустой адрес отправителя или получателя");
             return false;
         }
         if self.pending_transactions.contains(&transaction) {
@@ -652,7 +653,7 @@ impl Blockchain {
                 .duration_since(start_time)
                 .unwrap()
                 .as_secs_f64();
-            println!("Транзакция уже существует в pending_transactions, проверка заняла {} секунд", duration);
+            warn!(duration_secs = duration, "Транзакция уже существует в pending_transactions");
             return false;
         }
         let key = transaction.id.as_bytes();
@@ -662,7 +663,7 @@ impl Blockchain {
                 .duration_since(start_time)
                 .unwrap()
                 .as_secs_f64();
-            println!("Транзакция с ID {} уже существует в LevelDB, проверка заняла {} секунд", transaction.id, duration);
+            warn!(txid = %transaction.id, duration_secs = duration, "Транзакция уже существует в LevelDB");
             return false;
         }
         for existing_tx in &self.pending_transactions {
@@ -672,15 +673,18 @@ impl Blockchain {
                     .duration_since(start_time)
                     .unwrap()
                     .as_secs_f64();
-                println!(
-                    "Ошибка: Конфликт транзакции {} с существующей транзакцией {} для кошелька {}, проверка заняла {} секунд",
-                    transaction.id, existing_tx.id, transaction.sender, duration
+                warn!(
+                    txid = %transaction.id,
+                    existing_txid = %existing_tx.id,
+                    wallet = %transaction.sender,
+                    duration_secs = duration,
+                    "Конфликт транзакции"
                 );
                 return false;
             }
         }
         if let Some(sender_balance) = self.balances.get(&transaction.sender) {
-            println!("Баланс отправителя {}: {}", transaction.sender, sender_balance);
+            debug!(sender = %transaction.sender, balance = *sender_balance, "Баланс отправителя");
             if *sender_balance >= transaction.amount {
                 self.balances.entry(transaction.receiver.clone()).or_insert(0);
                 let value = match serde_json::to_vec(&transaction) {
@@ -690,7 +694,7 @@ impl Blockchain {
                             .duration_since(start_time)
                             .unwrap()
                             .as_secs_f64();
-                        println!("Ошибка сериализации транзакции {}: {}, проверка заняла {} секунд", transaction.id, e, duration);
+                        error!(txid = %transaction.id, error = %e, duration_secs = duration, "Ошибка сериализации транзакции");
                         return false;
                     }
                 };
@@ -699,7 +703,7 @@ impl Blockchain {
                         .duration_since(start_time)
                         .unwrap()
                         .as_secs_f64();
-                    println!("Ошибка сохранения транзакции {} в LevelDB: {}, проверка заняла {} секунд", transaction.id, e, duration);
+                    error!(txid = %transaction.id, error = %e, duration_secs = duration, "Ошибка сохранения транзакции в LevelDB");
                     return false;
                 }
                 drop(db);
@@ -709,16 +713,19 @@ impl Blockchain {
                     .duration_since(start_time)
                     .unwrap()
                     .as_secs_f64();
-                println!("Транзакция добавлена и сохранена в LevelDB за {} секунд: {:?}", duration, self.pending_transactions);
+                info!(duration_secs = duration, pending_count = self.pending_transactions.len(), "Транзакция добавлена и сохранена в LevelDB");
                 return true;
             } else {
                 let duration = SystemTime::now()
                     .duration_since(start_time)
                     .unwrap()
                     .as_secs_f64();
-                println!(
-                    "Ошибка: Недостаточно средств у {} (баланс: {}, требуется: {}), проверка заняла {} секунд",
-                    transaction.sender, sender_balance, transaction.amount, duration
+                warn!(
+                    sender = %transaction.sender,
+                    balance = *sender_balance,
+                    required = transaction.amount,
+                    duration_secs = duration,
+                    "Недостаточно средств"
                 );
                 return false;
             }
@@ -727,97 +734,98 @@ impl Blockchain {
             .duration_since(start_time)
             .unwrap()
             .as_secs_f64();
-        println!(
-            "Ошибка: Адрес отправителя {} не найден, проверка заняла {} секунд",
-            transaction.sender, duration
+        warn!(
+            sender = %transaction.sender,
+            duration_secs = duration,
+            "Адрес отправителя не найден"
         );
         false
     }
 
     fn validate_chain(&self) -> bool {
         let start_time = SystemTime::now();
-        println!("Начало валидации цепочки блоков");
+        info!("Начало валидации цепочки блоков");
         if self.chain.is_empty() {
-            println!("Цепочка пуста, невалидна");
+            warn!("Цепочка пуста, невалидна");
             return false;
         }
 
         let genesis_block = &self.chain[0];
-        println!("Проверка генезис-блока: index={}, previous_hash={}", genesis_block.index, genesis_block.previous_hash);
+        info!(index = genesis_block.index, previous_hash = %genesis_block.previous_hash, "Проверка генезис-блока");
         if genesis_block.index != 0 || genesis_block.previous_hash != "0" {
-            println!("Некорректный генезис-блок: {:?}", genesis_block);
+            warn!(?genesis_block, "Некорректный генезис-блок");
             return false;
         }
         let genesis_hash = self.calculate_hash(genesis_block);
-        println!("Вычисленный хэш генезис-блока: {}, сохранённый хэш: {}", genesis_hash, genesis_block.hash);
+        debug!(calculated_hash = %genesis_hash, stored_hash = %genesis_block.hash, "Хэш генезис-блока");
         if genesis_block.hash != genesis_hash {
-            println!("Некорректный хэш генезис-блока: {:?}", genesis_block);
+            warn!(?genesis_block, "Некорректный хэш генезис-блока");
             return false;
         }
 
         // Восстанавливаем балансы из цепочки блоков, начиная с пустого состояния
         let mut expected_balances: HashMap<String, u64> = HashMap::new();
-        println!("Начальная инициализация expected_balances: {:?}", expected_balances);
+        debug!(?expected_balances, "Начальная инициализация expected_balances");
 
         // Применяем все транзакции из цепочки блоков
         for block in &self.chain {
-            println!("Обработка блока {} с {} транзакциями", block.index, block.transactions.len());
+            info!(block_index = block.index, tx_count = block.transactions.len(), "Обработка блока");
             for tx in &block.transactions {
-                println!("Обработка транзакции {}: sender={}, receiver={}, amount={}", tx.id, tx.sender, tx.receiver, tx.amount);
+                debug!(txid = %tx.id, sender = %tx.sender, receiver = %tx.receiver, amount = tx.amount, "Обработка транзакции");
                 // Пропускаем проверку баланса для отправителя "genesis"
                 if tx.sender != "genesis" {
                     let sender_balance = expected_balances.get(&tx.sender).unwrap_or(&0);
-                    println!("Текущий баланс отправителя {}: {}", tx.sender, sender_balance);
+                    debug!(sender = %tx.sender, balance = *sender_balance, "Текущий баланс отправителя");
                     if *sender_balance < tx.amount {
-                        println!("Недостаточно средств у {} в блоке {} для транзакции {}: требуется {}, доступно {}", tx.sender, block.index, tx.id, tx.amount, sender_balance);
+                        warn!(sender = %tx.sender, block_index = block.index, txid = %tx.id, required = tx.amount, available = *sender_balance, "Недостаточно средств в блоке");
                         return false;
                     }
                     *expected_balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
-                    println!("Баланс отправителя {} уменьшен на {}: новый баланс {}", tx.sender, tx.amount, expected_balances.get(&tx.sender).unwrap_or(&0));
+                    debug!(sender = %tx.sender, amount = tx.amount, new_balance = expected_balances.get(&tx.sender).unwrap_or(&0), "Баланс отправителя уменьшен");
                 } else {
-                    println!("Отправитель 'genesis', пропуск проверки баланса");
+                    debug!("Отправитель 'genesis', пропуск проверки баланса");
                 }
                 *expected_balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
-                println!("Баланс получателя {} увеличен на {}: новый баланс {}", tx.receiver, tx.amount, expected_balances.get(&tx.receiver).unwrap_or(&0));
-                println!("Обновлённые expected_balances после транзакции {}: {:?}", tx.id, expected_balances);
+                debug!(receiver = %tx.receiver, amount = tx.amount, new_balance = expected_balances.get(&tx.receiver).unwrap_or(&0), "Баланс получателя увеличен");
+                debug!(txid = %tx.id, ?expected_balances, "Обновлённые expected_balances после транзакции");
             }
         }
 
         // Проверяем неподтверждённые транзакции
         let mut temp_balances = expected_balances.clone();
-        println!("Проверка неподтверждённых транзакций, начальные temp_balances: {:?}", temp_balances);
+        debug!(?temp_balances, "Проверка неподтверждённых транзакций, начальные temp_balances");
         for tx in &self.pending_transactions {
-            println!("Обработка неподтверждённой транзакции {}: sender={}, receiver={}, amount={}", tx.id, tx.sender, tx.receiver, tx.amount);
+            debug!(txid = %tx.id, sender = %tx.sender, receiver = %tx.receiver, amount = tx.amount, "Обработка неподтверждённой транзакции");
             let sender_balance = temp_balances.get(&tx.sender).unwrap_or(&0);
-            println!("Текущий баланс отправителя {} в temp_balances: {}", tx.sender, sender_balance);
+            debug!(sender = %tx.sender, balance = *sender_balance, "Текущий баланс отправителя в temp_balances");
             if *sender_balance < tx.amount {
-                println!("Недостаточно средств у {} в pending_transactions для транзакции {}: требуется {}, доступно {}", tx.sender, tx.id, tx.amount, sender_balance);
+                warn!(sender = %tx.sender, txid = %tx.id, required = tx.amount, available = *sender_balance, "Недостаточно средств в pending_transactions");
                 return false;
             }
             *temp_balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
             *temp_balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
-            println!("Баланс отправителя {} уменьшен на {}: новый баланс {}", tx.sender, tx.amount, temp_balances.get(&tx.sender).unwrap_or(&0));
-            println!("Баланс получателя {} увеличен на {}: новый баланс {}", tx.receiver, tx.amount, temp_balances.get(&tx.receiver).unwrap_or(&0));
-            println!("Обновлённые temp_balances после pending транзакции {}: {:?}", tx.id, temp_balances);
+            debug!(sender = %tx.sender, amount = tx.amount, new_balance = temp_balances.get(&tx.sender).unwrap_or(&0), "Баланс отправителя уменьшен");
+            debug!(receiver = %tx.receiver, amount = tx.amount, new_balance = temp_balances.get(&tx.receiver).unwrap_or(&0), "Баланс получателя увеличен");
+            debug!(txid = %tx.id, ?temp_balances, "Обновлённые temp_balances после pending транзакции");
         }
 
         // Проверяем структуру цепочки
         for i in 1..self.chain.len() {
             let current_block = &self.chain[i];
             let previous_block = &self.chain[i - 1];
-            println!("Проверка блока {}: index={}, previous_hash={}", i, current_block.index, current_block.previous_hash);
+            debug!(block_index = i, current_index = current_block.index, previous_hash = %current_block.previous_hash, "Проверка блока");
             if current_block.index != previous_block.index + 1 {
-                println!("Некорректный индекс блока {}: ожидалось {}, получено {}", i, previous_block.index + 1, current_block.index);
+                warn!(block_index = i, expected_index = previous_block.index + 1, actual_index = current_block.index, "Некорректный индекс блока");
                 return false;
             }
             if current_block.previous_hash != previous_block.hash {
-                println!("Некорректный previous_hash в блоке {}: ожидалось {}, получено {}", i, previous_block.hash, current_block.previous_hash);
+                warn!(block_index = i, expected_hash = %previous_block.hash, actual_hash = %current_block.previous_hash, "Некорректный previous_hash");
                 return false;
             }
             let current_hash = self.calculate_hash(current_block);
-            println!("Вычисленный хэш блока {}: {}, сохранённый хэш: {}", i, current_hash, current_block.hash);
+            debug!(block_index = i, calculated_hash = %current_hash, stored_hash = %current_block.hash, "Хэш блока");
             if current_block.hash != current_hash {
-                println!("Некорректный хэш в блоке {}: {:?}", i, current_block);
+                warn!(block_index = i, ?current_block, "Некорректный хэш в блоке");
                 return false;
             }
         }
@@ -833,9 +841,9 @@ impl Blockchain {
             .filter(|(_, v)| **v != 0)
             .map(|(k, v)| (k.clone(), *v))
             .collect();
-        println!("Сверка восстановленных балансов: {:?} с хранимыми: {:?}", reconstructed, stored);
+        debug!(?reconstructed, ?stored, "Сверка восстановленных балансов");
         if reconstructed != stored {
-            println!("Восстановленные балансы не совпадают с хранимыми");
+            warn!("Восстановленные балансы не совпадают с хранимыми");
             return false;
         }
 
@@ -843,7 +851,7 @@ impl Blockchain {
             .duration_since(start_time)
             .unwrap()
             .as_secs_f64();
-        println!("Валидация цепочки завершена за {} секунд", duration);
+        info!(duration_secs = duration, "Валидация цепочки завершена");
         true
     }
 
@@ -851,10 +859,10 @@ impl Blockchain {
         let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
         for tx in &self.pending_transactions {
             let key = tx.id.as_bytes();
-            println!("Сохранение транзакции с ID {} в LevelDB", tx.id);
+            debug!(txid = %tx.id, "Сохранение транзакции в LevelDB");
             match db.get(key) {
                 Some(_) => {
-                    println!("Транзакция {} уже существует в LevelDB, пропуск", tx.id);
+                    debug!(txid = %tx.id, "Транзакция уже существует в LevelDB, пропуск");
                     continue;
                 }
                 None => {
@@ -883,33 +891,33 @@ impl Node {
             sync_rx: mpsc::channel().1,
         };
         thread::spawn(move || {
-            println!("Фоновый поток майнинга запущен в потоке {:?}", thread::current().id());
+            info!("Фоновый поток майнинга запущен");
             let mut mining_count = 0;
             let mut total_duration = 0.0;
             let mut successful_mining = 0;
             while let Ok(task) = mining_rx.recv() {
                 mining_count += 1;
-                println!("Получена задача майнинга {} в потоке {:?}", mining_count, thread::current().id());
+                info!(mining_count, "Получена задача майнинга");
                 let progress_tx_clone = task.progress_tx.clone();
                 let status_tx_clone = task.status_tx.clone();
                 let start_time = SystemTime::now();
                 let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    println!("Попытка захвата Mutex для blockchain в задаче {}", mining_count);
+                    debug!(mining_count, "Попытка захвата Mutex для blockchain");
                     let lock_start_time = SystemTime::now();
                     let mut blockchain = task.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                     let lock_duration = SystemTime::now().duration_since(lock_start_time).unwrap().as_secs_f64();
-                    println!("Захват Mutex для blockchain в задаче {} занял {} секунд", mining_count, lock_duration);
-                    println!("Проверка транзакции в задаче {}: {:?}", mining_count, task.transaction);
+                    debug!(mining_count, lock_duration_secs = lock_duration, "Захват Mutex для blockchain");
+                    debug!(mining_count, ?task.transaction, "Проверка транзакции");
                     if blockchain.add_transaction(task.transaction.clone()) {
-                        println!("Транзакция в задаче {} успешно добавлена, начало майнинга", mining_count);
+                        info!(mining_count, "Транзакция успешно добавлена, начало майнинга");
                         blockchain.mine_block(progress_tx_clone)
                     } else {
-                        println!("Транзакция в задаче {} отклонена, попытка майнить существующие транзакции", mining_count);
+                        warn!(mining_count, "Транзакция отклонена, попытка майнить существующие транзакции");
                         if !blockchain.pending_transactions.is_empty() {
                             blockchain.mine_block(progress_tx_clone)
                         } else {
                             let _ = task.progress_tx.send(format!("Ошибка: Нет транзакций для майнинга в задаче {}", mining_count));
-                            println!("Ошибка: Нет транзакций для майнинга в задаче {}", mining_count);
+                            warn!(mining_count, "Нет транзакций для майнинга");
                             None
                         }
                     }
@@ -920,7 +928,7 @@ impl Node {
                             Some(s) => s.to_string(),
                             None => format!("Неизвестная паника: {:?}", panic),
                         };
-                        println!("Паника в потоке майнинга {}: {}", mining_count, err_msg);
+                        error!(mining_count, error = %err_msg, "Паника в потоке майнинга");
                         let _ = task.progress_tx.send(format!("Паника в потоке майнинга {}: {}", mining_count, err_msg));
                         None
                     }
@@ -930,7 +938,7 @@ impl Node {
                     .unwrap()
                     .as_secs_f64();
                 total_duration += duration;
-                println!("Майнинг {} завершен за {} секунд с результатом: {:?}", mining_count, duration, result);
+                info!(mining_count, duration_secs = duration, result = ?result, "Майнинг завершен");
                 let mut attempts = 0;
                 let max_attempts = 5;
                 let mut status_updated = false;
@@ -939,7 +947,7 @@ impl Node {
                         *mining_status = match result {
                             Some(block) => {
                                 successful_mining += 1;
-                                println!("Майнинг {} успешен, блок добавлен: {:?}", mining_count, block);
+                                info!(mining_count, ?block, "Майнинг успешен, блок добавлен");
                                 let _ = status_tx_clone.send(format!("Транзакция отправлена, блок добавлен: {:?}", block));
                                 let mut node_temp = Node {
                                     blockchain: task.blockchain.clone(),
@@ -951,32 +959,32 @@ impl Node {
                                 MiningStatus::Completed(Some(block))
                             }
                             None => {
-                                println!("Майнинг {} не удался: нет транзакций или превышен лимит итераций/таймаут", mining_count);
+                                warn!(mining_count, "Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут");
                                 let _ = status_tx_clone.send("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут".to_string());
                                 MiningStatus::Failed("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут".to_string())
                             }
                         };
                         status_updated = true;
-                        println!("Статус майнинга {} обновлён: {:?}", mining_count, *mining_status);
+                        debug!(mining_count, ?mining_status, "Статус майнинга обновлён");
                         break;
                     } else {
                         attempts += 1;
-                        println!("Попытка {} обновить статус майнинга {} не удалась", attempts, mining_count);
+                        debug!(attempts, mining_count, "Попытка обновить статус майнинга не удалась");
                         std::thread::sleep(Duration::from_millis(500));
                     }
                 }
                 if !status_updated {
-                    println!("Не удалось обновить статус майнинга {} после {} попыток", mining_count, max_attempts);
+                    warn!(mining_count, max_attempts, "Не удалось обновить статус майнинга после попыток");
                     let _ = task.progress_tx.send(format!("Ошибка: Не удалось обновить статус майнинга {} после {} попыток", mining_count, max_attempts));
                     let _ = status_tx_clone.send(format!("Ошибка: Не удалось обновить статус майнинга после {} попыток", max_attempts));
                 }
                 if mining_count > 0 {
                     let avg_duration = total_duration / mining_count as f64;
-                    println!("Среднее время майнинга после {} задач: {} секунд", mining_count, avg_duration);
-                    println!("Успешных майнингов: {}, Неуспешных: {}", successful_mining, mining_count - successful_mining);
+                    debug!(mining_count, avg_duration_secs = avg_duration, "Среднее время майнинга");
+                    debug!(mining_count, successful = successful_mining, failed = mining_count - successful_mining, "Статистика майнинга");
                 }
             }
-            println!("Фоновый поток майнинга завершен");
+            info!("Фоновый поток майнинга завершен");
         });
         node
     }
@@ -1003,7 +1011,7 @@ impl Node {
             .duration_since(start_time)
             .unwrap()
             .as_secs_f64();
-        println!("Обнаружение пиров завершено за {} секунд: {:?}", duration, *peers);
+        debug!(duration_secs = duration, peers = ?*peers, "Обнаружение пиров завершено");
     }
 
     fn add_peer(&mut self, address: String) -> bool {
@@ -1014,7 +1022,7 @@ impl Node {
                 .duration_since(start_time)
                 .unwrap()
                 .as_secs_f64();
-            println!("Пир {} уже существует, добавление не требуется, заняло {} секунд", address, duration);
+            debug!(peer = %address, duration_secs = duration, "Пир уже существует, добавление не требуется");
             return false;
         }
         peers.push(address.clone());
@@ -1034,7 +1042,7 @@ impl Node {
             .duration_since(start_time)
             .unwrap()
             .as_secs_f64();
-        println!("Пир {} добавлен за {} секунд", address, duration);
+        info!(peer = %address, duration_secs = duration, "Пир добавлен");
         true
     }
 
@@ -1077,7 +1085,7 @@ impl Node {
                                     total_read += read;
                                 }
                                 let request = String::from_utf8_lossy(&buffer[..total_read]).to_string();
-                                println!("Получен запрос: {}", request);
+                                debug!(request = %request, "Получен запрос");
 
                                 if request == "GET_BLOCKCHAIN" {
                                     let blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
@@ -1087,14 +1095,14 @@ impl Node {
                                     data.extend_from_slice(response.as_bytes());
                                     if writer.write_all(&data).is_ok() {
                                         writer.flush().ok();
-                                        println!("Отправлен блокчейн клиенту");
+                                        info!("Отправлен блокчейн клиенту");
                                     }
                                 } else if request.starts_with("UPDATE_BLOCKCHAIN:") {
                                     let blockchain_data = request.strip_prefix("UPDATE_BLOCKCHAIN:").unwrap_or("");
                                     let mut temp_blockchain: BlockchainDeserialize = match serde_json::from_str(blockchain_data) {
                                         Ok(data) => data,
                                         Err(e) => {
-                                            println!("Ошибка десериализации данных блокчейна: {}", e);
+                                            error!(error = %e, "Ошибка десериализации данных блокчейна");
                                             return;
                                         }
                                     };
@@ -1115,13 +1123,13 @@ impl Node {
                                         for tx in temp_blockchain.pending_transactions.iter() {
                                             if !merged_pending.iter().any(|t: &Transaction| t.id == tx.id) && new_blockchain.add_transaction(tx.clone()) {
                                                 merged_pending.push(tx.clone());
-                                                println!("Добавлена транзакция от узла: {:?}", tx);
+                                                info!(?tx, "Добавлена транзакция от узла");
                                             }
                                         }
                                         for tx in current_pending.iter() {
                                             if !merged_pending.iter().any(|t| t.id == tx.id) && new_blockchain.add_transaction(tx.clone()) {
                                                 merged_pending.push(tx.clone());
-                                                println!("Сохранена локальная транзакция: {:?}", tx);
+                                                info!(?tx, "Сохранена локальная транзакция");
                                             }
                                         }
                                         new_blockchain.pending_transactions = merged_pending;
@@ -1131,13 +1139,13 @@ impl Node {
                                                 let key = tx.id.as_bytes();
                                                 let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
                                                 if let Err(e) = db.put(key, &value) {
-                                                    println!("Ошибка сохранения транзакции {} в LevelDB: {}", tx.id, e);
+                                                    error!(txid = %tx.id, error = %e, "Ошибка сохранения транзакции в LevelDB");
                                                 }
                                             }
                                             drop(db);
                                             *blockchain = new_blockchain;
                                             blockchain.save_state();
-                                            println!("Блокчейн обновлён через UPDATE_BLOCKCHAIN");
+                                            info!("Блокчейн обновлён через UPDATE_BLOCKCHAIN");
                                             let _ = sync_tx.send(Blockchain {
                                                 chain: temp_blockchain.chain,
                                                 balances: temp_blockchain.balances,
@@ -1146,7 +1154,7 @@ impl Node {
                                                 db: blockchain.db.clone(),
                                             });
                                         } else {
-                                            println!("Полученный блокчейн не прошёл валидацию");
+                                            warn!("Полученный блокчейн не прошёл валидацию");
                                         }
                                     } else {
                                         // Обновляем только pending_transactions, добавляя только валидные
@@ -1154,24 +1162,24 @@ impl Node {
                                         for tx in temp_blockchain.pending_transactions.iter() {
                                             if !new_pending.iter().any(|t| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
                                                 new_pending.push(tx.clone());
-                                                println!("Добавлена транзакция от узла: {:?}", tx);
+                                                info!(?tx, "Добавлена транзакция от узла");
                                             }
                                         }
                                         for tx in current_pending.iter() {
                                             if !new_pending.iter().any(|t| t.id == tx.id) && blockchain.add_transaction(tx.clone()) {
                                                 new_pending.push(tx.clone());
-                                                println!("Сохранена локальная транзакция: {:?}", tx);
+                                                info!(?tx, "Сохранена локальная транзакция");
                                             }
                                         }
                                         blockchain.pending_transactions = new_pending;
                                         blockchain.save_state();
-                                        println!("Обновлены pending_transactions через UPDATE_BLOCKCHAIN");
+                                        info!("Обновлены pending_transactions через UPDATE_BLOCKCHAIN");
                                     }
                                 }
                             }
                         });
                     }
-                    Err(e) => println!("Ошибка обработки входящего соединения: {}", e),
+                    Err(e) => error!(error = %e, "Ошибка обработки входящего соединения"),
                 }
             }
         });
@@ -1179,7 +1187,7 @@ impl Node {
             .duration_since(start_time)
             .unwrap()
             .as_secs_f64();
-        println!("Сервер запущен на порту {} за {} секунд", port, duration);
+        info!(port, duration_secs = duration, "Сервер запущен");
     }
     fn sync_blockchain(&mut self, sync_tx: mpsc::Sender<Blockchain>) {
         let start_time = SystemTime::now();
@@ -1189,7 +1197,7 @@ impl Node {
             .iter()
             .cloned()
             .collect();
-        println!("Список пиров для синхронизации: {:?}", peers);
+        info!(peers = ?peers, "Список пиров для синхронизации");
 
         // Получаем текущее состояние блокчейна
         let blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
@@ -1201,19 +1209,19 @@ impl Node {
         let current_balances = blockchain.balances.clone();
         let wallet_address = self.address.clone();
         let existing_db = blockchain.db.clone();
-        println!("Текущая длина chain: {}, содержимое: {:?}", current_chain_length, blockchain.chain);
+        debug!(current_chain_length, chain = ?blockchain.chain, "Текущая длина chain");
         drop(blockchain); // Освобождаем блокировку
 
         for peer in peers.iter() {
             let addr: SocketAddr = match peer.parse() {
                 Ok(addr) => addr,
                 Err(e) => {
-                    println!("Некорректный адрес пира {}: {}", peer, e);
+                    warn!(peer = %peer, error = %e, "Некорректный адрес пира");
                     continue;
                 }
             };
             if current_chain_length <= 1 {
-                println!("Новый узел, только получение данных, отправка цепочки запрещена");
+                info!("Новый узел, только получение данных, отправка цепочки запрещена");
                 continue; // Пропускаем отправку UPDATE_BLOCKCHAIN
             }
             // Отправка UPDATE_BLOCKCHAIN
@@ -1227,7 +1235,7 @@ impl Node {
                 data.extend_from_slice(message.as_bytes());
                 if writer.write_all(&data).is_ok() {
                     writer.flush().ok();
-                    println!("Блокчейн отправлен узлу {}, длина сообщения: {} байт", peer, data.len());
+                    info!(peer = %peer, message_len = data.len(), "Блокчейн отправлен узлу");
                 }
                 drop(blockchain);
             }
@@ -1257,11 +1265,11 @@ impl Node {
                             total_read += read;
                         }
                         let response = String::from_utf8_lossy(&buffer[..total_read]).to_string();
-                        println!("Получен ответ от узла {}: длина {} байт", peer, response.len());
+                        debug!(peer = %peer, response_len = response.len(), "Получен ответ от узла");
                         match serde_json::from_str::<BlockchainDeserialize>(&response) {
                             Ok(received_blockchain) => {
                                 if received_blockchain.chain.is_empty() || received_blockchain.chain.len() <= 1 {
-                                    println!("Получена пустая или минимальная цепочка (длина {}) от узла {}, игнорируем", received_blockchain.chain.len(), peer);
+                                    info!(peer = %peer, chain_len = received_blockchain.chain.len(), "Получена пустая или минимальная цепочка, игнорируем");
                                     continue;
                                 }
                                 let temp_blockchain = Blockchain {
@@ -1271,7 +1279,7 @@ impl Node {
                                     pending_transactions: received_blockchain.pending_transactions.clone(),
                                     db: existing_db.clone(),
                                 };
-                                println!("Полученная цепочка от узла {}: длина {}, содержимое: {:?}", peer, temp_blockchain.chain.len(), temp_blockchain.chain);
+                                info!(peer = %peer, chain_len = temp_blockchain.chain.len(), chain = ?temp_blockchain.chain, "Полученная цепочка от узла");
                                 let received_hash = temp_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
                                 let received_timestamp = temp_blockchain.chain.last().map(|b| b.timestamp).unwrap_or(0);
                                 let received_block_count = temp_blockchain.chain.iter().filter(|b| !b.transactions.is_empty()).count();
@@ -1292,7 +1300,7 @@ impl Node {
                                             new_blockchain.add_transaction(tx.clone()) {
                                             merged_pending.push(tx.clone());
                                             added_transactions += 1;
-                                            println!("Добавлена транзакция от узла {}: {:?}", peer, tx);
+                                            info!(peer = %peer, ?tx, "Добавлена транзакция от узла");
                                         }
                                     }
 
@@ -1302,39 +1310,39 @@ impl Node {
                                             new_blockchain.add_transaction(tx.clone()) {
                                             merged_pending.push(tx.clone());
                                             added_transactions += 1;
-                                            println!("Сохранена локальная транзакция: {:?}", tx);
+                                            info!(?tx, "Сохранена локальная транзакция");
                                         }
                                     }
 
                                     new_blockchain.pending_transactions = merged_pending;
-                                    println!("Обновлено {} pending_transactions с узла {}", added_transactions, peer);
+                                    info!(added_transactions, peer = %peer, "Обновлено pending_transactions с узла");
 
                                     if new_blockchain.validate_chain() {
                                         let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                                         let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
                                         let chain_data = serde_json::to_vec(&new_blockchain.chain).expect("Ошибка сериализации chain");
-                                        println!("Сохраняемый chain: длина {}, размер {} байт", new_blockchain.chain.len(), chain_data.len());
+                                        debug!(chain_len = new_blockchain.chain.len(), chain_size = chain_data.len(), "Сохраняемый chain");
                                         for tx in &new_blockchain.pending_transactions {
                                             let key = tx.id.as_bytes();
                                             let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
                                             if let Err(e) = db.put(key, &value) {
-                                                println!("Ошибка сохранения транзакции {} в LevelDB: {}", tx.id, e);
+                                                error!(txid = %tx.id, error = %e, "Ошибка сохранения транзакции в LevelDB");
                                             }
                                         }
                                         if let Err(e) = db.put(b"chain", &chain_data) {
-                                            println!("Ошибка сохранения chain в LevelDB: {}", e);
+                                            error!(error = %e, "Ошибка сохранения chain в LevelDB");
                                         }
                                         if let Err(e) = db.put(b"balances", &serde_json::to_vec(&new_blockchain.balances).unwrap()) {
-                                            println!("Ошибка сохранения balances в LevelDB: {}", e);
+                                            error!(error = %e, "Ошибка сохранения balances в LevelDB");
                                         }
                                         if let Err(e) = db.put(b"difficulty", &serde_json::to_vec(&new_blockchain.difficulty).unwrap()) {
-                                            println!("Ошибка сохранения difficulty в LevelDB: {}", e);
+                                            error!(error = %e, "Ошибка сохранения difficulty в LevelDB");
                                         }
                                         db.flush().expect("Ошибка при фиксации данных в LevelDB");
                                         drop(db);
                                         *blockchain = new_blockchain;
                                         blockchain.save_state();
-                                        println!("Блокчейн обновлён с узла {}, новая длина chain: {}", peer, blockchain.chain.len());
+                                        info!(peer = %peer, new_chain_len = blockchain.chain.len(), "Блокчейн обновлён с узла");
                                         let _ = sync_tx.send(Blockchain {
                                             chain: blockchain.chain.clone(),
                                             balances: blockchain.balances.clone(),
@@ -1343,7 +1351,7 @@ impl Node {
                                             db: existing_db.clone(),
                                         });
                                     } else {
-                                        println!("Полученный блокчейн с узла {} не прошёл валидацию после объединения", peer);
+                                        warn!(peer = %peer, "Полученный блокчейн с узла не прошёл валидацию после объединения");
                                     }
                                 } else {
                                     let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
@@ -1355,7 +1363,7 @@ impl Node {
                                             blockchain.add_transaction(tx.clone()) {
                                             new_pending.push(tx.clone());
                                             added_transactions += 1;
-                                            println!("Добавлена транзакция от узла {}: {:?}", peer, tx);
+                                            info!(peer = %peer, ?tx, "Добавлена транзакция от узла");
                                         }
                                     }
                                     for tx in current_pending.iter() {
@@ -1364,18 +1372,18 @@ impl Node {
                                             blockchain.add_transaction(tx.clone()) {
                                             new_pending.push(tx.clone());
                                             added_transactions += 1;
-                                            println!("Сохранена локальная транзакция: {:?}", tx);
+                                            info!(?tx, "Сохранена локальная транзакция");
                                         }
                                     }
                                     blockchain.pending_transactions = new_pending;
-                                    println!("Обновлено {} pending_transactions с узла {}", added_transactions, peer);
+                                    info!(added_transactions, peer = %peer, "Обновлено pending_transactions с узла");
                                     blockchain.save_state();
                                 }
                             }
-                            Err(e) => println!("Ошибка десериализации блокчейна от узла {}: {}", peer, e),
+                            Err(e) => error!(peer = %peer, error = %e, "Ошибка десериализации блокчейна от узла"),
                         }
                     } else {
-                        println!("Узел {} недоступен", peer);
+                        debug!(peer = %peer, "Узел недоступен");
                     }
                 }
             }
@@ -1384,7 +1392,7 @@ impl Node {
             .duration_since(start_time)
             .unwrap()
             .as_secs_f64();
-        println!("Синхронизация блокчейна завершена за {} секунд", duration);
+        info!(duration_secs = duration, "Синхронизация блокчейна завершена");
     }
 }
 
@@ -1401,7 +1409,7 @@ impl eframe::App for WalletApp {
             let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
             let received_hash = received_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
             if received_blockchain.chain.is_empty() || received_blockchain.chain.len() <= 1 {
-                println!("Получена пустая или минимальная цепочка через sync_rx, игнорируем");
+                debug!("Получена пустая или минимальная цепочка через sync_rx, игнорируем");
                 continue;
             }
             let current_balance = blockchain.balances.get(&self.wallet_address).cloned().unwrap_or(0);
@@ -1412,21 +1420,21 @@ impl eframe::App for WalletApp {
                     let key = tx.id.as_bytes();
                     let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
                     if let Err(e) = db.put(key, &value) {
-                        println!("Ошибка сохранения транзакции {} в LevelDB: {}", tx.id, e);
+                        error!(txid = %tx.id, error = %e, "Ошибка сохранения транзакции в LevelDB");
                     }
                 }
                 drop(db);
                 *blockchain = received_blockchain;
                 blockchain.save_state();
-                println!("UI: Блокчейн обновлён через канал синхронизации");
+                info!("UI: Блокчейн обновлён через канал синхронизации");
                 if current_balance != received_balance {
-                    println!("Баланс кошелька {} изменился с {} на {}, запрашивается перерисовка", self.wallet_address, current_balance, received_balance);
+                    info!(wallet = %self.wallet_address, old_balance = current_balance, new_balance = received_balance, "Баланс кошелька изменился, запрашивается перерисовка");
                     ctx.request_repaint();
                 } else {
-                    println!("Баланс кошелька {} не изменился ({}), перерисовка не требуется", self.wallet_address, current_balance);
+                    debug!(wallet = %self.wallet_address, balance = current_balance, "Баланс кошелька не изменился, перерисовка не требуется");
                 }
             } else {
-                println!("Полученный блокчейн через канал синхронизации не длиннее или не прошёл валидацию");
+                debug!("Полученный блокчейн через канал синхронизации не длиннее или не прошёл валидацию");
             }
         }
 
@@ -1436,11 +1444,11 @@ impl eframe::App for WalletApp {
                 if self.status.starts_with("Транзакция отправлена") {
                     if let Ok(mut mining_status) = self.mining_status.lock() {
                         *mining_status = MiningStatus::Idle;
-                        println!("Статус майнинга сброшен на Idle");
+                        debug!("Статус майнинга сброшен на Idle");
                     }
                     self.progress_rx = None;
                 }
-                println!("Получено обновление статуса: {}", self.status);
+                debug!(status = %self.status, "Получено обновление статуса");
                 ctx.request_repaint();
             }
         }
@@ -1465,7 +1473,7 @@ impl eframe::App for WalletApp {
                 ui.horizontal(|ui| {
                     if ui.button("Войти").clicked() {
                         let start_time = SystemTime::now();
-                        println!("Кнопка 'Войти' нажата, адрес: {}, пароль: {}", self.wallet_address, self.password);
+                        info!(wallet_address = %self.wallet_address, "Кнопка 'Войти' нажата");
                         let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
                         let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
                         let config_path = exe_dir.join("config.json");
@@ -1479,7 +1487,7 @@ impl eframe::App for WalletApp {
                                         .duration_since(start_time)
                                         .unwrap()
                                         .as_secs_f64();
-                                    println!("Аутентификация успешна за {} секунд", duration);
+                                    info!(duration_secs = duration, "Аутентификация успешна");
                                     // Баланс не устанавливается при входе
                                 } else {
                                     self.status = "Неверный адрес кошелька".to_string();
@@ -1487,7 +1495,7 @@ impl eframe::App for WalletApp {
                                         .duration_since(start_time)
                                         .unwrap()
                                         .as_secs_f64();
-                                    println!("Аутентификация не удалась за {} секунд: неверный адрес кошелька", duration);
+                                    warn!(duration_secs = duration, "Аутентификация не удалась: неверный адрес кошелька");
                                 }
                             }
                             Err(e) => {
@@ -1496,14 +1504,14 @@ impl eframe::App for WalletApp {
                                     .duration_since(start_time)
                                     .unwrap()
                                     .as_secs_f64();
-                                println!("Аутентификация не удалась за {} секунд: {}", duration, e);
+                                error!(duration_secs = duration, error = %e, "Аутентификация не удалась");
                             }
                         }
                         ctx.request_repaint();
                     }
                     if ui.button("Регистрация").clicked() {
                         let start_time = SystemTime::now();
-                        println!("Кнопка 'Регистрация' нажата, пароль: {}", self.new_wallet_password);
+                        info!("Кнопка 'Регистрация' нажата");
                         let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
                         let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
                         let config_path = exe_dir.join("config.json");
@@ -1513,7 +1521,7 @@ impl eframe::App for WalletApp {
                                 .duration_since(start_time)
                                 .unwrap()
                                 .as_secs_f64();
-                            println!("Ошибка регистрации за {} секунд: пустой пароль", duration);
+                            warn!(duration_secs = duration, "Ошибка регистрации: пустой пароль");
                         } else {
                             match wallet::Wallet::new(&self.new_wallet_password, &config_path) {
                                 Ok(wallet) => {
@@ -1526,7 +1534,7 @@ impl eframe::App for WalletApp {
                                         .duration_since(start_time)
                                         .unwrap()
                                         .as_secs_f64();
-                                    println!("Регистрация успешна за {} секунд, адрес: {}", duration, self.wallet_address);
+                                    info!(duration_secs = duration, wallet_address = %self.wallet_address, "Регистрация успешна");
                                     let mut blockchain = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                                     if !blockchain.balances.contains_key(&self.wallet_address) {
                                         if !blockchain.grant_initial_balance_to_first_wallet(&self.wallet_address) {
@@ -1536,7 +1544,7 @@ impl eframe::App for WalletApp {
                                         // Дополнительно сохраняем балансы в LevelDB явно
                                         let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
                                         if let Err(e) = db.put(b"balances", &serde_json::to_vec(&blockchain.balances).unwrap()) {
-                                            println!("Ошибка сохранения балансов в LevelDB: {}", e);
+                                            error!(error = %e, "Ошибка сохранения балансов в LevelDB");
                                         }
                                         db.flush().expect("Ошибка при фиксации данных в LevelDB");
                                     }
@@ -1547,7 +1555,7 @@ impl eframe::App for WalletApp {
                                         .duration_since(start_time)
                                         .unwrap()
                                         .as_secs_f64();
-                                    println!("Ошибка регистрации за {} секунд: {}", duration, e);
+                                    error!(duration_secs = duration, error = %e, "Ошибка регистрации");
                                 }
                             }
                         }
@@ -1569,11 +1577,11 @@ impl eframe::App for WalletApp {
                 ui.text_edit_singleline(&mut self.receiver_address);
                 ui.text_edit_singleline(&mut self.amount);
 
-                if let Some(ref progress_rx) = self.progress_rx {
+if let Some(ref progress_rx) = self.progress_rx {
                     while let Ok(progress) = progress_rx.try_recv() {
                         let mut mining_progress = self.mining_progress.lock().expect("Не удалось захватить Mutex для mining_progress");
                         *mining_progress = Some(progress);
-                        println!("Прогресс майнинга обновлён в UI: {:?}", *mining_progress);
+                        debug!(?mining_progress, "Прогресс майнинга обновлён в UI");
                     }
                 }
 
@@ -1589,17 +1597,14 @@ impl eframe::App for WalletApp {
                     ctx.request_repaint();
                 } else if ui.button("Отправить").clicked() {
                     let start_time = SystemTime::now();
-                    println!(
-                        "Кнопка 'Отправить' нажата, получатель: {}, сумма: {}",
-                        self.receiver_address, self.amount
-                    );
+                    info!(receiver = %self.receiver_address, amount = %self.amount, "Кнопка 'Отправить' нажата");
                     if self.receiver_address.trim().is_empty() {
                         self.status = "Адрес получателя не может быть пустым".to_string();
                         let duration = SystemTime::now()
                             .duration_since(start_time)
                             .unwrap()
                             .as_secs_f64();
-                        println!("Ошибка: пустой адрес получателя, проверка заняла {} секунд", duration);
+                        warn!(duration_secs = duration, "Пустой адрес получателя");
                         ctx.request_repaint();
                         return;
                     }
@@ -1610,7 +1615,7 @@ impl eframe::App for WalletApp {
                                 .duration_since(start_time)
                                 .unwrap()
                                 .as_secs_f64();
-                            println!("Ошибка: сумма равна нулю, проверка заняла {} секунд", duration);
+                            warn!(duration_secs = duration, "Сумма равна нулю");
                             ctx.request_repaint();
                             return;
                         }
@@ -1626,17 +1631,14 @@ impl eframe::App for WalletApp {
 
                         {
                             let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                            println!("Транзакция для добавления: {:?}", transaction);
+                            debug!(?transaction, "Транзакция для добавления");
                             if !blockchain.add_transaction(transaction.clone()) {
                                 self.status = "Недостаточно средств или неверный адрес".to_string();
                                 let duration = SystemTime::now()
                                     .duration_since(start_time)
                                     .unwrap()
                                     .as_secs_f64();
-                                println!(
-                                    "Ошибка: недостаточно средств или неверный адрес, проверка заняла {} секунд",
-                                    duration
-                                );
+                                warn!(duration_secs = duration, "Недостаточно средств или неверный адрес");
                                 ctx.request_repaint();
                                 return;
                             }
@@ -1644,11 +1646,11 @@ impl eframe::App for WalletApp {
                                 .duration_since(start_time)
                                 .unwrap()
                                 .as_secs_f64();
-                            println!("Транзакция успешно добавлена за {} секунд", duration);
+                            info!(duration_secs = duration, "Транзакция успешно добавлена");
                         }
 
                         self.status = "Запуск майнинга...".to_string();
-                        println!("Подготовка к отправке задачи майнинга в потоке {:?}", thread::current().id());
+                        info!("Подготовка к отправке задачи майнинга");
                         let (progress_tx, progress_rx) = mpsc::channel();
                         let (status_tx, status_rx) = mpsc::channel();
                         {
@@ -1656,20 +1658,20 @@ impl eframe::App for WalletApp {
                             *mining_progress = None;
                             self.progress_rx = Some(progress_rx);
                             self.status_rx = Some(status_rx);
-                            println!("Каналы прогресса и статуса созданы");
+                            debug!("Каналы прогресса и статуса созданы");
                         }
                         if let Ok(mut mining_status) = self.mining_status.lock() {
                             *mining_status = MiningStatus::Mining;
-                            println!("Статус майнинга установлен: Mining");
+                            info!("Статус майнинга установлен: Mining");
                         } else {
                             self.status = "Ошибка: Не удалось установить статус майнинга".to_string();
-                            println!("Ошибка: Не удалось установить статус майнинга");
+                            error!("Не удалось установить статус майнинга");
                             self.progress_rx = None;
                             self.status_rx = None;
                             ctx.request_repaint();
                             return;
                         }
-                        println!("Попытка отправки задачи майнинга");
+                        info!("Попытка отправки задачи майнинга");
                         if let Err(e) = self.mining_tx.send(MiningTask {
                             blockchain,
                             transaction,
@@ -1678,22 +1680,22 @@ impl eframe::App for WalletApp {
                             status_tx,
                         }) {
                             self.status = format!("Ошибка отправки задачи майнинга: {}", e);
-                            println!("Ошибка отправки задачи майнинга: {}", e);
+                            error!(error = %e, "Ошибка отправки задачи майнинга");
                             if let Ok(mut mining_status) = self.mining_status.lock() {
                                 *mining_status = MiningStatus::Idle;
-                                println!("Статус майнинга сброшен на Idle");
+                                debug!("Статус майнинга сброшен на Idle");
                             }
                             self.progress_rx = None;
                             self.status_rx = None;
                             ctx.request_repaint();
                             return;
                         }
-                        println!("Задача майнинга успешно отправлена");
+                        info!("Задача майнинга успешно отправлена");
                         let duration = SystemTime::now()
                             .duration_since(start_time)
                             .unwrap()
                             .as_secs_f64();
-                        println!("Запуск майнинга завершён за {} секунд", duration);
+                        info!(duration_secs = duration, "Запуск майнинга завершён");
                         ctx.request_repaint();
                     } else {
                         self.status = "Неверный формат суммы".to_string();
@@ -1701,7 +1703,7 @@ impl eframe::App for WalletApp {
                             .duration_since(start_time)
                             .unwrap()
                             .as_secs_f64();
-                        println!("Ошибка: неверный формат суммы, проверка заняла {} секунд", duration);
+                        warn!(duration_secs = duration, port = %self.port, "Неверный формат суммы");
                         ctx.request_repaint();
                     }
                 }
@@ -1715,7 +1717,7 @@ impl eframe::App for WalletApp {
                 });
                 if ui.button("Найти кошелёк").clicked() {
                     let start_time = SystemTime::now();
-                    println!("Кнопка 'Найти кошелёк' нажата, IP: {}, Порт: {}", self.ip, self.port);
+                    info!(ip = %self.ip, port = %self.port, "Кнопка 'Найти кошелёк' нажата");
                     let ip = self.ip.trim();
                     if ip.is_empty() {
                         self.status = "IP-адрес не может быть пустым".to_string();
@@ -1723,7 +1725,7 @@ impl eframe::App for WalletApp {
                             .duration_since(start_time)
                             .unwrap()
                             .as_secs_f64();
-                        println!("Ошибка: пустой IP-адрес, проверка заняла {} секунд", duration);
+                        warn!(duration_secs = duration, "Пустой IP-адрес");
                     } else if let Ok(port_num) = self.port.trim().parse::<u16>() {
                         let address = format!("{}:{}", ip, port_num);
                         if let Some(wallet) = self.node.find_wallet_by_ip(ip, port_num) {
@@ -1733,14 +1735,14 @@ impl eframe::App for WalletApp {
                                     .duration_since(start_time)
                                     .unwrap()
                                     .as_secs_f64();
-                                println!("Кошелёк найден: {} для {}:{} и добавлен в network.json, поиск занял {} секунд", wallet, ip, port_num, duration);
+                                info!(wallet = %wallet, ip = %ip, port = port_num, duration_secs = duration, "Кошелёк найден и добавлен в network.json");
                             } else {
                                 self.status = format!("Найден кошелёк: {} для {}:{}, уже существует в network.json", wallet, ip, port_num);
                                 let duration = SystemTime::now()
                                     .duration_since(start_time)
                                     .unwrap()
                                     .as_secs_f64();
-                                println!("Кошелёк найден: {} для {}:{}, уже существует в network.json, поиск занял {} секунд", wallet, ip, port_num, duration);
+                                info!(wallet = %wallet, ip = %ip, port = port_num, duration_secs = duration, "Кошелёк найден, уже существует в network.json");
                             }
                         } else {
                             self.status = format!("Кошелёк не найден для {}:{}", ip, port_num);
@@ -1748,7 +1750,7 @@ impl eframe::App for WalletApp {
                                 .duration_since(start_time)
                                 .unwrap()
                                 .as_secs_f64();
-                            println!("Кошелёк не найден для {}:{}, поиск занял {} секунд", ip, port_num, duration);
+                            warn!(ip = %ip, port = port_num, duration_secs = duration, "Кошелёк не найден");
                         }
                     } else {
                         self.status = "Неверный формат порта".to_string();
@@ -1756,7 +1758,7 @@ impl eframe::App for WalletApp {
                             .duration_since(start_time)
                             .unwrap()
                             .as_secs_f64();
-                        println!("Ошибка: неверный формат порта {}, проверка заняла {} секунд", self.port, duration);
+                        warn!(port = %self.port, duration_secs = duration, "Неверный формат порта");
                     }
                     ctx.request_repaint();
                 }
@@ -1766,12 +1768,17 @@ impl eframe::App for WalletApp {
 }
 
 fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_target(false)
+        .init();
+
     let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
     let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
     let config_path = exe_dir.join("config.json");
 
     let config_content = fs::read_to_string(&config_path).unwrap_or_else(|err| {
-        eprintln!("Ошибка чтения {}: {}. Используются значения по умолчанию.", config_path.display(), err);
+        warn!("Ошибка чтения {}: {}. Используются значения по умолчанию.", config_path.display(), err);
         r#"{"wallet": {"name": "", "password": "", "port": 8081, "ip": "127.0.0.1"}}"#.to_string()
     });
     let config: Config = serde_json::from_str(&config_content).expect("Ошибка парсинга конфигурации");
@@ -1779,13 +1786,13 @@ fn main() {
     let network_path = exe_dir.join("network.json");
     let network_config: NetworkConfig = match fs::read_to_string(&network_path) {
         Ok(content) => serde_json::from_str(&content).unwrap_or_else(|err| {
-            eprintln!("Ошибка парсинга network.json: {}. Используются значения по умолчанию.", err);
+            warn!("Ошибка парсинга network.json: {}. Используются значения по умолчанию.", err);
             NetworkConfig {
                 peers: vec!["127.0.0.1:8081".to_string(), "127.0.0.1:8082".to_string(), "127.0.0.1:8083".to_string()],
             }
         }),
         Err(err) => {
-            eprintln!("Ошибка чтения network.json: {}. Используются значения по умолчанию.", err);
+            warn!("Ошибка чтения network.json: {}. Используются значения по умолчанию.", err);
             NetworkConfig {
                 peers: vec!["127.0.0.1:8081".to_string(), "127.0.0.1:8082".to_string(), "127.0.0.1:8083".to_string()],
             }
@@ -1798,7 +1805,7 @@ fn main() {
 
     let (mining_tx, mining_rx) = mpsc::channel();
     let (sync_tx, sync_rx) = mpsc::channel();
-    println!("Каналы майнинга и синхронизации созданы");
+    info!("Каналы майнинга и синхронизации созданы");
 
     let mut node = Node::new(format!("{}:{}", config.wallet.ip, config.wallet.port), mining_rx, sync_tx.clone(), config.wallet.port);
     node.start_server(config.wallet.port, sync_tx.clone());
@@ -1846,9 +1853,9 @@ fn main() {
     };
 
     ctrlc::set_handler(move || {
-        println!("Получен сигнал завершения, сохранение состояния...");
+        info!("Получен сигнал завершения, сохранение состояния...");
         save_on_exit(blockchain.clone());
-        println!("Состояние сохранено, выход...");
+        info!("Состояние сохранено, выход...");
         std::process::exit(0);
     }).expect("Ошибка установки обработчика завершения");
 
@@ -2300,7 +2307,7 @@ mod tests {
             let bal = bc.balances.get(&addrs[i]).copied().unwrap_or(0);
             assert_eq!(bal, expected[i], "Узел {}: баланс кошелька не совпал", i + 1);
             assert!(bc.validate_chain(), "Узел {}: цепочка не прошла валидацию", i + 1);
-            println!("Узел {}: баланс кошелька = {}, длина цепочки = {}", i + 1, bal, bc.chain.len());
+            info!(node = i + 1, balance = bal, chain_len = bc.chain.len(), "Узел: баланс кошелька и длина цепочки");
         }
 
         if let Some(saved) = saved_net {
@@ -2410,11 +2417,11 @@ mod tests {
             let bc = nodes[i].1.lock().unwrap();
             let bal = bc.balances.get(&addrs[i]).copied().unwrap_or(0);
             assert!(bc.validate_chain(), "Узел {}: цепочка не прошла валидацию", i + 1);
-            println!("Узел {}: баланс кошелька = {}, длина цепочки = {}", i + 1, bal, bc.chain.len());
+            info!(node = i + 1, balance = bal, chain_len = bc.chain.len(), "Узел: баланс кошелька и длина цепочки");
             if bal != expected[i] {
-                println!("НЕВЕРНЫЙ БАЛАНС узла {}: ожидалось {}, получено {}", i + 1, expected[i], bal);
-                println!("Балансы узла {}: {:?}", i + 1, bc.balances);
-                println!("Цепочка узла {}: {:?}", i + 1, bc.chain);
+                error!(node = i + 1, expected = expected[i], actual = bal, "НЕВЕРНЫЙ БАЛАНС узла");
+                error!(node = i + 1, balances = ?bc.balances, "Балансы узла");
+                error!(node = i + 1, chain = ?bc.chain, "Цепочка узла");
                 panic!("Узел {}: баланс кошелька не совпал: ожидалось {}, получено {}", i + 1, expected[i], bal);
             }
         }

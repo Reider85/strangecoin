@@ -20,3 +20,5 @@ base64 = "0.22.1"
 aes-gcm = "0.10"
 ed25519-dalek =  { version = "2.2.0", features = ["rand_core", "pem", "pkcs8","serde","alloc","std"] }
 thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

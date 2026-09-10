@@ -17,6 +17,7 @@ use std::path::Path;
 use uuid::Uuid;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use tracing::{info};
 
 #[derive(Serialize, Deserialize)]
 pub struct Keystore {
@@ -106,7 +107,7 @@ impl Wallet {
             .duration_since(start_time)
             .map_err(|e| format!("Time calculation error: {}", e))?
             .as_secs_f64();
-        println!("Wallet created in {} seconds, public key: {}", duration, public_key_base64);
+        info!(duration_secs = duration, public_key = %public_key_base64, "Wallet created");
 
         Ok(Wallet {
             public_key,
@@ -180,7 +181,7 @@ impl Wallet {
             .duration_since(start_time)
             .map_err(|e| format!("Time calculation error: {}", e))?
             .as_secs_f64();
-        println!("Wallet loaded in {} seconds, public key: {}", duration, public_key_base64);
+        info!(duration_secs = duration, public_key = %public_key_base64, "Wallet loaded");
 
         Ok(Wallet {
             public_key,
