@@ -9,7 +9,7 @@ use pbkdf2::{
     Pbkdf2,
 };
 use rand::rngs::OsRng;
-use secp256k1::{Message, PublicKey, SecretKey, Secp256k1, ecdsa::Signature};
+use secp256k1::{Message, PublicKey, SecretKey, Secp256k1, ecdsa::{Signature, RecoverableSignature, RecoveryId}};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
@@ -190,13 +190,17 @@ impl Wallet {
         })
     }
 
-    pub fn sign(&self, message: &[u8]) -> Result<[u8; 64], String> {
+    pub fn sign(&self, message: &[u8]) -> Result<[u8; 65], String> {
         let secret_key = self.private_key.as_ref().ok_or("Private key is missing")?;
         let secp = Secp256k1::new();
         let msg = Message::from_digest_slice(message)
             .map_err(|e| format!("Invalid message for signing: {}", e))?;
-        let sig: Signature = secp.sign_ecdsa(&msg, secret_key);
-        Ok(sig.serialize_compact())
+        let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&msg, secret_key);
+        let (rec_id, sig_bytes) = sig.serialize_compact();
+        let mut out = [0u8; 65];
+        out[..64].copy_from_slice(&sig_bytes);
+        out[64] = rec_id.to_i32() as u8;
+        Ok(out)
     }
 
     pub fn verify(sig: &[u8; 64], message: &[u8], pk: &PublicKey) -> bool {
@@ -213,14 +217,8 @@ impl Wallet {
     }
 
     pub fn sign_transaction(&self, transaction: &super::Transaction) -> Result<String, String> {
-        let message = format!(
-            "{}{}{}{}",
-            transaction.id,
-            transaction.sender,
-            transaction.receiver,
-            transaction.amount
-        );
-        let signature = self.sign(message.as_bytes())?;
+        let message = crate::serialize::hash_transaction(transaction);
+        let signature = self.sign(&message)?;
         Ok(BASE64.encode(signature))
     }
 }
