@@ -2,6 +2,7 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
+use blake3;
 use pbkdf2::{
     password_hash::{
         rand_core::RngCore, PasswordHash, PasswordHasher, SaltString,
@@ -18,6 +19,7 @@ use uuid::Uuid;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use tracing::{info};
+use crate::error::StrangecoinError;
 
 #[derive(Serialize, Deserialize)]
 pub struct Keystore {
@@ -216,9 +218,12 @@ impl Wallet {
         secp.verify_ecdsa(&msg, &signature, pk).is_ok()
     }
 
-    pub fn sign_transaction(&self, transaction: &super::Transaction) -> Result<String, String> {
-        let message = crate::serialize::hash_transaction(transaction);
-        let signature = self.sign(&message)?;
-        Ok(BASE64.encode(signature))
+    pub fn sign_transaction(&self, transaction: &mut super::Transaction) -> Result<(), StrangecoinError> {
+        let message_bytes = crate::serialize::serialize_transaction(transaction);
+        let message_hash = blake3::hash(&message_bytes);
+        let signature = self.sign(message_hash.as_bytes())
+            .map_err(|_e| StrangecoinError::InvalidSignature)?;
+        transaction.signature = signature.to_vec();
+        Ok(())
     }
 }

@@ -1,94 +1,43 @@
-0.0.1 first realisation
-0.0.2 config
-0.0.3 config
-0.0.4 send 
-0.0.5 send fix and ip fix
-0.0.6 send fix and ip fix
-0.0.7 fix thread error
-0.0.8 send fix and ip fix
-0.0.9 sleep fix
-0.1.0 mining logging
-0.1.1 mining timing
-0.1.2 mining run fix
-0.1.3 mining run fix
-0.1.4 mining run fix
-0.1.5 self fix
-0.1.6 mining thread run fix
-0.1.7 mining thread run fix
-0.1.8 mining thread run fix
-0.1.9 mining thread run fix
-0.2.0 mining status fix
-0.2.1 mining status fix
-0.2.2 mining status fix
-0.2.3 mining thread run fix
-0.2.4 mining thread run fix
-0.2.5 mining one operation one block fix
-0.2.6 mining one operation one block fix
-0.2.7 mining one operation one block fix
-0.2.8 mining ui fix
-0.2.9 sync blockchain
-0.3.0 sync blockchain
-0.3.1 sync blockchain
-0.3.2 sync blockchain
-0.3.3 find by ip
-0.3.4 network save ip
-0.3.5 save transaction level db
-0.3.6 crashed fix
-0.3.7 synchronized fix
-0.3.8 sync blockchain many operations
-0.3.9 db load fix
-0.4.0 several wallets test
-0.4.1 ip in config
-0.4.2 ip in config
-0.4.3 db load fix
-0.4.4 db load fix
-0.4.5 db load fix
-0.4.6 db load fix
-0.4.7 db logging
-0.4.8 db save fix
-0.4.9 sync blockchain
-0.5.0 debug save transactions
-0.5.1 debug save transactions
-0.5.2 debug save transactions
-0.5.3 debug save transactions
-0.5.4 debug save transactions
-0.5.5 sync blockchain
-0.5.6 sync blockchain
-0.5.7 sync blockchain
-0.5.8 sync transaction
-0.5.9 sync transaction
-0.6.0 sync transaction
-0.6.1 sync transaction
-0.6.2 sync transaction
-0.6.3 sync transaction
-0.6.4 sync transaction
-0.6.5 sync transaction
-0.6.6 sync transaction
-0.6.7 sync transaction
-0.6.8 sync transaction
-0.6.9 sync first transaction
-0.7.0 repaint fix
-0.7.1 register
-0.7.2 wrong symbols
-0.7.3 sync transaction
-0.7.4 find by ip
-0.7.5 balances problem
-0.7.6 balances problem
-0.7.7 balances problem
-0.7.8 balances problem
-0.7.9 balances problem
-0.8.0 balances problem
-0.8.1 balances problem
-0.8.2 balances problem
-0.8.3 genesis block problem
-0.8.4 genesis block problem
-0.8.5 sync problem
-0.8.6 validate chain
-0.8.7 grant block + validate_chain + test
-0.8.8 run 3 wallets script
-0.8.9 deterministic genesis
-0.9.0 analytics
-0.9.1 analytics
-0.9.2 analytics
-0.9.3 repo setup: LICENSE (MIT/Apache-2.0), ADR-0004/0005, .gitignore, CONTRIBUTING.md, removed [wallet] from Cargo.toml
-0.9.4 module skeleton: error.rs + 10 module stubs (blockchain, consensus, network, mempool, storage, api, cli, gui, economics, governance), thiserror dep
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- **P06: Canonical Binary Serialization** — `serialize.rs` module
+  - `serialize_transaction()`: canonical unsigned tx encoding (format_version, length-prefixed strings, BE integers)
+  - `serialize_transaction_signed()`: unsigned encoding + length-prefixed signature
+  - `txid()`: blake3 hash of signed transaction bytes (32-byte commitment)
+  - `serialize_block_header()`: format_version, index, timestamp, previous_hash, merkle_root, nonce
+  - `serialize_block()`: header + length-prefixed transaction count + signed transactions
+  - `block_hash()`: blake3 hash of block header
+  - Golden vector tests (12 test cases) for transactions, blocks, and hashes to prevent encoding drift
+  - Uses `blake3` for consensus hashing (faster than SHA-256, standardized)
+- **P05: Replay Protection** — chain_id, nonce, address_from_public_key
+  - Extended `Transaction` struct with `nonce`, `chain_id`, `signature`, `is_coinbase` fields
+  - Removed legacy `id` field (will be replaced by `txid` in P07)
+  - Created `AccountState` struct with `balance` and `nonce` for account tracking
+  - Added chain ID constants in `consensus/mod.rs`: MAINNET=1, TESTNET=2, REGTEST=3
+  - Implemented `address_from_public_key()` in `address.rs` using base64 encoding
+  - Created canonical binary serialization in `serialize.rs` with blake3 hashing
+  - Updated `add_transaction` validation:
+    - Rejects transactions with mismatched `chain_id`
+    - Rejects transactions with invalid `nonce` (must be `account.nonce + 1`)
+    - Verifies ECDSA signatures via secp256k1 public key recovery
+    - Updates sender/receiver balances and nonces atomically
+  - Updated `wallet::sign_transaction()` to sign canonical binary bytes
+  - Updated genesis block and test transaction creation with new fields
+  - Added `hex` and `blake3` dependencies to Cargo.toml
+  - Added `recovery` feature to secp256k1 for signature recovery
+
+### Changed
+- `balances` HashMap now maps `String -> AccountState` instead of `String -> u64`
+- LevelDB transaction keys changed from UUID to `sender:nonce` format
+- Signature format changed from 64-byte compact to 65-byte recoverable (64 bytes + recovery ID)
+
+### Fixed
+- Backward compatibility: new Transaction fields use `#[serde(default)]` for existing LevelDB data

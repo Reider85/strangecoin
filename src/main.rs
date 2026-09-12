@@ -19,6 +19,8 @@ use std::io::{BufReader, BufWriter};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use tracing::{info, warn, error, debug};
+use hex;
+use blake3;
 mod wallet;
 mod error;
 mod blockchain;
@@ -61,8 +63,8 @@ struct Block {
     index: u64,
     timestamp: u64,
     transactions: Vec<Transaction>,
-    previous_hash: String,
-    hash: String,
+    previous_hash: String,  // hex-encoded blake3 hash (32 bytes = 64 hex chars)
+    hash: String,           // hex-encoded blake3 hash (32 bytes = 64 hex chars)
     nonce: u64,
 }
 
@@ -366,7 +368,7 @@ impl Blockchain {
             index: 0,
             timestamp: 0,
             transactions: vec![genesis_transaction],
-            previous_hash: "0".to_string(),
+            previous_hash: "0".repeat(64),
             hash: String::new(),
             nonce: 0,
         };
@@ -470,17 +472,8 @@ impl Blockchain {
 
     fn calculate_hash(&self, block: &Block) -> String {
         let start_time = SystemTime::now();
-        let input = format!(
-            "{}{}{}{}{}",
-            block.index,
-            block.timestamp,
-            serde_json::to_string(&block.transactions).unwrap(),
-            block.previous_hash,
-            block.nonce
-        );
-        let mut hasher = Sha256::new();
-        hasher.update(input);
-        let hash = format!("{:x}", hasher.finalize());
+        let hash_bytes = crate::serialize::block_hash(block);
+        let hash = hex::encode(hash_bytes);
         let duration = SystemTime::now()
             .duration_since(start_time)
             .unwrap()
@@ -713,8 +706,9 @@ impl Blockchain {
                 return false;
             }
             let secp = Secp256k1::new();
-            let msg_bytes = crate::serialize::hash_transaction(&transaction);
-            let msg = Message::from_digest_slice(&msg_bytes).expect("message digest");
+            let msg_bytes = crate::serialize::serialize_transaction(&transaction);
+            let msg_hash = blake3::hash(&msg_bytes);
+            let msg = Message::from_digest_slice(msg_hash.as_bytes()).expect("message digest");
             if transaction.signature.len() != 65 {
                 let duration = SystemTime::now()
                     .duration_since(start_time)
@@ -837,7 +831,7 @@ impl Blockchain {
 
         let genesis_block = &self.chain[0];
         info!(index = genesis_block.index, previous_hash = %genesis_block.previous_hash, "Проверка генезис-блока");
-        if genesis_block.index != 0 || genesis_block.previous_hash != "0" {
+        if genesis_block.index != 0 || genesis_block.previous_hash != "0".repeat(64) {
             warn!(?genesis_block, "Некорректный генезис-блок");
             return false;
         }
@@ -1733,33 +1727,17 @@ if let Some(ref progress_rx) = self.progress_rx {
                                     return;
                                 }
                             };
-                            let signature_b64 = match wallet.sign_transaction(&transaction) {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    self.status = format!("Ошибка подписи транзакции: {}", e);
-                                    let duration = SystemTime::now()
-                                        .duration_since(start_time)
-                                        .unwrap()
-                                        .as_secs_f64();
-                                    error!(duration_secs = duration, error = %e, "Ошибка подписи транзакции");
-                                    ctx.request_repaint();
-                                    return;
-                                }
+                            let mut transaction = transaction;
+                            if let Err(e) = wallet.sign_transaction(&mut transaction) {
+                                self.status = format!("Ошибка подписи транзакции: {}", e);
+                                let duration = SystemTime::now()
+                                    .duration_since(start_time)
+                                    .unwrap()
+                                    .as_secs_f64();
+                                error!(duration_secs = duration, error = %e, "Ошибка подписи транзакции");
+                                ctx.request_repaint();
+                                return;
                             };
-                            let signature = match BASE64.decode(&signature_b64) {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    self.status = format!("Ошибка декодирования подписи: {}", e);
-                                    let duration = SystemTime::now()
-                                        .duration_since(start_time)
-                                        .unwrap()
-                                        .as_secs_f64();
-                                    error!(duration_secs = duration, error = %e, "Ошибка декодирования подписи");
-                                    ctx.request_repaint();
-                                    return;
-                                }
-                            };
-                            transaction.signature = signature;
                         let blockchain = Arc::clone(&self.node.blockchain);
                         let mining_status = Arc::clone(&self.mining_status);
                         let mining_progress = Arc::clone(&self.mining_progress);
@@ -2154,8 +2132,9 @@ mod tests {
             };
 
             // Sign the transaction
-            let msg_bytes = crate::serialize::hash_transaction(&transaction);
-            let msg = Message::from_digest_slice(&msg_bytes).expect("message digest");
+            let msg_bytes = crate::serialize::serialize_transaction(&transaction);
+            let msg_hash = blake3::hash(&msg_bytes);
+            let msg = Message::from_digest_slice(msg_hash.as_bytes()).expect("message digest");
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&msg, &keypairs[s].1);
             let (rec_id, sig_bytes) = sig.serialize_compact();
             let mut sig_vec = Vec::with_capacity(65);
@@ -2316,8 +2295,9 @@ mod tests {
             };
             // Sign the transaction
             let secp = Secp256k1::new();
-            let msg_bytes = crate::serialize::hash_transaction(&tx);
-            let msg = Message::from_digest_slice(&msg_bytes).expect("message digest");
+            let msg_bytes = crate::serialize::serialize_transaction(&tx);
+            let msg_hash = blake3::hash(&msg_bytes);
+            let msg = Message::from_digest_slice(msg_hash.as_bytes()).expect("message digest");
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&msg, &keypairs[0].1);
             let (rec_id, sig_bytes) = sig.serialize_compact();
             let mut sig_vec = Vec::with_capacity(65);
@@ -2374,8 +2354,9 @@ mod tests {
                 signature: Vec::new(),
                 is_coinbase: false,
             };
-            let msg_bytes = crate::serialize::hash_transaction(&tx);
-            let msg = Message::from_digest_slice(&msg_bytes).expect("message digest");
+            let msg_bytes = crate::serialize::serialize_transaction(&tx);
+            let msg_hash = blake3::hash(&msg_bytes);
+            let msg = Message::from_digest_slice(msg_hash.as_bytes()).expect("message digest");
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&msg, &sk1);
             let (rec_id, sig_bytes) = sig.serialize_compact();
             let mut sig_vec = Vec::with_capacity(65);
@@ -2491,8 +2472,9 @@ mod tests {
                 signature: Vec::new(),
                 is_coinbase: false,
             };
-            let msg_bytes = crate::serialize::hash_transaction(&tx);
-            let msg = Message::from_digest_slice(&msg_bytes).expect("message digest");
+            let msg_bytes = crate::serialize::serialize_transaction(&tx);
+            let msg_hash = blake3::hash(&msg_bytes);
+            let msg = Message::from_digest_slice(msg_hash.as_bytes()).expect("message digest");
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&msg, &keypairs[0].1);
             let (rec_id, sig_bytes) = sig.serialize_compact();
             let mut sig_vec = Vec::with_capacity(65);
@@ -2621,8 +2603,9 @@ mod tests {
                 signature: Vec::new(),
                 is_coinbase: false,
             };
-            let msg_bytes = crate::serialize::hash_transaction(&tx);
-            let msg = Message::from_digest_slice(&msg_bytes).expect("message digest");
+            let msg_bytes = crate::serialize::serialize_transaction(&tx);
+            let msg_hash = blake3::hash(&msg_bytes);
+            let msg = Message::from_digest_slice(msg_hash.as_bytes()).expect("message digest");
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&msg, &keypairs[0].1);
             let (rec_id, sig_bytes) = sig.serialize_compact();
             let mut sig_vec = Vec::with_capacity(65);
