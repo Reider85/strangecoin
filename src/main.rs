@@ -697,38 +697,12 @@ impl Blockchain {
                 warn!(expected_nonce = sender_nonce + 1, got_nonce = transaction.nonce, duration_secs = duration, "Неверный nonce");
                 return false;
             }
-            if transaction.signature.is_empty() {
+            if let Err(e) = crate::consensus::verify_transaction(&transaction) {
                 let duration = SystemTime::now()
                     .duration_since(start_time)
                     .unwrap()
                     .as_secs_f64();
-                warn!(duration_secs = duration, "Пустая подпись для не-coinbase транзакции");
-                return false;
-            }
-            let secp = Secp256k1::new();
-            let msg_bytes = crate::serialize::serialize_transaction(&transaction);
-            let msg_hash = blake3::hash(&msg_bytes);
-            let msg = Message::from_digest_slice(msg_hash.as_bytes()).expect("message digest");
-            if transaction.signature.len() != 65 {
-                let duration = SystemTime::now()
-                    .duration_since(start_time)
-                    .unwrap()
-                    .as_secs_f64();
-                warn!(sig_len = transaction.signature.len(), duration_secs = duration, "Неверная длина подписи");
-                return false;
-            }
-            let mut sig_bytes = [0u8; 64];
-            sig_bytes.copy_from_slice(&transaction.signature[..64]);
-            let rec_id = RecoveryId::from_i32(transaction.signature[64] as i32).expect("valid recovery id");
-            let sig = RecoverableSignature::from_compact(&sig_bytes, rec_id).expect("signature");
-            let recovered_pk = secp.recover_ecdsa(&msg, &sig).expect("recover public key");
-            let recovered_address = crate::address::address_from_public_key(&recovered_pk);
-            if recovered_address != transaction.sender {
-                let duration = SystemTime::now()
-                    .duration_since(start_time)
-                    .unwrap()
-                    .as_secs_f64();
-                warn!(expected_sender = %transaction.sender, recovered_sender = %recovered_address, duration_secs = duration, "Подпись не соответствует отправителю");
+                warn!(error = %e, duration_secs = duration, "Валидация транзакции не удалась");
                 return false;
             }
         }
@@ -772,11 +746,10 @@ impl Blockchain {
                 sender_account.balance
             };
             if sender_balance >= transaction.amount {
+                // Balance will be updated when block is mined (in mine_block)
+                // Only update nonce here to prevent replay within mempool
                 let sender_account = self.balances.get_mut(&transaction.sender).unwrap();
-                sender_account.balance -= transaction.amount;
                 sender_account.nonce = transaction.nonce;
-                let receiver_account = self.balances.entry(transaction.receiver.clone()).or_default();
-                receiver_account.balance += transaction.amount;
             let value = match serde_json::to_vec(&transaction) {
                 Ok(value) => value,
                 Err(e) => {
@@ -840,6 +813,16 @@ impl Blockchain {
         if genesis_block.hash != genesis_hash {
             warn!(?genesis_block, "Некорректный хэш генезис-блока");
             return false;
+        }
+
+        // Валидация подписей всех транзакций в цепочке
+        for block in &self.chain {
+            for tx in &block.transactions {
+                if let Err(e) = crate::consensus::verify_transaction(tx) {
+                    warn!(block_index = block.index, tx = ?tx, error = %e, "Неверная подпись транзакции в блоке");
+                    return false;
+                }
+            }
         }
 
         // Восстанавливаем балансы из цепочки блоков, начиная с пустого состояния
