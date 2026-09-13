@@ -580,12 +580,14 @@ impl Blockchain {
     ) -> Option<Block> {
         let start_time = SystemTime::now();
         debug!("Начало mine_block_inner");
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mtp = crate::consensus::median_time_past(&self.chain, previous_block.index + 1);
         let mut block = Block {
             index: previous_block.index + 1,
-            timestamp: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            timestamp: now.max(mtp + 1),
             transactions,
             previous_hash: previous_block.hash.clone(),
             hash: String::new(),
@@ -802,6 +804,11 @@ impl Blockchain {
             return false;
         }
 
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
         let genesis_block = &self.chain[0];
         info!(index = genesis_block.index, previous_hash = %genesis_block.previous_hash, "Проверка генезис-блока");
         if genesis_block.index != 0 || genesis_block.previous_hash != "0".repeat(64) {
@@ -871,7 +878,7 @@ impl Blockchain {
             debug!(nonce = tx.nonce, ?temp_balances, "Обновлённые temp_balances после pending транзакции");
         }
 
-        // Проверяем структуру цепочки
+        // Проверяем структуру цепочки и timestamp'ы
         for i in 1..self.chain.len() {
             let current_block = &self.chain[i];
             let previous_block = &self.chain[i - 1];
@@ -882,6 +889,11 @@ impl Blockchain {
             }
             if current_block.previous_hash != previous_block.hash {
                 warn!(block_index = i, expected_hash = %previous_block.hash, actual_hash = %current_block.previous_hash, "Некорректный previous_hash");
+                return false;
+            }
+            // Валидация timestamp текущего блока
+            if let Err(e) = crate::consensus::validate_timestamp(current_block, &self.chain[..i], now) {
+                warn!(block_index = current_block.index, error = %e, "Некорректный timestamp блока");
                 return false;
             }
             let current_hash = self.calculate_hash(current_block);

@@ -18,4 +18,8 @@ pub enum StrangecoinError {
     SerializationError(#[from] serde_json::Error),
     #[error("leveldb error: {0}")]
     LeveldbError(#[from] rusty_leveldb::Status),
+    #[error("block timestamp too old: must be > median time past of last 11 blocks")]
+    TimestampTooOld,
+    #[error("block timestamp in future: must be <= now + 2 hours")]
+    TimestampInFuture,
 }

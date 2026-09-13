@@ -2,8 +2,40 @@ pub const CHAIN_ID_MAINNET: u32 = 1;
 pub const CHAIN_ID_TESTNET: u32 = 2;
 pub const CHAIN_ID_REGTEST: u32 = 3;
 
+pub const MEDIAN_TIME_WINDOW: usize = 11;
+pub const MAX_FUTURE_TIME: u64 = 2 * 60 * 60; // 2 hours
+
 pub fn current_chain_id() -> u32 {
     CHAIN_ID_REGTEST
+}
+
+pub fn median_time_past(blocks: &[crate::Block], current_height: u64) -> u64 {
+    if current_height == 0 {
+        return 0;
+    }
+    let start = current_height.saturating_sub(MEDIAN_TIME_WINDOW as u64);
+    let mut times: Vec<u64> = blocks[start as usize..].iter().map(|b| b.timestamp).collect();
+    times.sort();
+    times[times.len() / 2]
+}
+
+pub fn validate_timestamp(
+    block: &crate::Block,
+    prev_blocks: &[crate::Block],
+    now: u64,
+) -> Result<(), crate::error::StrangecoinError> {
+    // Genesis block (index 0) has timestamp 0 - allow it
+    if block.index == 0 {
+        return Ok(());
+    }
+    let mtp = median_time_past(prev_blocks, block.index);
+    if block.timestamp <= mtp {
+        return Err(crate::error::StrangecoinError::TimestampTooOld);
+    }
+    if block.timestamp > now + MAX_FUTURE_TIME {
+        return Err(crate::error::StrangecoinError::TimestampInFuture);
+    }
+    Ok(())
 }
 
 pub fn recover_pubkey_from_sig(signature: &[u8], message: &[u8]) -> Result<secp256k1::PublicKey, crate::error::StrangecoinError> {

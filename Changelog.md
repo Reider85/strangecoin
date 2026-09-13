@@ -5,39 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.8] - 2026-09-13
 
 ### Added
-- **P06: Canonical Binary Serialization** — `serialize.rs` module
-  - `serialize_transaction()`: canonical unsigned tx encoding (format_version, length-prefixed strings, BE integers)
-  - `serialize_transaction_signed()`: unsigned encoding + length-prefixed signature
-  - `txid()`: blake3 hash of signed transaction bytes (32-byte commitment)
-  - `serialize_block_header()`: format_version, index, timestamp, previous_hash, merkle_root, nonce
-  - `serialize_block()`: header + length-prefixed transaction count + signed transactions
-  - `block_hash()`: blake3 hash of block header
-  - Golden vector tests (12 test cases) for transactions, blocks, and hashes to prevent encoding drift
-  - Uses `blake3` for consensus hashing (faster than SHA-256, standardized)
-- **P05: Replay Protection** — chain_id, nonce, address_from_public_key
-  - Extended `Transaction` struct with `nonce`, `chain_id`, `signature`, `is_coinbase` fields
-  - Removed legacy `id` field (will be replaced by `txid` in P07)
-  - Created `AccountState` struct with `balance` and `nonce` for account tracking
-  - Added chain ID constants in `consensus/mod.rs`: MAINNET=1, TESTNET=2, REGTEST=3
-  - Implemented `address_from_public_key()` in `address.rs` using base64 encoding
-  - Created canonical binary serialization in `serialize.rs` with blake3 hashing
-  - Updated `add_transaction` validation:
-    - Rejects transactions with mismatched `chain_id`
-    - Rejects transactions with invalid `nonce` (must be `account.nonce + 1`)
-    - Verifies ECDSA signatures via secp256k1 public key recovery
-    - Updates sender/receiver balances and nonces atomically
-  - Updated `wallet::sign_transaction()` to sign canonical binary bytes
-  - Updated genesis block and test transaction creation with new fields
-  - Added `hex` and `blake3` dependencies to Cargo.toml
-  - Added `recovery` feature to secp256k1 for signature recovery
+- **P09: Median-time-past + future timestamp protection**
+  - `consensus::median_time_past()` — computes median timestamp of last 11 blocks (MTP)
+  - `consensus::validate_timestamp()` — enforces timestamp > MTP and timestamp ≤ now + 2 hours
+  - `consensus::MEDIAN_TIME_WINDOW = 11` — Bitcoin-style MTP window
+  - `consensus::MAX_FUTURE_TIME = 7200` — 2-hour future tolerance (per ARCHITECT3.md §6 vector #4)
+  - New error variants: `TimestampTooOld`, `TimestampInFuture` in `StrangecoinError`
 
 ### Changed
-- `balances` HashMap now maps `String -> AccountState` instead of `String -> u64`
-- LevelDB transaction keys changed from UUID to `sender:nonce` format
-- Signature format changed from 64-byte compact to 65-byte recoverable (64 bytes + recovery ID)
+- `mine_block_inner()` now sets `timestamp = max(now, mtp + 1)` ensuring mined blocks always pass timestamp validation
+- `validate_chain()` validates timestamp for every block (genesis block with timestamp=0 is allowed)
+
+### Security
+- Mitigates time-warp attack (STRIDE vector #4): prevents miners from manipulating timestamps to lower difficulty
+
+### Tests
+- All 24 integration tests pass including multi-node sync, concurrent transfers, and chain adoption
+
+## [0.8.7] - 2026-09-12
+
+### Added
+- **P07: txid commitment + full signature verification**
+  - `consensus::verify_transaction()` — centralized transaction signature verification using canonical binary serialization
+  - `consensus::recover_pubkey_from_sig()` — helper to recover public key from ECDSA recoverable signature
+  - `validate_chain()` now verifies all transaction signatures in every block (coinbase transactions skipped)
+  - `Blockchain::add_transaction()` delegates to `consensus::verify_transaction()` for DRY validation
 
 ### Fixed
-- Backward compatibility: new Transaction fields use `#[serde(default)]` for existing LevelDB data
+- **Double balance update bug**: Removed premature balance updates from `add_transaction()`. Balances now only update when blocks are mined in `mine_block()`, preventing balance drift during chain adoption/sync.
+
+### Changed
+- Transaction signature verification unified in consensus module (was duplicated inline in `add_transaction`)
+
+### Tests
+- All 24 integration tests pass including:
+  - `three_instances_receive_transfer` — multi-node sync with signature verification
+  - `no_rollback_on_shorter_chain` — chain adoption with balance reconciliation
+  - `real_network_three_nodes` / `real_network_fast_registration_race` — concurrent P2P operations
+  - `hundred_transactions_five_wallets` — stress test with many concurrent transfers
+
+## [0.8.6] - 2026-09-10
+
+### Added
+- Stage 0 foundation: module skeleton, tracing migration, secp256k1 wallet migration
+- Canonical binary serialization with blake3 (serialize.rs)
+- Chain ID, nonce, address derivation (P05)
+- Golden vector tests for serialization determinism
+
+### Changed
+- Migration from Ed25519 to secp256k1 (ECDSA) for EOA signatures
+- Structured logging via tracing crate (replaced println!)
