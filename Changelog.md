@@ -5,56 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.8] - 2026-09-13
+## [1.0.0] - 2026-09-14
 
 ### Added
-- **P09: Median-time-past + future timestamp protection**
-  - `consensus::median_time_past()` — computes median timestamp of last 11 blocks (MTP)
-  - `consensus::validate_timestamp()` — enforces timestamp > MTP and timestamp ≤ now + 2 hours
-  - `consensus::MEDIAN_TIME_WINDOW = 11` — Bitcoin-style MTP window
-  - `consensus::MAX_FUTURE_TIME = 7200` — 2-hour future tolerance (per ARCHITECT3.md §6 vector #4)
-  - New error variants: `TimestampTooOld`, `TimestampInFuture` in `StrangecoinError`
+- **P10: Deterministic genesis** (Stage 0 consensus hardening)
+  - `genesis.json` — canonical genesis configuration (format_version, network_id, chain_id, timestamp, initial_holder, initial_amount, block_reward, tail_emission_rate, max_supply_pre_tail, target_block_time, retarget_interval)
+  - Deterministic genesis keypair derived from fixed seed `strangecoin-genesis-seed-2026` (Stage 0; real offline key before mainnet freeze)
+  - `EXPECTED_GENESIS_HASH` constant — blake3 hash of genesis block header for mainnet anchor
+  - `load_genesis()` — loads and constructs genesis block from genesis.json
+  - `validate_genesis()` — enforces genesis hash match on startup (skipped for regtest)
+  - `is_regtest(network_id)` — detects regtest mode (network_id == 3) for test genesis generation
+  - `--print-genesis-hash` CLI command — outputs genesis hash for verification
+  - GenesisMismatch error — clear panic on genesis hash mismatch with expected/got values
+  - Units: satoshi-based (1 SC = 10^8 satoshi); `initial_amount=1_000_000_000` = 10 SC premine
 
 ### Changed
-- `mine_block_inner()` now sets `timestamp = max(now, mtp + 1)` ensuring mined blocks always pass timestamp validation
-- `validate_chain()` validates timestamp for every block (genesis block with timestamp=0 is allowed)
+- **Blockchain startup**: Replaced inline `create_genesis_block()` with `genesis.json`-driven genesis loading
+- **Existing DB**: Validates first block hash == `EXPECTED_GENESIS_HASH` on startup (unless regtest)
+- **Regtest mode**: Generates own genesis with chain_id=3, bypasses EXPECTED_GENESIS_HASH check
 
 ### Security
-- Mitigates time-warp attack (STRIDE vector #4): prevents miners from manipulating timestamps to lower difficulty
-
-### Tests
-- All 24 integration tests pass including multi-node sync, concurrent transfers, and chain adoption
-
-## [0.8.7] - 2026-09-12
-
-### Added
-- **P07: txid commitment + full signature verification**
-  - `consensus::verify_transaction()` — centralized transaction signature verification using canonical binary serialization
-  - `consensus::recover_pubkey_from_sig()` — helper to recover public key from ECDSA recoverable signature
-  - `validate_chain()` now verifies all transaction signatures in every block (coinbase transactions skipped)
-  - `Blockchain::add_transaction()` delegates to `consensus::verify_transaction()` for DRY validation
-
-### Fixed
-- **Double balance update bug**: Removed premature balance updates from `add_transaction()`. Balances now only update when blocks are mined in `mine_block()`, preventing balance drift during chain adoption/sync.
-
-### Changed
-- Transaction signature verification unified in consensus module (was duplicated inline in `add_transaction`)
-
-### Tests
-- All 24 integration tests pass including:
-  - `three_instances_receive_transfer` — multi-node sync with signature verification
-  - `no_rollback_on_shorter_chain` — chain adoption with balance reconciliation
-  - `real_network_three_nodes` / `real_network_fast_registration_race` — concurrent P2P operations
-  - `hundred_transactions_five_wallets` — stress test with many concurrent transfers
-
-## [0.8.6] - 2026-09-10
-
-### Added
-- Stage 0 foundation: module skeleton, tracing migration, secp256k1 wallet migration
-- Canonical binary serialization with blake3 (serialize.rs)
-- Chain ID, nonce, address derivation (P05)
-- Golden vector tests for serialization determinism
-
-### Changed
-- Migration from Ed25519 to secp256k1 (ECDSA) for EOA signatures
-- Structured logging via tracing crate (replaced println!)
+- Closes critical gap: non-deterministic genesis allowed chain splits between nodes
+- Deterministic genesis ensures all mainnet nodes start with identical genesis block
+- Genesis hash anchored in code prevents silent chain substitution attacks

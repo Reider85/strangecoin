@@ -1,4 +1,5 @@
 use crate::serialize;
+use sha2::Digest;
 
 pub const CHAIN_ID_MAINNET: u32 = 1;
 pub const CHAIN_ID_TESTNET: u32 = 2;
@@ -277,4 +278,104 @@ pub fn verify_transaction(tx: &crate::Transaction) -> Result<(), crate::error::S
         return Err(crate::error::StrangecoinError::InvalidSignature);
     }
     Ok(())
+}
+
+// Genesis configuration
+#[derive(serde::Deserialize)]
+pub struct GenesisConfig {
+    pub format_version: u8,
+    pub network_id: u32,
+    pub chain_id: u32,
+    pub timestamp: u64,
+    pub initial_holder: String,
+    pub initial_amount: u64,
+    pub block_reward: u64,
+    pub tail_emission_rate: f64,
+    pub max_supply_pre_tail: u64,
+    pub target_block_time: u64,
+    pub retarget_interval: u64,
+    pub genesis_hash: String,
+}
+
+/// Expected genesis block hash for mainnet (computed from genesis.json with deterministic seed)
+pub const EXPECTED_GENESIS_HASH: [u8; 32] = [
+    0x56, 0x3c, 0x9e, 0x51, 0x34, 0x23, 0x44, 0xc0,
+    0x1b, 0x93, 0x18, 0x53, 0xc4, 0x9e, 0x22, 0x74,
+    0xb6, 0xfb, 0xd2, 0xde, 0x99, 0xed, 0x50, 0xb8,
+    0xd6, 0xd3, 0xbd, 0x7a, 0x7e, 0x65, 0xab, 0x50,
+];
+
+/// Deterministic genesis keypair for Stage 0 (derived from fixed seed)
+/// Real offline key will be used before mainnet freeze
+pub fn genesis_keypair() -> (secp256k1::SecretKey, secp256k1::PublicKey) {
+    let seed = b"strangecoin-genesis-seed-2026";
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(seed);
+    let secret_bytes: [u8; 32] = hasher.finalize().into();
+    let secp = secp256k1::Secp256k1::new();
+    let secret_key = secp256k1::SecretKey::from_slice(&secret_bytes).expect("valid secret key");
+    let public_key = secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
+    (secret_key, public_key)
+}
+
+/// Load genesis block from genesis.json
+pub fn load_genesis(path: &str) -> Result<crate::Block, crate::error::StrangecoinError> {
+    let json = std::fs::read_to_string(path)?;
+    let genesis: GenesisConfig = serde_json::from_str(&json)?;
+
+    // Parse initial_holder (0x prefix + 64 hex chars = 33 bytes compressed pubkey)
+    let pk_hex = genesis.initial_holder.strip_prefix("0x").unwrap_or(&genesis.initial_holder);
+    let pk_bytes = hex::decode(pk_hex)?;
+    let public_key = secp256k1::PublicKey::from_slice(&pk_bytes)?;
+    let initial_holder_addr = crate::address::address_from_public_key(&public_key);
+
+    let genesis_tx = crate::Transaction {
+        sender: "genesis".to_string(),
+        receiver: initial_holder_addr,
+        amount: genesis.initial_amount,
+        nonce: 0,
+        chain_id: genesis.chain_id,
+        signature: Vec::new(),
+        is_coinbase: true,
+    };
+
+    let target_bytes = hex::decode("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")?;
+    let mut target_arr = [0u8; 32];
+    target_arr.copy_from_slice(&target_bytes);
+
+    let block = crate::Block {
+        index: 0,
+        timestamp: genesis.timestamp,
+        transactions: vec![genesis_tx],
+        previous_hash: "0".repeat(64),
+        hash: String::new(),
+        nonce: 0,
+        target: hex::encode(target_arr),
+    };
+
+    // Compute hash
+    let hash = crate::serialize::block_hash(&block);
+    let mut block = block;
+    block.hash = hex::encode(hash);
+    Ok(block)
+}
+
+/// Validate genesis block matches expected hash (skip for regtest)
+pub fn validate_genesis(block: &crate::Block, is_regtest: bool) -> Result<(), crate::error::StrangecoinError> {
+    if is_regtest {
+        return Ok(());
+    }
+    let hash = crate::serialize::block_hash(block);
+    if hash != EXPECTED_GENESIS_HASH {
+        return Err(crate::error::StrangecoinError::GenesisMismatch {
+            expected: EXPECTED_GENESIS_HASH,
+            got: hash,
+        });
+    }
+    Ok(())
+}
+
+/// Check if running in regtest mode (network_id == 3)
+pub fn is_regtest(network_id: u32) -> bool {
+    network_id == CHAIN_ID_REGTEST
 }

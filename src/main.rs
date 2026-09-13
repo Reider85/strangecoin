@@ -306,10 +306,66 @@ impl Blockchain {
             debug!(count = pending.len(), "Загружено транзакций");
         }
 
-        if let Some(chain) = chain_opt {
+        if let Some(mut chain) = chain_opt {
+            // Existing chain: validate genesis hash matches expected (unless regtest)
+            let chain_id = crate::consensus::current_chain_id();
+            let is_regtest = crate::consensus::is_regtest(chain_id);
+            if !chain.is_empty() {
+                if let Err(e) = crate::consensus::validate_genesis(&chain[0], is_regtest) {
+                    panic!("Genesis validation failed: {}", e);
+                }
+            }
             blockchain.chain = chain;
         } else {
-            blockchain.create_genesis_block();
+            // New chain: load genesis from genesis.json (mainnet/testnet) or generate regtest genesis
+            let chain_id = crate::consensus::current_chain_id();
+            let is_regtest = crate::consensus::is_regtest(chain_id);
+            
+            let genesis_block = if is_regtest {
+                // Regtest: generate deterministic genesis with chain_id=3
+                let genesis_tx = crate::Transaction {
+                    sender: "genesis".to_string(),
+                    receiver: "regtest_initial_holder".to_string(),
+                    amount: 1_000_000_000,
+                    nonce: 0,
+                    chain_id,
+                    signature: Vec::new(),
+                    is_coinbase: true,
+                };
+                let target_bytes = hex::decode("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+                    .expect("valid target hex");
+                let mut target_arr = [0u8; 32];
+                target_arr.copy_from_slice(&target_bytes);
+                let mut block = crate::Block {
+                    index: 0,
+                    timestamp: 0,
+                    transactions: vec![genesis_tx],
+                    previous_hash: "0".repeat(64),
+                    hash: String::new(),
+                    nonce: 0,
+                    target: hex::encode(target_arr),
+                };
+                let hash = crate::serialize::block_hash(&block);
+                block.hash = hex::encode(hash);
+                block
+            } else {
+                // Mainnet/testnet: load from genesis.json
+                let genesis_path = exe_dir.join("genesis.json");
+                crate::consensus::load_genesis(genesis_path.to_str().unwrap())
+                    .expect("Failed to load genesis from genesis.json")
+            };
+            
+            if let Err(e) = crate::consensus::validate_genesis(&genesis_block, is_regtest) {
+                panic!("Genesis validation failed: {}", e);
+            }
+            blockchain.chain.push(genesis_block.clone());
+            
+            // Initialize balances with genesis allocation
+            for tx in &genesis_block.transactions {
+                if tx.sender != "genesis" {
+                    blockchain.balances.entry(tx.receiver.clone()).or_default().balance += tx.amount;
+                }
+            }
         }
 
         if let Some(balances) = balances_opt {
@@ -1896,6 +1952,13 @@ fn main() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_target(false)
         .init();
+
+    // Handle CLI commands
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 && args[1] == "--print-genesis-hash" {
+        crate::cli::print_genesis_hash();
+        return;
+    }
 
     let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
     let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");

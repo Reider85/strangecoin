@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "network_id": 1,
+  "chain_id": 1,
+  "timestamp": 0,
+  "initial_holder": "0x026f7d841405eb8af268dd422994e708a3c343396aa4c85f87aa9628e25248da87",
+  "initial_amount": 1000000000,
+  "block_reward": 50,
+  "tail_emission_rate": 0.006,
+  "max_supply_pre_tail": 21000000,
+  "target_block_time": 600,
+  "retarget_interval": 2016,
+  "genesis_hash": "0x563c9e51342344c01b931853c49e2274b6fbd2de99ed50b8d6d3bd7a7e65ab50"
+}

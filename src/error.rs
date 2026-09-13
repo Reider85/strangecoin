@@ -22,4 +22,10 @@ pub enum StrangecoinError {
     TimestampTooOld,
     #[error("block timestamp in future: must be <= now + 2 hours")]
     TimestampInFuture,
+    #[error("genesis mismatch: expected {expected:?}, got {got:?}")]
+    GenesisMismatch { expected: [u8; 32], got: [u8; 32] },
+    #[error("hex decode error: {0}")]
+    HexError(#[from] hex::FromHexError),
+    #[error("secp256k1 error: {0}")]
+    Secp256k1Error(#[from] secp256k1::Error),
 }
