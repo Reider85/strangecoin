@@ -1,9 +1,145 @@
+use crate::serialize;
+
 pub const CHAIN_ID_MAINNET: u32 = 1;
 pub const CHAIN_ID_TESTNET: u32 = 2;
 pub const CHAIN_ID_REGTEST: u32 = 3;
 
 pub const MEDIAN_TIME_WINDOW: usize = 11;
-pub const MAX_FUTURE_TIME: u64 = 2 * 60 * 60; // 2 hours
+pub const MAX_FUTURE_TIME: u64 = 2 * 60 * 60;
+
+pub const RETARGET_INTERVAL: u64 = 2016;
+pub const TARGET_BLOCK_TIME: u64 = 600;
+pub const MAX_TARGET_CHANGE_FACTOR: u64 = 4;
+
+pub type U256 = [u64; 4];
+
+pub fn u256_from_bytes(bytes: &[u8; 32]) -> U256 {
+    let mut words = [0u64; 4];
+    for i in 0..4 {
+        let start = i * 8;
+        let end = start + 8;
+        let mut word_bytes = [0u8; 8];
+        word_bytes.copy_from_slice(&bytes[start..end]);
+        words[i] = u64::from_be_bytes(word_bytes);
+    }
+    words
+}
+
+pub fn u256_from_u64(v: u64) -> U256 {
+    [0, 0, 0, v]
+}
+
+pub fn u256_to_bytes(v: U256) -> [u8; 32] {
+    let mut bytes = [0u8; 32];
+    for i in 0..4 {
+        let word_bytes = v[i].to_be_bytes();
+        bytes[i * 8..(i + 1) * 8].copy_from_slice(&word_bytes);
+    }
+    bytes
+}
+
+pub fn u256_mul(a: U256, b: U256) -> U256 {
+    let mut result = [0u128; 8];
+    for i in 0..4 {
+        for j in 0..4 {
+            result[i + j] += a[i] as u128 * b[j] as u128;
+        }
+    }
+    let mut carry: u128 = 0;
+    for i in 0..8 {
+        result[i] += carry;
+        carry = result[i] >> 64;
+        result[i] &= 0xFFFFFFFFFFFFFFFF;
+    }
+    [
+        result[0] as u64,
+        result[1] as u64,
+        result[2] as u64,
+        result[3] as u64,
+    ]
+}
+
+pub fn u256_div(a: U256, b: U256) -> U256 {
+    let mut remainder = [0u128; 8];
+    let mut quotient = [0u64; 4];
+
+    for i in (0..4).rev() {
+        remainder[i + 4] = a[i] as u128;
+    }
+
+    for i in (0..4).rev() {
+        let mut divisor = 0u128;
+        for j in 0..4 {
+            divisor = (divisor << 64) | b[j] as u128;
+        }
+
+        let mut dividend = 0u128;
+        for j in 0..8 {
+            dividend = (dividend << 64) | remainder[j];
+        }
+
+        if divisor == 0 {
+            return [0, 0, 0, 0];
+        }
+
+        let q = dividend / divisor;
+        quotient[i] = q as u64;
+
+        let mut sub = 0u128;
+        for j in (0..4).rev() {
+            let prod = (quotient[i] as u128) * b[j] as u128 + sub;
+            sub = prod >> 64;
+            let diff = remainder[j + 4] - (prod & 0xFFFFFFFFFFFFFFFF);
+            remainder[j + 4] = diff & 0xFFFFFFFFFFFFFFFF;
+        }
+    }
+
+    quotient
+}
+
+pub fn u256_min(a: U256, b: U256) -> U256 {
+    for i in (0..4).rev() {
+        if a[i] < b[i] {
+            return a;
+        } else if a[i] > b[i] {
+            return b;
+        }
+    }
+    a
+}
+
+pub fn u256_max(a: U256, b: U256) -> U256 {
+    for i in (0..4).rev() {
+        if a[i] > b[i] {
+            return a;
+        } else if a[i] < b[i] {
+            return b;
+        }
+    }
+    a
+}
+
+pub fn u256_gt(a: U256, b: U256) -> bool {
+    for i in (0..4).rev() {
+        if a[i] > b[i] {
+            return true;
+        } else if a[i] < b[i] {
+            return false;
+        }
+    }
+    false
+}
+
+pub fn u256_le(a: U256, b: U256) -> bool {
+    for i in (0..4).rev() {
+        if a[i] < b[i] {
+            return true;
+        } else if a[i] > b[i] {
+            return false;
+        }
+    }
+    true
+}
 
 pub fn current_chain_id() -> u32 {
     CHAIN_ID_REGTEST
@@ -24,7 +160,6 @@ pub fn validate_timestamp(
     prev_blocks: &[crate::Block],
     now: u64,
 ) -> Result<(), crate::error::StrangecoinError> {
-    // Genesis block (index 0) has timestamp 0 - allow it
     if block.index == 0 {
         return Ok(());
     }
@@ -34,6 +169,82 @@ pub fn validate_timestamp(
     }
     if block.timestamp > now + MAX_FUTURE_TIME {
         return Err(crate::error::StrangecoinError::TimestampInFuture);
+    }
+    Ok(())
+}
+
+pub fn bits_to_target(bits: u32) -> [u8; 32] {
+    let exponent = ((bits >> 24) & 0xff) as usize;
+    let mantissa = bits & 0x007fffff;
+    let mut target = [0u8; 32];
+    if exponent <= 3 {
+        let mantissa_bytes = (mantissa as u64).to_be_bytes();
+        let start = 32 - exponent;
+        target[start..start + 8].copy_from_slice(&mantissa_bytes[8 - exponent..]);
+    } else {
+        let mantissa_bytes = (mantissa as u64).to_be_bytes();
+        target[32 - exponent..32 - exponent + 3].copy_from_slice(&mantissa_bytes[5..8]);
+    }
+    target
+}
+
+pub fn target_to_bits(target: &[u8; 32]) -> u32 {
+    let leading_zeros = target.iter().take_while(|&&b| b == 0).count();
+    if leading_zeros >= 32 {
+        return 1;
+    }
+    let exponent = (32 - leading_zeros) as u32;
+    let mantissa_bytes = &target[leading_zeros..leading_zeros + 3];
+    let mut mantissa = 0u32;
+    for &b in mantissa_bytes {
+        mantissa = (mantissa << 8) | b as u32;
+    }
+    (exponent << 24) | (mantissa & 0x007fffff)
+}
+
+pub fn compute_target(prev_blocks: &[crate::Block]) -> [u8; 32] {
+    if prev_blocks.len() < RETARGET_INTERVAL as usize {
+        let last = prev_blocks.last().expect("at least one block");
+        let target_bytes = hex::decode(&last.target).expect("valid target hex");
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&target_bytes);
+        return arr;
+    }
+    let window = &prev_blocks[prev_blocks.len() - RETARGET_INTERVAL as usize..];
+    let first = &window[0];
+    let last = &window[window.len() - 1];
+    let actual_time = last.timestamp.saturating_sub(first.timestamp);
+    let expected_time = TARGET_BLOCK_TIME * (RETARGET_INTERVAL - 1);
+
+    let prev_target_bytes = hex::decode(&last.target).expect("valid target hex");
+    let mut prev_target_arr = [0u8; 32];
+    prev_target_arr.copy_from_slice(&prev_target_bytes);
+
+    let prev_u256 = u256_from_bytes(&prev_target_arr);
+    let actual_u256 = u256_from_u64(actual_time);
+    let expected_u256 = u256_from_u64(expected_time);
+
+    let numerator = u256_mul(prev_u256, actual_u256);
+    let new_target = u256_div(numerator, expected_u256);
+
+    let max_target = u256_mul(prev_u256, u256_from_u64(MAX_TARGET_CHANGE_FACTOR));
+    let min_target = u256_div(prev_u256, u256_from_u64(MAX_TARGET_CHANGE_FACTOR));
+    let clamped = u256_min(u256_max(new_target, min_target), max_target);
+
+    u256_to_bytes(clamped)
+}
+
+pub fn validate_difficulty(block: &crate::Block) -> Result<(), crate::error::StrangecoinError> {
+    let hash = serialize::block_hash(block);
+    let target_bytes = hex::decode(&block.target).map_err(|_| crate::error::StrangecoinError::InvalidDifficulty)?;
+    let mut target_arr = [0u8; 32];
+    target_arr.copy_from_slice(&target_bytes);
+
+    let hash_u256 = u256_from_bytes(&hash);
+    let target_u256 = u256_from_bytes(&target_arr);
+
+    if u256_gt(hash_u256, target_u256) {
+        return Err(crate::error::StrangecoinError::InvalidDifficulty);
     }
     Ok(())
 }

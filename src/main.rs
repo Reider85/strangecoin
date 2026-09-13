@@ -66,6 +66,7 @@ struct Block {
     previous_hash: String,  // hex-encoded blake3 hash (32 bytes = 64 hex chars)
     hash: String,           // hex-encoded blake3 hash (32 bytes = 64 hex chars)
     nonce: u64,
+    target: String,         // hex-encoded 32-byte target (compact bits representation)
 }
 
 // Структура транзакции
@@ -371,6 +372,7 @@ impl Blockchain {
             previous_hash: "0".repeat(64),
             hash: String::new(),
             nonce: 0,
+            target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(), // max target (easy mining for tests)
         };
         let hash = self.calculate_hash(&genesis_block);
         let mut genesis_block = genesis_block;
@@ -416,6 +418,7 @@ impl Blockchain {
             previous_hash: previous_block.hash.clone(),
             hash: String::new(),
             nonce: 0,
+            target: previous_block.target.clone(),
         };
         block.hash = self.calculate_hash(&block);
         self.chain.push(block);
@@ -502,9 +505,8 @@ impl Blockchain {
             let _ = progress_tx.send("Все pending_transactions уже включены в блоки".to_string());
             return None;
         }
-        let difficulty = self.difficulty;
 
-        let block = self.mine_block_inner(previous_block, transactions, difficulty, progress_tx.clone());
+        let block = self.mine_block_inner(previous_block, transactions, progress_tx.clone());
 
         if let Some(mut block) = block {
             let balance_start_time = SystemTime::now();
@@ -575,7 +577,6 @@ impl Blockchain {
         &self,
         previous_block: Block,
         transactions: Vec<Transaction>,
-        difficulty: u32,
         progress_tx: mpsc::Sender<String>,
     ) -> Option<Block> {
         let start_time = SystemTime::now();
@@ -585,6 +586,15 @@ impl Blockchain {
             .unwrap()
             .as_secs();
         let mtp = crate::consensus::median_time_past(&self.chain, previous_block.index + 1);
+        
+        // Determine target: use previous block's target, or compute new one at retarget height
+        let target = if previous_block.index + 1 > 0 && (previous_block.index + 1) % crate::consensus::RETARGET_INTERVAL == 0 {
+            let new_target = crate::consensus::compute_target(&self.chain);
+            hex::encode(new_target)
+        } else {
+            previous_block.target.clone()
+        };
+        
         let mut block = Block {
             index: previous_block.index + 1,
             timestamp: now.max(mtp + 1),
@@ -592,32 +602,18 @@ impl Blockchain {
             previous_hash: previous_block.hash.clone(),
             hash: String::new(),
             nonce: 0,
+            target,
         };
 
-        let max_iterations = 1000;
-        let timeout = Duration::from_secs(5);
-        let mut iteration_count = 0;
+        let target_bytes = hex::decode(&block.target).expect("valid target hex");
+        let mut target_arr = [0u8; 32];
+        target_arr.copy_from_slice(&target_bytes);
+        let target_u256 = crate::consensus::u256_from_bytes(&target_arr);
+
+        let mut iteration_count = 0u64;
         let mut total_hash_time = 0.0;
 
         loop {
-            if iteration_count >= max_iterations {
-                let total_duration = SystemTime::now()
-                    .duration_since(start_time)
-                    .unwrap()
-                    .as_secs_f64();
-                warn!(max_iterations, duration_secs = total_duration, "Достигнуто максимальное количество итераций");
-                let _ = progress_tx.send(format!("Достигнуто максимальное количество итераций: {} за {} секунд", max_iterations, total_duration));
-                return None;
-            }
-            if SystemTime::now().duration_since(start_time).unwrap() > timeout {
-                let total_duration = SystemTime::now()
-                    .duration_since(start_time)
-                    .unwrap()
-                    .as_secs_f64();
-                warn!(timeout_secs = timeout.as_secs(), iteration_count, "Майнинг прерван: превышен таймаут");
-                let _ = progress_tx.send(format!("Майнинг прерван: превышен таймаут {} секунд, всего итераций: {}", timeout.as_secs(), iteration_count));
-                return None;
-            }
             iteration_count += 1;
             let hash_start_time = SystemTime::now();
             let hash = self.calculate_hash(&block);
@@ -626,14 +622,13 @@ impl Blockchain {
                 .unwrap()
                 .as_secs_f64();
             total_hash_time += hash_duration;
-            debug!(
-                iteration = iteration_count,
-                nonce = block.nonce,
-                hash = %hash,
-                hash_duration_secs = hash_duration,
-                "Итерация майнинга"
-            );
-            if hash.starts_with(&"0".repeat(difficulty as usize)) {
+            
+            let hash_bytes = hex::decode(&hash).expect("valid hash hex");
+            let mut hash_arr = [0u8; 32];
+            hash_arr.copy_from_slice(&hash_bytes);
+            let hash_u256 = crate::consensus::u256_from_bytes(&hash_arr);
+            
+            if crate::consensus::u256_le(hash_u256, target_u256) {
                 block.hash = hash;
                 let total_duration = SystemTime::now()
                     .duration_since(start_time)
@@ -653,7 +648,7 @@ impl Blockchain {
                 return Some(block);
             }
             block.nonce += 1;
-            if iteration_count % 100 == 0 {
+            if iteration_count % 10000 == 0 {
                 let progress_duration = SystemTime::now()
                     .duration_since(start_time)
                     .unwrap()
@@ -901,6 +896,27 @@ impl Blockchain {
             if current_block.hash != current_hash {
                 warn!(block_index = i, ?current_block, "Некорректный хэш в блоке");
                 return false;
+            }
+            // Валидация difficulty
+            if let Err(e) = crate::consensus::validate_difficulty(current_block) {
+                warn!(block_index = current_block.index, error = %e, "Неверная сложность блока");
+                return false;
+            }
+            // Проверка retarget
+            if current_block.index > 0 && current_block.index % crate::consensus::RETARGET_INTERVAL == 0 {
+                let expected_target = crate::consensus::compute_target(&self.chain[..current_block.index as usize]);
+                let expected_target_hex = hex::encode(expected_target);
+                if current_block.target != expected_target_hex {
+                    warn!(block_index = current_block.index, expected = %expected_target_hex, got = %current_block.target, "Неверный target на retarget height");
+                    return false;
+                }
+            } else if current_block.index > 0 {
+                // На не-retarget height target должен совпадать с предыдущим блоком
+                let prev_target = &self.chain[current_block.index as usize - 1].target;
+                if current_block.target != *prev_target {
+                    warn!(block_index = current_block.index, expected = %prev_target, got = %current_block.target, "Target изменён вне retarget height");
+                    return false;
+                }
             }
         }
 
