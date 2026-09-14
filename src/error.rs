@@ -28,4 +28,6 @@ pub enum StrangecoinError {
     HexError(#[from] hex::FromHexError),
     #[error("secp256k1 error: {0}")]
     Secp256k1Error(#[from] secp256k1::Error),
+    #[error("invalid coinbase amount: expected {expected}, got {got}")]
+    InvalidCoinbaseAmount { expected: u64, got: u64 },
 }

@@ -562,19 +562,42 @@ impl Blockchain {
             return None;
         }
 
-        let block = self.mine_block_inner(previous_block, transactions, progress_tx.clone());
+        // Calculate total supply before mining this block
+        let total_supply: u64 = self.balances.values().map(|a| a.balance).sum();
+        let height = previous_block.index + 1;
+        let coinbase_amount = crate::economics::emission::block_reward_at_height(height, total_supply);
+
+        // Create coinbase transaction (first in block)
+        let miner_address = self.balances.keys().next().cloned().unwrap_or_else(|| "miner".to_string());
+        let coinbase_tx = Transaction {
+            sender: "coinbase".to_string(),
+            receiver: miner_address,
+            amount: coinbase_amount,
+            nonce: 0,
+            chain_id: crate::consensus::current_chain_id(),
+            signature: Vec::new(),
+            is_coinbase: true,
+        };
+
+        let mut all_transactions = vec![coinbase_tx];
+        all_transactions.extend(transactions);
+
+        let block = self.mine_block_inner(previous_block, all_transactions, progress_tx.clone());
 
         if let Some(mut block) = block {
             let balance_start_time = SystemTime::now();
             for tx in &block.transactions {
-                let sender_balance = self.balances.get(&tx.sender).map(|a| a.balance).unwrap_or(0);
-                if sender_balance < tx.amount {
-                    error!(sender = %tx.sender, nonce = tx.nonce, "Недостаточно средств для транзакции");
-                    return None;
+                let mut sender_final = 0u64;
+                // Skip balance check for coinbase (sender "coinbase" has no balance to deduct)
+                if !tx.is_coinbase {
+                    let sender_balance = self.balances.get(&tx.sender).map(|a| a.balance).unwrap_or(0);
+                    if sender_balance < tx.amount {
+                        error!(sender = %tx.sender, nonce = tx.nonce, "Недостаточно средств для транзакции");
+                        return None;
+                    }
+                    sender_final = sender_balance - tx.amount;
+                    self.balances.entry(tx.sender.clone()).or_default().balance = sender_final;
                 }
-                let sender_final = sender_balance - tx.amount;
-                self.balances.entry(tx.sender.clone()).or_default().balance = sender_final;
-
                 let receiver_balance = self.balances.get(&tx.receiver).map(|a| a.balance).unwrap_or(0);
                 let receiver_final = receiver_balance + tx.amount;
                 self.balances.entry(tx.receiver.clone()).or_default().balance = receiver_final;
@@ -885,15 +908,33 @@ impl Blockchain {
 
         // Восстанавливаем балансы из цепочки блоков, начиная с пустого состояния
         let mut expected_balances: HashMap<String, u64> = HashMap::new();
+        let mut total_supply_before_block = 0u64;
         debug!(?expected_balances, "Начальная инициализация expected_balances");
 
         // Применяем все транзакции из цепочки блоков
         for block in &self.chain {
             info!(block_index = block.index, tx_count = block.transactions.len(), "Обработка блока");
+            
+            // Validate coinbase for non-genesis blocks (skip grant block at index 1)
+            if block.index > 0 && block.index != 1 {
+                let coinbase_tx = block.transactions.iter().find(|tx| tx.is_coinbase);
+                if let Some(coinbase) = coinbase_tx {
+                    let expected_reward = crate::economics::emission::block_reward_at_height(block.index, total_supply_before_block);
+                    if coinbase.amount > expected_reward {
+                        warn!(block_index = block.index, expected = expected_reward, got = coinbase.amount, "Coinbase amount exceeds emission schedule");
+                        return false;
+                    }
+                    // Miner can underpay voluntarily (coinbase.amount < expected_reward is OK)
+                } else {
+                    warn!(block_index = block.index, "Block missing coinbase transaction");
+                    return false;
+                }
+            }
+            
             for tx in &block.transactions {
                 debug!(nonce = tx.nonce, sender = %tx.sender, receiver = %tx.receiver, amount = tx.amount, "Обработка транзакции");
-                // Пропускаем проверку баланса для отправителя "genesis"
-                if tx.sender != "genesis" {
+                // Пропускаем проверку баланса для отправителя "genesis" и "coinbase"
+                if tx.sender != "genesis" && tx.sender != "coinbase" {
                     let sender_balance = expected_balances.get(&tx.sender).unwrap_or(&0);
                     debug!(sender = %tx.sender, balance = *sender_balance, "Текущий баланс отправителя");
                     if *sender_balance < tx.amount {
@@ -903,12 +944,15 @@ impl Blockchain {
                     *expected_balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
                     debug!(sender = %tx.sender, amount = tx.amount, new_balance = expected_balances.get(&tx.sender).unwrap_or(&0), "Баланс отправителя уменьшен");
                 } else {
-                    debug!("Отправитель 'genesis', пропуск проверки баланса");
+                    debug!("Отправитель '{}', пропуск проверки баланса", tx.sender);
                 }
                 *expected_balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
                 debug!(receiver = %tx.receiver, amount = tx.amount, new_balance = expected_balances.get(&tx.receiver).unwrap_or(&0), "Баланс получателя увеличен");
                 debug!(nonce = tx.nonce, ?expected_balances, "Обновлённые expected_balances после транзакции");
             }
+            
+            // Update total supply after processing block (for next block's coinbase validation)
+            total_supply_before_block = expected_balances.values().sum();
         }
 
         // Проверяем неподтверждённые транзакции
