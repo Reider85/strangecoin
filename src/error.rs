@@ -24,6 +24,8 @@ pub enum StrangecoinError {
     TimestampInFuture,
     #[error("genesis mismatch: expected {expected:?}, got {got:?}")]
     GenesisMismatch { expected: [u8; 32], got: [u8; 32] },
+    #[error("peer banned: rate limit exceeded")]
+    PeerBanned,
     #[error("hex decode error: {0}")]
     HexError(#[from] hex::FromHexError),
     #[error("secp256k1 error: {0}")]

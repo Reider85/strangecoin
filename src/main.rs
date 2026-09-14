@@ -167,6 +167,7 @@ struct MiningTask {
     mining_status: Arc<Mutex<MiningStatus>>,
     progress_tx: mpsc::Sender<String>,
     status_tx: mpsc::Sender<String>,
+    rate_limiter: Arc<crate::network::RateLimiter>,
 }
 
 // Структура узла
@@ -175,6 +176,7 @@ struct Node {
     peers: Arc<Mutex<Vec<String>>>,
     address: String,
     sync_rx: mpsc::Receiver<Blockchain>,
+    rate_limiter: Arc<crate::network::RateLimiter>,
 }
 
 // Структура клиента для GUI
@@ -1102,11 +1104,13 @@ impl Node {
     fn new(address: String, mining_rx: mpsc::Receiver<MiningTask>, sync_tx: mpsc::Sender<Blockchain>, port: u16) -> Self {
         let blockchain = Arc::new(Mutex::new(Blockchain::new(port)));
         let peers = Arc::new(Mutex::new(vec![]));
+        let rate_limiter = Arc::new(crate::network::RateLimiter::new(10, 100));
         let node = Node {
             blockchain: blockchain.clone(),
             peers: peers.clone(),
             address: address.clone(),
             sync_rx: mpsc::channel().1,
+            rate_limiter: rate_limiter.clone(),
         };
         thread::spawn(move || {
             info!("Фоновый поток майнинга запущен");
@@ -1172,6 +1176,7 @@ impl Node {
                                     peers: peers.clone(),
                                     address: address.clone(),
                                     sync_rx: mpsc::channel().1,
+                                    rate_limiter: task.rate_limiter.clone(),
                                 };
                                 node_temp.sync_blockchain(sync_tx.clone());
                                 MiningStatus::Completed(Some(block))
@@ -1279,6 +1284,7 @@ impl Node {
 fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
         let start_time = SystemTime::now();
         let blockchain = Arc::clone(&self.blockchain);
+        let rate_limiter = Arc::clone(&self.rate_limiter);
         let address = format!("0.0.0.0:{}", port);
         let listener = TcpListener::bind(&address).expect("Не удалось запустить сервер");
         thread::spawn(move || {
@@ -1287,7 +1293,15 @@ fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
                     Ok(stream) => {
                         let blockchain = Arc::clone(&blockchain);
                         let sync_tx = sync_tx.clone();
+                        let rate_limiter = Arc::clone(&rate_limiter);
+                        let peer_addr = stream.peer_addr().ok();
                         thread::spawn(move || {
+                            if let Some(addr) = peer_addr {
+                                if let Err(e) = rate_limiter.check(addr) {
+                                    warn!(peer = %addr, error = %e, "Rate limit exceeded, closing connection");
+                                    return;
+                                }
+                            }
                             let mut reader = BufReader::new(stream.try_clone().unwrap());
                             let mut writer = BufWriter::new(stream);
                             let request_bytes = match crate::network::protocol::read_length_prefixed(&mut reader) {
@@ -1403,6 +1417,7 @@ fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
     }
     fn sync_blockchain(&mut self, sync_tx: mpsc::Sender<Blockchain>) {
         let start_time = SystemTime::now();
+        let rate_limiter = Arc::clone(&self.rate_limiter);
         // Обнаруживаем пиры перед синхронизацией
         self.discover_peers();
         let peers: Vec<String> = self.peers.lock().expect("Не удалось захватить Mutex для peers")
@@ -1432,6 +1447,11 @@ fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
                     continue;
                 }
             };
+            // Rate limit check for outgoing requests
+            if let Err(e) = rate_limiter.check(addr) {
+                warn!(peer = %peer, error = %e, "Rate limit exceeded for outgoing request, skipping peer");
+                continue;
+            }
             if current_chain_length <= 1 {
                 info!("Новый узел, только получение данных, отправка цепочки запрещена");
                 continue; // Пропускаем отправку UPDATE_BLOCKCHAIN
@@ -1918,6 +1938,7 @@ if let Some(ref progress_rx) = self.progress_rx {
                             mining_status,
                             progress_tx,
                             status_tx,
+                            rate_limiter: self.node.rate_limiter.clone(),
                         }) {
                             self.status = format!("Ошибка отправки задачи майнинга: {}", e);
                             error!(error = %e, "Ошибка отправки задачи майнинга");
@@ -2063,6 +2084,7 @@ fn main() {
         peers: Arc::clone(&node.peers),
         address: node.address.clone(),
         sync_rx: mpsc::channel().1,
+        rate_limiter: node.rate_limiter.clone(),
     };
     thread::spawn(move || {
         loop {
@@ -2079,6 +2101,7 @@ fn main() {
             peers: node.peers,
             address: node.address,
             sync_rx,
+            rate_limiter: node.rate_limiter.clone(),
         },
         wallet_address: config.wallet.name,
         password: config.wallet.password,
@@ -2542,6 +2565,7 @@ mod tests {
                 peers: Arc::new(Mutex::new(vec![])),
                 address: format!("127.0.0.1:{}", p),
                 sync_rx: mpsc::channel().1,
+                rate_limiter: Arc::new(crate::network::RateLimiter::new(10, 100)),
             };
             nodes.push((node, dir.clone(), bc));
         }
@@ -2575,6 +2599,7 @@ mod tests {
                     peers: Arc::clone(&nodes[i].0.peers),
                     address: nodes[i].0.address.clone(),
                     sync_rx: mpsc::channel().1,
+                    rate_limiter: nodes[i].0.rate_limiter.clone(),
                 };
                 sync_node.sync_blockchain(sync_tx.clone());
             }
@@ -2627,6 +2652,7 @@ mod tests {
                     peers: Arc::clone(&nodes[i].0.peers),
                     address: nodes[i].0.address.clone(),
                     sync_rx: mpsc::channel().1,
+                    rate_limiter: nodes[i].0.rate_limiter.clone(),
                 };
                 sync_node.sync_blockchain(sync_tx.clone());
             }
@@ -2679,6 +2705,7 @@ mod tests {
                 peers: Arc::clone(&peers),
                 address: format!("127.0.0.1:{}", p),
                 sync_rx: mpsc::channel().1,
+                rate_limiter: Arc::new(crate::network::RateLimiter::new(10, 100)),
             };
             nodes.push((node, bc, peers));
         }
@@ -2717,6 +2744,7 @@ mod tests {
                     peers: Arc::clone(&nodes[i].2),
                     address: nodes[i].0.address.clone(),
                     sync_rx: mpsc::channel().1,
+                    rate_limiter: nodes[i].0.rate_limiter.clone(),
                 };
                 sync_node.sync_blockchain(sync_tx.clone());
             }
@@ -2758,6 +2786,7 @@ mod tests {
                     peers: Arc::clone(&nodes[i].2),
                     address: nodes[i].0.address.clone(),
                     sync_rx: mpsc::channel().1,
+                    rate_limiter: nodes[i].0.rate_limiter.clone(),
                 };
                 sync_node.sync_blockchain(sync_tx.clone());
             }
