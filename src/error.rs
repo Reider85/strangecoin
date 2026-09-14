@@ -32,4 +32,10 @@ pub enum StrangecoinError {
     Secp256k1Error(#[from] secp256k1::Error),
     #[error("invalid coinbase amount: expected {expected}, got {got}")]
     InvalidCoinbaseAmount { expected: u64, got: u64 },
+    #[error("mempool full: max {0} transactions")]
+    MempoolFull(usize),
+    #[error("duplicate transaction")]
+    DuplicateTx,
+    #[error("insufficient balance: have {available}, need {required}")]
+    InsufficientBalance { available: u64, required: u64 },
 }

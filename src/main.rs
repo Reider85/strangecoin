@@ -1,3 +1,4 @@
+use crate::error::StrangecoinError;
 use secp256k1::{PublicKey, Secp256k1, ecdsa::{RecoverableSignature, RecoveryId}, Message};
 use serde::{Deserialize, Serialize, Deserializer};
 use sha2::{Digest, Sha256};
@@ -116,17 +117,32 @@ struct BlockchainDeserialize {
     balances: HashMap<String, AccountState>,
     difficulty: u32,
     pending_transactions: Vec<Transaction>,
+    mempool_txs: Vec<Transaction>,  // New field for mempool
 }
 
 // Структура блокчейна
-#[derive(Clone, Serialize)]
+#[derive(Clone)]
 struct Blockchain {
     chain: Vec<Block>,
     balances: HashMap<String, AccountState>,
     difficulty: u32,
-    pending_transactions: Vec<Transaction>,
-    #[serde(skip)]
+    mempool: crate::mempool::Mempool,
     db: Arc<Mutex<DB>>,
+}
+
+impl Serialize for Blockchain {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("Blockchain", 4)?;
+        state.serialize_field("chain", &self.chain)?;
+        state.serialize_field("balances", &self.balances)?;
+        state.serialize_field("difficulty", &self.difficulty)?;
+        state.serialize_field("mempool_txs", &self.mempool.transactions())?;
+        state.end()
+    }
 }
 
 impl<'de> Deserialize<'de> for Blockchain {
@@ -139,6 +155,7 @@ impl<'de> Deserialize<'de> for Blockchain {
             balances,
             difficulty,
             pending_transactions,
+            mempool_txs,
         } = BlockchainDeserialize::deserialize(deserializer)?;
 
         let port = std::env::var("PORT").unwrap_or("8081".to_string()).parse::<u16>().unwrap_or(8081);
@@ -146,11 +163,23 @@ impl<'de> Deserialize<'de> for Blockchain {
         let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
         let db_path = exe_dir.join(format!("blockchain_db_{}", port));
 
+        let mut mempool = crate::mempool::Mempool::new();
+        // Add pending_transactions (legacy) to mempool
+        for tx in pending_transactions {
+            let account = AccountState { balance: 0, nonce: 0 };
+            let _ = mempool.insert(tx, &account);
+        }
+        // Add mempool_txs (new format) to mempool
+        for tx in mempool_txs {
+            let account = AccountState { balance: 0, nonce: 0 };
+            let _ = mempool.insert(tx, &account);
+        }
+
         Ok(Blockchain {
             chain,
             balances,
             difficulty,
-            pending_transactions,
+            mempool,
             db: Arc::new(Mutex::new(DB::open(
                 db_path,
                 Options::default(),
@@ -263,7 +292,7 @@ impl Blockchain {
             chain: vec![],
             balances: HashMap::new(),
             difficulty: 1,
-            pending_transactions: vec![],
+            mempool: crate::mempool::Mempool::new(),
             db: db.clone(),
         };
         blockchain.debug_db();
@@ -271,7 +300,6 @@ impl Blockchain {
         let mut chain_opt: Option<Vec<Block>> = None;
         let mut balances_opt: Option<HashMap<String, u64>> = None;
         let mut difficulty_opt: Option<u32> = None;
-        let mut pending = vec![];
 
         {
             let mut db_guard = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
@@ -298,14 +326,13 @@ impl Blockchain {
                 match serde_json::from_slice::<Transaction>(&value) {
                     Ok(transaction) => {
                         debug!(?transaction, "Успешно загружена транзакция");
-                        if !pending.iter().any(|t| t == &transaction) {
-                            pending.push(transaction);
-                        }
+                        let account = AccountState { balance: 0, nonce: 0 };
+                        let _ = blockchain.mempool.insert(transaction, &account);
                     }
                     Err(e) => debug!(key = %key_str, error = %e, "Ошибка десериализации транзакции"),
                 }
             }
-            debug!(count = pending.len(), "Загружено транзакций");
+            debug!(count = blockchain.mempool.len(), "Загружено транзакций в mempool");
         }
 
         if let Some(mut chain) = chain_opt {
@@ -399,7 +426,6 @@ impl Blockchain {
 
         blockchain.migrate_initial_wallet_balance();
 
-        blockchain.pending_transactions = pending;
         blockchain.save_state();
         blockchain.debug_db();
         let duration = SystemTime::now()
@@ -546,18 +572,15 @@ impl Blockchain {
     fn mine_block(&mut self, progress_tx: mpsc::Sender<String>) -> Option<Block> {
         let total_start_time = SystemTime::now();
         info!("Начало майнинга");
-        if self.pending_transactions.is_empty() {
+        if self.mempool.is_empty() {
             warn!("Нет транзакций для майнинга");
             let _ = progress_tx.send("Нет транзакций для майнинга".to_string());
             return None;
         }
 
         let previous_block = self.chain.last().unwrap().clone();
-        let transactions: Vec<Transaction> = self.pending_transactions
-            .iter()
-            .filter(|tx| !self.chain.iter().any(|block| block.transactions.iter().any(|t| t == *tx)))
-            .cloned()
-            .collect();
+        // Get pending transactions from mempool (up to MAX_BLOCK_SIZE worth)
+        let transactions: Vec<Transaction> = self.mempool.get_pending(1000); // reasonable limit
         if transactions.is_empty() {
             warn!("Все pending_transactions уже включены в блоки");
             let _ = progress_tx.send("Все pending_transactions уже включены в блоки".to_string());
@@ -588,6 +611,7 @@ impl Blockchain {
 
         if let Some(mut block) = block {
             let balance_start_time = SystemTime::now();
+            let mut mined_txids = Vec::new();
             for tx in &block.transactions {
                 let mut sender_final = 0u64;
                 // Skip balance check for coinbase (sender "coinbase" has no balance to deduct)
@@ -599,6 +623,8 @@ impl Blockchain {
                     }
                     sender_final = sender_balance - tx.amount;
                     self.balances.entry(tx.sender.clone()).or_default().balance = sender_final;
+                    // Track txid for mempool removal
+                    mined_txids.push(crate::serialize::txid(tx));
                 }
                 let receiver_balance = self.balances.get(&tx.receiver).map(|a| a.balance).unwrap_or(0);
                 let receiver_final = receiver_balance + tx.amount;
@@ -612,19 +638,15 @@ impl Blockchain {
                 .as_secs_f64();
             debug!(duration_secs = balance_duration, "Обновление балансов завершено");
 
+            // Remove mined transactions from mempool
+            for tx_id in mined_txids {
+                self.mempool.remove(&tx_id);
+            }
+
             self.chain.push(block.clone());
             let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
-            for tx in &self.pending_transactions {
-                let key = format!("{}:{}", tx.sender, tx.nonce).into_bytes();
-                debug!(key = ?key, "Удаление ключа");
-                if key.is_empty() {
-                    error!(nonce = tx.nonce, "Пустой ключ для транзакции");
-                    continue;
-                }
-                if let Err(e) = db.delete(&key) {
-                    error!(sender = %tx.sender, nonce = tx.nonce, error = %e, "Ошибка удаления транзакции из LevelDB");
-                }
-            }
+            // Clean up old pending transaction keys from LevelDB (legacy)
+            // Note: We don't track which exact keys were mined, so we keep them for now
             if let Err(e) = db.put(b"chain", &serde_json::to_vec(&self.chain).unwrap()) {
                 error!(error = %e, "Ошибка сохранения цепочки блоков в LevelDB");
             }
@@ -635,7 +657,6 @@ impl Blockchain {
                 error!(error = %e, "Ошибка сохранения сложности в LevelDB");
             }
             drop(db);
-            self.pending_transactions.clear();
             let total_duration = SystemTime::now()
                 .duration_since(total_start_time)
                 .unwrap()
@@ -746,7 +767,7 @@ impl Blockchain {
         }
     }
 
-    fn add_transaction(&mut self, transaction: Transaction) -> bool {
+    fn add_transaction(&mut self, transaction: Transaction) -> Result<(), StrangecoinError> {
         let start_time = SystemTime::now();
         debug!(?transaction, "Начало добавления транзакции");
         if transaction.sender.is_empty() || transaction.receiver.is_empty() {
@@ -755,7 +776,7 @@ impl Blockchain {
                 .unwrap()
                 .as_secs_f64();
             warn!(duration_secs = duration, "Пустой адрес отправителя или получателя");
-            return false;
+            return Err(StrangecoinError::SizeLimitExceeded("empty address"));
         }
         let tx_size = match serde_json::to_vec(&transaction) {
             Ok(v) => v.len(),
@@ -765,7 +786,7 @@ impl Blockchain {
                     .unwrap()
                     .as_secs_f64();
                 error!(error = %e, duration_secs = duration, "Ошибка сериализации транзакции для проверки размера");
-                return false;
+                return Err(StrangecoinError::SerializationError(e));
             }
         };
         if tx_size > crate::network::protocol::MAX_TX_SIZE {
@@ -774,121 +795,16 @@ impl Blockchain {
                 .unwrap()
                 .as_secs_f64();
             warn!(tx_size, limit = crate::network::protocol::MAX_TX_SIZE, duration_secs = duration, "TX size limit exceeded");
-            return false;
+            return Err(StrangecoinError::SizeLimitExceeded("transaction"));
         }
-        if transaction.chain_id != crate::consensus::current_chain_id() {
-            let duration = SystemTime::now()
-                .duration_since(start_time)
-                .unwrap()
-                .as_secs_f64();
-            warn!(expected_chain_id = crate::consensus::current_chain_id(), got_chain_id = transaction.chain_id, duration_secs = duration, "Неверный chain_id");
-            return false;
-        }
-        if !transaction.is_coinbase {
-            let sender_nonce = self.balances.get(&transaction.sender).map(|a| a.nonce).unwrap_or(0);
-            if transaction.nonce != sender_nonce + 1 {
-                let duration = SystemTime::now()
-                    .duration_since(start_time)
-                    .unwrap()
-                    .as_secs_f64();
-                warn!(expected_nonce = sender_nonce + 1, got_nonce = transaction.nonce, duration_secs = duration, "Неверный nonce");
-                return false;
-            }
-            if let Err(e) = crate::consensus::verify_transaction(&transaction) {
-                let duration = SystemTime::now()
-                    .duration_since(start_time)
-                    .unwrap()
-                    .as_secs_f64();
-                warn!(error = %e, duration_secs = duration, "Валидация транзакции не удалась");
-                return false;
-            }
-        }
-        if self.pending_transactions.contains(&transaction) {
-            let duration = SystemTime::now()
-                .duration_since(start_time)
-                .unwrap()
-                .as_secs_f64();
-            warn!(duration_secs = duration, "Транзакция уже существует в pending_transactions");
-            return false;
-        }
-        let key = format!("{}:{}", transaction.sender, transaction.nonce).into_bytes();
-        let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
-        if db.get(&key).is_some() {
-            let duration = SystemTime::now()
-                .duration_since(start_time)
-                .unwrap()
-                .as_secs_f64();
-            warn!(sender = %transaction.sender, nonce = transaction.nonce, duration_secs = duration, "Транзакция уже существует в LevelDB");
-            return false;
-        }
-        for existing_tx in &self.pending_transactions {
-            if (existing_tx.sender == transaction.sender || existing_tx.receiver == transaction.sender) &&
-                (transaction.sender != transaction.receiver) {
-                let duration = SystemTime::now()
-                    .duration_since(start_time)
-                    .unwrap()
-                    .as_secs_f64();
-                warn!(
-                    sender = %transaction.sender,
-                    existing_sender = %existing_tx.sender,
-                    wallet = %transaction.sender,
-                    duration_secs = duration,
-                    "Конфликт транзакции"
-                );
-                return false;
-            }
-        }
-        let sender_balance = {
-                let sender_account = self.balances.entry(transaction.sender.clone()).or_default();
-                sender_account.balance
-            };
-            if sender_balance >= transaction.amount {
-                // Balance will be updated when block is mined (in mine_block)
-                // Only update nonce here to prevent replay within mempool
-                let sender_account = self.balances.get_mut(&transaction.sender).unwrap();
-                sender_account.nonce = transaction.nonce;
-            let value = match serde_json::to_vec(&transaction) {
-                Ok(value) => value,
-                Err(e) => {
-                    let duration = SystemTime::now()
-                        .duration_since(start_time)
-                        .unwrap()
-                        .as_secs_f64();
-                    error!(sender = %transaction.sender, nonce = transaction.nonce, error = %e, duration_secs = duration, "Ошибка сериализации транзакции");
-                    return false;
-                }
-            };
-            if let Err(e) = db.put(&key, &value) {
-                let duration = SystemTime::now()
-                    .duration_since(start_time)
-                    .unwrap()
-                    .as_secs_f64();
-                error!(sender = %transaction.sender, nonce = transaction.nonce, error = %e, duration_secs = duration, "Ошибка сохранения транзакции в LevelDB");
-                return false;
-            }
-            drop(db);
-            self.pending_transactions.push(transaction);
-            self.save_state();
-            let duration = SystemTime::now()
-                .duration_since(start_time)
-                .unwrap()
-                .as_secs_f64();
-            info!(duration_secs = duration, pending_count = self.pending_transactions.len(), "Транзакция добавлена и сохранена в LevelDB");
-            true
-        } else {
-            let duration = SystemTime::now()
-                .duration_since(start_time)
-                .unwrap()
-                .as_secs_f64();
-            warn!(
-                sender = %transaction.sender,
-                balance = sender_balance,
-                required = transaction.amount,
-                duration_secs = duration,
-                "Недостаточно средств"
-            );
-            false
-        }
+        let account_state = self.balances.get(&transaction.sender).cloned().unwrap_or_default();
+        self.mempool.insert(transaction, &account_state)?;
+        let duration = SystemTime::now()
+            .duration_since(start_time)
+            .unwrap()
+            .as_secs_f64();
+        info!(duration_secs = duration, pending_count = self.mempool.len(), "Транзакция добавлена в mempool");
+        Ok(())
     }
 
     fn validate_chain(&self) -> bool {
@@ -985,22 +901,22 @@ impl Blockchain {
             total_supply_before_block = expected_balances.values().sum();
         }
 
-        // Проверяем неподтверждённые транзакции
+        // Проверяем неподтверждённые транзакции (mempool)
         let mut temp_balances = expected_balances.clone();
         debug!(?temp_balances, "Проверка неподтверждённых транзакций, начальные temp_balances");
-        for tx in &self.pending_transactions {
+        for tx in self.mempool.transactions() {
             debug!(nonce = tx.nonce, sender = %tx.sender, receiver = %tx.receiver, amount = tx.amount, "Обработка неподтверждённой транзакции");
             let sender_balance = temp_balances.get(&tx.sender).unwrap_or(&0);
             debug!(sender = %tx.sender, balance = *sender_balance, "Текущий баланс отправителя в temp_balances");
             if *sender_balance < tx.amount {
-                warn!(sender = %tx.sender, nonce = tx.nonce, required = tx.amount, available = *sender_balance, "Недостаточно средств в pending_transactions");
+                warn!(sender = %tx.sender, nonce = tx.nonce, required = tx.amount, available = *sender_balance, "Недостаточно средств в mempool");
                 return false;
             }
             *temp_balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
             *temp_balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
             debug!(sender = %tx.sender, amount = tx.amount, new_balance = temp_balances.get(&tx.sender).unwrap_or(&0), "Баланс отправителя уменьшен");
             debug!(receiver = %tx.receiver, amount = tx.amount, new_balance = temp_balances.get(&tx.receiver).unwrap_or(&0), "Баланс получателя увеличен");
-            debug!(nonce = tx.nonce, ?temp_balances, "Обновлённые temp_balances после pending транзакции");
+            debug!(nonce = tx.nonce, ?temp_balances, "Обновлённые temp_balances после mempool транзакции");
         }
 
         // Проверяем структуру цепочки и timestamp'ы
@@ -1077,7 +993,8 @@ impl Blockchain {
 
     fn save_state(&mut self) {
         let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
-        for tx in &self.pending_transactions {
+        // Save mempool transactions
+        for tx in self.mempool.transactions() {
             let key = format!("{}:{}", tx.sender, tx.nonce).into_bytes();
             debug!(sender = %tx.sender, nonce = tx.nonce, "Сохранение транзакции в LevelDB");
             match db.get(&key) {
@@ -1086,7 +1003,7 @@ impl Blockchain {
                     continue;
                 }
                 None => {
-                    let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
+                    let value = serde_json::to_vec(&tx).expect("Ошибка сериализации транзакции");
                     db.put(&key, &value).expect("Ошибка сохранения транзакции в LevelDB");
                 }
             }
@@ -1130,17 +1047,20 @@ impl Node {
                     let lock_duration = SystemTime::now().duration_since(lock_start_time).unwrap().as_secs_f64();
                     debug!(mining_count, lock_duration_secs = lock_duration, "Захват Mutex для blockchain");
                     debug!(mining_count, ?task.transaction, "Проверка транзакции");
-                    if blockchain.add_transaction(task.transaction.clone()) {
-                        info!(mining_count, "Транзакция успешно добавлена, начало майнинга");
-                        blockchain.mine_block(progress_tx_clone)
-                    } else {
-                        warn!(mining_count, "Транзакция отклонена, попытка майнить существующие транзакции");
-                        if !blockchain.pending_transactions.is_empty() {
+                    match blockchain.add_transaction(task.transaction.clone()) {
+                        Ok(_) => {
+                            info!(mining_count, "Транзакция успешно добавлена, начало майнинга");
                             blockchain.mine_block(progress_tx_clone)
-                        } else {
-                            let _ = task.progress_tx.send(format!("Ошибка: Нет транзакций для майнинга в задаче {}", mining_count));
-                            warn!(mining_count, "Нет транзакций для майнинга");
-                            None
+                        }
+                        Err(e) => {
+                            warn!(mining_count, error = %e, "Транзакция отклонена, попытка майнить существующие транзакции");
+                            if !blockchain.mempool.is_empty() {
+                                blockchain.mine_block(progress_tx_clone)
+                            } else {
+                                let _ = task.progress_tx.send(format!("Ошибка: Нет транзакций для майнинга в задаче {}", mining_count));
+                                warn!(mining_count, "Нет транзакций для майнинга");
+                                None
+                            }
                         }
                     }
                 })) {
@@ -1333,8 +1253,8 @@ fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
                                         return;
                                     }
                                 };
-                                let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                                let current_pending = blockchain.pending_transactions.clone();
+let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                                let current_pending: Vec<Transaction> = blockchain.mempool.transactions();
 
                                 // Принимаем только строго более длинную цепочку, чтобы не откатывать уже намайненные блоки
                                 if temp_blockchain.chain.len() > blockchain.chain.len() {
@@ -1342,29 +1262,29 @@ fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
                                         chain: temp_blockchain.chain.clone(),
                                         balances: temp_blockchain.balances.clone(),
                                         difficulty: temp_blockchain.difficulty,
-                                        pending_transactions: vec![],
+                                        mempool: crate::mempool::Mempool::new(),
                                         db: blockchain.db.clone(),
                                     };
-                                    // Объединяем pending_transactions, добавляя только валидные
+                                    // Объединяем mempool, добавляя только валидные
                                     let mut merged_pending = vec![];
-                                    for tx in temp_blockchain.pending_transactions.iter() {
-                                        if !merged_pending.iter().any(|t| t == tx) && new_blockchain.add_transaction(tx.clone()) {
+                                    for tx in temp_blockchain.mempool_txs.iter() {
+                                        if !merged_pending.iter().any(|t| t == tx) && new_blockchain.add_transaction(tx.clone()).is_ok() {
                                             merged_pending.push(tx.clone());
                                             info!(sender = %tx.sender, nonce = tx.nonce, "Добавлена транзакция от узла");
                                         }
                                     }
                                     for tx in current_pending.iter() {
-                                        if !merged_pending.iter().any(|t| t == tx) && new_blockchain.add_transaction(tx.clone()) {
+                                        if !merged_pending.iter().any(|t| t == tx) && new_blockchain.add_transaction(tx.clone()).is_ok() {
                                             merged_pending.push(tx.clone());
                                             info!(sender = %tx.sender, nonce = tx.nonce, "Сохранена локальная транзакция");
                                         }
                                     }
-                                    new_blockchain.pending_transactions = merged_pending;
+                                    // Note: merged_pending is tracked in mempool via add_transaction
                                     if new_blockchain.validate_chain() {
                                         let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
-                                        for tx in &new_blockchain.pending_transactions {
+                                        for tx in new_blockchain.mempool.transactions() {
                                             let key = format!("{}:{}", tx.sender, tx.nonce).into_bytes();
-                                            let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
+                                            let value = serde_json::to_vec(&tx).expect("Ошибка сериализации транзакции");
                                             if let Err(e) = db.put(&key, &value) {
                                                 error!(sender = %tx.sender, nonce = tx.nonce, error = %e, "Ошибка сохранения транзакции в LevelDB");
                                             }
@@ -1377,7 +1297,7 @@ fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
                                             chain: temp_blockchain.chain,
                                             balances: temp_blockchain.balances,
                                             difficulty: temp_blockchain.difficulty,
-                                            pending_transactions: blockchain.pending_transactions.clone(),
+                                            mempool: crate::mempool::Mempool::new(),
                                             db: blockchain.db.clone(),
                                         });
                                     } else {
@@ -1385,20 +1305,12 @@ fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
                                     }
                                 } else {
                                     // Обновляем только pending_transactions, добавляя только валидные
-                                    let mut new_pending = blockchain.pending_transactions.clone();
                                     for tx in temp_blockchain.pending_transactions.iter() {
-                                        if !new_pending.iter().any(|t| t == tx) && blockchain.add_transaction(tx.clone()) {
-                                            new_pending.push(tx.clone());
-                                            info!(sender = %tx.sender, nonce = tx.nonce, "Добавлена транзакция от узла");
+                                        if !blockchain.mempool.contains(&crate::serialize::txid(&tx)) {
+                                            let _ = blockchain.add_transaction(tx.clone());
                                         }
                                     }
-                                    for tx in current_pending.iter() {
-                                        if !new_pending.iter().any(|t| t == tx) && blockchain.add_transaction(tx.clone()) {
-                                            new_pending.push(tx.clone());
-                                            info!(sender = %tx.sender, nonce = tx.nonce, "Сохранена локальная транзакция");
-                                        }
-                                    }
-                                    blockchain.pending_transactions = new_pending;
+                                    // current_pending is already in mempool
                                     blockchain.save_state();
                                     info!("Обновлены pending_transactions через UPDATE_BLOCKCHAIN");
                                 }
@@ -1431,7 +1343,7 @@ fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
         let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
         let current_chain_length = blockchain.chain.len();
         let current_timestamp = blockchain.chain.last().map(|b| b.timestamp).unwrap_or(0);
-        let current_pending = blockchain.pending_transactions.clone();
+        let current_pending: Vec<Transaction> = blockchain.mempool.transactions();
         let current_block_count = blockchain.chain.iter().filter(|b| !b.transactions.is_empty()).count();
         let current_balances = blockchain.balances.clone();
         let wallet_address = self.address.clone();
@@ -1503,7 +1415,13 @@ fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
                                 chain: received_blockchain.chain.clone(),
                                 balances: received_blockchain.balances.clone(),
                                 difficulty: received_blockchain.difficulty,
-                                pending_transactions: received_blockchain.pending_transactions.clone(),
+                                mempool: {
+                                    let mut mp = crate::mempool::Mempool::new();
+                                    for tx in received_blockchain.mempool_txs.iter() {
+                                        let _ = mp.insert(tx.clone(), &AccountState::default());
+                                    }
+                                    mp
+                                },
                                 db: existing_db.clone(),
                             };
                             info!(peer = %peer, chain_len = temp_blockchain.chain.len(), chain = ?temp_blockchain.chain, "Полученная цепочка от узла");
@@ -1515,43 +1433,37 @@ fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
                                     chain: temp_blockchain.chain.clone(),
                                     balances: temp_blockchain.balances.clone(),
                                     difficulty: temp_blockchain.difficulty,
-                                    pending_transactions: vec![],
+                                    mempool: crate::mempool::Mempool::new(),
                                     db: existing_db.clone(),
                                 };
-                                let mut merged_pending = vec![];
                                 let mut added_transactions = 0;
 
-                                for tx in temp_blockchain.pending_transactions.iter() {
-                                    if !new_blockchain.chain.iter().any(|block| block.transactions.iter().any(|t| t == tx)) &&
-                                        !merged_pending.iter().any(|t| t == tx) &&
-                                        new_blockchain.add_transaction(tx.clone()) {
-                                        merged_pending.push(tx.clone());
+                                for tx in temp_blockchain.mempool.transactions() {
+                                    if !new_blockchain.chain.iter().any(|block| block.transactions.iter().any(|t| *t == tx)) &&
+                                        new_blockchain.add_transaction(tx.clone()).is_ok() {
                                         added_transactions += 1;
                                         info!(peer = %peer, sender = %tx.sender, nonce = tx.nonce, "Добавлена транзакция от узла");
                                     }
                                 }
 
                                 for tx in current_pending.iter() {
-                                    if !new_blockchain.chain.iter().any(|block| block.transactions.iter().any(|t| t == tx)) &&
-                                        !merged_pending.iter().any(|t| t == tx) &&
-                                        new_blockchain.add_transaction(tx.clone()) {
-                                        merged_pending.push(tx.clone());
+                                    if !new_blockchain.chain.iter().any(|block| block.transactions.iter().any(|t| *t == *tx)) &&
+                                        new_blockchain.add_transaction(tx.clone()).is_ok() {
                                         added_transactions += 1;
                                         info!(sender = %tx.sender, nonce = tx.nonce, "Сохранена локальная транзакция");
                                     }
                                 }
 
-                                new_blockchain.pending_transactions = merged_pending;
-                                info!(added_transactions, peer = %peer, "Обновлено pending_transactions с узла");
+                                info!(added_transactions, peer = %peer, "Обновлено mempool с узла");
 
                                 if new_blockchain.validate_chain() {
                                     let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                                     let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
                                     let chain_data = serde_json::to_vec(&new_blockchain.chain).expect("Ошибка сериализации chain");
                                     debug!(chain_len = new_blockchain.chain.len(), chain_size = chain_data.len(), "Сохраняемый chain");
-                                    for tx in &new_blockchain.pending_transactions {
+                                    for tx in new_blockchain.mempool.transactions() {
                                         let key = format!("{}:{}", tx.sender, tx.nonce).into_bytes();
-                                        let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
+                                        let value = serde_json::to_vec(&tx).expect("Ошибка сериализации транзакции");
                                         if let Err(e) = db.put(&key, &value) {
                                             error!(sender = %tx.sender, nonce = tx.nonce, error = %e, "Ошибка сохранения транзакции в LevelDB");
                                         }
@@ -1574,7 +1486,7 @@ fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
                                         chain: blockchain.chain.clone(),
                                         balances: blockchain.balances.clone(),
                                         difficulty: blockchain.difficulty,
-                                        pending_transactions: blockchain.pending_transactions.clone(),
+                                        mempool: crate::mempool::Mempool::new(),
                                         db: existing_db.clone(),
                                     });
                                 } else {
@@ -1582,28 +1494,12 @@ fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
                                 }
                             } else {
                                 let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                                let mut new_pending = blockchain.pending_transactions.clone();
-                                let mut added_transactions = 0;
-                                for tx in temp_blockchain.pending_transactions.iter() {
-                                    if !blockchain.chain.iter().any(|block| block.transactions.iter().any(|t| t == tx)) &&
-                                        !new_pending.iter().any(|t| t == tx) &&
-                                        blockchain.add_transaction(tx.clone()) {
-                                        new_pending.push(tx.clone());
-                                        added_transactions += 1;
-                                        info!(peer = %peer, sender = %tx.sender, nonce = tx.nonce, "Добавлена транзакция от узла");
+                                for tx in temp_blockchain.mempool.transactions() {
+                                    if !blockchain.chain.iter().any(|block| block.transactions.iter().any(|t| *t == tx)) &&
+                                        !blockchain.mempool.contains(&crate::serialize::txid(&tx)) {
+                                        let _ = blockchain.add_transaction(tx.clone());
                                     }
                                 }
-                                for tx in current_pending.iter() {
-                                    if !blockchain.chain.iter().any(|block| block.transactions.iter().any(|t| t == tx)) &&
-                                        !new_pending.iter().any(|t| t == tx) &&
-                                        blockchain.add_transaction(tx.clone()) {
-                                        new_pending.push(tx.clone());
-                                        added_transactions += 1;
-                                        info!(sender = %tx.sender, nonce = tx.nonce, "Сохранена локальная транзакция");
-                                    }
-                                }
-                                blockchain.pending_transactions = new_pending;
-                                info!(added_transactions, peer = %peer, "Обновлено pending_transactions с узла");
                                 blockchain.save_state();
                             }
                         }
@@ -1642,9 +1538,9 @@ impl eframe::App for WalletApp {
             let received_balance = received_blockchain.balances.get(&self.wallet_address).map(|a| a.balance).unwrap_or(0);
             if received_blockchain.chain.len() > blockchain.chain.len() && received_blockchain.validate_chain() {
                 let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
-                for tx in &received_blockchain.pending_transactions {
+                for tx in received_blockchain.mempool.transactions() {
                     let key = format!("{}:{}", tx.sender, tx.nonce).into_bytes();
-                    let value = serde_json::to_vec(tx).expect("Ошибка сериализации транзакции");
+                    let value = serde_json::to_vec(&tx).expect("Ошибка сериализации транзакции");
                     if let Err(e) = db.put(&key, &value) {
                         error!(sender = %tx.sender, nonce = tx.nonce, error = %e, "Ошибка сохранения транзакции в LevelDB");
                     }
@@ -1687,7 +1583,7 @@ impl eframe::App for WalletApp {
                     .blockchain
                     .lock()
                     .expect("Не удалось захватить Mutex для blockchain")
-                    .pending_transactions
+                    .mempool
                     .len()
             ));
             if !self.is_authenticated {
@@ -1892,7 +1788,7 @@ if let Some(ref progress_rx) = self.progress_rx {
                         {
                             let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
                             debug!(?transaction, "Транзакция для добавления");
-                            if !blockchain.add_transaction(transaction.clone()) {
+                            if blockchain.add_transaction(transaction.clone()).is_err() {
                                 self.status = "Недостаточно средств или неверный адрес".to_string();
                                 let duration = SystemTime::now()
                                     .duration_since(start_time)
@@ -2169,7 +2065,7 @@ mod tests {
             chain: vec![],
             balances: HashMap::new(),
             difficulty: 0,
-            pending_transactions: vec![],
+            mempool: crate::mempool::Mempool::new(),
             db: Arc::new(Mutex::new(db)),
         };
         bc.create_genesis_block();
@@ -2197,7 +2093,7 @@ mod tests {
                 w.chain.clone(),
                 w.balances.clone(),
                 w.difficulty,
-                w.pending_transactions.clone(),
+                w.mempool.transactions(),
             )
         };
         for (i, w) in wallets.iter().enumerate() {
@@ -2206,7 +2102,10 @@ mod tests {
                 guard.chain = chain.clone();
                 guard.balances = balances.clone();
                 guard.difficulty = difficulty;
-                guard.pending_transactions = pending.clone();
+                guard.mempool = crate::mempool::Mempool::new();
+                for tx in &pending {
+                    let _ = guard.mempool.insert(tx.clone(), &AccountState::default());
+                }
                 guard.save_state();
             }
         }
@@ -2302,7 +2201,7 @@ mod tests {
             {
                 let mut bc = wallets[s].lock().unwrap();
                 assert!(
-                    bc.add_transaction(transaction),
+                    bc.add_transaction(transaction).is_ok(),
                     "Транзакция {} отклонена (недостаточно средств?)",
                     tx_index
                 );
@@ -2342,7 +2241,7 @@ mod tests {
             src.chain.clone(),
             src.balances.clone(),
             src.difficulty,
-            src.pending_transactions.clone(),
+            src.mempool.transactions(),
         );
         drop(src);
 
@@ -2360,28 +2259,28 @@ mod tests {
             chain: src_chain,
             balances: src_balances,
             difficulty: src_difficulty,
-            pending_transactions: vec![],
+            mempool: crate::mempool::Mempool::new(),
             db: tgt.db.clone(),
         };
         let mut merged_pending = vec![];
         for tx in src_pending.iter() {
             if !new_blockchain.chain.iter().any(|b| b.transactions.iter().any(|t| t == tx))
                 && !merged_pending.iter().any(|t| t == tx)
-                && new_blockchain.add_transaction(tx.clone())
+                && new_blockchain.add_transaction(tx.clone()).is_ok()
             {
                 merged_pending.push(tx.clone());
             }
         }
-        let current_pending = tgt.pending_transactions.clone();
+        let current_pending = tgt.mempool.transactions();
         for tx in current_pending.iter() {
             if !new_blockchain.chain.iter().any(|b| b.transactions.iter().any(|t| t == tx))
                 && !merged_pending.iter().any(|t| t == tx)
-                && new_blockchain.add_transaction(tx.clone())
+                && new_blockchain.add_transaction(tx.clone()).is_ok()
             {
                 merged_pending.push(tx.clone());
             }
         }
-        new_blockchain.pending_transactions = merged_pending;
+        // Note: merged_pending is tracked in mempool via add_transaction
 
         if new_blockchain.validate_chain() {
             *tgt = new_blockchain;
@@ -2461,7 +2360,7 @@ mod tests {
             sig_vec.extend_from_slice(&sig_bytes);
             sig_vec.push(rec_id.to_i32() as u8);
             tx.signature = sig_vec;
-            assert!(bc.add_transaction(tx), "Транзакция отклонена");
+            assert!(bc.add_transaction(tx).is_ok(), "Транзакция отклонена");
             mine_current(&mut bc);
         }
 
@@ -2520,7 +2419,7 @@ mod tests {
             sig_vec.extend_from_slice(&sig_bytes);
             sig_vec.push(rec_id.to_i32() as u8);
             tx.signature = sig_vec;
-            assert!(bc.add_transaction(tx), "Транзакция отклонена");
+            assert!(bc.add_transaction(tx).is_ok(), "Транзакция отклонена");
             mine_current(&mut bc);
         }
         // bc2: только грант -> [g, gr2] (короче, другая история)
@@ -2640,7 +2539,7 @@ mod tests {
             sig_vec.extend_from_slice(&sig_bytes);
             sig_vec.push(rec_id.to_i32() as u8);
             tx.signature = sig_vec;
-            assert!(bc.add_transaction(tx), "Транзакция отклонена");
+            assert!(bc.add_transaction(tx).is_ok(), "Транзакция отклонена");
             assert!(bc.mine_block(mpsc::channel().0).is_some(), "Майнинг не удался");
         }
 
@@ -2774,7 +2673,7 @@ mod tests {
             sig_vec.extend_from_slice(&sig_bytes);
             sig_vec.push(rec_id.to_i32() as u8);
             tx.signature = sig_vec;
-            assert!(bc.add_transaction(tx), "Передача отклонена на узле 1");
+            assert!(bc.add_transaction(tx).is_ok(), "Передача отклонена на узле 1");
             assert!(bc.mine_block(mpsc::channel().0).is_some(), "Майнинг не удался");
         }
 

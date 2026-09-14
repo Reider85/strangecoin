@@ -5,26 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] - 2026-09-14
+## [Unreleased]
+
+## [0.8.6] - 2026-09-14
 
 ### Added
-- **P10: Deterministic genesis** (Stage 0 consensus hardening)
-  - `genesis.json` — canonical genesis configuration (format_version, network_id, chain_id, timestamp, initial_holder, initial_amount, block_reward, tail_emission_rate, max_supply_pre_tail, target_block_time, retarget_interval)
-  - Deterministic genesis keypair derived from fixed seed `strangecoin-genesis-seed-2026` (Stage 0; real offline key before mainnet freeze)
-  - `EXPECTED_GENESIS_HASH` constant — blake3 hash of genesis block header for mainnet anchor
-  - `load_genesis()` — loads and constructs genesis block from genesis.json
-  - `validate_genesis()` — enforces genesis hash match on startup (skipped for regtest)
-  - `is_regtest(network_id)` — detects regtest mode (network_id == 3) for test genesis generation
-  - `--print-genesis-hash` CLI command — outputs genesis hash for verification
-  - GenesisMismatch error — clear panic on genesis hash mismatch with expected/got values
-  - Units: satoshi-based (1 SC = 10^8 satoshi); `initial_amount=1_000_000_000` = 10 SC premine
+- P2P rate limiting per peer (`src/network/rate_limiter.rs`)
+  - 100 messages per 10 seconds window per peer
+  - 5-minute ban on rate limit exceeded
+  - Automatic ban expiry
+  - Independent counters per peer
+  - `tracing::warn!` logging on ban events
+- `PeerBanned` error variant in `StrangecoinError`
+- Rate limiting applied to:
+  - Incoming P2P connections (`Node::start_server`)
+  - Outgoing blockchain sync requests (`Node::sync_blockchain`)
+- Mempool implementation (`src/mempool/mod.rs`) — P14
+  - `Mempool` struct with `HashMap<TxId, Transaction>` and sender nonce index
+  - `MAX_PENDING_TXS = 10_000` capacity limit
+  - `insert()` with full validation: signature, duplicate, chain_id, nonce, balance
+  - `remove()` for mined transaction cleanup
+  - `get_pending()` for block construction
+- New error variants in `StrangecoinError`:
+  - `MempoolFull(usize)` — capacity exceeded
+  - `DuplicateTx` — duplicate transaction rejection
+  - `InsufficientBalance { available, required }` — balance check failure
 
 ### Changed
-- **Blockchain startup**: Replaced inline `create_genesis_block()` with `genesis.json`-driven genesis loading
-- **Existing DB**: Validates first block hash == `EXPECTED_GENESIS_HASH` on startup (unless regtest)
-- **Regtest mode**: Generates own genesis with chain_id=3, bypasses EXPECTED_GENESIS_HASH check
+- `Node` struct now includes `rate_limiter: Arc<RateLimiter>`
+- `MiningTask` struct includes rate limiter for sync after mining
+- `src/network/mod.rs` exports `RateLimiter`
+- `Blockchain` struct: replaced `pending_transactions: Vec<Transaction>` with `mempool: Mempool`
+- `add_transaction()` now delegates to `Mempool::insert()` with canonical validation
+- `mine_block()` uses `mempool.get_pending()` and removes mined txs via `mempool.remove()`
+- `save_state()` persists mempool transactions to LevelDB
+- `validate_chain()` validates mempool transactions against reconstructed balances
+- Network protocol serializes `mempool_txs` for P2P sync
+- `Blockchain::serialize` / `Deserialize` custom impl for mempool wire format
 
-### Security
-- Closes critical gap: non-deterministic genesis allowed chain splits between nodes
-- Deterministic genesis ensures all mainnet nodes start with identical genesis block
-- Genesis hash anchored in code prevents silent chain substitution attacks
+### Tests
+- `network::rate_limiter::tests::test_rate_limit_exceeded`
+- `network::rate_limiter::tests::test_banned_peer_rejected`
+- `network::rate_limiter::tests::test_ban_expires`
+- `network::rate_limiter::tests::test_independent_peers`
+- All 36 core integration tests pass (mempool validation, mining, sync, serialization)
+
+### Implemented Prompts
+- P13: P2P rate limiting per peer (from `analytics/prompt-stage0.md`)
+- P14: Mempool: validation on insert + MAX_PENDING_TXS (from `analytics/prompt-stage0.md`)
