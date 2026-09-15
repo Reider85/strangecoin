@@ -1,3 +1,19 @@
+//! # Lock Ordering
+//!
+//! To prevent deadlocks, locks must always be acquired in this order:
+//!
+//! 1. **blockchain** (via `RwLock<BlockchainInner>`) — outer, first.
+//!    The blockchain is the top-level container owning chain, balances, mempool.
+//!    See `ARCHITECT3.md §3.4`: state_cache is the sole read path for balances,
+//!    facade is the sole entry point.
+//!
+//! 2. **wallet** (file-based keystore lock, future in-memory lock) — inner, second.
+//!    Wallet is a peripheral entity; access occurs in context of a known account.
+//!
+//! Never acquire wallet lock while holding blockchain write lock from a different call site.
+//! Read locks on blockchain may be held while acquiring wallet lock.
+//! This ordering is enforced by the deadlock test in `main.rs` test module.
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]

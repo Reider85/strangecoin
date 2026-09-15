@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize, Deserializer};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use eframe::egui;
@@ -172,7 +172,7 @@ impl<'de> Deserialize<'de> for Blockchain {
 // Структура для команды майнинга
 #[derive(Clone)]
 struct MiningTask {
-    blockchain: Arc<Mutex<Blockchain>>,
+    blockchain: Arc<RwLock<Blockchain>>,
     transaction: Transaction,
     mining_status: Arc<Mutex<MiningStatus>>,
     progress_tx: mpsc::Sender<String>,
@@ -182,7 +182,7 @@ struct MiningTask {
 
 // Структура узла
 struct Node {
-    blockchain: Arc<Mutex<Blockchain>>,
+    blockchain: Arc<RwLock<Blockchain>>,
     peers: Arc<Mutex<Vec<String>>>,
     address: String,
     sync_rx: mpsc::Receiver<Blockchain>,
@@ -1001,7 +1001,7 @@ impl Blockchain {
 
 impl Node {
     fn new(address: String, mining_rx: mpsc::Receiver<MiningTask>, sync_tx: mpsc::Sender<Blockchain>, port: u16) -> Self {
-        let blockchain = Arc::new(Mutex::new(Blockchain::new(port)));
+        let blockchain = Arc::new(RwLock::new(Blockchain::new(port)));
         let peers = Arc::new(Mutex::new(vec![]));
         let rate_limiter = Arc::new(crate::network::RateLimiter::new(10, 100));
         let node = Node {
@@ -1023,11 +1023,11 @@ impl Node {
                 let status_tx_clone = task.status_tx.clone();
                 let start_time = SystemTime::now();
                 let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    debug!(mining_count, "Попытка захвата Mutex для blockchain");
+                    debug!(mining_count, "Попытка захвата write lock для blockchain");
                     let lock_start_time = SystemTime::now();
-                    let mut blockchain = task.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                    let mut blockchain = task.blockchain.write().expect("Не удалось захватить write lock для blockchain");
                     let lock_duration = SystemTime::now().duration_since(lock_start_time).unwrap().as_secs_f64();
-                    debug!(mining_count, lock_duration_secs = lock_duration, "Захват Mutex для blockchain");
+                    debug!(mining_count, lock_duration_secs = lock_duration, "Захват write lock для blockchain");
                     debug!(mining_count, ?task.transaction, "Проверка транзакции");
                     match blockchain.add_transaction(task.transaction.clone()) {
                         Ok(_) => {
@@ -1181,7 +1181,7 @@ impl Node {
         let addr = format!("{}:{}", ip, port);
         let peers = self.peers.lock().expect("Не удалось захватить Mutex для peers");
         if peers.contains(&addr) {
-            let blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+            let blockchain = self.blockchain.read().expect("Не удалось захватить read lock для blockchain");
             for (wallet, _) in blockchain.balances.iter() {
                 return Some(wallet.clone());
             }
@@ -1222,8 +1222,8 @@ fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
                             let request = String::from_utf8_lossy(&request_bytes).to_string();
                             debug!(request = %request, "Получен запрос");
 
-                            if request == "GET_BLOCKCHAIN" {
-                                let blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+if request == "GET_BLOCKCHAIN" {
+                                let blockchain = blockchain.read().expect("Не удалось захватить read lock для blockchain");
                                 let response = serde_json::to_string(&*blockchain).unwrap();
                                 let length = response.len() as u32;
                                 let mut data = length.to_be_bytes().to_vec();
@@ -1241,7 +1241,7 @@ fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
                                         return;
                                     }
                                 };
-let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                                let mut blockchain = blockchain.write().expect("Не удалось захватить write lock для blockchain");
                                 let current_pending: Vec<Transaction> = blockchain.mempool.transactions();
 
                                 // Принимаем только строго более длинную цепочку, чтобы не откатывать уже намайненные блоки
@@ -1327,7 +1327,7 @@ let mut blockchain = blockchain.lock().expect("Не удалось захват�
         info!(peers = ?peers, "Список пиров для синхронизации");
 
         // Получаем текущее состояние блокчейна
-        let blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+        let blockchain = self.blockchain.read().expect("Не удалось захватить read lock для blockchain");
         let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
         let current_chain_length = blockchain.chain.len();
         let current_timestamp = blockchain.chain.last().map(|b| b.timestamp).unwrap_or(0);
@@ -1359,7 +1359,7 @@ let mut blockchain = blockchain.lock().expect("Не удалось захват�
             // Отправка UPDATE_BLOCKCHAIN
             if let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
                 let mut writer = BufWriter::new(stream.try_clone().unwrap());
-                let blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                let blockchain = self.blockchain.read().expect("Не удалось захватить read lock для blockchain");
                 let response = serde_json::to_string(&*blockchain).unwrap();
                 let message = format!("UPDATE_BLOCKCHAIN:{}", response);
                 let length = message.len() as u32;
@@ -1445,7 +1445,7 @@ let mut blockchain = blockchain.lock().expect("Не удалось захват�
                                 info!(added_transactions, peer = %peer, "Обновлено mempool с узла");
 
                                 if new_blockchain.validate_chain() {
-                                    let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                                    let mut blockchain = self.blockchain.write().expect("Не удалось захватить write lock для blockchain");
                                     let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
                                     let chain_data = serde_json::to_vec(&new_blockchain.chain).expect("Ошибка сериализации chain");
                                     debug!(chain_len = new_blockchain.chain.len(), chain_size = chain_data.len(), "Сохраняемый chain");
@@ -1481,7 +1481,7 @@ let mut blockchain = blockchain.lock().expect("Не удалось захват�
                                     warn!(peer = %peer, "Полученный блокчейн с узла не прошёл валидацию после объединения");
                                 }
                             } else {
-                                let mut blockchain = self.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                                let mut blockchain = self.blockchain.write().expect("Не удалось захватить write lock для blockchain");
                                 for tx in temp_blockchain.mempool.transactions() {
                                     if !blockchain.chain.iter().any(|block| block.transactions.iter().any(|t| *t == tx)) &&
                                         !blockchain.mempool.contains(&crate::serialize::txid(&tx)) {
@@ -1515,7 +1515,7 @@ impl eframe::App for WalletApp {
         }
 
         while let Ok(received_blockchain) = self.node.sync_rx.try_recv() {
-            let mut blockchain = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+            let mut blockchain = self.node.blockchain.write().expect("Не удалось захватить write lock для blockchain");
             let current_hash = blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
             let received_hash = received_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
             if received_blockchain.chain.is_empty() || received_blockchain.chain.len() <= 1 {
@@ -1569,8 +1569,8 @@ impl eframe::App for WalletApp {
                 "Количество транзакций в базе данных: {}",
                 self.node
                     .blockchain
-                    .lock()
-                    .expect("Не удалось захватить Mutex для blockchain")
+                    .read()
+                    .expect("Не удалось захватить read lock для blockchain")
                     .mempool
                     .len()
             ));
@@ -1690,7 +1690,7 @@ impl eframe::App for WalletApp {
                                     .unwrap()
                                     .as_secs_f64();
                                 info!(duration_secs = duration, wallet_address = %self.wallet_address, "Регистрация успешна");
-                                let mut blockchain = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                                let mut blockchain = self.node.blockchain.write().expect("Не удалось захватить write lock для blockchain");
                                 if !blockchain.balances.contains_key(&self.wallet_address) {
                                     if !blockchain.grant_initial_balance_to_first_wallet(&self.wallet_address) {
                                         blockchain.balances.entry(self.wallet_address.clone()).or_default();
@@ -1721,7 +1721,7 @@ impl eframe::App for WalletApp {
                 ui.heading("Кошелёк");
                 ui.label(format!("Адрес: {}", self.wallet_address));
                 let balance = {
-                    let blockchain = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                    let blockchain = self.node.blockchain.read().expect("Не удалось захватить read lock для blockchain");
                     blockchain.balances.get(&self.wallet_address).map(|a| a.balance).unwrap_or(0)
                 };
                 ui.label(format!("Баланс: {}", balance));
@@ -1773,7 +1773,7 @@ if let Some(ref progress_rx) = self.progress_rx {
                             return;
                         }
                         let sender_nonce = {
-                                let bc = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                                let bc = self.node.blockchain.read().expect("Не удалось захватить read lock для blockchain");
                                 bc.balances.get(&self.wallet_address).map(|a| a.nonce).unwrap_or(0)
                             };
                             let mut transaction = Transaction {
@@ -1820,7 +1820,7 @@ if let Some(ref progress_rx) = self.progress_rx {
                         let mining_progress = Arc::clone(&self.mining_progress);
 
                         {
-                            let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                            let mut blockchain = blockchain.write().expect("Не удалось захватить write lock для blockchain");
                             debug!(?transaction, "Транзакция для добавления");
                             if blockchain.add_transaction(transaction.clone()).is_err() {
                                 self.status = "Недостаточно средств или неверный адрес".to_string();
@@ -2112,8 +2112,8 @@ fn main() {
     ).expect("Ошибка запуска приложения");
 }
 
-fn save_on_exit(blockchain: Arc<Mutex<Blockchain>>) {
-    let mut blockchain = blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+fn save_on_exit(blockchain: Arc<RwLock<Blockchain>>) {
+    let mut blockchain = blockchain.write().expect("Не удалось захватить write lock для blockchain");
     blockchain.save_state();
 }
 
@@ -2160,15 +2160,15 @@ mod tests {
     }
 
     // Синхронизирует все кошельки: самая длинная цепочка распространяется на остальные
-    fn sync_to_longest(wallets: &[Arc<Mutex<Blockchain>>]) {
+    fn sync_to_longest(wallets: &[Arc<RwLock<Blockchain>>]) {
         let (idx, len) = wallets
             .iter()
             .enumerate()
-            .map(|(i, w)| (i, w.lock().unwrap().chain.len()))
+            .map(|(i, w)| (i, w.read().unwrap().chain.len()))
             .max_by_key(|(_, l)| *l)
             .expect("Список кошельков пуст");
         let (chain, balances, difficulty, pending) = {
-            let w = wallets[idx].lock().unwrap();
+            let w = wallets[idx].read().unwrap();
             (
                 w.chain.clone(),
                 w.balances.clone(),
@@ -2177,7 +2177,7 @@ mod tests {
             )
         };
         for (i, w) in wallets.iter().enumerate() {
-            let mut guard = w.lock().unwrap();
+            let mut guard = w.write().unwrap();
             if i != idx && guard.chain.len() < len {
                 guard.chain = chain.clone();
                 guard.balances = balances.clone();
@@ -2192,9 +2192,9 @@ mod tests {
     }
 
     // Сверяет балансы всех кошельков с эталонной моделью
-    fn assert_balances(wallets: &[Arc<Mutex<Blockchain>>], addrs: &[String], expected: &[u64]) {
+    fn assert_balances(wallets: &[Arc<RwLock<Blockchain>>], addrs: &[String], expected: &[u64]) {
         for (i, w) in wallets.iter().enumerate() {
-            let bc = w.lock().unwrap();
+            let bc = w.read().unwrap();
             let bal = bc.balances.get(&addrs[i]).map(|a| a.balance).unwrap_or(0);
             assert_eq!(bal, expected[i], "Баланс кошелька {} не совпадает", addrs[i]);
         }
@@ -2227,16 +2227,16 @@ mod tests {
         let addrs: Vec<String> = keypairs.iter().map(|(a, _)| a.clone()).collect();
 
         let mut dirs: Vec<PathBuf> = Vec::new();
-        let mut wallets: Vec<Arc<Mutex<Blockchain>>> = Vec::new();
+        let mut wallets: Vec<Arc<RwLock<Blockchain>>> = Vec::new();
         for i in 0..5 {
             let dir = temp_db_dir(&format!("wallet_{}", i));
             dirs.push(dir.clone());
-            wallets.push(Arc::new(Mutex::new(create_test_blockchain(&dir))));
+            wallets.push(Arc::new(RwLock::new(create_test_blockchain(&dir))));
         }
 
         // Первый кошелёк получает 10000 из генезис-блока, у остальных 0
         {
-            let mut bc = wallets[0].lock().unwrap();
+            let mut bc = wallets[0].write().unwrap();
             assert!(bc.grant_initial_balance_to_first_wallet(&addrs[0]));
         }
         sync_to_longest(&wallets);
@@ -2253,7 +2253,7 @@ mod tests {
             let amount = amount_for(edge, pass);
 
             let sender_nonce = {
-                let bc = wallets[s].lock().unwrap();
+                let bc = wallets[s].read().unwrap();
                 bc.balances.get(&addrs[s]).map(|a| a.nonce).unwrap_or(0)
             };
 
@@ -2279,7 +2279,7 @@ mod tests {
             transaction.signature = sig_vec;
 
             {
-                let mut bc = wallets[s].lock().unwrap();
+                let mut bc = wallets[s].write().unwrap();
                 assert!(
                     bc.add_transaction(transaction).is_ok(),
                     "Транзакция {} отклонена (недостаточно средств?)",
@@ -2303,7 +2303,7 @@ mod tests {
         assert_balances(&wallets, &addrs, &[0, 0, 0, 0, 10000]);
 
         for w in &wallets {
-            let bc = w.lock().unwrap();
+            let bc = w.read().unwrap();
             assert_eq!(bc.chain.len(), 102, "Цепочка должна содержать генезис-блок, блок первичной эмиссии и 100 блоков транзакций");
             assert!(bc.validate_chain(), "Цепочка не прошла валидацию");
         }
@@ -2315,8 +2315,8 @@ mod tests {
     }
 
     // Воспроизводит обработку UPDATE_BLOCKCHAIN: принятие чужой (более длинной) цепочки после валидации
-    fn adopt_from(target: &Arc<Mutex<Blockchain>>, source: &Arc<Mutex<Blockchain>>) -> bool {
-        let src = source.lock().unwrap();
+    fn adopt_from(target: &Arc<RwLock<Blockchain>>, source: &Arc<RwLock<Blockchain>>) -> bool {
+        let src = source.read().unwrap();
         let (src_chain, src_balances, src_difficulty, src_pending) = (
             src.chain.clone(),
             src.balances.clone(),
@@ -2325,7 +2325,7 @@ mod tests {
         );
         drop(src);
 
-        let mut tgt = target.lock().unwrap();
+        let mut tgt = target.write().unwrap();
         let current_len = tgt.chain.len();
         if src_chain.is_empty() || src_chain.len() <= 1 {
             return false;
@@ -2385,16 +2385,16 @@ mod tests {
         let addrs: Vec<String> = keypairs.iter().map(|(a, _)| a.clone()).collect();
 
         let mut dirs: Vec<PathBuf> = Vec::new();
-        let mut instances: Vec<Arc<Mutex<Blockchain>>> = Vec::new();
+        let mut instances: Vec<Arc<RwLock<Blockchain>>> = Vec::new();
         for i in 0..3 {
             let dir = temp_db_dir(&format!("inst_{}", i));
             dirs.push(dir.clone());
-            instances.push(Arc::new(Mutex::new(create_test_blockchain(&dir))));
+            instances.push(Arc::new(RwLock::new(create_test_blockchain(&dir))));
         }
 
         // Регистрация кошелька в инстансе 1: грант 10000
         {
-            let mut bc = instances[0].lock().unwrap();
+            let mut bc = instances[0].write().unwrap();
             assert!(bc.grant_initial_balance_to_first_wallet(&addrs[0]));
         }
 
@@ -2406,7 +2406,7 @@ mod tests {
 
         // Регистрация кошельков в инстансах 2 и 3 (поведение GUI-обработчика)
         for i in 1..3 {
-            let mut bc = instances[i].lock().unwrap();
+            let mut bc = instances[i].write().unwrap();
             if !bc.balances.contains_key(&addrs[i]) {
                 if !bc.grant_initial_balance_to_first_wallet(&addrs[i]) {
                     bc.balances.entry(addrs[i].clone()).or_default();
@@ -2418,7 +2418,7 @@ mod tests {
         // Перевод 1000 с кошелька 1 на кошелёк 2 и майнинг
         let amount = 1000u64;
         {
-            let mut bc = instances[0].lock().unwrap();
+            let mut bc = instances[0].write().unwrap();
             let sender_nonce = bc.balances.get(&addrs[0]).map(|a| a.nonce).unwrap_or(0);
             let mut tx = Transaction {
                 sender: addrs[0].clone(),
@@ -2462,8 +2462,8 @@ mod tests {
     fn no_rollback_on_shorter_chain() {
         let dir1 = temp_db_dir("norb_1");
         let dir2 = temp_db_dir("norb_2");
-        let bc1 = Arc::new(Mutex::new(create_test_blockchain(&dir1)));
-        let bc2 = Arc::new(Mutex::new(create_test_blockchain(&dir2)));
+        let bc1 = Arc::new(RwLock::new(create_test_blockchain(&dir1)));
+        let bc2 = Arc::new(RwLock::new(create_test_blockchain(&dir2)));
         let secp = Secp256k1::new();
         let (a1, sk1): (String, SecretKey) = {
             let sk = SecretKey::new(&mut OsRng);
@@ -2478,7 +2478,7 @@ mod tests {
 
         // bc1: грант + намайненная транзакция -> [g, gr1, b1]
         {
-            let mut bc = bc1.lock().unwrap();
+            let mut bc = bc1.write().unwrap();
             assert!(bc.grant_initial_balance_to_first_wallet(&a1));
             let sender_nonce = bc.balances.get(&a1).map(|a| a.nonce).unwrap_or(0);
             let mut tx = Transaction {
@@ -2504,13 +2504,13 @@ mod tests {
         }
         // bc2: только грант -> [g, gr2] (короче, другая история)
         {
-            let mut bc = bc2.lock().unwrap();
+            let mut bc = bc2.write().unwrap();
             assert!(bc.grant_initial_balance_to_first_wallet(&a2));
         }
 
         // bc1 не должен откатываться на более короткую цепочку bc2
         assert!(!adopt_from(&bc1, &bc2), "Узел откатился на более короткую цепочку");
-        let bc1_guard = bc1.lock().unwrap();
+        let bc1_guard = bc1.read().unwrap();
         assert_eq!(bc1_guard.chain.len(), 3, "Узел потерял намайненный блок");
         let received = bc1_guard.balances.get(&a2).map(|a| a.balance).unwrap_or(0);
         assert_eq!(received, 1000, "Баланс получателя изменился при отказе от отката");
@@ -2533,12 +2533,12 @@ mod tests {
 
         let ports = [18281u16, 18282, 18283];
         let (sync_tx, _sync_rx) = mpsc::channel::<Blockchain>();
-        let mut nodes: Vec<(Node, PathBuf, Arc<Mutex<Blockchain>>)> = Vec::new();
+        let mut nodes: Vec<(Node, PathBuf, Arc<RwLock<Blockchain>>)> = Vec::new();
         let mut dirs = Vec::new();
         for (i, p) in ports.iter().enumerate() {
             let dir = temp_db_dir(&format!("net_{}", i));
             dirs.push(dir.clone());
-            let bc = Arc::new(Mutex::new(create_test_blockchain(&dir)));
+            let bc = Arc::new(RwLock::new(create_test_blockchain(&dir)));
             let node = Node {
                 blockchain: Arc::clone(&bc),
                 peers: Arc::new(Mutex::new(vec![])),
@@ -2566,7 +2566,7 @@ mod tests {
             .collect();
         let addrs: Vec<String> = keypairs.iter().map(|(a, _)| a.clone()).collect();
         {
-            let mut bc = nodes[0].2.lock().unwrap();
+            let mut bc = nodes[0].2.write().unwrap();
             assert!(bc.grant_initial_balance_to_first_wallet(&addrs[0]), "Грант не создан");
         }
 
@@ -2588,7 +2588,7 @@ mod tests {
 
         // Регистрация кошельков 2 и 3 (грант уже потрачен на первый кошелёк)
         for i in 1..3 {
-            let mut bc = nodes[i].2.lock().unwrap();
+            let mut bc = nodes[i].2.write().unwrap();
             if !bc.balances.contains_key(&addrs[i]) {
                 if !bc.grant_initial_balance_to_first_wallet(&addrs[i]) {
                     bc.balances.entry(addrs[i].clone()).or_default();
@@ -2599,7 +2599,7 @@ mod tests {
 
         // Передача 1000 с узла 1 на кошелёк 2 (намайнивается блок)
         {
-            let mut bc = nodes[0].2.lock().unwrap();
+            let mut bc = nodes[0].2.write().unwrap();
             let sender_nonce = bc.balances.get(&addrs[0]).map(|a| a.nonce).unwrap_or(0);
             let mut tx = Transaction {
                 sender: addrs[0].clone(),
@@ -2641,7 +2641,7 @@ mod tests {
 
         let expected = [10000u64 - 1000, 1000, 0];
         for i in 0..3 {
-            let bc = nodes[i].2.lock().unwrap();
+            let bc = nodes[i].2.read().unwrap();
             let bal = bc.balances.get(&addrs[i]).map(|a| a.balance).unwrap_or(0);
             assert_eq!(bal, expected[i], "Узел {}: баланс кошелька не совпал", i + 1);
             assert!(bc.validate_chain(), "Узел {}: цепочка не прошла валидацию", i + 1);
@@ -2672,12 +2672,12 @@ mod tests {
 
         let ports = [18291u16, 18292, 18293];
         let (sync_tx, _sync_rx) = mpsc::channel::<Blockchain>();
-        let mut nodes: Vec<(Node, Arc<Mutex<Blockchain>>, Arc<Mutex<Vec<String>>>)> = Vec::new();
+        let mut nodes: Vec<(Node, Arc<RwLock<Blockchain>>, Arc<Mutex<Vec<String>>>)> = Vec::new();
         let mut dirs = Vec::new();
         for (i, p) in ports.iter().enumerate() {
             let dir = temp_db_dir(&format!("fast_{}", i));
             dirs.push(dir.clone());
-            let bc = Arc::new(Mutex::new(create_test_blockchain(&dir)));
+            let bc = Arc::new(RwLock::new(create_test_blockchain(&dir)));
             let peers = Arc::new(Mutex::new(vec![]));
             let node = Node {
                 blockchain: Arc::clone(&bc),
@@ -2706,7 +2706,7 @@ mod tests {
             .collect();
         let addrs: Vec<String> = keypairs.iter().map(|(a, _)| a.clone()).collect();
         for i in 0..3 {
-            let mut bc = nodes[i].1.lock().unwrap();
+            let mut bc = nodes[i].1.write().unwrap();
             if !bc.balances.contains_key(&addrs[i]) {
                 if !bc.grant_initial_balance_to_first_wallet(&addrs[i]) {
                     bc.balances.entry(addrs[i].clone()).or_default();
@@ -2733,7 +2733,7 @@ mod tests {
 
         // Передача 1000 с кошелька 1 на кошелёк 2
         {
-            let mut bc = nodes[0].1.lock().unwrap();
+            let mut bc = nodes[0].1.write().unwrap();
             let sender_nonce = bc.balances.get(&addrs[0]).map(|a| a.nonce).unwrap_or(0);
             let mut tx = Transaction {
                 sender: addrs[0].clone(),
@@ -2775,7 +2775,7 @@ mod tests {
 
         let expected = [10000u64 - 1000, 1000, 0];
         for i in 0..3 {
-            let bc = nodes[i].1.lock().unwrap();
+            let bc = nodes[i].1.read().unwrap();
             let bal = bc.balances.get(&addrs[i]).map(|a| a.balance).unwrap_or(0);
             assert!(bc.validate_chain(), "Узел {}: цепочка не прошла валидацию", i + 1);
             info!(node = i + 1, balance = bal, chain_len = bc.chain.len(), "Узел: баланс кошелька и длина цепочки");
@@ -2794,6 +2794,48 @@ mod tests {
         }
         for dir in &dirs {
             let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    /// Deadlock test: 100 iterations with random lock acquisition order
+    /// Verifies no deadlock when acquiring blockchain.read() + wallet lock
+    #[test]
+    fn deadlock_test_blockchain_wallet_lock_order() {
+        use std::sync::{Arc, RwLock, Mutex};
+        use std::thread;
+        use rand::{SeedableRng, rngs::StdRng};
+        use rand::seq::SliceRandom;
+
+        let blockchain = Arc::new(RwLock::new(create_test_blockchain(&temp_db_dir("deadlock"))));
+        let wallet_lock = Arc::new(Mutex::new(())); // Simulates file-based keystore lock
+
+        let mut handles = vec![];
+
+        for i in 0..100 {
+            let bc = Arc::clone(&blockchain);
+            let wl = Arc::clone(&wallet_lock);
+            handles.push(thread::spawn(move || {
+                // Each thread gets its own RNG with a deterministic seed
+                let mut rng = StdRng::seed_from_u64(3735928559 + i);
+                // Random order: 0 = blockchain first, 1 = wallet first
+                let order: [u8; 2] = [0, 1];
+                let mut order = order;
+                order.shuffle(&mut rng);
+
+                for &o in &order {
+                    match o {
+                        0 => { let _g = bc.read().unwrap(); }
+                        1 => { let _g = wl.lock().unwrap(); }
+                        _ => unreachable!(),
+                    }
+                }
+                // Work done
+                thread::sleep(Duration::from_millis(1));
+            }));
+        }
+
+        for h in handles {
+            h.join().expect("Thread panicked - possible deadlock");
         }
     }
 }
