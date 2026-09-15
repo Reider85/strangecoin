@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-09-15
+
+### Added
+- Unified configuration system (`src/config.rs`) — P15
+  - `Config` struct with `network_id`, `node_mode`, `network`, `storage`, `log_level`, `data_dir`
+  - `NetworkConfig` with `listen_addr`, `seeds`, `max_peers`
+  - `StorageConfig` with `path`
+  - `NodeMode` enum: `Full`, `Light`, `Archival`
+  - `Config::load()` / `Config::validate()` for TOML config
+  - Auto-migration from legacy `config.json` → `config.toml` on first startup
+  - `ConfigError` variant in `StrangecoinError`
+- Secure wallet password handling
+  - Password sourced from `STRANGECOIN_WALLET_PASSWORD` env var
+  - Fallback to interactive prompt in GUI
+  - No passwords stored in config files (invariant #9)
+- Keystore isolation: `data_dir/keystore/wallet_<pubkey>.json`
+  - `Wallet::list_keystores()` for discovery
+  - `Wallet::get_password_from_env()` for password retrieval
+
+### Changed
+- Removed inline `Config`/`WalletConfig`/`NetworkConfig` from `src/main.rs`
+- `Wallet::new()` and `Wallet::load()` now accept `data_dir` path instead of `config_path`
+- GUI `WalletApp` stores `data_dir` for keystore operations
+- `config.toml` updated to new schema (no `[wallet]` section, no password field)
+- `network.json` uses `serde_json::Value` instead of typed struct
+
+### Security
+- `config.toml` contains no secrets (password field removed)
+- Legacy `config.json` automatically migrated and deleted
+- Keystore files encrypted with PBKDF2 + AES-256-GCM
+
+### Tests
+- All 36 core integration tests pass (emission, rate limiter, serialization, blockchain)
+- 2 pre-existing flaky network tests fail (`real_network_three_nodes`, `real_network_fast_registration_race`)
+
+### Implemented Prompts
+- P15: Unified Config struct + secrets only in keystore (from `analytics/prompt-stage0.md`)
+
 ## [0.8.6] - 2026-09-14
 
 ### Added

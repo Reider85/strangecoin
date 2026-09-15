@@ -1,4 +1,12 @@
-[wallet]
-name = "wallet1"
-password = "password"
-port = 8081
+network_id = 3
+node_mode = "Full"
+log_level = "info"
+data_dir = "./data"
+
+[network]
+listen_addr = "127.0.0.1:8081"
+seeds = []
+max_peers = 50
+
+[storage]
+path = "./data/leveldb"

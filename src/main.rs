@@ -37,26 +37,7 @@ mod economics;
 mod governance;
 mod address;
 mod serialize;
-
-// Структура для конфигурации
-#[derive(Deserialize, Serialize)]
-struct Config {
-    wallet: WalletConfig,
-}
-
-#[derive(Deserialize, Serialize)]
-struct WalletConfig {
-    name: String,
-    password: String,
-    port: u16,
-    ip: String,
-}
-
-// Структура для network.json
-#[derive(Deserialize, Serialize)]
-struct NetworkConfig {
-    peers: Vec<String>,
-}
+mod config;
 
 // Структура блока
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -228,6 +209,7 @@ struct WalletApp {
     last_repaint: f64,
     last_sync: f64,
     new_wallet_password: String,
+    data_dir: PathBuf,
 }
 
 // Статус майнинга
@@ -1139,15 +1121,19 @@ impl Node {
         let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
         let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
         let network_path = exe_dir.join("network.json");
-        let network_config: NetworkConfig = match fs::read_to_string(&network_path) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| NetworkConfig { peers: vec![] }),
-            Err(_) => NetworkConfig { peers: vec![] },
+        let network_config: serde_json::Value = match fs::read_to_string(&network_path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({ "peers": [] })),
+            Err(_) => serde_json::json!({ "peers": [] }),
         };
         let own_port = self.address.split(':').last().unwrap_or("0").parse::<u16>().unwrap_or(0);
-        for peer in network_config.peers {
-            let peer_port = peer.split(':').last().unwrap_or("0").parse::<u16>().unwrap_or(0);
-            if peer_port != own_port {
-                peers.push(peer);
+        let empty_peers: Vec<serde_json::Value> = vec![];
+        let peer_list = network_config["peers"].as_array().unwrap_or(&empty_peers);
+        for peer in peer_list {
+            if let Some(peer_str) = peer.as_str() {
+                let peer_port = peer_str.split(':').last().unwrap_or("0").parse::<u16>().unwrap_or(0);
+                if peer_port != own_port {
+                    peers.push(peer_str.to_string());
+                }
             }
         }
         let duration = SystemTime::now()
@@ -1172,12 +1158,14 @@ impl Node {
         let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
         let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
         let network_path = exe_dir.join("network.json");
-        let mut network_config: NetworkConfig = match fs::read_to_string(&network_path) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| NetworkConfig { peers: vec![] }),
-            Err(_) => NetworkConfig { peers: vec![] },
+        let mut network_config: serde_json::Value = match fs::read_to_string(&network_path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({ "peers": [] })),
+            Err(_) => serde_json::json!({ "peers": [] }),
         };
-        if !network_config.peers.contains(&address) {
-            network_config.peers.push(address.clone());
+        let mut empty_peers: Vec<serde_json::Value> = vec![];
+        let peer_list = network_config["peers"].as_array_mut().unwrap_or(&mut empty_peers);
+        if !peer_list.iter().any(|v| v.as_str() == Some(&address)) {
+            peer_list.push(serde_json::Value::String(address.clone()));
             let network_content = serde_json::to_string_pretty(&network_config).expect("Ошибка сериализации network.json");
             fs::write(&network_path, network_content).expect("Ошибка записи в network.json");
         }
@@ -1596,37 +1584,74 @@ impl eframe::App for WalletApp {
                     if ui.button("Войти").clicked() {
                         let start_time = SystemTime::now();
                         info!(wallet_address = %self.wallet_address, "Кнопка 'Войти' нажата");
-                        let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
-                        let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
-                        let config_path = exe_dir.join("config.json");
-                        match wallet::Wallet::load(&self.password, &config_path) {
-                            Ok(wallet) => {
-                                if base64::encode(wallet.public_key.serialize()) == self.wallet_address {
-                                    self.is_authenticated = true;
-                                    self.status = "Успешная аутентификация".to_string();
-                                    self.node.discover_peers();
-                                    let duration = SystemTime::now()
-                                        .duration_since(start_time)
-                                        .unwrap()
-                                        .as_secs_f64();
-                                    info!(duration_secs = duration, "Аутентификация успешна");
-                                    // Баланс не устанавливается при входе
-                                } else {
-                                    self.status = "Неверный адрес кошелька".to_string();
-                                    let duration = SystemTime::now()
-                                        .duration_since(start_time)
-                                        .unwrap()
-                                        .as_secs_f64();
-                                    warn!(duration_secs = duration, "Аутентификация не удалась: неверный адрес кошелька");
+                        let data_dir = self.data_dir.clone();
+                        let password = if self.password.is_empty() {
+                            wallet::Wallet::get_password_from_env()
+                        } else {
+                            Some(self.password.clone())
+                        };
+                        let password = match password {
+                            Some(p) => p,
+                            None => {
+                                self.status = "Пароль не указан (введите в поле или задайте STRANGECOIN_WALLET_PASSWORD)".to_string();
+                                ctx.request_repaint();
+                                return;
+                            }
+                        };
+                        match wallet::Wallet::list_keystores(&data_dir) {
+                            Ok(keystores) => {
+                                let sanitized_address = self.wallet_address
+                                    .replace("/", "_")
+                                    .replace("+", "_")
+                                    .replace("=", "_");
+                                let keystore_path = keystores.iter().find(|p| {
+                                    p.file_name().and_then(|n| n.to_str()) == Some(&format!("wallet_{}.json", sanitized_address))
+                                });
+                                let keystore_path = match keystore_path {
+                                    Some(p) => p,
+                                    None => {
+                                        self.status = "Кошелёк не найден".to_string();
+                                        ctx.request_repaint();
+                                        return;
+                                    }
+                                };
+                                match wallet::Wallet::load(&password, keystore_path) {
+                                    Ok(wallet) => {
+                                        if base64::encode(wallet.public_key.serialize()) == self.wallet_address {
+                                            self.is_authenticated = true;
+                                            self.status = "Успешная аутентификация".to_string();
+                                            self.node.discover_peers();
+                                            let duration = SystemTime::now()
+                                                .duration_since(start_time)
+                                                .unwrap()
+                                                .as_secs_f64();
+                                            info!(duration_secs = duration, "Аутентификация успешна");
+                                        } else {
+                                            self.status = "Неверный адрес кошелька".to_string();
+                                            let duration = SystemTime::now()
+                                                .duration_since(start_time)
+                                                .unwrap()
+                                                .as_secs_f64();
+                                            warn!(duration_secs = duration, "Аутентификация не удалась: неверный адрес кошелька");
+                                        }
+                                    }
+                                    Err(e) => {
+                                        self.status = format!("Ошибка аутентификации: {}", e);
+                                        let duration = SystemTime::now()
+                                            .duration_since(start_time)
+                                            .unwrap()
+                                            .as_secs_f64();
+                                        error!(duration_secs = duration, error = %e, "Аутентификация не удалась");
+                                    }
                                 }
                             }
                             Err(e) => {
-                                self.status = format!("Ошибка аутентификации: {}", e);
+                                self.status = format!("Ошибка поиска кошельков: {}", e);
                                 let duration = SystemTime::now()
                                     .duration_since(start_time)
                                     .unwrap()
                                     .as_secs_f64();
-                                error!(duration_secs = duration, error = %e, "Аутентификация не удалась");
+                                error!(duration_secs = duration, error = %e, "Ошибка поиска кошельков");
                             }
                         }
                         ctx.request_repaint();
@@ -1634,51 +1659,57 @@ impl eframe::App for WalletApp {
                     if ui.button("Регистрация").clicked() {
                         let start_time = SystemTime::now();
                         info!("Кнопка 'Регистрация' нажата");
-                        let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
-                        let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
-                        let config_path = exe_dir.join("config.json");
-                        if self.new_wallet_password.is_empty() {
-                            self.status = "Пароль для регистрации не может быть пустым".to_string();
-                            let duration = SystemTime::now()
-                                .duration_since(start_time)
-                                .unwrap()
-                                .as_secs_f64();
-                            warn!(duration_secs = duration, "Ошибка регистрации: пустой пароль");
+                        let password = if self.new_wallet_password.is_empty() {
+                            wallet::Wallet::get_password_from_env()
                         } else {
-                            match wallet::Wallet::new(&self.new_wallet_password, &config_path) {
-                                Ok(wallet) => {
-                                    self.wallet_address = base64::encode(wallet.public_key.serialize());
-                                    self.password = self.new_wallet_password.clone();
-                                    self.is_authenticated = true;
-                                    self.status = format!("Кошелёк успешно создан: {}", self.wallet_address);
-                                    self.node.discover_peers();
-                                    let duration = SystemTime::now()
-                                        .duration_since(start_time)
-                                        .unwrap()
-                                        .as_secs_f64();
-                                    info!(duration_secs = duration, wallet_address = %self.wallet_address, "Регистрация успешна");
-                                    let mut blockchain = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
-                                    if !blockchain.balances.contains_key(&self.wallet_address) {
-                                        if !blockchain.grant_initial_balance_to_first_wallet(&self.wallet_address) {
-                                            blockchain.balances.entry(self.wallet_address.clone()).or_default();
-                                        }
-                                        blockchain.save_state(); // Уже есть
-                                        // Дополнительно сохраняем балансы в LevelDB явно
-                                        let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
-                                        if let Err(e) = db.put(b"balances", &serde_json::to_vec(&blockchain.balances).unwrap()) {
-                                            error!(error = %e, "Ошибка сохранения балансов в LevelDB");
-                                        }
-                                        db.flush().expect("Ошибка при фиксации данных в LevelDB");
+                            Some(self.new_wallet_password.clone())
+                        };
+                        let password = match password {
+                            Some(p) => p,
+                            None => {
+                                self.status = "Пароль для регистрации не может быть пустым (введите в поле или задайте STRANGECOIN_WALLET_PASSWORD)".to_string();
+                                let duration = SystemTime::now()
+                                    .duration_since(start_time)
+                                    .unwrap()
+                                    .as_secs_f64();
+                                warn!(duration_secs = duration, "Ошибка регистрации: пустой пароль");
+                                ctx.request_repaint();
+                                return;
+                            }
+                        };
+                        let data_dir = self.data_dir.clone();
+                        match wallet::Wallet::new(&password, &data_dir) {
+                            Ok(wallet) => {
+                                self.wallet_address = base64::encode(wallet.public_key.serialize());
+                                self.password = password;
+                                self.is_authenticated = true;
+                                self.status = format!("Кошелёк успешно создан: {}", self.wallet_address);
+                                self.node.discover_peers();
+                                let duration = SystemTime::now()
+                                    .duration_since(start_time)
+                                    .unwrap()
+                                    .as_secs_f64();
+                                info!(duration_secs = duration, wallet_address = %self.wallet_address, "Регистрация успешна");
+                                let mut blockchain = self.node.blockchain.lock().expect("Не удалось захватить Mutex для blockchain");
+                                if !blockchain.balances.contains_key(&self.wallet_address) {
+                                    if !blockchain.grant_initial_balance_to_first_wallet(&self.wallet_address) {
+                                        blockchain.balances.entry(self.wallet_address.clone()).or_default();
                                     }
+                                    blockchain.save_state();
+                                    let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+                                    if let Err(e) = db.put(b"balances", &serde_json::to_vec(&blockchain.balances).unwrap()) {
+                                        error!(error = %e, "Ошибка сохранения балансов в LevelDB");
+                                    }
+                                    db.flush().expect("Ошибка при фиксации данных в LevelDB");
                                 }
-                                Err(e) => {
-                                    self.status = format!("Ошибка регистрации: {}", e);
-                                    let duration = SystemTime::now()
-                                        .duration_since(start_time)
-                                        .unwrap()
-                                        .as_secs_f64();
-                                    error!(duration_secs = duration, error = %e, "Ошибка регистрации");
-                                }
+                            }
+                            Err(e) => {
+                                self.status = format!("Ошибка регистрации: {}", e);
+                                let duration = SystemTime::now()
+                                    .duration_since(start_time)
+                                    .unwrap()
+                                    .as_secs_f64();
+                                error!(duration_secs = duration, error = %e, "Ошибка регистрации");
                             }
                         }
                         ctx.request_repaint();
@@ -1754,10 +1785,13 @@ if let Some(ref progress_rx) = self.progress_rx {
                                 signature: Vec::new(),
                                 is_coinbase: false,
                             };
-                            let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
-                            let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
-                            let config_path = exe_dir.join("config.json");
-                            let wallet = match wallet::Wallet::load(&self.password, &config_path) {
+                            let data_dir = self.data_dir.clone();
+                            let sanitized_address = self.wallet_address
+                                .replace("/", "_")
+                                .replace("+", "_")
+                                .replace("=", "_");
+                            let keystore_path = data_dir.join("keystore").join(format!("wallet_{}.json", sanitized_address));
+                            let wallet = match wallet::Wallet::load(&self.password, &keystore_path) {
                                 Ok(w) => w,
                                 Err(e) => {
                                     self.status = format!("Ошибка загрузки кошелька: {}", e);
@@ -1939,31 +1973,74 @@ fn main() {
 
     let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
     let exe_dir = exe_path.parent().expect("Не удалось получить директорию исполняемого файла");
-    let config_path = exe_dir.join("config.json");
+    let config_toml_path = exe_dir.join("config.toml");
+    let config_json_path = exe_dir.join("config.json");
 
-    let config_content = fs::read_to_string(&config_path).unwrap_or_else(|err| {
-        warn!("Ошибка чтения {}: {}. Используются значения по умолчанию.", config_path.display(), err);
-        r#"{"wallet": {"name": "", "password": "", "port": 8081, "ip": "127.0.0.1"}}"#.to_string()
-    });
-    let config: Config = serde_json::from_str(&config_content).expect("Ошибка парсинга конфигурации");
+    // Migration: config.json -> config.toml
+    let config = if config_toml_path.exists() {
+        crate::config::Config::load(&config_toml_path).expect("Ошибка загрузки config.toml")
+    } else if config_json_path.exists() {
+        info!("Migrating config.json to config.toml");
+        let config_content = fs::read_to_string(&config_json_path)
+            .expect("Ошибка чтения config.json");
+        let old_config: serde_json::Value = serde_json::from_str(&config_content)
+            .expect("Ошибка парсинга config.json");
+        
+        let new_config = crate::config::Config {
+            network_id: 3,
+            node_mode: crate::config::NodeMode::Full,
+            network: crate::config::NetworkConfig {
+                listen_addr: format!("{}:{}", 
+                    old_config["wallet"]["ip"].as_str().unwrap_or("127.0.0.1"),
+                    old_config["wallet"]["port"].as_u64().unwrap_or(8081)
+                ).parse().unwrap(),
+                seeds: vec![],
+                max_peers: 50,
+            },
+            storage: crate::config::StorageConfig {
+                path: exe_dir.join("data/leveldb"),
+            },
+            log_level: "info".into(),
+            data_dir: exe_dir.join("data"),
+        };
+        
+        let toml_content = toml::to_string_pretty(&new_config)
+            .expect("Ошибка сериализации config.toml");
+        fs::write(&config_toml_path, toml_content)
+            .expect("Ошибка записи config.toml");
+        
+        fs::remove_file(&config_json_path)
+            .expect("Ошибка удаления config.json");
+        
+        new_config
+    } else {
+        crate::config::Config::default()
+    };
 
     let network_path = exe_dir.join("network.json");
-    let network_config: NetworkConfig = match fs::read_to_string(&network_path) {
+    let network_config: serde_json::Value = match fs::read_to_string(&network_path) {
         Ok(content) => serde_json::from_str(&content).unwrap_or_else(|err| {
             warn!("Ошибка парсинга network.json: {}. Используются значения по умолчанию.", err);
-            NetworkConfig {
-                peers: vec!["127.0.0.1:8081".to_string(), "127.0.0.1:8082".to_string(), "127.0.0.1:8083".to_string()],
-            }
+            serde_json::json!({
+                "peers": ["127.0.0.1:8081", "127.0.0.1:8082", "127.0.0.1:8083"]
+            })
         }),
         Err(err) => {
             warn!("Ошибка чтения network.json: {}. Используются значения по умолчанию.", err);
-            NetworkConfig {
-                peers: vec!["127.0.0.1:8081".to_string(), "127.0.0.1:8082".to_string(), "127.0.0.1:8083".to_string()],
-            }
+            serde_json::json!({
+                "peers": ["127.0.0.1:8081", "127.0.0.1:8082", "127.0.0.1:8083"]
+            })
         }
     };
-    if network_config.peers == vec!["127.0.0.1:8081".to_string(), "127.0.0.1:8082".to_string(), "127.0.0.1:8083".to_string()] {
-        let network_content = serde_json::to_string_pretty(&network_config).expect("Ошибка сериализации network.json");
+    
+    let default_peers = vec!["127.0.0.1:8081".to_string(), "127.0.0.1:8082".to_string(), "127.0.0.1:8083".to_string()];
+    let peers: Vec<String> = network_config["peers"].as_array()
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or(default_peers.clone());
+    
+    if peers == default_peers {
+        let network_content = serde_json::to_string_pretty(&serde_json::json!({ "peers": peers }))
+            .expect("Ошибка сериализации network.json");
         fs::write(&network_path, network_content).expect("Ошибка записи в network.json");
     }
 
@@ -1971,8 +2048,10 @@ fn main() {
     let (sync_tx, sync_rx) = mpsc::channel();
     info!("Каналы майнинга и синхронизации созданы");
 
-    let mut node = Node::new(format!("{}:{}", config.wallet.ip, config.wallet.port), mining_rx, sync_tx.clone(), config.wallet.port);
-    node.start_server(config.wallet.port, sync_tx.clone());
+    let listen_addr = config.network.listen_addr;
+    let port = listen_addr.port();
+    let mut node = Node::new(listen_addr.to_string(), mining_rx, sync_tx.clone(), port);
+    node.start_server(port, sync_tx.clone());
     node.discover_peers();
 
     let mut node_clone = Node {
@@ -1999,8 +2078,8 @@ fn main() {
             sync_rx,
             rate_limiter: node.rate_limiter.clone(),
         },
-        wallet_address: config.wallet.name,
-        password: config.wallet.password,
+        wallet_address: String::new(),
+        password: String::new(),
         is_authenticated: false,
         receiver_address: String::new(),
         amount: String::new(),
@@ -2016,6 +2095,7 @@ fn main() {
         last_repaint: 0.0,
         last_sync: 0.0,
         new_wallet_password: String::new(),
+        data_dir: config.data_dir.clone(),
     };
 
     ctrlc::set_handler(move || {

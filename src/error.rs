@@ -38,4 +38,6 @@ pub enum StrangecoinError {
     DuplicateTx,
     #[error("insufficient balance: have {available}, need {required}")]
     InsufficientBalance { available: u64, required: u64 },
+    #[error("config error: {0}")]
+    ConfigError(String),
 }
