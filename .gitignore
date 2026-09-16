@@ -21,3 +21,6 @@ keystore/*.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Accidental binary
+rustup-init.exe

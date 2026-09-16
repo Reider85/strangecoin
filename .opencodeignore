@@ -1,0 +1,58 @@
+# Rust build artifacts
+target/
+*.pdb
+*.d
+*.o
+*.rlib
+*.rmeta
+
+# Lock files
+Cargo.lock
+*.lock
+
+# Blockchain database (LevelDB)
+data/
+blockchain_db_*
+
+# Keystore (encrypted private keys)
+keystore/
+
+# Secrets and runtime config
+config.json
+config.toml
+
+# Test artifacts
+network.json
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temporary and generated files
+*.tmp
+*.bak
+*.orig
+*.log
+
+# Code coverage and profiling
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+kcov/
+
+# Tooling directories
+.codebuddy/
+instances/
+remote_repo.git/
+
+# Accidental binary (should be removed from repo)
+rustup-init.exe
