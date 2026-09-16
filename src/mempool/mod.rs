@@ -1,8 +1,8 @@
-use std::collections::{HashMap, BTreeMap};
-use crate::{Transaction, AccountState};
+use crate::consensus::{current_chain_id, verify_transaction};
 use crate::error::StrangecoinError;
 use crate::serialize::txid;
-use crate::consensus::{verify_transaction, current_chain_id};
+use crate::{AccountState, Transaction};
+use std::collections::{BTreeMap, HashMap};
 
 pub const MAX_PENDING_TXS: usize = 10_000;
 
@@ -22,7 +22,11 @@ impl Mempool {
         }
     }
 
-    pub fn insert(&mut self, tx: Transaction, account_state: &AccountState) -> Result<(), StrangecoinError> {
+    pub fn insert(
+        &mut self,
+        tx: Transaction,
+        account_state: &AccountState,
+    ) -> Result<(), StrangecoinError> {
         if self.txs.len() >= MAX_PENDING_TXS {
             return Err(StrangecoinError::MempoolFull(MAX_PENDING_TXS));
         }
@@ -76,11 +80,7 @@ impl Mempool {
     }
 
     pub fn get_pending(&self, max_count: usize) -> Vec<Transaction> {
-        self.txs
-            .values()
-            .take(max_count)
-            .cloned()
-            .collect()
+        self.txs.values().take(max_count).cloned().collect()
     }
 
     pub fn len(&self) -> usize {

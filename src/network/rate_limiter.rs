@@ -1,8 +1,8 @@
+use crate::error::StrangecoinError;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use crate::error::StrangecoinError;
 
 struct PeerCounter {
     count: usize,
@@ -63,7 +63,11 @@ impl RateLimiter {
     }
 
     #[cfg(test)]
-    pub fn with_ban_duration(window_secs: u64, max_messages_per_window: usize, ban_duration: Duration) -> Self {
+    pub fn with_ban_duration(
+        window_secs: u64,
+        max_messages_per_window: usize,
+        ban_duration: Duration,
+    ) -> Self {
         RateLimiter {
             window: Duration::from_secs(window_secs),
             max_messages_per_window,
@@ -127,7 +131,10 @@ mod tests {
         }
 
         assert!(limiter.check(addr).is_err(), "Request 101 should fail");
-        assert!(matches!(limiter.check(addr), Err(StrangecoinError::PeerBanned)));
+        assert!(matches!(
+            limiter.check(addr),
+            Err(StrangecoinError::PeerBanned)
+        ));
     }
 
     #[test]
@@ -140,7 +147,10 @@ mod tests {
         }
         limiter.check(addr).unwrap_err();
 
-        assert!(matches!(limiter.check(addr), Err(StrangecoinError::PeerBanned)));
+        assert!(matches!(
+            limiter.check(addr),
+            Err(StrangecoinError::PeerBanned)
+        ));
     }
 
     #[test]

@@ -151,7 +151,10 @@ pub fn median_time_past(blocks: &[crate::Block], current_height: u64) -> u64 {
         return 0;
     }
     let start = current_height.saturating_sub(MEDIAN_TIME_WINDOW as u64);
-    let mut times: Vec<u64> = blocks[start as usize..].iter().map(|b| b.timestamp).collect();
+    let mut times: Vec<u64> = blocks[start as usize..]
+        .iter()
+        .map(|b| b.timestamp)
+        .collect();
     times.sort();
     times[times.len() / 2]
 }
@@ -237,7 +240,8 @@ pub fn compute_target(prev_blocks: &[crate::Block]) -> [u8; 32] {
 
 pub fn validate_difficulty(block: &crate::Block) -> Result<(), crate::error::StrangecoinError> {
     let hash = serialize::block_hash(block);
-    let target_bytes = hex::decode(&block.target).map_err(|_| crate::error::StrangecoinError::InvalidDifficulty)?;
+    let target_bytes = hex::decode(&block.target)
+        .map_err(|_| crate::error::StrangecoinError::InvalidDifficulty)?;
     let mut target_arr = [0u8; 32];
     target_arr.copy_from_slice(&target_bytes);
 
@@ -250,7 +254,10 @@ pub fn validate_difficulty(block: &crate::Block) -> Result<(), crate::error::Str
     Ok(())
 }
 
-pub fn recover_pubkey_from_sig(signature: &[u8], message: &[u8]) -> Result<secp256k1::PublicKey, crate::error::StrangecoinError> {
+pub fn recover_pubkey_from_sig(
+    signature: &[u8],
+    message: &[u8],
+) -> Result<secp256k1::PublicKey, crate::error::StrangecoinError> {
     if signature.len() != 65 {
         return Err(crate::error::StrangecoinError::InvalidSignature);
     }
@@ -264,7 +271,8 @@ pub fn recover_pubkey_from_sig(signature: &[u8], message: &[u8]) -> Result<secp2
         .map_err(|_| crate::error::StrangecoinError::InvalidSignature)?;
     let sig = secp256k1::ecdsa::RecoverableSignature::from_compact(&sig_bytes, rec_id)
         .map_err(|_| crate::error::StrangecoinError::InvalidSignature)?;
-    let recovered_pk = secp.recover_ecdsa(&msg, &sig)
+    let recovered_pk = secp
+        .recover_ecdsa(&msg, &sig)
         .map_err(|_| crate::error::StrangecoinError::InvalidSignature)?;
     Ok(recovered_pk)
 }
@@ -299,10 +307,8 @@ pub struct GenesisConfig {
 
 /// Expected genesis block hash for mainnet (computed from genesis.json with deterministic seed)
 pub const EXPECTED_GENESIS_HASH: [u8; 32] = [
-    0x56, 0x3c, 0x9e, 0x51, 0x34, 0x23, 0x44, 0xc0,
-    0x1b, 0x93, 0x18, 0x53, 0xc4, 0x9e, 0x22, 0x74,
-    0xb6, 0xfb, 0xd2, 0xde, 0x99, 0xed, 0x50, 0xb8,
-    0xd6, 0xd3, 0xbd, 0x7a, 0x7e, 0x65, 0xab, 0x50,
+    0x56, 0x3c, 0x9e, 0x51, 0x34, 0x23, 0x44, 0xc0, 0x1b, 0x93, 0x18, 0x53, 0xc4, 0x9e, 0x22, 0x74,
+    0xb6, 0xfb, 0xd2, 0xde, 0x99, 0xed, 0x50, 0xb8, 0xd6, 0xd3, 0xbd, 0x7a, 0x7e, 0x65, 0xab, 0x50,
 ];
 
 /// Deterministic genesis keypair for Stage 0 (derived from fixed seed)
@@ -324,7 +330,10 @@ pub fn load_genesis(path: &str) -> Result<crate::Block, crate::error::Strangecoi
     let genesis: GenesisConfig = serde_json::from_str(&json)?;
 
     // Parse initial_holder (0x prefix + 64 hex chars = 33 bytes compressed pubkey)
-    let pk_hex = genesis.initial_holder.strip_prefix("0x").unwrap_or(&genesis.initial_holder);
+    let pk_hex = genesis
+        .initial_holder
+        .strip_prefix("0x")
+        .unwrap_or(&genesis.initial_holder);
     let pk_bytes = hex::decode(pk_hex)?;
     let public_key = secp256k1::PublicKey::from_slice(&pk_bytes)?;
     let initial_holder_addr = crate::address::address_from_public_key(&public_key);
@@ -339,7 +348,8 @@ pub fn load_genesis(path: &str) -> Result<crate::Block, crate::error::Strangecoi
         is_coinbase: true,
     };
 
-    let target_bytes = hex::decode("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")?;
+    let target_bytes =
+        hex::decode("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")?;
     let mut target_arr = [0u8; 32];
     target_arr.copy_from_slice(&target_bytes);
 
@@ -361,7 +371,10 @@ pub fn load_genesis(path: &str) -> Result<crate::Block, crate::error::Strangecoi
 }
 
 /// Validate genesis block matches expected hash (skip for regtest)
-pub fn validate_genesis(block: &crate::Block, is_regtest: bool) -> Result<(), crate::error::StrangecoinError> {
+pub fn validate_genesis(
+    block: &crate::Block,
+    is_regtest: bool,
+) -> Result<(), crate::error::StrangecoinError> {
     if is_regtest {
         return Ok(());
     }

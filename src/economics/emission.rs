@@ -27,7 +27,9 @@ pub fn block_reward_at_height_for_chain(height: u64, total_supply: u64, chain_id
 
 fn halving_schedule(height: u64) -> u64 {
     let halvings = height / HALVING_INTERVAL;
-    if halvings >= 64 { return 0; }
+    if halvings >= 64 {
+        return 0;
+    }
     INITIAL_REWARD >> halvings
 }
 
@@ -43,23 +45,36 @@ mod tests {
 
     #[test]
     fn test_genesis_reward() {
-        assert_eq!(block_reward_at_height_for_chain(0, 0, consensus::CHAIN_ID_MAINNET), 50 * COIN);
+        assert_eq!(
+            block_reward_at_height_for_chain(0, 0, consensus::CHAIN_ID_MAINNET),
+            50 * COIN
+        );
     }
 
     #[test]
     fn test_first_halving() {
-        assert_eq!(block_reward_at_height_for_chain(HALVING_INTERVAL, 0, consensus::CHAIN_ID_MAINNET), 25 * COIN);
+        assert_eq!(
+            block_reward_at_height_for_chain(HALVING_INTERVAL, 0, consensus::CHAIN_ID_MAINNET),
+            25 * COIN
+        );
     }
 
     #[test]
     fn test_second_halving() {
-        assert_eq!(block_reward_at_height_for_chain(2 * HALVING_INTERVAL, 0, consensus::CHAIN_ID_MAINNET), 12 * COIN + 50_000_000);
+        assert_eq!(
+            block_reward_at_height_for_chain(2 * HALVING_INTERVAL, 0, consensus::CHAIN_ID_MAINNET),
+            12 * COIN + 50_000_000
+        );
     }
 
     #[test]
     fn test_tail_emission_activates() {
         let tail_reward = calculate_tail_reward(MAX_SUPPLY_PRE_TAIL);
-        let reward_at_tail = block_reward_at_height_for_chain(1_100_000, MAX_SUPPLY_PRE_TAIL, consensus::CHAIN_ID_MAINNET);
+        let reward_at_tail = block_reward_at_height_for_chain(
+            1_100_000,
+            MAX_SUPPLY_PRE_TAIL,
+            consensus::CHAIN_ID_MAINNET,
+        );
         assert!(reward_at_tail >= tail_reward);
         assert_eq!(reward_at_tail, tail_reward);
     }
@@ -75,7 +90,8 @@ mod tests {
     fn test_reward_decreases_with_halving() {
         let r0 = block_reward_at_height_for_chain(0, 0, consensus::CHAIN_ID_MAINNET);
         let r1 = block_reward_at_height_for_chain(HALVING_INTERVAL, 0, consensus::CHAIN_ID_MAINNET);
-        let r2 = block_reward_at_height_for_chain(2 * HALVING_INTERVAL, 0, consensus::CHAIN_ID_MAINNET);
+        let r2 =
+            block_reward_at_height_for_chain(2 * HALVING_INTERVAL, 0, consensus::CHAIN_ID_MAINNET);
         assert!(r0 > r1);
         assert!(r1 > r2);
     }
@@ -91,7 +107,10 @@ mod tests {
 
     #[test]
     fn test_halving_eventually_zero() {
-        assert_eq!(block_reward_at_height_for_chain(64 * HALVING_INTERVAL, 0, consensus::CHAIN_ID_MAINNET), 0);
+        assert_eq!(
+            block_reward_at_height_for_chain(64 * HALVING_INTERVAL, 0, consensus::CHAIN_ID_MAINNET),
+            0
+        );
     }
 
     #[test]
@@ -102,8 +121,17 @@ mod tests {
     #[test]
     fn test_regtest_zero_reward() {
         // Regtest should have zero reward to not interfere with existing tests
-        assert_eq!(block_reward_at_height_for_chain(0, 0, consensus::CHAIN_ID_REGTEST), REGTEST_REWARD);
-        assert_eq!(block_reward_at_height_for_chain(100, 10000, consensus::CHAIN_ID_REGTEST), REGTEST_REWARD);
-        assert_eq!(block_reward_at_height_for_chain(1000, 1_000_000, consensus::CHAIN_ID_REGTEST), REGTEST_REWARD);
+        assert_eq!(
+            block_reward_at_height_for_chain(0, 0, consensus::CHAIN_ID_REGTEST),
+            REGTEST_REWARD
+        );
+        assert_eq!(
+            block_reward_at_height_for_chain(100, 10000, consensus::CHAIN_ID_REGTEST),
+            REGTEST_REWARD
+        );
+        assert_eq!(
+            block_reward_at_height_for_chain(1000, 1_000_000, consensus::CHAIN_ID_REGTEST),
+            REGTEST_REWARD
+        );
     }
 }

@@ -1,20 +1,28 @@
 #[cfg(test)]
 mod proptest {
-    use proptest::prelude::*;
-    use crate::{serialize, Transaction, Block};
-    use crate::economics::emission::{block_reward_at_height_for_chain, HALVING_INTERVAL, MAX_SUPPLY_PRE_TAIL};
-    use crate::consensus::{current_chain_id, validate_difficulty, compute_target, RETARGET_INTERVAL, TARGET_BLOCK_TIME, MAX_TARGET_CHANGE_FACTOR, u256_from_bytes, u256_to_bytes, u256_mul, u256_div, u256_from_u64, u256_min, u256_max, u256_gt, u256_le};
-    use secp256k1::{Secp256k1, SecretKey, PublicKey, ecdsa::RecoverableSignature};
-    use rand::rngs::OsRng;
+    use crate::consensus::{
+        compute_target, current_chain_id, u256_div, u256_from_bytes, u256_from_u64, u256_gt,
+        u256_le, u256_max, u256_min, u256_mul, u256_to_bytes, validate_difficulty,
+        MAX_TARGET_CHANGE_FACTOR, RETARGET_INTERVAL, TARGET_BLOCK_TIME,
+    };
+    use crate::economics::emission::{
+        block_reward_at_height_for_chain, HALVING_INTERVAL, MAX_SUPPLY_PRE_TAIL,
+    };
+    use crate::{serialize, Block, Transaction};
     use blake3;
     use hex;
+    use proptest::prelude::*;
+    use rand::rngs::OsRng;
+    use secp256k1::{ecdsa::RecoverableSignature, PublicKey, Secp256k1, SecretKey};
 
     fn arbitrary_public_key() -> impl Strategy<Value = PublicKey> {
         any::<[u8; 32]>().prop_map(|bytes| {
             let secp = Secp256k1::new();
             SecretKey::from_slice(&bytes)
                 .map(|sk| PublicKey::from_secret_key(&secp, &sk))
-                .unwrap_or_else(|_| PublicKey::from_secret_key(&secp, &SecretKey::from_slice(&[1u8; 32]).unwrap()))
+                .unwrap_or_else(|_| {
+                    PublicKey::from_secret_key(&secp, &SecretKey::from_slice(&[1u8; 32]).unwrap())
+                })
         })
     }
 
@@ -48,18 +56,21 @@ mod proptest {
             prop_oneof![Just(1u32), Just(2u32), Just(3u32)],
             proptest::option::of(arbitrary_signature()),
             any::<bool>(),
-        ).prop_map(|(sender, receiver, amount, nonce, chain_id, signature, is_coinbase)| {
-            let sig = signature.unwrap_or_default();
-            Transaction {
-                sender,
-                receiver,
-                amount,
-                nonce,
-                chain_id,
-                signature: if is_coinbase { Vec::new() } else { sig },
-                is_coinbase,
-            }
-        })
+        )
+            .prop_map(
+                |(sender, receiver, amount, nonce, chain_id, signature, is_coinbase)| {
+                    let sig = signature.unwrap_or_default();
+                    Transaction {
+                        sender,
+                        receiver,
+                        amount,
+                        nonce,
+                        chain_id,
+                        signature: if is_coinbase { Vec::new() } else { sig },
+                        is_coinbase,
+                    }
+                },
+            )
     }
 
     fn arbitrary_signed_transaction() -> impl Strategy<Value = Transaction> {
@@ -70,29 +81,31 @@ mod proptest {
             0u64..1_000_000u64,
             prop_oneof![Just(1u32), Just(2u32), Just(3u32)],
             arbitrary_secret_key(),
-        ).prop_map(|(sender, receiver, amount, nonce, chain_id, secret_key)| {
-            let secp = Secp256k1::new();
-            let public_key = PublicKey::from_secret_key(&secp, &secret_key);
-            let mut tx = Transaction {
-                sender: sender.clone(),
-                receiver,
-                amount,
-                nonce,
-                chain_id,
-                signature: Vec::new(),
-                is_coinbase: false,
-            };
-            let msg_bytes = serialize::serialize_transaction(&tx);
-            let msg_hash = blake3::hash(&msg_bytes);
-            let msg = secp256k1::Message::from_digest_slice(msg_hash.as_bytes()).expect("valid message");
-            let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&msg, &secret_key);
-            let (rec_id, sig_bytes) = sig.serialize_compact();
-            let mut sig_vec = Vec::with_capacity(65);
-            sig_vec.extend_from_slice(&sig_bytes);
-            sig_vec.push(rec_id.to_i32() as u8);
-            tx.signature = sig_vec;
-            tx
-        })
+        )
+            .prop_map(|(sender, receiver, amount, nonce, chain_id, secret_key)| {
+                let secp = Secp256k1::new();
+                let public_key = PublicKey::from_secret_key(&secp, &secret_key);
+                let mut tx = Transaction {
+                    sender: sender.clone(),
+                    receiver,
+                    amount,
+                    nonce,
+                    chain_id,
+                    signature: Vec::new(),
+                    is_coinbase: false,
+                };
+                let msg_bytes = serialize::serialize_transaction(&tx);
+                let msg_hash = blake3::hash(&msg_bytes);
+                let msg = secp256k1::Message::from_digest_slice(msg_hash.as_bytes())
+                    .expect("valid message");
+                let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&msg, &secret_key);
+                let (rec_id, sig_bytes) = sig.serialize_compact();
+                let mut sig_vec = Vec::with_capacity(65);
+                sig_vec.extend_from_slice(&sig_bytes);
+                sig_vec.push(rec_id.to_i32() as u8);
+                tx.signature = sig_vec;
+                tx
+            })
     }
 
     fn arbitrary_block() -> impl Strategy<Value = Block> {
@@ -103,17 +116,18 @@ mod proptest {
             "[0-9a-f]{64}",
             0u64..1_000_000u64,
             "[0-9a-f]{64}",
-        ).prop_map(|(index, timestamp, transactions, previous_hash, nonce, target)| {
-            Block {
-                index,
-                timestamp,
-                transactions,
-                previous_hash,
-                hash: String::new(),
-                nonce,
-                target,
-            }
-        })
+        )
+            .prop_map(
+                |(index, timestamp, transactions, previous_hash, nonce, target)| Block {
+                    index,
+                    timestamp,
+                    transactions,
+                    previous_hash,
+                    hash: String::new(),
+                    nonce,
+                    target,
+                },
+            )
     }
 
     fn arbitrary_target() -> impl Strategy<Value = [u8; 32]> {
@@ -203,10 +217,10 @@ mod proptest {
         fn u256_arithmetic_roundtrip(a in any::<[u64; 4]>(), b in any::<[u64; 4]>()) {
             let a_u256 = [a[0], a[1], a[2], a[3]];
             let b_u256 = [b[0], b[1], b[2], b[3]];
-            
+
             let mul = u256_mul(a_u256, b_u256);
             let div = u256_div(mul, b_u256);
-            
+
             if b_u256 != [0, 0, 0, 0] {
                 let mul_check = u256_mul(div, b_u256);
                 prop_assert!(u256_le(mul_check, mul) || u256_le(mul, mul_check));

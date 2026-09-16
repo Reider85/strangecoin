@@ -1,24 +1,25 @@
+use crate::error::StrangecoinError;
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use blake3;
 use pbkdf2::{
-    password_hash::{
-        rand_core::RngCore, PasswordHash, PasswordHasher, SaltString,
-    },
+    password_hash::{rand_core::RngCore, PasswordHash, PasswordHasher, SaltString},
     Pbkdf2,
 };
 use rand::rngs::OsRng;
-use secp256k1::{Message, PublicKey, SecretKey, Secp256k1, ecdsa::{Signature, RecoverableSignature, RecoveryId}};
+use secp256k1::{
+    ecdsa::{RecoverableSignature, RecoveryId, Signature},
+    Message, PublicKey, Secp256k1, SecretKey,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use uuid::Uuid;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use tracing::{info, warn};
-use crate::error::StrangecoinError;
+use uuid::Uuid;
 
 #[derive(Serialize, Deserialize)]
 pub struct Keystore {
@@ -49,17 +50,22 @@ impl Wallet {
         let password_hash = Pbkdf2
             .hash_password(password.as_bytes(), &salt)
             .map_err(|e| StrangecoinError::ConfigError(format!("Password hashing error: {}", e)))?;
-        let derived_key = password_hash.hash.ok_or_else(|| StrangecoinError::ConfigError("Failed to obtain derived key".into()))?;
+        let derived_key = password_hash
+            .hash
+            .ok_or_else(|| StrangecoinError::ConfigError("Failed to obtain derived key".into()))?;
         let derived_key_bytes = derived_key.as_bytes();
 
-        let cipher = Aes256Gcm::new_from_slice(derived_key_bytes)
-            .map_err(|e| StrangecoinError::ConfigError(format!("AES-256-GCM cipher creation error: {}", e)))?;
+        let cipher = Aes256Gcm::new_from_slice(derived_key_bytes).map_err(|e| {
+            StrangecoinError::ConfigError(format!("AES-256-GCM cipher creation error: {}", e))
+        })?;
         let mut nonce_bytes = [0u8; 12];
         csprng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
         let ciphertext = cipher
             .encrypt(nonce, private_key_bytes.as_ref())
-            .map_err(|e| StrangecoinError::ConfigError(format!("Private key encryption error: {}", e)))?;
+            .map_err(|e| {
+                StrangecoinError::ConfigError(format!("Private key encryption error: {}", e))
+            })?;
 
         let public_key_base64 = BASE64.encode(public_key.serialize());
         let encrypted_private_key_base64 = BASE64.encode(&ciphertext);
@@ -79,12 +85,14 @@ impl Wallet {
         };
 
         let keystore_dir = data_dir.join("keystore");
-        fs::create_dir_all(&keystore_dir)
-            .map_err(|e| StrangecoinError::ConfigError(format!("Failed to create keystore dir: {}", e)))?;
+        fs::create_dir_all(&keystore_dir).map_err(|e| {
+            StrangecoinError::ConfigError(format!("Failed to create keystore dir: {}", e))
+        })?;
 
         let keystore_path = keystore_dir.join(format!("wallet_{}.json", sanitized_public_key));
-        let keystore_json = serde_json::to_string_pretty(&keystore)
-            .map_err(|e| StrangecoinError::ConfigError(format!("Keystore serialization error: {}", e)))?;
+        let keystore_json = serde_json::to_string_pretty(&keystore).map_err(|e| {
+            StrangecoinError::ConfigError(format!("Keystore serialization error: {}", e))
+        })?;
         fs::write(&keystore_path, keystore_json)
             .map_err(|e| StrangecoinError::ConfigError(format!("Error writing Keystore: {}", e)))?;
 
@@ -107,37 +115,53 @@ impl Wallet {
         let keystore: Keystore = serde_json::from_str(&keystore_content)
             .map_err(|e| StrangecoinError::ConfigError(format!("Error parsing Keystore: {}", e)))?;
 
-        let public_key_bytes = BASE64.decode(&keystore.public_key)
-            .map_err(|e| StrangecoinError::ConfigError(format!("Error decoding public key: {}", e)))?;
-        let encrypted_private_key = BASE64.decode(&keystore.encrypted_private_key)
-            .map_err(|e| StrangecoinError::ConfigError(format!("Error decoding encrypted private key: {}", e)))?;
-        let nonce_bytes = BASE64.decode(&keystore.nonce)
+        let public_key_bytes = BASE64.decode(&keystore.public_key).map_err(|e| {
+            StrangecoinError::ConfigError(format!("Error decoding public key: {}", e))
+        })?;
+        let encrypted_private_key =
+            BASE64
+                .decode(&keystore.encrypted_private_key)
+                .map_err(|e| {
+                    StrangecoinError::ConfigError(format!(
+                        "Error decoding encrypted private key: {}",
+                        e
+                    ))
+                })?;
+        let nonce_bytes = BASE64
+            .decode(&keystore.nonce)
             .map_err(|e| StrangecoinError::ConfigError(format!("Error decoding nonce: {}", e)))?;
         let salt = SaltString::new(&keystore.salt)
             .map_err(|e| StrangecoinError::ConfigError(format!("Error parsing salt: {}", e)))?;
 
         let secp = Secp256k1::new();
-        let public_key = PublicKey::from_slice(&public_key_bytes)
-            .map_err(|e| StrangecoinError::ConfigError(format!("Error restoring public key: {}", e)))?;
+        let public_key = PublicKey::from_slice(&public_key_bytes).map_err(|e| {
+            StrangecoinError::ConfigError(format!("Error restoring public key: {}", e))
+        })?;
 
         let password_hash = Pbkdf2
             .hash_password(password.as_bytes(), &salt)
             .map_err(|e| StrangecoinError::ConfigError(format!("Error hashing password: {}", e)))?;
-        let derived_key = password_hash.hash.ok_or_else(|| StrangecoinError::ConfigError("Failed to obtain derived key".into()))?;
+        let derived_key = password_hash
+            .hash
+            .ok_or_else(|| StrangecoinError::ConfigError("Failed to obtain derived key".into()))?;
         let derived_key_bytes = derived_key.as_bytes();
 
-        let cipher = Aes256Gcm::new_from_slice(derived_key_bytes)
-            .map_err(|e| StrangecoinError::ConfigError(format!("Error creating AES-256-GCM cipher: {}", e)))?;
+        let cipher = Aes256Gcm::new_from_slice(derived_key_bytes).map_err(|e| {
+            StrangecoinError::ConfigError(format!("Error creating AES-256-GCM cipher: {}", e))
+        })?;
         let nonce = Nonce::from_slice(&nonce_bytes);
         let private_key_bytes = cipher
             .decrypt(nonce, encrypted_private_key.as_ref())
-            .map_err(|e| StrangecoinError::ConfigError(format!("Error decrypting private key: {}", e)))?;
+            .map_err(|e| {
+                StrangecoinError::ConfigError(format!("Error decrypting private key: {}", e))
+            })?;
 
         let private_key_array: [u8; 32] = private_key_bytes
             .try_into()
             .map_err(|_| StrangecoinError::ConfigError("Private key has invalid length".into()))?;
-        let secret_key = SecretKey::from_slice(&private_key_array)
-            .map_err(|e| StrangecoinError::ConfigError(format!("Error creating secret key: {}", e)))?;
+        let secret_key = SecretKey::from_slice(&private_key_array).map_err(|e| {
+            StrangecoinError::ConfigError(format!("Error creating secret key: {}", e))
+        })?;
 
         let public_key_base64 = BASE64.encode(public_key.serialize());
         let duration = std::time::SystemTime::now()
@@ -158,9 +182,12 @@ impl Wallet {
             return Ok(vec![]);
         }
         let mut keystores = Vec::new();
-        for entry in fs::read_dir(&keystore_dir)
-            .map_err(|e| StrangecoinError::ConfigError(format!("Failed to read keystore dir: {}", e)))? {
-            let entry = entry.map_err(|e| StrangecoinError::ConfigError(format!("Failed to read dir entry: {}", e)))?;
+        for entry in fs::read_dir(&keystore_dir).map_err(|e| {
+            StrangecoinError::ConfigError(format!("Failed to read keystore dir: {}", e))
+        })? {
+            let entry = entry.map_err(|e| {
+                StrangecoinError::ConfigError(format!("Failed to read dir entry: {}", e))
+            })?;
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("json") {
                 keystores.push(path);
@@ -174,10 +201,16 @@ impl Wallet {
     }
 
     pub fn sign(&self, message: &[u8]) -> Result<[u8; 65], StrangecoinError> {
-        let secret_key = self.private_key.as_ref().ok_or(StrangecoinError::ConfigError("Private key is missing".into()))?;
+        let secret_key = self
+            .private_key
+            .as_ref()
+            .ok_or(StrangecoinError::ConfigError(
+                "Private key is missing".into(),
+            ))?;
         let secp = Secp256k1::new();
-        let msg = Message::from_digest_slice(message)
-            .map_err(|e| StrangecoinError::ConfigError(format!("Invalid message for signing: {}", e)))?;
+        let msg = Message::from_digest_slice(message).map_err(|e| {
+            StrangecoinError::ConfigError(format!("Invalid message for signing: {}", e))
+        })?;
         let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&msg, secret_key);
         let (rec_id, sig_bytes) = sig.serialize_compact();
         let mut out = [0u8; 65];
@@ -199,7 +232,10 @@ impl Wallet {
         secp.verify_ecdsa(&msg, &signature, pk).is_ok()
     }
 
-    pub fn sign_transaction(&self, transaction: &mut super::Transaction) -> Result<(), StrangecoinError> {
+    pub fn sign_transaction(
+        &self,
+        transaction: &mut super::Transaction,
+    ) -> Result<(), StrangecoinError> {
         let message_bytes = crate::serialize::serialize_transaction(transaction);
         let message_hash = blake3::hash(&message_bytes);
         let signature = self.sign(message_hash.as_bytes())?;

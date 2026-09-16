@@ -1,4 +1,4 @@
-use rusty_leveldb::{DB, Options};
+use rusty_leveldb::{Options, DB};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tracing::{info, warn};

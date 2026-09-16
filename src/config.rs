@@ -51,16 +51,24 @@ impl Config {
 
     pub fn validate(&self) -> Result<(), StrangecoinError> {
         if self.network_id == 0 {
-            return Err(StrangecoinError::ConfigError("network_id must be > 0".into()));
+            return Err(StrangecoinError::ConfigError(
+                "network_id must be > 0".into(),
+            ));
         }
         if self.network.max_peers == 0 {
-            return Err(StrangecoinError::ConfigError("max_peers must be > 0".into()));
+            return Err(StrangecoinError::ConfigError(
+                "max_peers must be > 0".into(),
+            ));
         }
         if self.data_dir.as_os_str().is_empty() {
-            return Err(StrangecoinError::ConfigError("data_dir must not be empty".into()));
+            return Err(StrangecoinError::ConfigError(
+                "data_dir must not be empty".into(),
+            ));
         }
         if self.storage.path.as_os_str().is_empty() {
-            return Err(StrangecoinError::ConfigError("storage.path must not be empty".into()));
+            return Err(StrangecoinError::ConfigError(
+                "storage.path must not be empty".into(),
+            ));
         }
         Ok(())
     }
