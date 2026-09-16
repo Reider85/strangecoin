@@ -94,6 +94,69 @@ fn write_bytes32(out: &mut Vec<u8>, s: &str) {
     out.extend_from_slice(&bytes);
 }
 
+pub fn read_u32_be(bytes: &[u8], offset: &mut usize) -> u32 {
+    let val = u32::from_be_bytes([bytes[*offset], bytes[*offset + 1], bytes[*offset + 2], bytes[*offset + 3]]);
+    *offset += 4;
+    val
+}
+
+pub fn read_u64_be(bytes: &[u8], offset: &mut usize) -> u64 {
+    let val = u64::from_be_bytes([
+        bytes[*offset], bytes[*offset + 1], bytes[*offset + 2], bytes[*offset + 3],
+        bytes[*offset + 4], bytes[*offset + 5], bytes[*offset + 6], bytes[*offset + 7],
+    ]);
+    *offset += 8;
+    val
+}
+
+pub fn read_string(bytes: &[u8], offset: &mut usize) -> Result<String, &'static str> {
+    let len = read_u32_be(bytes, offset) as usize;
+    if *offset + len > bytes.len() {
+        return Err("Buffer too short for string");
+    }
+    let s = std::str::from_utf8(&bytes[*offset..*offset + len])
+        .map_err(|_| "Invalid UTF-8 in string")?
+        .to_string();
+    *offset += len;
+    Ok(s)
+}
+
+pub fn deserialize_transaction(bytes: &[u8]) -> Result<Transaction, &'static str> {
+    let mut offset = 0;
+    
+    if offset >= bytes.len() {
+        return Err("Empty buffer");
+    }
+    let format_version = bytes[offset];
+    offset += 1;
+    if format_version != FORMAT_VERSION {
+        return Err("Unsupported format version");
+    }
+    
+    let sender = read_string(bytes, &mut offset)?;
+    let receiver = read_string(bytes, &mut offset)?;
+    let amount = read_u64_be(bytes, &mut offset);
+    let nonce = read_u64_be(bytes, &mut offset);
+    let chain_id = read_u32_be(bytes, &mut offset) as u32;
+    let is_coinbase = if offset < bytes.len() {
+        let b = bytes[offset];
+        offset += 1;
+        b != 0
+    } else {
+        false
+    };
+    
+    Ok(Transaction {
+        sender,
+        receiver,
+        amount,
+        nonce,
+        chain_id,
+        signature: Vec::new(),
+        is_coinbase,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

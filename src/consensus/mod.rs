@@ -379,3 +379,6 @@ pub fn validate_genesis(block: &crate::Block, is_regtest: bool) -> Result<(), cr
 pub fn is_regtest(network_id: u32) -> bool {
     network_id == CHAIN_ID_REGTEST
 }
+
+#[cfg(test)]
+mod proptest;
