@@ -207,3 +207,9 @@ impl Wallet {
         Ok(())
     }
 }
+
+impl Drop for Wallet {
+    fn drop(&mut self) {
+        tracing::info!("Wallet dropped, keystore locked");
+    }
+}

@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize, Deserializer};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream};
-use std::sync::{Arc, Mutex, RwLock, mpsc};
+use std::sync::{Arc, Mutex, RwLock, mpsc, atomic::{AtomicBool, Ordering}};
 use std::thread::{self, JoinHandle};
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
+use std::time::{SystemTime, UNIX_EPOCH, Duration, Instant};
 use eframe::egui;
 use std::io::{Read, Write};
 use rand::Rng;
@@ -108,7 +108,7 @@ struct Blockchain {
     balances: HashMap<String, AccountState>,
     difficulty: u32,
     mempool: crate::mempool::Mempool,
-    db: Arc<Mutex<DB>>,
+    storage: crate::storage::Storage,
 }
 
 impl Serialize for Blockchain {
@@ -156,15 +156,15 @@ impl<'de> Deserialize<'de> for Blockchain {
             let _ = mempool.insert(tx, &account);
         }
 
+        let storage = crate::storage::Storage::new(&db_path)
+            .map_err(serde::de::Error::custom)?;
+
         Ok(Blockchain {
             chain,
             balances,
             difficulty,
             mempool,
-            db: Arc::new(Mutex::new(DB::open(
-                db_path,
-                Options::default(),
-            ).map_err(serde::de::Error::custom)?)),
+            storage,
         })
     }
 }
@@ -178,6 +178,7 @@ struct MiningTask {
     progress_tx: mpsc::Sender<String>,
     status_tx: mpsc::Sender<String>,
     rate_limiter: Arc<crate::network::RateLimiter>,
+    shutdown: Arc<AtomicBool>,
 }
 
 // Структура узла
@@ -187,6 +188,9 @@ struct Node {
     address: String,
     sync_rx: mpsc::Receiver<Blockchain>,
     rate_limiter: Arc<crate::network::RateLimiter>,
+    shutdown: Arc<AtomicBool>,
+    listener: Arc<Mutex<Option<TcpListener>>>,
+    sync_thread_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 // Структура клиента для GUI
@@ -223,7 +227,8 @@ enum MiningStatus {
 
 impl Blockchain {
     fn debug_db(&self) {
-        let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+        let db_arc = self.storage.db();
+        let mut db = db_arc.lock().expect("Не удалось захватить Mutex для LevelDB");
         let mut iterator = db.new_iter().expect("Не удалось создать итератор LevelDB");
         debug!("Содержимое базы данных:");
         while let Some((key, value)) = iterator.next() {
@@ -250,32 +255,15 @@ impl Blockchain {
         if !db_path.exists() {
             info!("База данных не существует, создаётся новая");
         }
-        let lock_file = db_path.join("LOCK");
-        if lock_file.exists() {
-            warn!("Файл LOCK существует, ожидание освобождения базы данных");
-            let max_attempts = 5;
-            let mut attempts = 0;
-            while lock_file.exists() && attempts < max_attempts {
-                std::thread::sleep(Duration::from_millis(1000));
-                attempts += 1;
-            }
-            if lock_file.exists() {
-                warn!("Файл LOCK всё ещё существует, попытка удаления");
-                if let Err(e) = fs::remove_file(&lock_file) {
-                    panic!("Не удалось удалить файл LOCK: {}", e);
-                }
-            }
-        }
 
-        let db = DB::open(db_path, Options::default()).expect("Не удалось открыть LevelDB");
-        let db = Arc::new(Mutex::new(db));
+        let storage = crate::storage::Storage::new(&db_path).expect("Не удалось открыть LevelDB");
 
         let mut blockchain = Blockchain {
             chain: vec![],
             balances: HashMap::new(),
             difficulty: 1,
             mempool: crate::mempool::Mempool::new(),
-            db: db.clone(),
+            storage,
         };
         blockchain.debug_db();
 
@@ -284,7 +272,8 @@ impl Blockchain {
         let mut difficulty_opt: Option<u32> = None;
 
         {
-            let mut db_guard = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+            let db_arc = blockchain.storage.db();
+            let mut db_guard = db_arc.lock().expect("Не удалось захватить Mutex для LevelDB");
 
             chain_opt = db_guard.get(b"chain").and_then(|v| serde_json::from_slice::<Vec<Block>>(&v).ok());
             debug!(?chain_opt, "chain_opt");
@@ -395,7 +384,8 @@ impl Blockchain {
                 }
             }
             // Сохраняем инициализированные балансы в LevelDB
-            let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+            let db_arc = blockchain.storage.db();
+            let mut db = db_arc.lock().expect("Не удалось захватить Mutex для LevelDB");
             if let Err(e) = db.put(b"balances", &serde_json::to_vec(&blockchain.balances).unwrap()) {
                 error!(error = %e, "Ошибка сохранения балансов в LevelDB");
             }
@@ -551,7 +541,7 @@ impl Blockchain {
         hash
     }
 
-    fn mine_block(&mut self, progress_tx: mpsc::Sender<String>) -> Option<Block> {
+    fn mine_block(&mut self, progress_tx: mpsc::Sender<String>, shutdown: &Arc<AtomicBool>) -> Option<Block> {
         let total_start_time = SystemTime::now();
         info!("Начало майнинга");
         if self.mempool.is_empty() {
@@ -589,7 +579,7 @@ impl Blockchain {
         let mut all_transactions = vec![coinbase_tx];
         all_transactions.extend(transactions);
 
-        let block = self.mine_block_inner(previous_block, all_transactions, progress_tx.clone());
+        let block = self.mine_block_inner(previous_block, all_transactions, progress_tx.clone(), shutdown);
 
         if let Some(mut block) = block {
             let balance_start_time = SystemTime::now();
@@ -626,7 +616,8 @@ impl Blockchain {
             }
 
             self.chain.push(block.clone());
-            let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+            let db_arc = self.storage.db();
+            let mut db = db_arc.lock().expect("Не удалось захватить Mutex для LevelDB");
             // Clean up old pending transaction keys from LevelDB (legacy)
             // Note: We don't track which exact keys were mined, so we keep them for now
             if let Err(e) = db.put(b"chain", &serde_json::to_vec(&self.chain).unwrap()) {
@@ -662,6 +653,7 @@ impl Blockchain {
         previous_block: Block,
         transactions: Vec<Transaction>,
         progress_tx: mpsc::Sender<String>,
+        shutdown: &Arc<AtomicBool>,
     ) -> Option<Block> {
         let start_time = SystemTime::now();
         debug!("Начало mine_block_inner");
@@ -698,6 +690,10 @@ impl Blockchain {
         let mut total_hash_time = 0.0;
 
         loop {
+            if shutdown.load(Ordering::Relaxed) {
+                info!("Shutdown signal received, stopping mining");
+                return None;
+            }
             iteration_count += 1;
             let hash_start_time = SystemTime::now();
             let hash = self.calculate_hash(&block);
@@ -974,7 +970,8 @@ impl Blockchain {
     }
 
     fn save_state(&mut self) {
-        let mut db = self.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+        let db_arc = self.storage.db();
+        let mut db = db_arc.lock().expect("Не удалось захватить Mutex для LevelDB");
         // Save mempool transactions
         for tx in self.mempool.transactions() {
             let key = format!("{}:{}", tx.sender, tx.nonce).into_bytes();
@@ -1004,12 +1001,16 @@ impl Node {
         let blockchain = Arc::new(RwLock::new(Blockchain::new(port)));
         let peers = Arc::new(Mutex::new(vec![]));
         let rate_limiter = Arc::new(crate::network::RateLimiter::new(10, 100));
+        let shutdown = Arc::new(AtomicBool::new(false));
         let node = Node {
             blockchain: blockchain.clone(),
             peers: peers.clone(),
             address: address.clone(),
             sync_rx: mpsc::channel().1,
             rate_limiter: rate_limiter.clone(),
+            shutdown: shutdown.clone(),
+            listener: Arc::new(Mutex::new(None)),
+            sync_thread_handle: Arc::new(Mutex::new(None)),
         };
         thread::spawn(move || {
             info!("Фоновый поток майнинга запущен");
@@ -1032,12 +1033,12 @@ impl Node {
                     match blockchain.add_transaction(task.transaction.clone()) {
                         Ok(_) => {
                             info!(mining_count, "Транзакция успешно добавлена, начало майнинга");
-                            blockchain.mine_block(progress_tx_clone)
+                            blockchain.mine_block(progress_tx_clone, &task.shutdown)
                         }
                         Err(e) => {
                             warn!(mining_count, error = %e, "Транзакция отклонена, попытка майнить существующие транзакции");
                             if !blockchain.mempool.is_empty() {
-                                blockchain.mine_block(progress_tx_clone)
+                                blockchain.mine_block(progress_tx_clone, &task.shutdown)
                             } else {
                                 let _ = task.progress_tx.send(format!("Ошибка: Нет транзакций для майнинга в задаче {}", mining_count));
                                 warn!(mining_count, "Нет транзакций для майнинга");
@@ -1079,6 +1080,9 @@ impl Node {
                                     address: address.clone(),
                                     sync_rx: mpsc::channel().1,
                                     rate_limiter: task.rate_limiter.clone(),
+                                    shutdown: Arc::new(AtomicBool::new(false)),
+                                    listener: Arc::new(Mutex::new(None)),
+                                    sync_thread_handle: Arc::new(Mutex::new(None)),
                                 };
                                 node_temp.sync_blockchain(sync_tx.clone());
                                 MiningStatus::Completed(Some(block))
@@ -1193,10 +1197,17 @@ fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
         let start_time = SystemTime::now();
         let blockchain = Arc::clone(&self.blockchain);
         let rate_limiter = Arc::clone(&self.rate_limiter);
+        let shutdown = Arc::clone(&self.shutdown);
         let address = format!("0.0.0.0:{}", port);
-        let listener = TcpListener::bind(&address).expect("Не удалось запустить сервер");
+        let listener = TcpListener::bind(&address).expect("Не удалось запустить серver");
+        // Store listener for graceful shutdown
+        *self.listener.lock().unwrap() = Some(listener.try_clone().expect("Failed to clone listener"));
         thread::spawn(move || {
             for stream in listener.incoming() {
+                if shutdown.load(Ordering::Relaxed) {
+                    info!("Shutdown signal received, stopping server");
+                    break;
+                }
                 match stream {
                     Ok(stream) => {
                         let blockchain = Arc::clone(&blockchain);
@@ -1246,12 +1257,13 @@ if request == "GET_BLOCKCHAIN" {
 
                                 // Принимаем только строго более длинную цепочку, чтобы не откатывать уже намайненные блоки
                                 if temp_blockchain.chain.len() > blockchain.chain.len() {
+                                    let storage = blockchain.storage.clone();
                                     let mut new_blockchain = Blockchain {
                                         chain: temp_blockchain.chain.clone(),
                                         balances: temp_blockchain.balances.clone(),
                                         difficulty: temp_blockchain.difficulty,
                                         mempool: crate::mempool::Mempool::new(),
-                                        db: blockchain.db.clone(),
+                                        storage,
                                     };
                                     // Объединяем mempool, добавляя только валидные
                                     let mut merged_pending = vec![];
@@ -1269,7 +1281,9 @@ if request == "GET_BLOCKCHAIN" {
                                     }
                                     // Note: merged_pending is tracked in mempool via add_transaction
                                     if new_blockchain.validate_chain() {
-                                        let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+                                        let storage = blockchain.storage.clone();
+                                        let db_arc = storage.db();
+                                        let mut db = db_arc.lock().expect("Не удалось захватить Mutex для LevelDB");
                                         for tx in new_blockchain.mempool.transactions() {
                                             let key = format!("{}:{}", tx.sender, tx.nonce).into_bytes();
                                             let value = serde_json::to_vec(&tx).expect("Ошибка сериализации транзакции");
@@ -1286,7 +1300,7 @@ if request == "GET_BLOCKCHAIN" {
                                             balances: temp_blockchain.balances,
                                             difficulty: temp_blockchain.difficulty,
                                             mempool: crate::mempool::Mempool::new(),
-                                            db: blockchain.db.clone(),
+                                            storage: blockchain.storage.clone(),
                                         });
                                     } else {
                                         warn!("Полученный блокчейн не прошёл валидацию");
@@ -1315,9 +1329,10 @@ if request == "GET_BLOCKCHAIN" {
             .as_secs_f64();
         info!(port, duration_secs = duration, "Сервер запущен");
     }
-    fn sync_blockchain(&mut self, sync_tx: mpsc::Sender<Blockchain>) {
+fn sync_blockchain(&mut self, sync_tx: mpsc::Sender<Blockchain>) {
         let start_time = SystemTime::now();
         let rate_limiter = Arc::clone(&self.rate_limiter);
+        let shutdown = Arc::clone(&self.shutdown);
         // Обнаруживаем пиры перед синхронизацией
         self.discover_peers();
         let peers: Vec<String> = self.peers.lock().expect("Не удалось захватить Mutex для peers")
@@ -1335,11 +1350,15 @@ if request == "GET_BLOCKCHAIN" {
         let current_block_count = blockchain.chain.iter().filter(|b| !b.transactions.is_empty()).count();
         let current_balances = blockchain.balances.clone();
         let wallet_address = self.address.clone();
-        let existing_db = blockchain.db.clone();
+        let existing_db = blockchain.storage.db().clone();
         debug!(current_chain_length, chain = ?blockchain.chain, "Текущая длина chain");
         drop(blockchain); // Освобождаем блокировку
 
         for peer in peers.iter() {
+            if shutdown.load(Ordering::Relaxed) {
+                info!("Shutdown signal received, stopping sync");
+                break;
+            }
             let addr: SocketAddr = match peer.parse() {
                 Ok(addr) => addr,
                 Err(e) => {
@@ -1410,7 +1429,7 @@ if request == "GET_BLOCKCHAIN" {
                                     }
                                     mp
                                 },
-                                db: existing_db.clone(),
+                                storage: crate::storage::Storage::from_db(existing_db.clone()),
                             };
                             info!(peer = %peer, chain_len = temp_blockchain.chain.len(), chain = ?temp_blockchain.chain, "Полученная цепочка от узла");
                             let received_hash = temp_blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default();
@@ -1422,7 +1441,7 @@ if request == "GET_BLOCKCHAIN" {
                                     balances: temp_blockchain.balances.clone(),
                                     difficulty: temp_blockchain.difficulty,
                                     mempool: crate::mempool::Mempool::new(),
-                                    db: existing_db.clone(),
+                                    storage: crate::storage::Storage::from_db(existing_db.clone()),
                                 };
                                 let mut added_transactions = 0;
 
@@ -1445,8 +1464,10 @@ if request == "GET_BLOCKCHAIN" {
                                 info!(added_transactions, peer = %peer, "Обновлено mempool с узла");
 
                                 if new_blockchain.validate_chain() {
+                                    let storage = self.blockchain.read().unwrap().storage.clone();
+                                    let db_arc = storage.db();
                                     let mut blockchain = self.blockchain.write().expect("Не удалось захватить write lock для blockchain");
-                                    let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+                                    let mut db = db_arc.lock().expect("Не удалось захватить Mutex для LevelDB");
                                     let chain_data = serde_json::to_vec(&new_blockchain.chain).expect("Ошибка сериализации chain");
                                     debug!(chain_len = new_blockchain.chain.len(), chain_size = chain_data.len(), "Сохраняемый chain");
                                     for tx in new_blockchain.mempool.transactions() {
@@ -1475,7 +1496,7 @@ if request == "GET_BLOCKCHAIN" {
                                         balances: blockchain.balances.clone(),
                                         difficulty: blockchain.difficulty,
                                         mempool: crate::mempool::Mempool::new(),
-                                        db: existing_db.clone(),
+                                        storage: crate::storage::Storage::from_db(existing_db.clone()),
                                     });
                                 } else {
                                     warn!(peer = %peer, "Полученный блокчейн с узла не прошёл валидацию после объединения");
@@ -1506,6 +1527,33 @@ if request == "GET_BLOCKCHAIN" {
     }
 }
 
+impl Drop for Node {
+    fn drop(&mut self) {
+        info!("Shutting down network node");
+        
+        // Signal shutdown
+        self.shutdown.store(true, Ordering::Relaxed);
+        
+        // Close listener
+        if let Ok(mut listener) = self.listener.lock() {
+            if let Some(l) = listener.take() {
+                drop(l);
+                info!("TCP listener closed");
+            }
+        }
+        
+        // Wait for sync thread to finish (with timeout)
+        if let Ok(mut handle) = self.sync_thread_handle.lock() {
+            if let Some(h) = handle.take() {
+                let _ = h.join();
+                info!("Sync thread joined");
+            }
+        }
+        
+        info!("Network node shutdown complete");
+    }
+}
+
 impl eframe::App for WalletApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = ctx.input(|i| i.time);
@@ -1525,7 +1573,8 @@ impl eframe::App for WalletApp {
             let current_balance = blockchain.balances.get(&self.wallet_address).map(|a| a.balance).unwrap_or(0);
             let received_balance = received_blockchain.balances.get(&self.wallet_address).map(|a| a.balance).unwrap_or(0);
             if received_blockchain.chain.len() > blockchain.chain.len() && received_blockchain.validate_chain() {
-                let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
+                let db_arc = blockchain.storage.db();
+                let mut db = db_arc.lock().expect("Не удалось захватить Mutex для LevelDB");
                 for tx in received_blockchain.mempool.transactions() {
                     let key = format!("{}:{}", tx.sender, tx.nonce).into_bytes();
                     let value = serde_json::to_vec(&tx).expect("Ошибка сериализации транзакции");
@@ -1696,11 +1745,6 @@ impl eframe::App for WalletApp {
                                         blockchain.balances.entry(self.wallet_address.clone()).or_default();
                                     }
                                     blockchain.save_state();
-                                    let mut db = blockchain.db.lock().expect("Не удалось захватить Mutex для LevelDB");
-                                    if let Err(e) = db.put(b"balances", &serde_json::to_vec(&blockchain.balances).unwrap()) {
-                                        error!(error = %e, "Ошибка сохранения балансов в LevelDB");
-                                    }
-                                    db.flush().expect("Ошибка при фиксации данных в LevelDB");
                                 }
                             }
                             Err(e) => {
@@ -1869,6 +1913,7 @@ if let Some(ref progress_rx) = self.progress_rx {
                             progress_tx,
                             status_tx,
                             rate_limiter: self.node.rate_limiter.clone(),
+                            shutdown: self.node.shutdown.clone(),
                         }) {
                             self.status = format!("Ошибка отправки задачи майнинга: {}", e);
                             error!(error = %e, "Ошибка отправки задачи майнинга");
@@ -2050,33 +2095,63 @@ fn main() {
 
     let listen_addr = config.network.listen_addr;
     let port = listen_addr.port();
+    
+    // Create shared shutdown signal for graceful shutdown
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_ctrlc = Arc::clone(&shutdown);
+    
     let mut node = Node::new(listen_addr.to_string(), mining_rx, sync_tx.clone(), port);
     node.start_server(port, sync_tx.clone());
     node.discover_peers();
-
-    let mut node_clone = Node {
-        blockchain: Arc::clone(&node.blockchain),
-        peers: Arc::clone(&node.peers),
-        address: node.address.clone(),
-        sync_rx: mpsc::channel().1,
-        rate_limiter: node.rate_limiter.clone(),
-    };
-    thread::spawn(move || {
-        loop {
-            node_clone.sync_blockchain(sync_tx.clone());
-            std::thread::sleep(Duration::from_secs(1));
+    
+    // Spawn sync thread with shutdown handling
+    let shutdown_sync = Arc::clone(&shutdown);
+    let shutdown_sync_node = Arc::clone(&shutdown);
+    let node_blockchain = Arc::clone(&node.blockchain);
+    let node_peers = Arc::clone(&node.peers);
+    let node_address = node.address.clone();
+    let node_rate_limiter = node.rate_limiter.clone();
+    let sync_tx_clone = sync_tx.clone();
+    
+    let sync_thread_handle = thread::spawn(move || {
+        let mut sync_node = Node {
+            blockchain: node_blockchain,
+            peers: node_peers,
+            address: node_address,
+            sync_rx: mpsc::channel().1,
+            rate_limiter: node_rate_limiter,
+            shutdown: shutdown_sync_node,
+            listener: Arc::new(Mutex::new(None)),
+            sync_thread_handle: Arc::new(Mutex::new(None)),
+        };
+        while !shutdown_sync.load(Ordering::Relaxed) {
+            sync_node.sync_blockchain(sync_tx_clone.clone());
+            // Sleep with periodic shutdown checks
+            for _ in 0..10 {
+                if shutdown_sync.load(Ordering::Relaxed) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
         }
+        info!("Sync thread stopped");
     });
+    
+    // Store sync thread handle in node for graceful shutdown
+    *node.sync_thread_handle.lock().unwrap() = Some(sync_thread_handle);
 
     let blockchain = Arc::clone(&node.blockchain);
 
     let app = WalletApp {
         node: Node {
             blockchain: Arc::clone(&node.blockchain),
-            peers: node.peers,
-            address: node.address,
+            peers: Arc::clone(&node.peers),
+            address: node.address.clone(),
             sync_rx,
             rate_limiter: node.rate_limiter.clone(),
+            shutdown: Arc::clone(&shutdown),
+            listener: Arc::new(Mutex::new(None)),
+            sync_thread_handle: Arc::new(Mutex::new(None)),
         },
         wallet_address: String::new(),
         password: String::new(),
@@ -2098,10 +2173,26 @@ fn main() {
         data_dir: config.data_dir.clone(),
     };
 
+    // Graceful shutdown handler
     ctrlc::set_handler(move || {
-        info!("Получен сигнал завершения, сохранение состояния...");
-        save_on_exit(blockchain.clone());
-        info!("Состояние сохранено, выход...");
+        info!("Shutdown signal received, initiating graceful shutdown...");
+        shutdown_ctrlc.store(true, Ordering::Relaxed);
+        
+        // Give time for threads to shut down gracefully
+        let shutdown_start = Instant::now();
+        let shutdown_timeout = Duration::from_secs(30);
+        
+        // Wait for mining and sync threads to finish
+        while shutdown_start.elapsed() < shutdown_timeout {
+            std::thread::sleep(Duration::from_millis(100));
+            // The Drop impls will handle cleanup when node goes out of scope
+        }
+        
+        if shutdown_start.elapsed() >= shutdown_timeout {
+            error!("Shutdown timeout exceeded, forcing exit");
+        }
+        
+        info!("Graceful shutdown complete, exiting");
         std::process::exit(0);
     }).expect("Ошибка установки обработчика завершения");
 
@@ -2110,11 +2201,6 @@ fn main() {
         eframe::NativeOptions::default(),
         Box::new(|_cc| Box::new(app)),
     ).expect("Ошибка запуска приложения");
-}
-
-fn save_on_exit(blockchain: Arc<RwLock<Blockchain>>) {
-    let mut blockchain = blockchain.write().expect("Не удалось захватить write lock для blockchain");
-    blockchain.save_state();
 }
 
 #[cfg(test)]
@@ -2140,13 +2226,13 @@ mod tests {
     // Создаёт блокчейн с собственной БД (отдельная для каждого кошелька)
     fn create_test_blockchain(db_path: &Path) -> Blockchain {
         fs::create_dir_all(db_path).expect("Не удалось создать директорию тестовой БД");
-        let db = DB::open(db_path, Options::default()).expect("Не удалось открыть тестовую БД");
+        let storage = crate::storage::Storage::new(db_path).expect("Не удалось открыть тестовую БД");
         let mut bc = Blockchain {
             chain: vec![],
             balances: HashMap::new(),
             difficulty: 0,
             mempool: crate::mempool::Mempool::new(),
-            db: Arc::new(Mutex::new(db)),
+            storage,
         };
         bc.create_genesis_block();
         bc
@@ -2155,7 +2241,8 @@ mod tests {
     // Майнит все ожидающие транзакции в новый блок
     fn mine_current(blockchain: &mut Blockchain) {
         let (progress_tx, _progress_rx) = mpsc::channel();
-        let block = blockchain.mine_block(progress_tx);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let block = blockchain.mine_block(progress_tx, &shutdown);
         assert!(block.is_some(), "Майнинг текущей транзакции не удался");
     }
 
@@ -2340,7 +2427,7 @@ mod tests {
             balances: src_balances,
             difficulty: src_difficulty,
             mempool: crate::mempool::Mempool::new(),
-            db: tgt.db.clone(),
+            storage: tgt.storage.clone(),
         };
         let mut merged_pending = vec![];
         for tx in src_pending.iter() {
@@ -2545,6 +2632,9 @@ mod tests {
                 address: format!("127.0.0.1:{}", p),
                 sync_rx: mpsc::channel().1,
                 rate_limiter: Arc::new(crate::network::RateLimiter::new(10, 100)),
+                shutdown: Arc::new(AtomicBool::new(false)),
+                listener: Arc::new(Mutex::new(None)),
+                sync_thread_handle: Arc::new(Mutex::new(None)),
             };
             nodes.push((node, dir.clone(), bc));
         }
@@ -2579,6 +2669,9 @@ mod tests {
                     address: nodes[i].0.address.clone(),
                     sync_rx: mpsc::channel().1,
                     rate_limiter: nodes[i].0.rate_limiter.clone(),
+                    shutdown: Arc::new(AtomicBool::new(false)),
+                    listener: Arc::new(Mutex::new(None)),
+                    sync_thread_handle: Arc::new(Mutex::new(None)),
                 };
                 sync_node.sync_blockchain(sync_tx.clone());
             }
@@ -2620,7 +2713,8 @@ mod tests {
             sig_vec.push(rec_id.to_i32() as u8);
             tx.signature = sig_vec;
             assert!(bc.add_transaction(tx).is_ok(), "Транзакция отклонена");
-            assert!(bc.mine_block(mpsc::channel().0).is_some(), "Майнинг не удался");
+            let shutdown = Arc::new(AtomicBool::new(false));
+            assert!(bc.mine_block(mpsc::channel().0, &shutdown).is_some(), "Майнинг не удался");
         }
 
         // Распространяем цепочку с транзакцией
@@ -2632,6 +2726,9 @@ mod tests {
                     address: nodes[i].0.address.clone(),
                     sync_rx: mpsc::channel().1,
                     rate_limiter: nodes[i].0.rate_limiter.clone(),
+                    shutdown: Arc::new(AtomicBool::new(false)),
+                    listener: Arc::new(Mutex::new(None)),
+                    sync_thread_handle: Arc::new(Mutex::new(None)),
                 };
                 sync_node.sync_blockchain(sync_tx.clone());
             }
@@ -2685,6 +2782,9 @@ mod tests {
                 address: format!("127.0.0.1:{}", p),
                 sync_rx: mpsc::channel().1,
                 rate_limiter: Arc::new(crate::network::RateLimiter::new(10, 100)),
+                shutdown: Arc::new(AtomicBool::new(false)),
+                listener: Arc::new(Mutex::new(None)),
+                sync_thread_handle: Arc::new(Mutex::new(None)),
             };
             nodes.push((node, bc, peers));
         }
@@ -2724,6 +2824,9 @@ mod tests {
                     address: nodes[i].0.address.clone(),
                     sync_rx: mpsc::channel().1,
                     rate_limiter: nodes[i].0.rate_limiter.clone(),
+                    shutdown: Arc::new(AtomicBool::new(false)),
+                    listener: Arc::new(Mutex::new(None)),
+                    sync_thread_handle: Arc::new(Mutex::new(None)),
                 };
                 sync_node.sync_blockchain(sync_tx.clone());
             }
@@ -2754,7 +2857,8 @@ mod tests {
             sig_vec.push(rec_id.to_i32() as u8);
             tx.signature = sig_vec;
             assert!(bc.add_transaction(tx).is_ok(), "Передача отклонена на узле 1");
-            assert!(bc.mine_block(mpsc::channel().0).is_some(), "Майнинг не удался");
+            let shutdown = Arc::new(AtomicBool::new(false));
+            assert!(bc.mine_block(mpsc::channel().0, &shutdown).is_some(), "Майнинг не удался");
         }
 
         // Распространяем блок с транзакцией
@@ -2766,6 +2870,9 @@ mod tests {
                     address: nodes[i].0.address.clone(),
                     sync_rx: mpsc::channel().1,
                     rate_limiter: nodes[i].0.rate_limiter.clone(),
+                    shutdown: Arc::new(AtomicBool::new(false)),
+                    listener: Arc::new(Mutex::new(None)),
+                    sync_thread_handle: Arc::new(Mutex::new(None)),
                 };
                 sync_node.sync_blockchain(sync_tx.clone());
             }
