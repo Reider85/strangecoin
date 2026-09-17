@@ -1,18 +1,10 @@
 use crate::error::StrangecoinError;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use blake3;
 use eframe::egui;
 use hex;
-use rand::Rng;
-use rusty_leveldb::{LdbIterator, Options, DB};
-use secp256k1::{
-    ecdsa::{RecoverableSignature, RecoveryId},
-    Message, PublicKey, Secp256k1,
-};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufReader, BufWriter};
@@ -27,7 +19,6 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
-use uuid::Uuid;
 mod address;
 mod api;
 mod blockchain;
@@ -226,9 +217,7 @@ struct WalletApp {
     progress_rx: Option<mpsc::Receiver<String>>,
     status_rx: Option<mpsc::Receiver<String>>,
     mining_tx: mpsc::Sender<MiningTask>,
-    mining_thread: Option<JoinHandle<()>>,
     last_repaint: f64,
-    last_sync: f64,
     new_wallet_password: String,
     data_dir: PathBuf,
 }
@@ -464,6 +453,7 @@ impl Blockchain {
         blockchain
     }
 
+    #[cfg(test)]
     fn create_genesis_block(&mut self) {
         let start_time = SystemTime::now();
         // Детерминированный генезис-блок: одинаков для всех узлов сети,
@@ -2058,7 +2048,7 @@ impl eframe::App for WalletApp {
                                 };
                                 match wallet::Wallet::load(&password, keystore_path) {
                                     Ok(wallet) => {
-                                        if base64::encode(wallet.public_key.serialize()) == self.wallet_address {
+                                        if BASE64.encode(wallet.public_key.serialize()) == self.wallet_address {
                                             self.is_authenticated = true;
                                             self.status = "Успешная аутентификация".to_string();
                                             self.node.discover_peers();
@@ -2121,7 +2111,7 @@ impl eframe::App for WalletApp {
                         let data_dir = self.data_dir.clone();
                         match wallet::Wallet::new(&password, &data_dir) {
                             Ok(wallet) => {
-                                self.wallet_address = base64::encode(wallet.public_key.serialize());
+                                self.wallet_address = BASE64.encode(wallet.public_key.serialize());
                                 self.password = password;
                                 self.is_authenticated = true;
                                 self.status = format!("Кошелёк успешно создан: {}", self.wallet_address);
@@ -2577,9 +2567,7 @@ fn main() {
         progress_rx: None,
         status_rx: None,
         mining_tx,
-        mining_thread: None,
         last_repaint: 0.0,
-        last_sync: 0.0,
         new_wallet_password: String::new(),
         data_dir: config.data_dir.clone(),
     };

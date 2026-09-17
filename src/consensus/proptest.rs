@@ -8,7 +8,7 @@ mod proptest {
     use crate::economics::emission::{
         block_reward_at_height_for_chain, HALVING_INTERVAL, MAX_SUPPLY_PRE_TAIL,
     };
-    use crate::{serialize, Block, Transaction};
+    use crate::{serialize, Transaction};
     use blake3;
     use hex;
     use proptest::prelude::*;
@@ -106,28 +106,6 @@ mod proptest {
                 tx.signature = sig_vec;
                 tx
             })
-    }
-
-    fn arbitrary_block() -> impl Strategy<Value = Block> {
-        (
-            0u64..10_000u64,
-            0u64..2_000_000_000u64,
-            proptest::collection::vec(arbitrary_transaction(), 0..5),
-            "[0-9a-f]{64}",
-            0u64..1_000_000u64,
-            "[0-9a-f]{64}",
-        )
-            .prop_map(
-                |(index, timestamp, transactions, previous_hash, nonce, target)| Block {
-                    index,
-                    timestamp,
-                    transactions,
-                    previous_hash,
-                    hash: String::new(),
-                    nonce,
-                    target,
-                },
-            )
     }
 
     fn arbitrary_target() -> impl Strategy<Value = [u8; 32]> {

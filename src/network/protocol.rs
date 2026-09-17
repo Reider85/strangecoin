@@ -1,5 +1,5 @@
 use crate::error::StrangecoinError;
-use std::io::{Read, Result as IoResult};
+use std::io::Read;
 
 pub const MAX_MESSAGE_SIZE: usize = 32 * 1024 * 1024;
 pub const MAX_BLOCK_SIZE: usize = 4 * 1024 * 1024;

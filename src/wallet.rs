@@ -12,14 +12,13 @@ use pbkdf2::{
 };
 use rand::rngs::OsRng;
 use secp256k1::{
-    ecdsa::{RecoverableSignature, RecoveryId, Signature},
+    ecdsa::{RecoverableSignature, Signature},
     Message, PublicKey, Secp256k1, SecretKey,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::{info, warn};
-use uuid::Uuid;
+use tracing::info;
 
 #[derive(Serialize, Deserialize)]
 pub struct Keystore {

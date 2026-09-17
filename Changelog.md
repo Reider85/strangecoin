@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-09-17 - P21: Warning & Dead Code Cleanup
+
+### Fixed
+- Removed 11 unused imports in `src/main.rs` (blake3, rand::Rng, rusty_leveldb::*, secp256k1::{RecoverableSignature, RecoveryId, Message, PublicKey, Secp256k1}, sha2::{Digest, Sha256}, uuid::Uuid) — these were only used in `#[cfg(test)]` code
+- Removed 3 unused imports in `src/wallet.rs` (RecoveryId, uuid::Uuid, tracing::warn)
+- Removed unused import `tracing::warn` in `src/network/mod.rs`
+- Removed unused import `std::io::Result as IoResult` in `src/network/protocol.rs`
+- Removed dead fields `mining_thread: Option<JoinHandle<()>>` and `last_sync: f64` from `WalletApp` struct
+- Marked `create_genesis_block()` as `#[cfg(test)]` (only called from tests)
+- Removed dead functions `bits_to_target()` and `target_to_bits()` from `src/consensus/mod.rs`
+- Removed dead function `arbitrary_block()` and unused `Block` import from `src/consensus/proptest.rs`
+- Fixed 2 deprecated `base64::encode()` calls → `BASE64.encode()` in `src/main.rs`
+
+### Removed
+- Unused dependency `winapi` from `Cargo.toml`
+- `config.json` from git tracking (contains plaintext passwords; migrated to `config.toml`)
+
 ## [1.0.0] - 2026-09-16 - Sanitized Prototype (Stage 0 Complete)
 
 ### Added

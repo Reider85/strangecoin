@@ -24,3 +24,6 @@ Thumbs.db
 
 # Accidental binary
 rustup-init.exe
+
+# Legacy config (contains secrets, migrated to config.toml)
+config.json

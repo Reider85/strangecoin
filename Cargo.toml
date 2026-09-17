@@ -12,7 +12,6 @@ serde_json = "1.0.142"
 sha2 = "0.10"
 rand = "0.8"
 eframe = "0.22"
-winapi = { version = "0.3.9", features = ["windef", "winuser"] }
 toml = "0.5"
 pbkdf2 = { version = "0.12.2", features = ["simple"] }
 rand_core = "0.6.4"

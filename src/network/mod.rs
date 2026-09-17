@@ -5,7 +5,7 @@ pub use rate_limiter::RateLimiter;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Network node that manages P2P connections and the TCP listener
 pub struct Node {

@@ -177,35 +177,6 @@ pub fn validate_timestamp(
     Ok(())
 }
 
-pub fn bits_to_target(bits: u32) -> [u8; 32] {
-    let exponent = ((bits >> 24) & 0xff) as usize;
-    let mantissa = bits & 0x007fffff;
-    let mut target = [0u8; 32];
-    if exponent <= 3 {
-        let mantissa_bytes = (mantissa as u64).to_be_bytes();
-        let start = 32 - exponent;
-        target[start..start + 8].copy_from_slice(&mantissa_bytes[8 - exponent..]);
-    } else {
-        let mantissa_bytes = (mantissa as u64).to_be_bytes();
-        target[32 - exponent..32 - exponent + 3].copy_from_slice(&mantissa_bytes[5..8]);
-    }
-    target
-}
-
-pub fn target_to_bits(target: &[u8; 32]) -> u32 {
-    let leading_zeros = target.iter().take_while(|&&b| b == 0).count();
-    if leading_zeros >= 32 {
-        return 1;
-    }
-    let exponent = (32 - leading_zeros) as u32;
-    let mantissa_bytes = &target[leading_zeros..leading_zeros + 3];
-    let mut mantissa = 0u32;
-    for &b in mantissa_bytes {
-        mantissa = (mantissa << 8) | b as u32;
-    }
-    (exponent << 24) | (mantissa & 0x007fffff)
-}
-
 pub fn compute_target(prev_blocks: &[crate::Block]) -> [u8; 32] {
     if prev_blocks.len() < RETARGET_INTERVAL as usize {
         let last = prev_blocks.last().expect("at least one block");
