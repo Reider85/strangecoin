@@ -24,5 +24,10 @@ blake3 = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
 [dev-dependencies]
 proptest = "1"
