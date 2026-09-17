@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0 — Stage 0 (Sanitized Prototype)
+
+### P25: Bug bounty + ADR-0003 (hybrid PoW→PoS) (2026-09-17)
+
+- Created `docs/ADR/0003-hybrid-pow-pos.md` — hybrid PoW (Stage 0–6) → PoS (Stage 7+) migration decision
+- Created `docs/security/BOUNTY.md` — bug bounty program: scope, 3 reward tiers ($1k/$10k/$100k), 90-day disclosure, Immunefi setup
+- Created `docs/security/SECURITY.md` — security contacts, PGP key placeholder, 48h SLA, safe harbor policy
+
 ## 0.8.6 — Stage 0 (Sanitized Prototype)
 
 ### P24: Reproducible builds (2026-09-17)
