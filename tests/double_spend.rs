@@ -5,8 +5,8 @@ use std::sync::{Arc, RwLock};
 
 #[test]
 fn double_spend_rejected() {
-    let dir = temp_db_dir("double_spend");
-    let bc = Arc::new(RwLock::new(create_test_blockchain(&dir)));
+    let _dir = TestDir::new("double_spend");
+    let bc = Arc::new(RwLock::new(create_test_blockchain(_dir.path())));
     let keypairs = generate_keypairs(2);
     let sender = keypairs[0].0.clone();
     let receiver1 = keypairs[1].0.clone();
@@ -69,6 +69,4 @@ fn double_spend_rejected() {
         balance_before - tx_amount,
         "Sender balance should be deducted exactly once"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }

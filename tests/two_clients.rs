@@ -9,13 +9,10 @@ fn hundred_transactions_five_wallets() {
     let keypairs = generate_keypairs(5);
     let addrs: Vec<String> = keypairs.iter().map(|(a, _)| a.clone()).collect();
 
-    let mut dirs: Vec<String> = Vec::new();
+    let dirs: Vec<TestDir> = (0..5).map(|i| TestDir::new(&format!("wallet_{}", i))).collect();
     let mut wallets: Vec<Arc<RwLock<Blockchain>>> = Vec::new();
-    for i in 0..5 {
-        let dir = temp_db_dir(&format!("wallet_{}", i));
-        let dir_str = dir.to_string_lossy().to_string();
-        dirs.push(dir_str);
-        wallets.push(Arc::new(RwLock::new(create_test_blockchain(&dir))));
+    for dir in &dirs {
+        wallets.push(Arc::new(RwLock::new(create_test_blockchain(dir.path()))));
     }
 
     {
@@ -76,9 +73,5 @@ fn hundred_transactions_five_wallets() {
         let bc = w.read().unwrap();
         assert_eq!(bc.chain.len(), 102);
         assert!(bc.validate_chain());
-    }
-
-    for dir in &dirs {
-        let _ = std::fs::remove_dir_all(dir);
     }
 }

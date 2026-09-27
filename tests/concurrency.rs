@@ -8,9 +8,8 @@ use std::thread;
 
 #[test]
 fn deadlock_test_blockchain_wallet_lock_order() {
-    let blockchain = Arc::new(RwLock::new(create_test_blockchain(&temp_db_dir(
-        "deadlock",
-    ))));
+    let _dir = TestDir::new("deadlock");
+    let blockchain = Arc::new(RwLock::new(create_test_blockchain(_dir.path())));
     let wallet_lock = Arc::new(Mutex::new(()));
 
     let mut handles = vec![];

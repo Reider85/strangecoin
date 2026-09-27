@@ -2609,10 +2609,36 @@ pub mod test_support {
 
     pub static NETWORK_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+    pub struct TestDir(pub PathBuf);
+
+    impl TestDir {
+        pub fn new(tag: &str) -> Self {
+            let mut dir = std::env::temp_dir();
+            dir.push(format!("strangecoin_test_{}_{}", tag, uuid::Uuid::new_v4()));
+            Self(dir)
+        }
+        pub fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
     pub fn temp_db_dir(tag: &str) -> PathBuf {
-        let mut dir = std::env::temp_dir();
-        dir.push(format!("strangecoin_test_{}_{}", tag, uuid::Uuid::new_v4()));
-        dir
+        TestDir::new(tag).0
+    }
+
+    pub fn random_port() -> u16 {
+        use std::net::TcpListener;
+        TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
     }
 
     pub fn create_test_blockchain(db_path: &Path) -> Blockchain {

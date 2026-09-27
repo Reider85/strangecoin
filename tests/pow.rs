@@ -5,10 +5,10 @@ use std::sync::{Arc, RwLock};
 
 #[test]
 fn mining_on_regtest_low_difficulty() {
-    let dir1 = temp_db_dir("pow_1");
-    let dir2 = temp_db_dir("pow_2");
-    let bc1 = Arc::new(RwLock::new(create_test_blockchain(&dir1)));
-    let bc2 = Arc::new(RwLock::new(create_test_blockchain(&dir2)));
+    let dir1 = TestDir::new("pow_1");
+    let dir2 = TestDir::new("pow_2");
+    let bc1 = Arc::new(RwLock::new(create_test_blockchain(dir1.path())));
+    let bc2 = Arc::new(RwLock::new(create_test_blockchain(dir2.path())));
 
     let keypairs = generate_keypairs(1);
     let addr = keypairs[0].0.clone();
@@ -50,7 +50,4 @@ fn mining_on_regtest_low_difficulty() {
     let bc2_guard = bc2.read().unwrap();
     assert_eq!(bc2_guard.chain.len(), 3);
     assert!(bc2_guard.validate_chain(), "Chain should be valid after mining");
-
-    let _ = std::fs::remove_dir_all(&dir1);
-    let _ = std::fs::remove_dir_all(&dir2);
 }

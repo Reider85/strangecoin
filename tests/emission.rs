@@ -4,8 +4,8 @@ use common::*;
 
 #[test]
 fn emission_matches_block_reward() {
-    let dir = temp_db_dir("emission");
-    let mut bc = create_test_blockchain(&dir);
+    let _dir = TestDir::new("emission");
+    let mut bc = create_test_blockchain(_dir.path());
 
     let keypairs = generate_keypairs(1);
     let addr = keypairs[0].0.clone();
@@ -46,6 +46,4 @@ fn emission_matches_block_reward() {
     }
 
     assert!(bc.validate_chain(), "Chain should be valid after 11 blocks");
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
