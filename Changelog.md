@@ -8,13 +8,11 @@
 - Created `docs/security/BOUNTY.md` — bug bounty program: scope, 3 reward tiers ($1k/$10k/$100k), 90-day disclosure, Immunefi setup
 - Created `docs/security/SECURITY.md` — security contacts, PGP key placeholder, 48h SLA, safe harbor policy
 
-## 0.8.6 — Stage 0 (Sanitized Prototype)
-
 ### P24: Reproducible builds (2026-09-17)
 
 - Added `[profile.release]` with LTO, single codegen unit, symbol stripping for deterministic builds
 - Created `.github/workflows/release.yml` — release pipeline triggered on `v*` tags
-  - Builds 5 targets: Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64
+  - Builds 6 targets: Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64/aarch64
   - `RUSTFLAGS="--remap-path-prefix"` strips build paths for reproducibility
   - SHA256 checksums for each artifact
   - SLSA Level 3 provenance via `slsa-github-generator`
@@ -32,3 +30,12 @@
 - **Entry corrected:** P22 was NOT completed during Stage 0. This changelog entry was added prematurely (commit "docs: add CHANGELOG.md" predates any THREAT_MODEL.md file).
 - P22 is executed in **D02** (debt prompt, see `analytics/prompt-stage1.md`).
 - Files `docs/security/THREAT_MODEL.md` and `docs/security/INCIDENT_RESPONSE.md` are created in D02 commit.
+
+### D03: DoD-verification + version sync + tag (2026-09-28)
+
+- Fixed `.github/workflows/release.yml`: added `aggregate-hashes` job for SLSA provenance, added 6th target (`aarch64-pc-windows-msvc`)
+- Cleaned repository: removed `test.md`, `.idea/`, `.codebuddy/`, `.opencodeignore` from tracking; `Cargo.lock` now tracked
+- Synchronized version to `1.0.0` across `Cargo.toml`, `Changelog.md`, `AGENTS.md`
+- Created `docs/stage0/CRITICAL_ISSUES_CLOSED.md` — 13 issues from ARCHITECT2 §1.1 with honest statuses
+- Created `docs/stage0/INVARIANTS_ENFORCED.md` — 22 invariants from ARCHITECT3 §5 with enforcement locations
+- Created `docs/stage0/STAGE0_SUMMARY.md` — Stage 0 completion summary with Stage 1 obligations

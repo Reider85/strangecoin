@@ -1,7 +1,7 @@
 # AGENTS.md — Strangecoin Developer Guide
 
 ## Project Overview
-Strangecoin is a Rust cryptocurrency (v1.0.0, edition 2021) — PoW blockchain with secp256k1 signatures, blake3 hashing, LevelDB storage. Monolithic `src/main.rs` (~2950 lines) + `src/wallet.rs`, modularized per Stage 0 roadmap (now complete).
+Strangecoin is a Rust cryptocurrency (v1.0.0, edition 2021) — PoW blockchain with secp256k1 signatures, blake3 hashing, LevelDB storage. Monolithic `src/main.rs` (~3452 lines) + `src/wallet.rs`, modularized per Stage 0 roadmap (completed with D03, see `docs/stage0/STAGE0_SUMMARY.md`).
 
 **Key docs**: `analytics/prompt-stage0.md` (26 prompts for Stage 0), `analytics/ARCHITECT3.md` (architecture), `analytics/ROADMAP3.md` (phases), `docs/ADR/` (architecture decisions), `docs/CONTRIBUTING.md` (workflow, style, ADR process).
 
@@ -66,7 +66,7 @@ src/
 Never acquire wallet lock while holding blockchain write lock from a different call site.
 
 ## Development Workflow
-1. Work through `analytics/prompt-stage0.md` prompts sequentially (P01→P26) — Stage 0 is complete as of v1.0.0
+1. Work through `analytics/prompt-stage0.md` prompts sequentially (P01→P26) — Stage 0 completed with D03 (see `docs/stage0/STAGE0_SUMMARY.md`)
 2. Each prompt: implement → `cargo check` → `cargo test` → verify checklist
 3. Do not commit unless explicitly asked
 4. New modules declared in `main.rs` with `mod xyz;` — code stays in main.rs until later prompts move it
@@ -87,8 +87,10 @@ Never acquire wallet lock while holding blockchain write lock from a different c
 | File | Purpose |
 |------|---------|
 | `analytics/prompt-stage0.md` | Stage 0 task breakdown (26 prompts) |
+| `analytics/prompt-stage1.md` | Stage 1 task breakdown (D01-D03 debt + S1-P01..S1-P22) |
 | `analytics/ARCHITECT3.md` | Full architecture spec (invariants, STRIDE, subsystems) |
 | `analytics/ROADMAP3.md` | Phase timeline |
+| `docs/stage0/STAGE0_SUMMARY.md` | Stage 0 completion summary |
 | `docs/ADR/0001-secp256k1-vs-ed25519.md` | Migration decision record |
 | `src/error.rs` | All typed errors + lock ordering docs |
 | `genesis.json` | Genesis block definition |

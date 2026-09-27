@@ -1,3 +1,7 @@
+# Strangecoin
+
+[![CI](https://github.com/Reider85/strangecoin/actions/workflows/ci.yml/badge.svg)](https://github.com/Reider85/strangecoin/actions/workflows/ci.yml)
+
 Описание реализации
 Блокчейн и консенсус:
 Блокчейн хранит блоки с транзакциями и балансы кошельков.

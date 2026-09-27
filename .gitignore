@@ -2,10 +2,6 @@
 /remote_repo.git
 /instances
 
-# Build artifacts
-*.lock
-Cargo.lock
-
 # Blockchain database
 blockchain_db_*
 
@@ -27,3 +23,6 @@ rustup-init.exe
 
 # Legacy config (contains secrets, migrated to config.toml)
 config.json
+
+# CodeBuddy
+.codebuddy/
