@@ -1,5 +1,5 @@
 use crate::consensus;
-use crate::serialize;
+use strangecoin_core::serialize;
 use std::path::Path;
 
 pub fn print_genesis_hash() {

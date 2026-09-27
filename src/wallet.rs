@@ -235,7 +235,7 @@ impl Wallet {
         &self,
         transaction: &mut super::Transaction,
     ) -> Result<(), StrangecoinError> {
-        let message_bytes = crate::serialize::serialize_transaction(transaction);
+        let message_bytes = strangecoin_core::serialize::serialize_transaction(transaction);
         let message_hash = blake3::hash(&message_bytes);
         let signature = self.sign(message_hash.as_bytes())?;
         transaction.signature = signature.to_vec();

@@ -1,0 +1,267 @@
+use crate::types::{Block, Transaction};
+use blake3;
+use hex;
+
+pub const FORMAT_VERSION: u8 = 1;
+
+pub fn serialize_transaction(tx: &Transaction) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.push(FORMAT_VERSION);
+    write_string(&mut out, &tx.sender);
+    write_string(&mut out, &tx.receiver);
+    out.extend_from_slice(&tx.amount.to_be_bytes());
+    out.extend_from_slice(&tx.nonce.to_be_bytes());
+    out.extend_from_slice(&tx.chain_id.to_be_bytes());
+    out.push(tx.is_coinbase as u8);
+    out
+}
+
+pub fn serialize_transaction_signed(tx: &Transaction) -> Vec<u8> {
+    let mut out = serialize_transaction(tx);
+    out.extend_from_slice(&(tx.signature.len() as u32).to_be_bytes());
+    out.extend_from_slice(&tx.signature);
+    out
+}
+
+pub fn txid(tx: &Transaction) -> [u8; 32] {
+    *blake3::hash(&serialize_transaction_signed(tx)).as_bytes()
+}
+
+pub fn serialize_block_header(block: &Block) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.push(FORMAT_VERSION);
+    out.extend_from_slice(&block.index.to_be_bytes());
+    out.extend_from_slice(&block.timestamp.to_be_bytes());
+    write_bytes32(&mut out, &block.previous_hash);
+    write_merkle_root(&mut out, &block.transactions);
+    let target_bytes = hex::decode(&block.target).expect("Invalid target hex");
+    assert_eq!(target_bytes.len(), 32, "Target must be 32 bytes");
+    out.extend_from_slice(&target_bytes);
+    out.extend_from_slice(&block.nonce.to_be_bytes());
+    out
+}
+
+fn write_merkle_root(out: &mut Vec<u8>, transactions: &[Transaction]) {
+    if transactions.is_empty() {
+        out.extend_from_slice(&[0u8; 32]);
+        return;
+    }
+    let mut hashes: Vec<[u8; 32]> = transactions.iter().map(|tx| txid(tx)).collect();
+    while hashes.len() > 1 {
+        let mut next = Vec::new();
+        for chunk in hashes.chunks(2) {
+            let mut combined = Vec::new();
+            combined.extend_from_slice(&chunk[0]);
+            if chunk.len() > 1 {
+                combined.extend_from_slice(&chunk[1]);
+            } else {
+                combined.extend_from_slice(&chunk[0]);
+            }
+            next.push(*blake3::hash(&combined).as_bytes());
+        }
+        hashes = next;
+    }
+    out.extend_from_slice(&hashes[0]);
+}
+
+pub fn block_hash(block: &Block) -> [u8; 32] {
+    *blake3::hash(&serialize_block_header(block)).as_bytes()
+}
+
+pub fn serialize_block(block: &Block) -> Vec<u8> {
+    let mut out = serialize_block_header(block);
+    out.extend_from_slice(&(block.transactions.len() as u32).to_be_bytes());
+    for tx in &block.transactions {
+        let tx_bytes = serialize_transaction_signed(tx);
+        out.extend_from_slice(&(tx_bytes.len() as u32).to_be_bytes());
+        out.extend_from_slice(&tx_bytes);
+    }
+    out
+}
+
+fn write_string(out: &mut Vec<u8>, s: &str) {
+    let bytes = s.as_bytes();
+    out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    out.extend_from_slice(bytes);
+}
+
+fn write_bytes32(out: &mut Vec<u8>, s: &str) {
+    let bytes = hex::decode(s).expect("Invalid hex hash");
+    assert_eq!(bytes.len(), 32, "Expected 32-byte hash");
+    out.extend_from_slice(&bytes);
+}
+
+pub fn read_u32_be(bytes: &[u8], offset: &mut usize) -> u32 {
+    let val = u32::from_be_bytes([
+        bytes[*offset],
+        bytes[*offset + 1],
+        bytes[*offset + 2],
+        bytes[*offset + 3],
+    ]);
+    *offset += 4;
+    val
+}
+
+pub fn read_u64_be(bytes: &[u8], offset: &mut usize) -> u64 {
+    let val = u64::from_be_bytes([
+        bytes[*offset],
+        bytes[*offset + 1],
+        bytes[*offset + 2],
+        bytes[*offset + 3],
+        bytes[*offset + 4],
+        bytes[*offset + 5],
+        bytes[*offset + 6],
+        bytes[*offset + 7],
+    ]);
+    *offset += 8;
+    val
+}
+
+pub fn read_string(bytes: &[u8], offset: &mut usize) -> Result<String, &'static str> {
+    let len = read_u32_be(bytes, offset) as usize;
+    if *offset + len > bytes.len() {
+        return Err("Buffer too short for string");
+    }
+    let s = std::str::from_utf8(&bytes[*offset..*offset + len])
+        .map_err(|_| "Invalid UTF-8 in string")?
+        .to_string();
+    *offset += len;
+    Ok(s)
+}
+
+pub fn deserialize_transaction(bytes: &[u8]) -> Result<Transaction, &'static str> {
+    let mut offset = 0;
+
+    if offset >= bytes.len() {
+        return Err("Empty buffer");
+    }
+    let format_version = bytes[offset];
+    offset += 1;
+    if format_version != FORMAT_VERSION {
+        return Err("Unsupported format version");
+    }
+
+    let sender = read_string(bytes, &mut offset)?;
+    let receiver = read_string(bytes, &mut offset)?;
+    let amount = read_u64_be(bytes, &mut offset);
+    let nonce = read_u64_be(bytes, &mut offset);
+    let chain_id = read_u32_be(bytes, &mut offset) as u32;
+    let is_coinbase = if offset < bytes.len() {
+        let b = bytes[offset];
+        offset += 1;
+        b != 0
+    } else {
+        false
+    };
+
+    Ok(Transaction {
+        sender,
+        receiver,
+        amount,
+        nonce,
+        chain_id,
+        signature: Vec::new(),
+        is_coinbase,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{Block, Transaction};
+
+    #[test]
+    fn test_serialize_transaction_deterministic() {
+        let tx = Transaction {
+            sender: "sender1".to_string(),
+            receiver: "receiver1".to_string(),
+            amount: 100,
+            nonce: 1,
+            chain_id: 1,
+            signature: vec![1, 2, 3, 4],
+            is_coinbase: false,
+        };
+        let bytes1 = serialize_transaction(&tx);
+        let bytes2 = serialize_transaction(&tx);
+        assert_eq!(bytes1, bytes2);
+    }
+
+    #[test]
+    fn test_serialize_transaction_different() {
+        let tx1 = Transaction {
+            sender: "sender1".to_string(),
+            receiver: "receiver1".to_string(),
+            amount: 100,
+            nonce: 1,
+            chain_id: 1,
+            signature: vec![1, 2, 3, 4],
+            is_coinbase: false,
+        };
+        let tx2 = Transaction {
+            sender: "sender2".to_string(),
+            receiver: "receiver1".to_string(),
+            amount: 100,
+            nonce: 1,
+            chain_id: 1,
+            signature: vec![1, 2, 3, 4],
+            is_coinbase: false,
+        };
+        let bytes1 = serialize_transaction(&tx1);
+        let bytes2 = serialize_transaction(&tx2);
+        assert_ne!(bytes1, bytes2);
+    }
+
+    #[test]
+    fn test_txid_deterministic() {
+        let tx = Transaction {
+            sender: "sender1".to_string(),
+            receiver: "receiver1".to_string(),
+            amount: 100,
+            nonce: 1,
+            chain_id: 1,
+            signature: vec![
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+                24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
+                45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65,
+            ],
+            is_coinbase: false,
+        };
+        let id1 = txid(&tx);
+        let id2 = txid(&tx);
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn test_serialize_block_header_deterministic() {
+        let block = Block {
+            index: 1,
+            timestamp: 1234567890,
+            transactions: vec![],
+            previous_hash: "0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
+            hash: "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+            nonce: 42,
+            target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+        };
+        let bytes1 = serialize_block_header(&block);
+        let bytes2 = serialize_block_header(&block);
+        assert_eq!(bytes1, bytes2);
+    }
+
+    #[test]
+    fn test_block_hash_deterministic() {
+        let block = Block {
+            index: 1,
+            timestamp: 1234567890,
+            transactions: vec![],
+            previous_hash: "0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
+            hash: "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+            nonce: 42,
+            target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+        };
+        let h1 = block_hash(&block);
+        let h2 = block_hash(&block);
+        assert_eq!(h1, h2);
+    }
+}

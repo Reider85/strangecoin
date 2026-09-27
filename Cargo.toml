@@ -1,9 +1,14 @@
+[workspace]
+members = [".", "crates/strangecoin-core"]
+resolver = "2"
+
 [package]
 name = "strangecoin"
 version = "1.0.0"
 edition = "2021"
 
 [dependencies]
+strangecoin-core = { path = "crates/strangecoin-core" }
 ctrlc = "3.4"
 rusty-leveldb = "4.0.0"
 uuid = { version = "1.17.0", features = ["v4"] }

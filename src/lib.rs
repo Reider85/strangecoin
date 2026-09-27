@@ -32,37 +32,10 @@ pub mod governance;
 pub mod gui;
 pub mod mempool;
 pub mod network;
-pub mod serialize;
 pub mod storage;
 pub mod wallet;
 
-// Структура блока
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Block {
-    pub index: u64,
-    pub timestamp: u64,
-    pub transactions: Vec<Transaction>,
-    pub previous_hash: String,
-    pub hash: String,
-    pub nonce: u64,
-    pub target: String,
-}
-
-// Структура транзакции
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Transaction {
-    pub sender: String,
-    pub receiver: String,
-    pub amount: u64,
-    #[serde(default)]
-    pub nonce: u64,
-    #[serde(default)]
-    pub chain_id: u32,
-    #[serde(default)]
-    pub signature: Vec<u8>,
-    #[serde(default)]
-    pub is_coinbase: bool,
-}
+pub use strangecoin_core::types::{Block, Transaction};
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct AccountState {
@@ -372,7 +345,7 @@ impl Blockchain {
                     nonce: 0,
                     target: hex::encode(target_arr),
                 };
-                let hash = crate::serialize::block_hash(&block);
+                let hash = strangecoin_core::serialize::block_hash(&block);
                 block.hash = hex::encode(hash);
                 block
             } else {
@@ -599,7 +572,7 @@ impl Blockchain {
 
     pub fn calculate_hash(&self, block: &Block) -> String {
         let start_time = SystemTime::now();
-        let hash_bytes = crate::serialize::block_hash(block);
+        let hash_bytes = strangecoin_core::serialize::block_hash(block);
         let hash = hex::encode(hash_bytes);
         let duration = SystemTime::now()
             .duration_since(start_time)
@@ -683,7 +656,7 @@ impl Blockchain {
                     sender_final = sender_balance - tx.amount;
                     self.balances.entry(tx.sender.clone()).or_default().balance = sender_final;
                     // Track txid for mempool removal
-                    mined_txids.push(crate::serialize::txid(tx));
+                    mined_txids.push(strangecoin_core::serialize::txid(tx));
                 }
                 let receiver_balance = self
                     .balances
@@ -944,7 +917,7 @@ impl Blockchain {
 
         // Block size validation (invariant #7)
         for block in &self.chain {
-            let block_size = crate::serialize::serialize_block(block).len();
+            let block_size = strangecoin_core::serialize::serialize_block(block).len();
             if block_size > crate::network::protocol::MAX_BLOCK_SIZE {
                 warn!(
                     block_index = block.index,
@@ -1597,7 +1570,7 @@ impl Node {
                                     for tx in temp_blockchain.pending_transactions.iter() {
                                         if !blockchain
                                             .mempool
-                                            .contains(&crate::serialize::txid(&tx))
+                                            .contains(&strangecoin_core::serialize::txid(&tx))
                                         {
                                             let _ = blockchain.add_transaction(tx.clone());
                                         }
@@ -1870,7 +1843,7 @@ impl Node {
                                         .any(|block| block.transactions.iter().any(|t| *t == tx))
                                         && !blockchain
                                             .mempool
-                                            .contains(&crate::serialize::txid(&tx))
+                                            .contains(&strangecoin_core::serialize::txid(&tx))
                                     {
                                         let _ = blockchain.add_transaction(tx.clone());
                                     }
@@ -2878,7 +2851,7 @@ pub mod test_support {
         secret_key: &SecretKey,
     ) {
         let secp = Secp256k1::new();
-        let msg_bytes = crate::serialize::serialize_transaction(tx);
+        let msg_bytes = strangecoin_core::serialize::serialize_transaction(tx);
         let msg_hash = blake3::hash(&msg_bytes);
         let msg = Message::from_digest_slice(msg_hash.as_bytes()).expect("message digest");
         let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&msg, secret_key);

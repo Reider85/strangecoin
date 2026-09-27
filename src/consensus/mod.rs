@@ -1,4 +1,4 @@
-use crate::serialize;
+use strangecoin_core::serialize;
 use sha2::Digest;
 
 pub const CHAIN_ID_MAINNET: u32 = 1;
@@ -252,7 +252,7 @@ pub fn verify_transaction(tx: &crate::Transaction) -> Result<(), crate::error::S
     if tx.is_coinbase {
         return Ok(());
     }
-    let pk = recover_pubkey_from_sig(&tx.signature, &crate::serialize::serialize_transaction(tx))?;
+    let pk = recover_pubkey_from_sig(&tx.signature, &strangecoin_core::serialize::serialize_transaction(tx))?;
     if crate::address::address_from_public_key(&pk) != tx.sender {
         return Err(crate::error::StrangecoinError::InvalidSignature);
     }
@@ -335,7 +335,7 @@ pub fn load_genesis(path: &str) -> Result<crate::Block, crate::error::Strangecoi
     };
 
     // Compute hash
-    let hash = crate::serialize::block_hash(&block);
+    let hash = strangecoin_core::serialize::block_hash(&block);
     let mut block = block;
     block.hash = hex::encode(hash);
     Ok(block)
@@ -349,7 +349,7 @@ pub fn validate_genesis(
     if is_regtest {
         return Ok(());
     }
-    let hash = crate::serialize::block_hash(block);
+    let hash = strangecoin_core::serialize::block_hash(block);
     if hash != EXPECTED_GENESIS_HASH {
         return Err(crate::error::StrangecoinError::GenesisMismatch {
             expected: EXPECTED_GENESIS_HASH,

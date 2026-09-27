@@ -1,6 +1,6 @@
 use crate::consensus::{current_chain_id, verify_transaction};
 use crate::error::StrangecoinError;
-use crate::serialize::txid;
+use strangecoin_core::serialize::txid;
 use crate::{AccountState, Transaction};
 use std::collections::{BTreeMap, HashMap};
 

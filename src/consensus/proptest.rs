@@ -8,7 +8,8 @@ mod proptest {
     use crate::economics::emission::{
         block_reward_at_height_for_chain, HALVING_INTERVAL, MAX_SUPPLY_PRE_TAIL,
     };
-    use crate::{serialize, Transaction};
+    use crate::Transaction;
+    use strangecoin_core::serialize;
     use blake3;
     use hex;
     use proptest::prelude::*;

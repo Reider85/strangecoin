@@ -2778,11 +2778,23 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "strangecoin-core",
  "thiserror",
  "toml",
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "strangecoin-core"
+version = "1.0.0"
+dependencies = [
+ "blake3",
+ "hex",
+ "proptest",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]
