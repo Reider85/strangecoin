@@ -27,7 +27,8 @@
 - Created `docs/spec/consensus.cfg` for TLC model checker
 - Created `docs/spec/README.md` with verification instructions
 
-### P22: Threat Model (STRIDE)
+### ~~P22: Threat Model (STRIDE)~~ — NOT COMPLETED IN STAGE 0
 
-- Created `docs/security/THREAT_MODEL.md` — 25 attack vectors with mitigations
-- Created `docs/security/INCIDENT_RESPONSE.md` — incident response plan
+- **Entry corrected:** P22 was NOT completed during Stage 0. This changelog entry was added prematurely (commit "docs: add CHANGELOG.md" predates any THREAT_MODEL.md file).
+- P22 is executed in **D02** (debt prompt, see `analytics/prompt-stage1.md`).
+- Files `docs/security/THREAT_MODEL.md` and `docs/security/INCIDENT_RESPONSE.md` are created in D02 commit.

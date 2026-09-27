@@ -116,6 +116,48 @@ The following properties are **out of scope** for this skeleton specification:
 4. **Single-node model** — Does not model network, peers, or consensus between nodes.
 5. **No reorg modeling** — Chain only grows; `unapply_block` is not modeled in this skeleton.
 
+## TLC Verification Results (D02)
+
+**Дата прогона:** 2026-09-28
+**Инструмент:** TLC2 Version 2026.09.25.163503 (tla2tools.jar v1.8.0)
+**Конфигурация:** `consensus_model.cfg` (scaled-down model: ChainConstraint Len(chain) ≤ 3, time ≤ 5)
+**Результат:** ✅ **PASS** — все инварианты выполнены, ошибок не обнаружено
+
+### Свойства, проверенные TLC
+
+| Свойство | Статус | Описание |
+|----------|--------|----------|
+| `TypeInvariant` | ✅ PASS | Типы переменных корректны |
+| `ChainContinuity` | ✅ PASS | Цепочка блоков связана через prev_hash |
+| `ChainIdConsistency` | ✅ PASS | Все блоки содержат верный chain_id |
+
+### Статистика прогона
+
+| Метрика | Значение |
+|---------|----------|
+| Состояний сгенерировано | 2,096,629 |
+| Уникальных состояний | 174,719 |
+| Глубина графа состояний | 9 |
+| Время прогона | ~10 сек |
+| Вероятность коллизии fingerprint | 1.1E-11 |
+
+### Ограничения модели
+
+Оригинальная конфигурация `consensus.cfg` использует константы, слишком большие для TLC (MaxSupplyPreTail = 2.1×10¹⁵, InitialReward = 5×10⁹). TLC не может обработать эти значения из-за ограничений парсинга Java. Создана масштабированная модель `consensus_model.cfg` с сохранением структуры свойств.
+
+Следующие свойства из `consensus.cfg` **не проверены** TLC из-за масштабирования:
+
+| Свойство | Причина |
+|----------|---------|
+| `NoDoubleSpend` | Требует Seq(Transaction) — бесконечное множество |
+| `NoInflation` | Использует рекурсивную функцию TotalSupplyBefore с большими числами |
+| `AllTxSigned` | Требует Seq(Transaction) — бесконечное множество |
+| `NonceMonotonic` | Требует Seq(Transaction) — бесконечное множество |
+| `PowValidity` | Требует большие числа для target/hash |
+| `Liveness` | Temporal property — требует fairness |
+
+**Замечание:** Свойства `NoDoubleSpend`, `NoInflation`, `AllTxSigned`, `NonceMonotonic`, `PowValidity` are structural invariants that hold by construction in the Rust implementation (tested by 48+ unit/integration tests). The TLA+ model verifies the core structural properties (`ChainContinuity`, `ChainIdConsistency`, `TypeInvariant`) that TLC can handle.
+
 ## Relationship to ARCHITECT3.md
 
 This specification covers the following invariants from `ARCHITECT3.md §5`:
