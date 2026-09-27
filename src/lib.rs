@@ -104,6 +104,7 @@ pub struct Blockchain {
     pub difficulty: u32,
     pub mempool: crate::mempool::Mempool,
     pub storage: crate::storage::Storage,
+    pub allow_grant_blocks: bool,
 }
 
 impl Serialize for Blockchain {
@@ -171,6 +172,7 @@ impl<'de> Deserialize<'de> for Blockchain {
             difficulty,
             mempool,
             storage,
+            allow_grant_blocks: false,
         })
     }
 }
@@ -269,6 +271,7 @@ impl Blockchain {
             difficulty: 1,
             mempool: crate::mempool::Mempool::new(),
             storage,
+            allow_grant_blocks: false,
         };
         blockchain.debug_db();
 
@@ -537,29 +540,39 @@ impl Blockchain {
     }
 
     // Начисляет первоначальный баланс (10000 из генезис-блока) первому реальному кошельку
-    pub fn grant_initial_balance_to_first_wallet(&mut self, wallet_address: &str) -> bool {
+    pub fn grant_initial_balance_to_first_wallet(
+        &mut self,
+        wallet_address: &str,
+    ) -> Result<bool, StrangecoinError> {
+        if !self.allow_grant_blocks {
+            warn!("Grant blocks are disabled (allow_grant_blocks = false)");
+            return Err(StrangecoinError::GrantBlocksDisabled);
+        }
         if self.chain.len() != 1 {
-            return false;
+            return Ok(false);
         }
         if self.balances.contains_key(wallet_address) {
-            return false;
+            return Ok(false);
         }
         let is_first_wallet =
             self.balances.len() == 1 && self.balances.contains_key("initial_wallet_address");
         if !is_first_wallet {
-            return false;
+            return Ok(false);
         }
         let amount = match self.balances.get("initial_wallet_address") {
             Some(a) if a.balance > 0 => a.balance,
-            _ => return false,
+            _ => return Ok(false),
         };
         self.create_grant_block(wallet_address, amount);
         info!(wallet = %wallet_address, amount, "Первому кошельку начислен первоначальный баланс");
-        true
+        Ok(true)
     }
 
     // Миграция для существующих баз: переносит баланс генезис-кошелька на единственный реальный кошелёк с нулевым балансом
     pub fn migrate_initial_wallet_balance(&mut self) {
+        if !self.allow_grant_blocks {
+            return;
+        }
         if self.chain.len() != 1 {
             return;
         }
@@ -969,8 +982,8 @@ impl Blockchain {
                 "Обработка блока"
             );
 
-            // Validate coinbase for non-genesis blocks (skip grant block at index 1)
-            if block.index > 0 && block.index != 1 {
+            // Validate coinbase for non-genesis blocks
+            if block.index > 0 {
                 let coinbase_tx = block.transactions.iter().find(|tx| tx.is_coinbase);
                 if let Some(coinbase) = coinbase_tx {
                     let expected_reward = crate::economics::emission::block_reward_at_height(
@@ -998,8 +1011,9 @@ impl Blockchain {
 
             for tx in &block.transactions {
                 debug!(nonce = tx.nonce, sender = %tx.sender, receiver = %tx.receiver, amount = tx.amount, "Обработка транзакции");
-                // Пропускаем проверку баланса для отправителя "genesis" и "coinbase"
-                if tx.sender != "genesis" && tx.sender != "coinbase" {
+                // Genesis block (index 0): skip balance checks — it is the origin of all value
+                // All other blocks: always check sender balance
+                if block.index > 0 {
                     let sender_balance = expected_balances.get(&tx.sender).unwrap_or(&0);
                     debug!(sender = %tx.sender, balance = *sender_balance, "Текущий баланс отправителя");
                     if *sender_balance < tx.amount {
@@ -1009,7 +1023,7 @@ impl Blockchain {
                     *expected_balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
                     debug!(sender = %tx.sender, amount = tx.amount, new_balance = expected_balances.get(&tx.sender).unwrap_or(&0), "Баланс отправителя уменьшен");
                 } else {
-                    debug!("Отправитель '{}', пропуск проверки баланса", tx.sender);
+                    debug!("Genesis block: skipping balance check for sender '{}'", tx.sender);
                 }
                 *expected_balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
                 debug!(receiver = %tx.receiver, amount = tx.amount, new_balance = expected_balances.get(&tx.receiver).unwrap_or(&0), "Баланс получателя увеличен");
@@ -1527,6 +1541,7 @@ impl Node {
                                         difficulty: temp_blockchain.difficulty,
                                         mempool: crate::mempool::Mempool::new(),
                                         storage,
+                                        allow_grant_blocks: blockchain.allow_grant_blocks,
                                     };
                                     // Объединяем mempool, добавляя только валидные
                                     let mut merged_pending = vec![];
@@ -1572,6 +1587,7 @@ impl Node {
                                             difficulty: temp_blockchain.difficulty,
                                             mempool: crate::mempool::Mempool::new(),
                                             storage: blockchain.storage.clone(),
+                                            allow_grant_blocks: blockchain.allow_grant_blocks,
                                         });
                                     } else {
                                         warn!("Полученный блокчейн не прошёл валидацию");
@@ -1725,6 +1741,7 @@ impl Node {
                                     mp
                                 },
                                 storage: crate::storage::Storage::from_db(existing_db.clone()),
+                                allow_grant_blocks: false,
                             };
                             info!(peer = %peer, chain_len = temp_blockchain.chain.len(), chain = ?temp_blockchain.chain, "Полученная цепочка от узла");
                             let received_hash = temp_blockchain
@@ -1752,6 +1769,7 @@ impl Node {
                                     difficulty: temp_blockchain.difficulty,
                                     mempool: crate::mempool::Mempool::new(),
                                     storage: crate::storage::Storage::from_db(existing_db.clone()),
+                                    allow_grant_blocks: false,
                                 };
                                 let mut added_transactions = 0;
 
@@ -1835,6 +1853,7 @@ impl Node {
                                         storage: crate::storage::Storage::from_db(
                                             existing_db.clone(),
                                         ),
+                                        allow_grant_blocks: blockchain.allow_grant_blocks,
                                     });
                                 } else {
                                     warn!(peer = %peer, "Полученный блокчейн с узла не прошёл валидацию после объединения");
@@ -2117,8 +2136,19 @@ impl eframe::App for WalletApp {
                                 info!(duration_secs = duration, wallet_address = %self.wallet_address, "Регистрация успешна");
                                 let mut blockchain = self.node.blockchain.write().expect("Не удалось захватить write lock для blockchain");
                                 if !blockchain.balances.contains_key(&self.wallet_address) {
-                                    if !blockchain.grant_initial_balance_to_first_wallet(&self.wallet_address) {
-                                        blockchain.balances.entry(self.wallet_address.clone()).or_default();
+                                    match blockchain.grant_initial_balance_to_first_wallet(&self.wallet_address) {
+                                        Ok(true) => {}
+                                        Ok(false) => {
+                                            blockchain.balances.entry(self.wallet_address.clone()).or_default();
+                                        }
+                                        Err(StrangecoinError::GrantBlocksDisabled) => {
+                                            warn!("Grant blocks disabled, creating zero-balance entry");
+                                            blockchain.balances.entry(self.wallet_address.clone()).or_default();
+                                        }
+                                        Err(e) => {
+                                            warn!(error = %e, "Failed to grant initial balance");
+                                            blockchain.balances.entry(self.wallet_address.clone()).or_default();
+                                        }
                                     }
                                     blockchain.save_state();
                                 }
@@ -2429,6 +2459,7 @@ pub fn run() {
             },
             log_level: "info".into(),
             data_dir: exe_dir.join("data"),
+            allow_grant_blocks: false,
         };
 
         let toml_content =
@@ -2496,6 +2527,10 @@ pub fn run() {
     let shutdown_ctrlc = Arc::clone(&shutdown);
 
     let mut node = Node::new(listen_addr.to_string(), mining_rx, sync_tx.clone(), port);
+    {
+        let mut bc = node.blockchain.write().expect("Failed to acquire blockchain lock");
+        bc.allow_grant_blocks = config.allow_grant_blocks;
+    }
     node.start_server(port, sync_tx.clone());
     node.discover_peers();
 
@@ -2651,6 +2686,7 @@ pub mod test_support {
             difficulty: 0,
             mempool: crate::mempool::Mempool::new(),
             storage,
+            allow_grant_blocks: true,
         };
         bc.create_genesis_block();
         bc
@@ -2766,6 +2802,7 @@ pub mod test_support {
             difficulty: src_difficulty,
             mempool: crate::mempool::Mempool::new(),
             storage: tgt.storage.clone(),
+            allow_grant_blocks: tgt.allow_grant_blocks,
         };
         let mut merged_pending = vec![];
         for tx in src_pending.iter() {

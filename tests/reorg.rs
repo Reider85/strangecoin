@@ -15,12 +15,12 @@ fn no_rollback_on_shorter_chain() {
 
     {
         let mut bc = bc1.write().unwrap();
-        assert!(bc.grant_initial_balance_to_first_wallet(&a1));
+        assert!(bc.grant_initial_balance_to_first_wallet(&a1).unwrap());
         create_and_mine_tx(&mut bc, &a1, &a2, 1000, &keypairs[0].1);
     }
     {
         let mut bc = bc2.write().unwrap();
-        assert!(bc.grant_initial_balance_to_first_wallet(&a2));
+        assert!(bc.grant_initial_balance_to_first_wallet(&a2).unwrap());
     }
 
     assert!(
@@ -47,7 +47,7 @@ fn full_reorg_longer_chain() {
 
     {
         let mut bc = bc_a.write().unwrap();
-        assert!(bc.grant_initial_balance_to_first_wallet(&addrs[0]));
+        assert!(bc.grant_initial_balance_to_first_wallet(&addrs[0]).unwrap());
         create_and_mine_tx(&mut bc, &addrs[0], &addrs[1], 2000, &keypairs[0].1);
         create_and_mine_tx(&mut bc, &addrs[0], &addrs[2], 1000, &keypairs[0].1);
     }
@@ -55,7 +55,7 @@ fn full_reorg_longer_chain() {
 
     {
         let mut bc = bc_b.write().unwrap();
-        assert!(bc.grant_initial_balance_to_first_wallet(&addrs[0]));
+        assert!(bc.grant_initial_balance_to_first_wallet(&addrs[0]).unwrap());
         create_and_mine_tx(&mut bc, &addrs[0], &addrs[1], 500, &keypairs[0].1);
         create_and_mine_tx(&mut bc, &addrs[0], &addrs[2], 300, &keypairs[0].1);
         create_and_mine_tx(&mut bc, &addrs[1], &addrs[2], 100, &keypairs[1].1);

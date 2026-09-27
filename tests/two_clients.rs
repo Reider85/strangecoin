@@ -17,7 +17,7 @@ fn hundred_transactions_five_wallets() {
 
     {
         let mut bc = wallets[0].write().unwrap();
-        assert!(bc.grant_initial_balance_to_first_wallet(&addrs[0]));
+        assert!(bc.grant_initial_balance_to_first_wallet(&addrs[0]).unwrap());
     }
     sync_to_longest(&wallets);
     assert_balances(&wallets, &addrs, &[10000, 0, 0, 0, 0]);

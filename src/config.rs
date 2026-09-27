@@ -25,6 +25,8 @@ pub struct Config {
     pub storage: StorageConfig,
     pub log_level: String,
     pub data_dir: PathBuf,
+    #[serde(default)]
+    pub allow_grant_blocks: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +91,7 @@ impl Default for Config {
             },
             log_level: "info".into(),
             data_dir: "./data".into(),
+            allow_grant_blocks: false,
         }
     }
 }

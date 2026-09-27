@@ -16,7 +16,7 @@ fn three_instances_receive_transfer() {
 
     {
         let mut bc = instances[0].write().unwrap();
-        assert!(bc.grant_initial_balance_to_first_wallet(&addrs[0]));
+        assert!(bc.grant_initial_balance_to_first_wallet(&addrs[0]).unwrap());
     }
 
     for i in 1..3 {
@@ -31,7 +31,7 @@ fn three_instances_receive_transfer() {
     for i in 1..3 {
         let mut bc = instances[i].write().unwrap();
         if !bc.balances.contains_key(&addrs[i]) {
-            if !bc.grant_initial_balance_to_first_wallet(&addrs[i]) {
+            if !bc.grant_initial_balance_to_first_wallet(&addrs[i]).unwrap_or(false) {
                 bc.balances.entry(addrs[i].clone()).or_default();
             }
         }
@@ -90,7 +90,7 @@ fn real_network_three_nodes() {
     {
         let mut bc = nodes[0].1.write().unwrap();
         assert!(
-            bc.grant_initial_balance_to_first_wallet(&addrs[0]),
+            bc.grant_initial_balance_to_first_wallet(&addrs[0]).unwrap(),
             "Grant not created"
         );
     }
@@ -112,7 +112,7 @@ fn real_network_three_nodes() {
     for i in 1..3 {
         let mut bc = nodes[i].1.write().unwrap();
         if !bc.balances.contains_key(&addrs[i]) {
-            if !bc.grant_initial_balance_to_first_wallet(&addrs[i]) {
+            if !bc.grant_initial_balance_to_first_wallet(&addrs[i]).unwrap_or(false) {
                 bc.balances.entry(addrs[i].clone()).or_default();
             }
             bc.save_state();
@@ -191,7 +191,7 @@ fn real_network_fast_registration_race() {
     for i in 0..3 {
         let mut bc = nodes[i].1.write().unwrap();
         if !bc.balances.contains_key(&addrs[i]) {
-            if !bc.grant_initial_balance_to_first_wallet(&addrs[i]) {
+            if !bc.grant_initial_balance_to_first_wallet(&addrs[i]).unwrap_or(false) {
                 bc.balances.entry(addrs[i].clone()).or_default();
             }
             bc.save_state();

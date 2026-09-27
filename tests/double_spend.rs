@@ -14,7 +14,7 @@ fn double_spend_rejected() {
 
     {
         let mut bc = bc.write().unwrap();
-        assert!(bc.grant_initial_balance_to_first_wallet(&sender));
+        assert!(bc.grant_initial_balance_to_first_wallet(&sender).unwrap());
     }
 
     let balance_before = {

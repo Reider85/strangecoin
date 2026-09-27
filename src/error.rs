@@ -56,4 +56,6 @@ pub enum StrangecoinError {
     InsufficientBalance { available: u64, required: u64 },
     #[error("config error: {0}")]
     ConfigError(String),
+    #[error("grant blocks are disabled (allow_grant_blocks = false)")]
+    GrantBlocksDisabled,
 }

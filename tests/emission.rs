@@ -9,7 +9,7 @@ fn emission_matches_block_reward() {
 
     let keypairs = generate_keypairs(1);
     let addr = keypairs[0].0.clone();
-    assert!(bc.grant_initial_balance_to_first_wallet(&addr));
+    assert!(bc.grant_initial_balance_to_first_wallet(&addr).unwrap());
 
     let mut total_supply: u64 = bc.balances.values().map(|a| a.balance).sum();
 

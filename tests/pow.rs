@@ -15,7 +15,7 @@ fn mining_on_regtest_low_difficulty() {
 
     {
         let mut bc = bc1.write().unwrap();
-        assert!(bc.grant_initial_balance_to_first_wallet(&addr));
+        assert!(bc.grant_initial_balance_to_first_wallet(&addr).unwrap());
     }
 
     adopt_from(&bc2, &bc1);
