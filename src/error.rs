@@ -59,3 +59,28 @@ pub enum StrangecoinError {
     #[error("grant blocks are disabled (allow_grant_blocks = false)")]
     GrantBlocksDisabled,
 }
+
+impl From<strangecoin_core::CoreError> for StrangecoinError {
+    fn from(e: strangecoin_core::CoreError) -> Self {
+        match e {
+            strangecoin_core::CoreError::InvalidSignature => StrangecoinError::InvalidSignature,
+            strangecoin_core::CoreError::InvalidNonce { expected, got } => {
+                StrangecoinError::InvalidNonce { expected, got }
+            }
+            strangecoin_core::CoreError::InvalidChainId { expected, got } => {
+                StrangecoinError::InvalidChainId { expected, got }
+            }
+            strangecoin_core::CoreError::InvalidDifficulty => StrangecoinError::InvalidDifficulty,
+            strangecoin_core::CoreError::TimestampTooOld => StrangecoinError::TimestampTooOld,
+            strangecoin_core::CoreError::TimestampInFuture => StrangecoinError::TimestampInFuture,
+            strangecoin_core::CoreError::GenesisMismatch { expected, got } => {
+                StrangecoinError::GenesisMismatch { expected, got }
+            }
+            strangecoin_core::CoreError::HexError(e) => StrangecoinError::HexError(e),
+            strangecoin_core::CoreError::Secp256k1Error(e) => StrangecoinError::Secp256k1Error(e),
+            strangecoin_core::CoreError::InvalidCoinbaseAmount { expected, got } => {
+                StrangecoinError::InvalidCoinbaseAmount { expected, got }
+            }
+        }
+    }
+}

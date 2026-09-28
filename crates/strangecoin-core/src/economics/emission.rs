@@ -7,8 +7,6 @@ pub const HALVING_INTERVAL: u64 = 210_000;
 pub const MAX_SUPPLY_PRE_TAIL: u64 = 21_000_000 * 100_000_000;
 pub const INITIAL_REWARD: u64 = 50 * 100_000_000;
 
-/// Zero reward for regtest to avoid breaking existing integration tests
-/// Mainnet/testnet use full emission schedule
 const REGTEST_REWARD: u64 = 0;
 
 pub fn block_reward_at_height(height: u64, total_supply: u64) -> u64 {
@@ -16,7 +14,6 @@ pub fn block_reward_at_height(height: u64, total_supply: u64) -> u64 {
 }
 
 pub fn block_reward_at_height_for_chain(height: u64, total_supply: u64, chain_id: u32) -> u64 {
-    // Regtest: minimal fixed reward to avoid interfering with existing tests
     if chain_id == consensus::CHAIN_ID_REGTEST {
         return REGTEST_REWARD;
     }
@@ -120,7 +117,6 @@ mod tests {
 
     #[test]
     fn test_regtest_zero_reward() {
-        // Regtest should have zero reward to not interfere with existing tests
         assert_eq!(
             block_reward_at_height_for_chain(0, 0, consensus::CHAIN_ID_REGTEST),
             REGTEST_REWARD

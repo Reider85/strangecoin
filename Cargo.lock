@@ -2790,10 +2790,14 @@ dependencies = [
 name = "strangecoin-core"
 version = "1.0.0"
 dependencies = [
+ "base64",
  "blake3",
  "hex",
  "proptest",
+ "rand 0.8.5",
+ "secp256k1",
  "serde",
+ "sha2",
  "thiserror",
 ]
 

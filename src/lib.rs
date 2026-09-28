@@ -36,6 +36,7 @@ pub mod storage;
 pub mod wallet;
 
 pub use strangecoin_core::types::{Block, Transaction};
+pub use strangecoin_core::serialize;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct AccountState {
