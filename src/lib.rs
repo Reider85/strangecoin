@@ -37,30 +37,7 @@ pub mod wallet;
 
 pub use strangecoin_core::types::{Block, Transaction};
 pub use strangecoin_core::serialize;
-
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
-pub struct AccountState {
-    pub balance: u64,
-    pub nonce: u64,
-}
-
-impl std::fmt::Display for AccountState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.balance)
-    }
-}
-
-impl std::ops::AddAssign<u64> for AccountState {
-    fn add_assign(&mut self, rhs: u64) {
-        self.balance += rhs;
-    }
-}
-
-impl std::ops::SubAssign<u64> for AccountState {
-    fn sub_assign(&mut self, rhs: u64) {
-        self.balance -= rhs;
-    }
-}
+pub use strangecoin_core::AccountState;
 
 #[derive(Deserialize, Serialize)]
 pub struct BlockchainDeserialize {
@@ -638,40 +615,29 @@ impl Blockchain {
             shutdown,
         );
 
-        if let Some(mut block) = block {
+        if let Some(block) = block {
             let balance_start_time = SystemTime::now();
+
+            let core_state = strangecoin_core::state::State {
+                balances: self.balances.clone(),
+            };
+            match strangecoin_core::state::apply_block(&core_state, &block) {
+                Ok(new_state) => {
+                    self.balances = new_state.balances;
+                }
+                Err(e) => {
+                    error!(error = %e, "Failed to apply block to state");
+                    return None;
+                }
+            }
+
             let mut mined_txids = Vec::new();
             for tx in &block.transactions {
-                let mut sender_final = 0u64;
-                // Skip balance check for coinbase (sender "coinbase" has no balance to deduct)
                 if !tx.is_coinbase {
-                    let sender_balance = self
-                        .balances
-                        .get(&tx.sender)
-                        .map(|a| a.balance)
-                        .unwrap_or(0);
-                    if sender_balance < tx.amount {
-                        error!(sender = %tx.sender, nonce = tx.nonce, "Недостаточно средств для транзакции");
-                        return None;
-                    }
-                    sender_final = sender_balance - tx.amount;
-                    self.balances.entry(tx.sender.clone()).or_default().balance = sender_final;
-                    // Track txid for mempool removal
                     mined_txids.push(strangecoin_core::serialize::txid(tx));
                 }
-                let receiver_balance = self
-                    .balances
-                    .get(&tx.receiver)
-                    .map(|a| a.balance)
-                    .unwrap_or(0);
-                let receiver_final = receiver_balance + tx.amount;
-                self.balances
-                    .entry(tx.receiver.clone())
-                    .or_default()
-                    .balance = receiver_final;
-
-                info!(sender = %tx.sender, sender_final, receiver = %tx.receiver, receiver_final, "Обновлён баланс");
             }
+
             let balance_duration = SystemTime::now()
                 .duration_since(balance_start_time)
                 .unwrap()
@@ -941,99 +907,40 @@ impl Blockchain {
         }
 
         // Восстанавливаем балансы из цепочки блоков, начиная с пустого состояния
-        let mut expected_balances: HashMap<String, u64> = HashMap::new();
-        let mut total_supply_before_block = 0u64;
-        debug!(
-            ?expected_balances,
-            "Начальная инициализация expected_balances"
-        );
-
-        // Применяем все транзакции из цепочки блоков
+        let mut expected_state = strangecoin_core::state::State::new();
         for block in &self.chain {
             info!(
                 block_index = block.index,
                 tx_count = block.transactions.len(),
                 "Обработка блока"
             );
-
-            // Validate coinbase for non-genesis blocks
-            if block.index > 0 {
-                let coinbase_tx = block.transactions.iter().find(|tx| tx.is_coinbase);
-                if let Some(coinbase) = coinbase_tx {
-                    let expected_reward = crate::economics::emission::block_reward_at_height(
-                        block.index,
-                        total_supply_before_block,
-                    );
-                    if coinbase.amount > expected_reward {
-                        warn!(
-                            block_index = block.index,
-                            expected = expected_reward,
-                            got = coinbase.amount,
-                            "Coinbase amount exceeds emission schedule"
-                        );
-                        return false;
-                    }
-                    // Miner can underpay voluntarily (coinbase.amount < expected_reward is OK)
-                } else {
-                    warn!(
-                        block_index = block.index,
-                        "Block missing coinbase transaction"
-                    );
+            match strangecoin_core::state::apply_block(&expected_state, block) {
+                Ok(new_state) => {
+                    expected_state = new_state;
+                }
+                Err(e) => {
+                    warn!(block_index = block.index, error = %e, "Block application failed during validation");
                     return false;
                 }
             }
-
-            for tx in &block.transactions {
-                debug!(nonce = tx.nonce, sender = %tx.sender, receiver = %tx.receiver, amount = tx.amount, "Обработка транзакции");
-                // Genesis block (index 0): skip balance checks — it is the origin of all value
-                // All other blocks: always check sender balance
-                if block.index > 0 {
-                    let sender_balance = expected_balances.get(&tx.sender).unwrap_or(&0);
-                    debug!(sender = %tx.sender, balance = *sender_balance, "Текущий баланс отправителя");
-                    if *sender_balance < tx.amount {
-                        warn!(sender = %tx.sender, block_index = block.index, nonce = tx.nonce, required = tx.amount, available = *sender_balance, "Недостаточно средств в блоке");
-                        return false;
-                    }
-                    *expected_balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
-                    debug!(sender = %tx.sender, amount = tx.amount, new_balance = expected_balances.get(&tx.sender).unwrap_or(&0), "Баланс отправителя уменьшен");
-                } else {
-                    debug!("Genesis block: skipping balance check for sender '{}'", tx.sender);
-                }
-                *expected_balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
-                debug!(receiver = %tx.receiver, amount = tx.amount, new_balance = expected_balances.get(&tx.receiver).unwrap_or(&0), "Баланс получателя увеличен");
-                debug!(
-                    nonce = tx.nonce,
-                    ?expected_balances,
-                    "Обновлённые expected_balances после транзакции"
-                );
-            }
-
-            // Update total supply after processing block (for next block's coinbase validation)
-            total_supply_before_block = expected_balances.values().sum();
         }
 
         // Проверяем неподтверждённые транзакции (mempool)
-        let mut temp_balances = expected_balances.clone();
-        debug!(
-            ?temp_balances,
-            "Проверка неподтверждённых транзакций, начальные temp_balances"
-        );
+        let mut temp_state = expected_state.clone();
         for tx in self.mempool.transactions() {
-            debug!(nonce = tx.nonce, sender = %tx.sender, receiver = %tx.receiver, amount = tx.amount, "Обработка неподтверждённой транзакции");
-            let sender_balance = temp_balances.get(&tx.sender).unwrap_or(&0);
-            debug!(sender = %tx.sender, balance = *sender_balance, "Текущий баланс отправителя в temp_balances");
-            if *sender_balance < tx.amount {
-                warn!(sender = %tx.sender, nonce = tx.nonce, required = tx.amount, available = *sender_balance, "Недостаточно средств в mempool");
+            let sender_balance = temp_state.get_balance(&tx.sender);
+            if sender_balance < tx.amount {
+                warn!(sender = %tx.sender, nonce = tx.nonce, required = tx.amount, available = sender_balance, "Недостаточно средств в mempool");
                 return false;
             }
-            *temp_balances.entry(tx.sender.clone()).or_insert(0) -= tx.amount;
-            *temp_balances.entry(tx.receiver.clone()).or_insert(0) += tx.amount;
-            debug!(sender = %tx.sender, amount = tx.amount, new_balance = temp_balances.get(&tx.sender).unwrap_or(&0), "Баланс отправителя уменьшен");
-            debug!(receiver = %tx.receiver, amount = tx.amount, new_balance = temp_balances.get(&tx.receiver).unwrap_or(&0), "Баланс получателя увеличен");
-            debug!(
-                nonce = tx.nonce,
-                ?temp_balances,
-                "Обновлённые temp_balances после mempool транзакции"
+            temp_state.set_balance(
+                &tx.sender,
+                sender_balance.checked_sub(tx.amount).unwrap_or(0),
+            );
+            let receiver_balance = temp_state.get_balance(&tx.receiver);
+            temp_state.set_balance(
+                &tx.receiver,
+                receiver_balance.checked_add(tx.amount).unwrap_or(u64::MAX),
             );
         }
 
@@ -1095,10 +1002,11 @@ impl Blockchain {
         }
 
         // Сверяем восстановленные балансы с хранимыми, игнорируя нулевые остатки
-        let reconstructed: HashMap<String, u64> = expected_balances
+        let reconstructed: HashMap<String, u64> = expected_state
+            .balances
             .iter()
-            .filter(|(_, v)| **v != 0)
-            .map(|(k, v)| (k.clone(), *v))
+            .filter(|(_, v)| v.balance != 0)
+            .map(|(k, v)| (k.clone(), v.balance))
             .collect();
         let stored: HashMap<String, u64> = self
             .balances

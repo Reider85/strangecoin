@@ -4,6 +4,8 @@ pub mod economics;
 pub mod consensus;
 pub mod address;
 pub mod error;
+pub mod state;
 
-pub use types::{Block, Transaction};
+pub use types::{AccountState, Block, Transaction};
 pub use error::CoreError;
+pub use state::{apply_block, unapply_block, State};

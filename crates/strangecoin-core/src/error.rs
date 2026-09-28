@@ -22,4 +22,12 @@ pub enum CoreError {
     Secp256k1Error(#[from] secp256k1::Error),
     #[error("invalid coinbase amount: expected {expected}, got {got}")]
     InvalidCoinbaseAmount { expected: u64, got: u64 },
+    #[error("insufficient balance for {sender}: have {available}, need {required}")]
+    InsufficientBalance {
+        sender: String,
+        available: u64,
+        required: u64,
+    },
+    #[error("arithmetic overflow in state transition")]
+    StateOverflow,
 }

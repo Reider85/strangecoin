@@ -11,6 +11,12 @@ pub struct Block {
     pub target: String,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct AccountState {
+    pub balance: u64,
+    pub nonce: u64,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Transaction {
     pub sender: String,
