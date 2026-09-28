@@ -7,6 +7,8 @@ pub const CHAIN_ID_MAINNET: u32 = 1;
 pub const CHAIN_ID_TESTNET: u32 = 2;
 pub const CHAIN_ID_REGTEST: u32 = 3;
 
+pub const CURRENT_CONSENSUS_VERSION: u32 = 1;
+
 pub const MEDIAN_TIME_WINDOW: usize = 11;
 pub const MAX_FUTURE_TIME: u64 = 2 * 60 * 60;
 

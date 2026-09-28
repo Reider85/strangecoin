@@ -2,7 +2,7 @@ use crate::types::{Block, Transaction};
 use blake3;
 use hex;
 
-pub const FORMAT_VERSION: u8 = 1;
+pub const FORMAT_VERSION: u8 = 2;
 
 pub fn serialize_transaction(tx: &Transaction) -> Vec<u8> {
     let mut out = Vec::new();
@@ -38,6 +38,7 @@ pub fn serialize_block_header(block: &Block) -> Vec<u8> {
     assert_eq!(target_bytes.len(), 32, "Target must be 32 bytes");
     out.extend_from_slice(&target_bytes);
     out.extend_from_slice(&block.nonce.to_be_bytes());
+    out.extend_from_slice(&block.consensus_version.to_be_bytes());
     out
 }
 
@@ -137,7 +138,7 @@ pub fn deserialize_transaction(bytes: &[u8]) -> Result<Transaction, &'static str
     }
     let format_version = bytes[offset];
     offset += 1;
-    if format_version != FORMAT_VERSION {
+    if format_version != 1 && format_version != 2 {
         return Err("Unsupported format version");
     }
 
@@ -242,6 +243,7 @@ mod tests {
             hash: "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
             nonce: 42,
             target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+            consensus_version: 1,
         };
         let bytes1 = serialize_block_header(&block);
         let bytes2 = serialize_block_header(&block);
@@ -259,6 +261,7 @@ mod tests {
             hash: "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
             nonce: 42,
             target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+            consensus_version: 1,
         };
         let h1 = block_hash(&block);
         let h2 = block_hash(&block);

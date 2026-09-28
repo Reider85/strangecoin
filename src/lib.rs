@@ -322,6 +322,7 @@ impl Blockchain {
                     hash: String::new(),
                     nonce: 0,
                     target: hex::encode(target_arr),
+                    consensus_version: strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION,
                 };
                 let hash = strangecoin_core::serialize::block_hash(&block);
                 block.hash = hex::encode(hash);
@@ -422,7 +423,8 @@ impl Blockchain {
             previous_hash: "0".repeat(64),
             hash: String::new(),
             nonce: 0,
-            target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(), // max target (easy mining for tests)
+            target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+            consensus_version: strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION,
         };
         let hash = self.calculate_hash(&genesis_block);
         let mut genesis_block = genesis_block;
@@ -479,6 +481,7 @@ impl Blockchain {
             hash: String::new(),
             nonce: 0,
             target: previous_block.target.clone(),
+            consensus_version: strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION,
         };
         block.hash = self.calculate_hash(&block);
         self.chain.push(block);
@@ -723,6 +726,7 @@ impl Blockchain {
             hash: String::new(),
             nonce: 0,
             target,
+            consensus_version: strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION,
         };
 
         let target_bytes = hex::decode(&block.target).expect("valid target hex");
@@ -891,6 +895,20 @@ impl Blockchain {
                     block_size,
                     limit = crate::network::protocol::MAX_BLOCK_SIZE,
                     "Block size limit exceeded"
+                );
+                return false;
+            }
+        }
+
+        // Consensus version validation (invariant #21)
+        for block in &self.chain {
+            let expected_version = strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION;
+            if block.consensus_version != expected_version {
+                warn!(
+                    block_index = block.index,
+                    got = block.consensus_version,
+                    expected = expected_version,
+                    "Block consensus_version mismatch"
                 );
                 return false;
             }

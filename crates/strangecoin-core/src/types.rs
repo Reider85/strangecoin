@@ -9,6 +9,8 @@ pub struct Block {
     pub hash: String,
     pub nonce: u64,
     pub target: String,
+    #[serde(default)]
+    pub consensus_version: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]

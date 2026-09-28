@@ -24,6 +24,7 @@ fn genesis_block(txs: Vec<Transaction>) -> Block {
         hash: "genesis_hash".to_string(),
         nonce: 0,
         target: "ff".to_string(),
+        consensus_version: 1,
     }
 }
 
@@ -38,6 +39,7 @@ fn transfer_block(index: u64, txs: Vec<Transaction>) -> Block {
         hash: format!("hash_{}", index),
         nonce: 0,
         target: "ff".to_string(),
+        consensus_version: 1,
     }
 }
 

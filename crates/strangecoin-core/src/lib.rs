@@ -5,6 +5,7 @@ pub mod consensus;
 pub mod address;
 pub mod error;
 pub mod state;
+pub mod governance;
 
 pub use types::{AccountState, Block, Transaction};
 pub use error::CoreError;

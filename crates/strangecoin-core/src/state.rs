@@ -231,6 +231,7 @@ mod tests {
             hash: format!("block_hash_{}", index),
             nonce: 0,
             target: "ff".to_string(),
+            consensus_version: 1,
         }
     }
 
@@ -295,6 +296,7 @@ mod tests {
             hash: "block_hash_1".to_string(),
             nonce: 0,
             target: "ff".to_string(),
+            consensus_version: 1,
         };
         let new_state = apply_block(&state, &block).unwrap();
         assert_eq!(new_state.get_balance("miner"), 0);

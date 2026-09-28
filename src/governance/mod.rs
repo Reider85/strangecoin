@@ -1,1 +1,1 @@
-// TODO: P11+ наполнит
+pub use strangecoin_core::governance::*;

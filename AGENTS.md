@@ -49,7 +49,21 @@ src/
 ├── blockchain/       # stub (// TODO: P03+)
 ├── api/              # stub (// TODO: P15+)
 ├── gui/              # stub, feature-gated (#[cfg(feature = "gui")]) — feature not in Cargo.toml
-└── governance/       # stub (// TODO: P11+)
+└── governance/       # re-exports strangecoin_core::governance (SCIP process)
+```
+
+## Current Architecture (Stage 1 — strangecoin-core crate)
+```
+crates/strangecoin-core/src/
+├── lib.rs            # module declarations, re-exports
+├── types.rs          # Block, Transaction, AccountState structs
+├── serialize.rs      # canonical binary serialization (blake3, FORMAT_VERSION=2), txid, block_hash
+├── consensus.rs      # chain_id, U256 math, retarget, verify_transaction, CURRENT_CONSENSUS_VERSION
+├── state.rs          # State, apply_block, unapply_block (pure, 0 I/O)
+├── economics/        # emission.rs, fee_market.rs (stub)
+├── governance/       # scip.rs: ScipDocument, ConsensusRules, activation height logic
+├── address.rs        # address_from_public_key
+├── error.rs          # CoreError (thiserror)
 ```
 
 ## Key Constraints (from ARCHITECT3.md)

@@ -68,6 +68,7 @@ fn block1_rejects_over_emission_when_disabled() {
         hash: String::new(),
         nonce: 0,
         target: previous_block.target.clone(),
+        consensus_version: 1,
     };
     block.hash = hex::encode(strangecoin::serialize::block_hash(&block));
     bc.chain.push(block);
@@ -108,6 +109,7 @@ fn magic_string_sender_rejected_in_normal_block() {
         hash: String::new(),
         nonce: 0,
         target: previous_block.target.clone(),
+        consensus_version: 1,
     };
     block.hash = hex::encode(strangecoin::serialize::block_hash(&block));
     bc.chain.push(block);

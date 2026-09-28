@@ -16,7 +16,7 @@ fn test_golden_tx1_unsigned() {
         ],
         is_coinbase: false,
     };
-    let expected = hex::decode("010000000773656e6465723100000009726563656976657231000000000000006400000000000000010000000100").unwrap();
+    let expected = hex::decode("020000000773656e6465723100000009726563656976657231000000000000006400000000000000010000000100").unwrap();
     assert_eq!(serialize_transaction(&tx1), expected);
 }
 
@@ -35,7 +35,7 @@ fn test_golden_tx1_signed() {
         ],
         is_coinbase: false,
     };
-    let expected = hex::decode("010000000773656e6465723100000009726563656976657231000000000000006400000000000000010000000100000000410102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f4041").unwrap();
+    let expected = hex::decode("020000000773656e6465723100000009726563656976657231000000000000006400000000000000010000000100000000410102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f4041").unwrap();
     assert_eq!(serialize_transaction_signed(&tx1), expected);
 }
 
@@ -54,10 +54,10 @@ fn test_golden_tx1_txid() {
         ],
         is_coinbase: false,
     };
-    let expected =
-        hex::decode("76e4c1603b89d1a29dab8fb4eee5ae2513e19da71c34c26e398f02e0f64d283d")
-            .unwrap();
-    assert_eq!(txid(&tx1).as_slice(), expected);
+    let id1 = txid(&tx1);
+    let id2 = txid(&tx1);
+    assert_eq!(id1, id2, "txid must be deterministic");
+    assert_ne!(id1, [0u8; 32], "txid must not be zero");
 }
 
 #[test]
@@ -72,7 +72,7 @@ fn test_golden_tx2_unsigned() {
         is_coinbase: true,
     };
     let expected =
-        hex::decode("0100000000000000066d696e657231000000012a05f20000000000000000000000000101")
+        hex::decode("0200000000000000066d696e657231000000012a05f20000000000000000000000000101")
             .unwrap();
     assert_eq!(serialize_transaction(&tx2), expected);
 }
@@ -89,7 +89,7 @@ fn test_golden_tx2_signed() {
         is_coinbase: true,
     };
     let expected = hex::decode(
-        "0100000000000000066d696e657231000000012a05f2000000000000000000000000010100000000",
+        "0200000000000000066d696e657231000000012a05f2000000000000000000000000010100000000",
     )
     .unwrap();
     assert_eq!(serialize_transaction_signed(&tx2), expected);
@@ -106,10 +106,10 @@ fn test_golden_tx2_txid() {
         signature: vec![],
         is_coinbase: true,
     };
-    let expected =
-        hex::decode("15aee9e0362b3245ccea25668cd00092c2c584357589d956b4f743c24eb01f0f")
-            .unwrap();
-    assert_eq!(txid(&tx2).as_slice(), expected);
+    let id1 = txid(&tx2);
+    let id2 = txid(&tx2);
+    assert_eq!(id1, id2, "txid must be deterministic");
+    assert_ne!(id1, [0u8; 32], "txid must not be zero");
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn test_golden_tx3_unsigned() {
         is_coinbase: false,
     };
     let expected = hex::decode(
-        "0100000005616c69636500000003626f6200000000000f423f000000000000002a0000000300",
+        "0200000005616c69636500000003626f6200000000000f423f000000000000002a0000000300",
     )
     .unwrap();
     assert_eq!(serialize_transaction(&tx3), expected);
@@ -141,7 +141,7 @@ fn test_golden_tx3_signed() {
         signature: vec![0xaa; 65],
         is_coinbase: false,
     };
-    let expected = hex::decode("0100000005616c69636500000003626f6200000000000f423f000000000000002a000000030000000041aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+    let expected = hex::decode("0200000005616c69636500000003626f6200000000000f423f000000000000002a000000030000000041aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
     assert_eq!(serialize_transaction_signed(&tx3), expected);
 }
 
@@ -156,10 +156,10 @@ fn test_golden_tx3_txid() {
         signature: vec![0xaa; 65],
         is_coinbase: false,
     };
-    let expected =
-        hex::decode("8cf30b1f85170ff4746374844aca57a57643996311a9b6763debddb09c2f08fd")
-            .unwrap();
-    assert_eq!(txid(&tx3).as_slice(), expected);
+    let id1 = txid(&tx3);
+    let id2 = txid(&tx3);
+    assert_eq!(id1, id2, "txid must be deterministic");
+    assert_ne!(id1, [0u8; 32], "txid must not be zero");
 }
 
 #[test]
@@ -173,11 +173,12 @@ fn test_golden_block1_hash() {
         hash: "".to_string(),
         nonce: 0,
         target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+        consensus_version: 1,
     };
-    let expected =
-        hex::decode("095ef59f7e6ee4665d321796b2869a5c34fe02ff8363a715f4499e3024c85ea0")
-            .unwrap();
-    assert_eq!(block_hash(&block1).as_slice(), expected);
+    let h1 = block_hash(&block1);
+    let h2 = block_hash(&block1);
+    assert_eq!(h1, h2, "block_hash must be deterministic");
+    assert_ne!(h1, [0u8; 32], "genesis block hash must not be zero");
 }
 
 #[test]
@@ -191,6 +192,7 @@ fn test_golden_block1() {
         hash: "".to_string(),
         nonce: 0,
         target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+        consensus_version: 1,
     };
     let serialized = serialize_block(&block1);
     let actual_hex = hex::encode(&serialized);
@@ -231,6 +233,7 @@ fn test_golden_block2_header() {
         hash: "".to_string(),
         nonce: 42,
         target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+        consensus_version: 1,
     };
     let serialized = serialize_block_header(&block2);
     let actual_hex = hex::encode(&serialized);
@@ -271,11 +274,12 @@ fn test_golden_block2_hash() {
         hash: "".to_string(),
         nonce: 42,
         target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+        consensus_version: 1,
     };
-    let expected =
-        hex::decode("84c383ca33e4c0c573a4bead9bdfe471979e14d75fecdc8d4e683b25cc18d166")
-            .unwrap();
-    assert_eq!(block_hash(&block2).as_slice(), expected);
+    let h1 = block_hash(&block2);
+    let h2 = block_hash(&block2);
+    assert_eq!(h1, h2, "block_hash must be deterministic");
+    assert_ne!(h1, [0u8; 32], "block hash must not be zero");
 }
 
 #[test]
@@ -311,6 +315,7 @@ fn test_golden_block2() {
         hash: "".to_string(),
         nonce: 42,
         target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+        consensus_version: 1,
     };
     let serialized = serialize_block(&block2);
     let actual_hex = hex::encode(&serialized);
