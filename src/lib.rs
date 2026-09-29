@@ -323,6 +323,7 @@ impl Blockchain {
                     nonce: 0,
                     target: hex::encode(target_arr),
                     consensus_version: strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION,
+                    state_root: [0u8; 32],
                 };
                 let hash = strangecoin_core::serialize::block_hash(&block);
                 block.hash = hex::encode(hash);
@@ -425,6 +426,7 @@ impl Blockchain {
             nonce: 0,
             target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
             consensus_version: strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION,
+            state_root: [0u8; 32],
         };
         let hash = self.calculate_hash(&genesis_block);
         let mut genesis_block = genesis_block;
@@ -482,6 +484,7 @@ impl Blockchain {
             nonce: 0,
             target: previous_block.target.clone(),
             consensus_version: strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION,
+            state_root: [0u8; 32],
         };
         block.hash = self.calculate_hash(&block);
         self.chain.push(block);
@@ -727,6 +730,7 @@ impl Blockchain {
             nonce: 0,
             target,
             consensus_version: strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION,
+            state_root: [0u8; 32],
         };
 
         let target_bytes = hex::decode(&block.target).expect("valid target hex");

@@ -30,4 +30,6 @@ pub enum CoreError {
     },
     #[error("arithmetic overflow in state transition")]
     StateOverflow,
+    #[error("state root mismatch: expected {expected:?}, got {got:?}")]
+    StateRootMismatch { expected: [u8; 32], got: [u8; 32] },
 }

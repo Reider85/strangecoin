@@ -2,7 +2,7 @@ use crate::types::{Block, Transaction};
 use blake3;
 use hex;
 
-pub const FORMAT_VERSION: u8 = 2;
+pub const FORMAT_VERSION: u8 = 3;
 
 pub fn serialize_transaction(tx: &Transaction) -> Vec<u8> {
     let mut out = Vec::new();
@@ -39,6 +39,7 @@ pub fn serialize_block_header(block: &Block) -> Vec<u8> {
     out.extend_from_slice(&target_bytes);
     out.extend_from_slice(&block.nonce.to_be_bytes());
     out.extend_from_slice(&block.consensus_version.to_be_bytes());
+    out.extend_from_slice(&block.state_root);
     out
 }
 
@@ -244,6 +245,7 @@ mod tests {
             nonce: 42,
             target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
             consensus_version: 1,
+            state_root: [0u8; 32],
         };
         let bytes1 = serialize_block_header(&block);
         let bytes2 = serialize_block_header(&block);
@@ -262,6 +264,7 @@ mod tests {
             nonce: 42,
             target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
             consensus_version: 1,
+            state_root: [0u8; 32],
         };
         let h1 = block_hash(&block);
         let h2 = block_hash(&block);

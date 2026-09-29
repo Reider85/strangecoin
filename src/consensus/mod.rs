@@ -66,6 +66,7 @@ pub fn load_genesis(path: &str) -> Result<crate::Block, crate::error::Strangecoi
         nonce: 0,
         target: hex::encode(target_arr),
         consensus_version: strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION,
+        state_root: [0u8; 32],
     };
 
     let hash = strangecoin_core::serialize::block_hash(&block);

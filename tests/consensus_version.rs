@@ -37,6 +37,7 @@ fn stale_consensus_version_rejected() {
         nonce: 0,
         target: previous_block.target.clone(),
         consensus_version: 0,
+        state_root: [0u8; 32],
     };
     block.hash = hex::encode(strangecoin::serialize::block_hash(&block));
     bc.chain.push(block);
@@ -79,6 +80,7 @@ fn future_consensus_version_rejected() {
         nonce: 0,
         target: previous_block.target.clone(),
         consensus_version: 99,
+        state_root: [0u8; 32],
     };
     block.hash = hex::encode(strangecoin::serialize::block_hash(&block));
     bc.chain.push(block);
