@@ -81,6 +81,26 @@ impl From<strangecoin_core::CoreError> for StrangecoinError {
             strangecoin_core::CoreError::InvalidCoinbaseAmount { expected, got } => {
                 StrangecoinError::InvalidCoinbaseAmount { expected, got }
             }
+            strangecoin_core::CoreError::InsufficientBalance {
+                sender,
+                available,
+                required,
+            } => StrangecoinError::InsufficientBalance {
+                available,
+                required,
+            },
+            strangecoin_core::CoreError::StateOverflow => StrangecoinError::ConfigError(
+                "arithmetic overflow in state transition".to_string(),
+            ),
+            strangecoin_core::CoreError::StateRootMismatch { expected, got } => {
+                StrangecoinError::ConfigError(format!(
+                    "state root mismatch: expected {:?}, got {:?}",
+                    expected, got
+                ))
+            }
+            strangecoin_core::CoreError::WitnessVerificationFailed => {
+                StrangecoinError::ConfigError("witness verification failed".to_string())
+            }
         }
     }
 }

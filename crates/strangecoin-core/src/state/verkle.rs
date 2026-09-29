@@ -105,6 +105,46 @@ impl VerkleTrie {
         }
         *hasher.finalize().as_bytes()
     }
+
+    pub fn prove(&self, address: &str, account: &AccountState) -> Vec<[u8; 32]> {
+        let key = account_key_hash(address);
+        let leaf = account_leaf_hash(&key, account);
+        let slot = key[0] as usize;
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != slot)
+            .map(|(_, h)| *h)
+            .collect()
+    }
+
+    pub fn verify_proof(
+        root: &[u8; 32],
+        address: &str,
+        account: &AccountState,
+        proof: &[[u8; 32]],
+    ) -> bool {
+        let key = account_key_hash(address);
+        let leaf = account_leaf_hash(&key, account);
+        let slot = key[0] as usize;
+
+        if proof.len() != 255 {
+            return false;
+        }
+
+        let mut hasher = Hasher::new();
+        let mut proof_idx = 0;
+        for i in 0..256 {
+            if i == slot {
+                hasher.update(&leaf);
+            } else {
+                hasher.update(&proof[proof_idx]);
+                proof_idx += 1;
+            }
+        }
+        let computed = *hasher.finalize().as_bytes();
+        computed == *root
+    }
 }
 
 impl Default for VerkleTrie {

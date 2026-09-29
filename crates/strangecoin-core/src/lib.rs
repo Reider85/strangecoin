@@ -10,3 +10,4 @@ pub mod governance;
 pub use types::{AccountState, Block, Transaction};
 pub use error::CoreError;
 pub use state::{apply_block, unapply_block, State, root_after, compute_state_root};
+pub use state::witness::{StateWitness, AccountProof, build_witness, verify_block_stateless};

@@ -1,5 +1,6 @@
 mod inner;
 pub mod verkle;
+pub mod witness;
 
 pub use inner::{apply_block, unapply_block, State};
 
