@@ -2,6 +2,7 @@ mod common;
 
 use common::*;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 #[test]
 fn three_instances_receive_transfer() {
@@ -95,7 +96,7 @@ fn real_network_three_nodes() {
         );
     }
 
-    for round in 0..4 {
+    for _ in 0..4 {
         for i in 0..3 {
             let mut sync_node = create_sync_node(
                 &nodes[i].1,
@@ -106,7 +107,6 @@ fn real_network_three_nodes() {
             sync_node.sync_blockchain(sync_tx.clone());
         }
         std::thread::sleep(std::time::Duration::from_millis(150));
-        let _ = round;
     }
 
     for i in 1..3 {
@@ -124,7 +124,7 @@ fn real_network_three_nodes() {
         create_and_mine_tx(&mut bc, &addrs[0], &addrs[1], 1000, &keypairs[0].1);
     }
 
-    for round in 0..6 {
+    for _ in 0..6 {
         for i in 0..3 {
             let mut sync_node = create_sync_node(
                 &nodes[i].1,
@@ -135,7 +135,6 @@ fn real_network_three_nodes() {
             sync_node.sync_blockchain(sync_tx.clone());
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
-        let _ = round;
     }
 
     let expected = [10000u64 - 1000, 1000, 0];
@@ -198,7 +197,7 @@ fn real_network_fast_registration_race() {
         }
     }
 
-    for round in 0..6 {
+    for _ in 0..6 {
         for i in 0..3 {
             let mut sync_node = create_sync_node(
                 &nodes[i].1,
@@ -209,7 +208,6 @@ fn real_network_fast_registration_race() {
             sync_node.sync_blockchain(sync_tx.clone());
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
-        let _ = round;
     }
 
     {
@@ -217,7 +215,7 @@ fn real_network_fast_registration_race() {
         create_and_mine_tx(&mut bc, &addrs[0], &addrs[1], 1000, &keypairs[0].1);
     }
 
-    for round in 0..6 {
+    for _ in 0..6 {
         for i in 0..3 {
             let mut sync_node = create_sync_node(
                 &nodes[i].1,
@@ -228,7 +226,6 @@ fn real_network_fast_registration_race() {
             sync_node.sync_blockchain(sync_tx.clone());
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
-        let _ = round;
     }
 
     let expected = [10000u64 - 1000, 1000, 0];

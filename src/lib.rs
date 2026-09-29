@@ -27,6 +27,7 @@ pub mod config;
 pub mod consensus;
 pub mod economics;
 pub mod error;
+pub mod events;
 pub mod governance;
 #[cfg(feature = "gui")]
 pub mod gui;
@@ -137,6 +138,7 @@ pub struct MiningTask {
     pub status_tx: mpsc::Sender<String>,
     pub rate_limiter: Arc<crate::network::RateLimiter>,
     pub shutdown: Arc<AtomicBool>,
+    pub event_bus: Arc<events::EventBus>,
 }
 
 pub struct Node {
@@ -148,6 +150,7 @@ pub struct Node {
     pub shutdown: Arc<AtomicBool>,
     pub listener: Arc<Mutex<Option<TcpListener>>>,
     pub sync_thread_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    pub event_bus: Arc<events::EventBus>,
 }
 
 pub struct WalletApp {
@@ -1109,6 +1112,7 @@ impl Node {
         mining_rx: mpsc::Receiver<MiningTask>,
         sync_tx: mpsc::Sender<Blockchain>,
         port: u16,
+        event_bus: Arc<events::EventBus>,
     ) -> Self {
         let blockchain = Arc::new(RwLock::new(Blockchain::new(port)));
         let peers = Arc::new(Mutex::new(vec![]));
@@ -1123,6 +1127,7 @@ impl Node {
             shutdown: shutdown.clone(),
             listener: Arc::new(Mutex::new(None)),
             sync_thread_handle: Arc::new(Mutex::new(None)),
+            event_bus: event_bus.clone(),
         };
         thread::spawn(move || {
             info!("Фоновый поток майнинга запущен");
@@ -1132,6 +1137,7 @@ impl Node {
             while let Ok(task) = mining_rx.recv() {
                 mining_count += 1;
                 info!(mining_count, "Получена задача майнинга");
+                task.event_bus.publish(events::NodeEvent::MiningStarted);
                 let progress_tx_clone = task.progress_tx.clone();
                 let status_tx_clone = task.status_tx.clone();
                 let start_time = SystemTime::now();
@@ -1158,10 +1164,17 @@ impl Node {
                                 mining_count,
                                 "Транзакция успешно добавлена, начало майнинга"
                             );
+                            task.event_bus.publish(events::NodeEvent::TxAccepted {
+                                txid: strangecoin_core::serialize::txid(&task.transaction),
+                            });
                             blockchain.mine_block(progress_tx_clone, &task.shutdown)
                         }
                         Err(e) => {
                             warn!(mining_count, error = %e, "Транзакция отклонена, попытка майнить существующие транзакции");
+                            task.event_bus.publish(events::NodeEvent::TxRejected {
+                                txid: strangecoin_core::serialize::txid(&task.transaction),
+                                reason: format!("{}", e),
+                            });
                             if !blockchain.mempool.is_empty() {
                                 blockchain.mine_block(progress_tx_clone, &task.shutdown)
                             } else {
@@ -1195,6 +1208,7 @@ impl Node {
                     .as_secs_f64();
                 total_duration += duration;
                 info!(mining_count, duration_secs = duration, result = ?result, "Майнинг завершен");
+                task.event_bus.publish(events::NodeEvent::MiningFinished);
                 let mut attempts = 0;
                 let max_attempts = 5;
                 let mut status_updated = false;
@@ -1217,8 +1231,13 @@ impl Node {
                                     shutdown: Arc::new(AtomicBool::new(false)),
                                     listener: Arc::new(Mutex::new(None)),
                                     sync_thread_handle: Arc::new(Mutex::new(None)),
+                                    event_bus: task.event_bus.clone(),
                                 };
                                 node_temp.sync_blockchain(sync_tx.clone());
+                                task.event_bus.publish(events::NodeEvent::BlockApplied {
+                                    height: block.index,
+                                    hash: block.hash.clone(),
+                                });
                                 MiningStatus::Completed(Some(block))
                             }
                             None => {
@@ -1387,8 +1406,9 @@ impl Node {
         let blockchain = Arc::clone(&self.blockchain);
         let rate_limiter = Arc::clone(&self.rate_limiter);
         let shutdown = Arc::clone(&self.shutdown);
+        let event_bus = Arc::clone(&self.event_bus);
         let address = format!("0.0.0.0:{}", port);
-        let listener = TcpListener::bind(&address).expect("Не удалось запустить серver");
+        let listener = TcpListener::bind(&address).expect("Не удалось запустить сервер");
         // Store listener for graceful shutdown
         *self.listener.lock().unwrap() =
             Some(listener.try_clone().expect("Failed to clone listener"));
@@ -1403,6 +1423,7 @@ impl Node {
                         let blockchain = Arc::clone(&blockchain);
                         let sync_tx = sync_tx.clone();
                         let rate_limiter = Arc::clone(&rate_limiter);
+                        let event_bus = Arc::clone(&event_bus);
                         let peer_addr = stream.peer_addr().ok();
                         thread::spawn(move || {
                             if let Some(addr) = peer_addr {
@@ -1502,6 +1523,13 @@ impl Node {
                                         *blockchain = new_blockchain;
                                         blockchain.save_state();
                                         info!("Блокчейн обновлён через UPDATE_BLOCKCHAIN");
+                                        event_bus.publish(events::NodeEvent::StatePersisted {
+                                            height: blockchain.chain.len() as u64 - 1,
+                                        });
+                                        event_bus.publish(events::NodeEvent::BlockApplied {
+                                            height: blockchain.chain.len() as u64 - 1,
+                                            hash: blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default(),
+                                        });
                                         let _ = sync_tx.send(Blockchain {
                                             chain: temp_blockchain.chain,
                                             balances: temp_blockchain.balances,
@@ -1766,6 +1794,13 @@ impl Node {
                                     *blockchain = new_blockchain;
                                     blockchain.save_state();
                                     info!(peer = %peer, new_chain_len = blockchain.chain.len(), "Блокчейн обновлён с узла");
+                                    self.event_bus.publish(events::NodeEvent::StatePersisted {
+                                        height: blockchain.chain.len() as u64 - 1,
+                                    });
+                                    self.event_bus.publish(events::NodeEvent::BlockApplied {
+                                        height: blockchain.chain.len() as u64 - 1,
+                                        hash: blockchain.chain.last().map(|b| b.hash.clone()).unwrap_or_default(),
+                                    });
                                     let _ = sync_tx.send(Blockchain {
                                         chain: blockchain.chain.clone(),
                                         balances: blockchain.balances.clone(),
@@ -2438,6 +2473,7 @@ pub fn run() {
 
     let (mining_tx, mining_rx) = mpsc::channel();
     let (sync_tx, sync_rx) = mpsc::channel();
+    let event_bus = Arc::new(events::EventBus::new());
     info!("Каналы майнинга и синхронизации созданы");
 
     let listen_addr = config.network.listen_addr;
@@ -2447,7 +2483,7 @@ pub fn run() {
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_ctrlc = Arc::clone(&shutdown);
 
-    let mut node = Node::new(listen_addr.to_string(), mining_rx, sync_tx.clone(), port);
+    let mut node = Node::new(listen_addr.to_string(), mining_rx, sync_tx.clone(), port, event_bus.clone());
     {
         let mut bc = node.blockchain.write().expect("Failed to acquire blockchain lock");
         bc.allow_grant_blocks = config.allow_grant_blocks;
@@ -2462,6 +2498,7 @@ pub fn run() {
     let node_peers = Arc::clone(&node.peers);
     let node_address = node.address.clone();
     let node_rate_limiter = node.rate_limiter.clone();
+    let node_event_bus = Arc::clone(&node.event_bus);
     let sync_tx_clone = sync_tx.clone();
 
     let sync_thread_handle = thread::spawn(move || {
@@ -2474,6 +2511,7 @@ pub fn run() {
             shutdown: shutdown_sync_node,
             listener: Arc::new(Mutex::new(None)),
             sync_thread_handle: Arc::new(Mutex::new(None)),
+            event_bus: node_event_bus,
         };
         while !shutdown_sync.load(Ordering::Relaxed) {
             sync_node.sync_blockchain(sync_tx_clone.clone());
@@ -2503,6 +2541,7 @@ pub fn run() {
             shutdown: Arc::clone(&shutdown),
             listener: Arc::new(Mutex::new(None)),
             sync_thread_handle: Arc::new(Mutex::new(None)),
+            event_bus: Arc::clone(&node.event_bus),
         },
         wallet_address: String::new(),
         password: String::new(),
@@ -2772,6 +2811,7 @@ pub mod test_support {
             shutdown: Arc::new(AtomicBool::new(false)),
             listener: Arc::new(Mutex::new(None)),
             sync_thread_handle: Arc::new(Mutex::new(None)),
+            event_bus: Arc::new(events::EventBus::new()),
         };
         (node, peers)
     }
@@ -2791,6 +2831,7 @@ pub mod test_support {
             shutdown: Arc::new(AtomicBool::new(false)),
             listener: Arc::new(Mutex::new(None)),
             sync_thread_handle: Arc::new(Mutex::new(None)),
+            event_bus: Arc::new(events::EventBus::new()),
         }
     }
 
