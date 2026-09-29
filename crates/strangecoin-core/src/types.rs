@@ -13,6 +13,8 @@ pub struct Block {
     pub consensus_version: u32,
     #[serde(default)]
     pub state_root: [u8; 32],
+    #[serde(default)]
+    pub tx_root: [u8; 32],
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]

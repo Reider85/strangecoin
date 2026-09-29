@@ -52,3 +52,17 @@
 - Created `docs/SCIP/README.md` and `docs/SCIP/scip-0000-process.md` — SCIP process skeleton
 - Created `tests/consensus_version.rs` — rejection tests for stale/future consensus_version
 - All golden vector tests updated for new serialization format
+
+### S1-P08: Merkle tx root in block header
+
+- Added public `merkle_root(txids: &[[u8; 32]]) -> [u8; 32]` function to `crates/strangecoin-core/src/serialize.rs` — blake3-merkle tree with odd-node duplication
+- Added `compute_tx_root(transactions: &[Transaction]) -> [u8; 32]` helper that computes txids and calls `merkle_root`
+- Added `tx_root: [u8; 32]` field to `Block` struct (`#[serde(default)]` for JSON backward compat)
+- Bumped `FORMAT_VERSION` from 3 to 4 — `serialize_block_header` now includes stored `tx_root` instead of recomputing it
+- Added `TxRootMismatch { expected, got }` variant to `CoreError`
+- Added `validate_tx_root(block: &Block) -> Result<(), CoreError>` to consensus module
+- Integrated tx_root computation in block creation paths: regtest genesis, `create_grant_block`, `mine_block_inner`, `load_genesis_block`
+- Added tx_root validation loop in `validate_chain()`
+- Updated all 29 Block literal sites across codebase
+- Created `crates/strangecoin-core/tests/merkle.rs` — 10 unit tests + 2 proptests: empty, single, pair, odd, 7-tx, deterministic, different inputs, compute_tx_root round-trip, proptest determinism, proptest non-zero
+- All golden vector tests updated for new serialization format

@@ -57,7 +57,7 @@ pub fn load_genesis(path: &str) -> Result<crate::Block, crate::error::Strangecoi
     let mut target_arr = [0u8; 32];
     target_arr.copy_from_slice(&target_bytes);
 
-    let block = crate::Block {
+    let mut block = crate::Block {
         index: 0,
         timestamp: genesis.timestamp,
         transactions: vec![genesis_tx],
@@ -67,10 +67,11 @@ pub fn load_genesis(path: &str) -> Result<crate::Block, crate::error::Strangecoi
         target: hex::encode(target_arr),
         consensus_version: strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION,
         state_root: [0u8; 32],
+        tx_root: [0u8; 32],
     };
+    block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
 
     let hash = strangecoin_core::serialize::block_hash(&block);
-    let mut block = block;
     block.hash = hex::encode(hash);
     Ok(block)
 }

@@ -26,6 +26,7 @@ fn genesis_block(txs: Vec<Transaction>) -> Block {
         target: "ff".to_string(),
         consensus_version: 1,
         state_root: [0u8; 32],
+        tx_root: [0u8; 32],
     }
 }
 
@@ -42,6 +43,7 @@ fn transfer_block(index: u64, txs: Vec<Transaction>) -> Block {
         target: "ff".to_string(),
         consensus_version: 1,
         state_root: [0u8; 32],
+        tx_root: [0u8; 32],
     }
 }
 

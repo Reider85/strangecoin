@@ -32,6 +32,8 @@ pub enum CoreError {
     StateOverflow,
     #[error("state root mismatch: expected {expected:?}, got {got:?}")]
     StateRootMismatch { expected: [u8; 32], got: [u8; 32] },
+    #[error("tx root mismatch: expected {expected:?}, got {got:?}")]
+    TxRootMismatch { expected: [u8; 32], got: [u8; 32] },
     #[error("witness verification failed")]
     WitnessVerificationFailed,
 }

@@ -15,6 +15,7 @@ fn create_block_with_timestamp(bc: &mut Blockchain, timestamp: u64) -> bool {
         target: previous_block.target.clone(),
         consensus_version: 1,
         state_root: [0u8; 32],
+        tx_root: [0u8; 32],
     };
     let hash = bc.calculate_hash(&block);
     let mut block = block;
@@ -75,6 +76,7 @@ fn reject_block_before_mtp() {
             target: previous_block.target.clone(),
             consensus_version: 1,
             state_root: [0u8; 32],
+            tx_root: [0u8; 32],
         };
         let hash = bc.calculate_hash(&block);
         let mut block = block;

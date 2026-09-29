@@ -2,7 +2,7 @@ use crate::types::{Block, Transaction};
 use blake3;
 use hex;
 
-pub const FORMAT_VERSION: u8 = 3;
+pub const FORMAT_VERSION: u8 = 4;
 
 pub fn serialize_transaction(tx: &Transaction) -> Vec<u8> {
     let mut out = Vec::new();
@@ -33,7 +33,7 @@ pub fn serialize_block_header(block: &Block) -> Vec<u8> {
     out.extend_from_slice(&block.index.to_be_bytes());
     out.extend_from_slice(&block.timestamp.to_be_bytes());
     write_bytes32(&mut out, &block.previous_hash);
-    write_merkle_root(&mut out, &block.transactions);
+    out.extend_from_slice(&block.tx_root);
     let target_bytes = hex::decode(&block.target).expect("Invalid target hex");
     assert_eq!(target_bytes.len(), 32, "Target must be 32 bytes");
     out.extend_from_slice(&target_bytes);
@@ -43,12 +43,11 @@ pub fn serialize_block_header(block: &Block) -> Vec<u8> {
     out
 }
 
-fn write_merkle_root(out: &mut Vec<u8>, transactions: &[Transaction]) {
-    if transactions.is_empty() {
-        out.extend_from_slice(&[0u8; 32]);
-        return;
+pub fn merkle_root(txids: &[[u8; 32]]) -> [u8; 32] {
+    if txids.is_empty() {
+        return [0u8; 32];
     }
-    let mut hashes: Vec<[u8; 32]> = transactions.iter().map(|tx| txid(tx)).collect();
+    let mut hashes: Vec<[u8; 32]> = txids.to_vec();
     while hashes.len() > 1 {
         let mut next = Vec::new();
         for chunk in hashes.chunks(2) {
@@ -63,7 +62,15 @@ fn write_merkle_root(out: &mut Vec<u8>, transactions: &[Transaction]) {
         }
         hashes = next;
     }
-    out.extend_from_slice(&hashes[0]);
+    hashes[0]
+}
+
+pub fn compute_tx_root(transactions: &[Transaction]) -> [u8; 32] {
+    if transactions.is_empty() {
+        return [0u8; 32];
+    }
+    let txids: Vec<[u8; 32]> = transactions.iter().map(|tx| txid(tx)).collect();
+    merkle_root(&txids)
 }
 
 pub fn block_hash(block: &Block) -> [u8; 32] {
@@ -246,6 +253,7 @@ mod tests {
             target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
             consensus_version: 1,
             state_root: [0u8; 32],
+            tx_root: [0u8; 32],
         };
         let bytes1 = serialize_block_header(&block);
         let bytes2 = serialize_block_header(&block);
@@ -265,6 +273,7 @@ mod tests {
             target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
             consensus_version: 1,
             state_root: [0u8; 32],
+            tx_root: [0u8; 32],
         };
         let h1 = block_hash(&block);
         let h2 = block_hash(&block);

@@ -38,7 +38,9 @@ fn stale_consensus_version_rejected() {
         target: previous_block.target.clone(),
         consensus_version: 0,
         state_root: [0u8; 32],
+        tx_root: [0u8; 32],
     };
+    block.tx_root = strangecoin::serialize::compute_tx_root(&block.transactions);
     block.hash = hex::encode(strangecoin::serialize::block_hash(&block));
     bc.chain.push(block);
 
@@ -81,7 +83,9 @@ fn future_consensus_version_rejected() {
         target: previous_block.target.clone(),
         consensus_version: 99,
         state_root: [0u8; 32],
+        tx_root: [0u8; 32],
     };
+    block.tx_root = strangecoin::serialize::compute_tx_root(&block.transactions);
     block.hash = hex::encode(strangecoin::serialize::block_hash(&block));
     bc.chain.push(block);
 

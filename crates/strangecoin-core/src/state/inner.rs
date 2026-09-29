@@ -233,6 +233,7 @@ mod tests {
             target: "ff".to_string(),
             consensus_version: 1,
             state_root: [0u8; 32],
+            tx_root: [0u8; 32],
         }
     }
 
@@ -299,6 +300,7 @@ mod tests {
             target: "ff".to_string(),
             consensus_version: 1,
             state_root: [0u8; 32],
+            tx_root: [0u8; 32],
         };
         let new_state = apply_block(&state, &block).unwrap();
         assert_eq!(new_state.get_balance("miner"), 0);

@@ -269,6 +269,17 @@ pub const EXPECTED_GENESIS_HASH: [u8; 32] = [
     0xab, 0x50,
 ];
 
+pub fn validate_tx_root(block: &Block) -> Result<(), CoreError> {
+    let computed = serialize::compute_tx_root(&block.transactions);
+    if computed != block.tx_root {
+        return Err(CoreError::TxRootMismatch {
+            expected: computed,
+            got: block.tx_root,
+        });
+    }
+    Ok(())
+}
+
 pub fn is_regtest(network_id: u32) -> bool {
     network_id == CHAIN_ID_REGTEST
 }

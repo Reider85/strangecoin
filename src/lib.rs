@@ -324,7 +324,9 @@ impl Blockchain {
                     target: hex::encode(target_arr),
                     consensus_version: strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION,
                     state_root: [0u8; 32],
+                    tx_root: [0u8; 32],
                 };
+                block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
                 let hash = strangecoin_core::serialize::block_hash(&block);
                 block.hash = hex::encode(hash);
                 block
@@ -427,9 +429,12 @@ impl Blockchain {
             target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
             consensus_version: strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION,
             state_root: [0u8; 32],
+            tx_root: [0u8; 32],
         };
+        let tx_root = strangecoin_core::serialize::compute_tx_root(&genesis_block.transactions);
         let hash = self.calculate_hash(&genesis_block);
         let mut genesis_block = genesis_block;
+        genesis_block.tx_root = tx_root;
         genesis_block.hash = hash;
         self.chain.push(genesis_block.clone());
         // Обновляем балансы на основе транзакций генезис-блока, только для получателя
@@ -485,7 +490,9 @@ impl Blockchain {
             target: previous_block.target.clone(),
             consensus_version: strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION,
             state_root: [0u8; 32],
+            tx_root: [0u8; 32],
         };
+        block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
         block.hash = self.calculate_hash(&block);
         self.chain.push(block);
         self.balances.remove("initial_wallet_address");
@@ -731,7 +738,9 @@ impl Blockchain {
             target,
             consensus_version: strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION,
             state_root: [0u8; 32],
+            tx_root: [0u8; 32],
         };
+        block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
 
         let target_bytes = hex::decode(&block.target).expect("valid target hex");
         let mut target_arr = [0u8; 32];
@@ -944,6 +953,14 @@ impl Blockchain {
                     warn!(block_index = block.index, error = %e, "Block application failed during validation");
                     return false;
                 }
+            }
+        }
+
+        // Tx root validation (invariant: merkle_root(txs) == block.tx_root)
+        for block in &self.chain {
+            if let Err(e) = strangecoin_core::consensus::validate_tx_root(block) {
+                warn!(block_index = block.index, error = %e, "Tx root mismatch");
+                return false;
             }
         }
 

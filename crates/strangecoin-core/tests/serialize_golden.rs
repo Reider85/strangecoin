@@ -175,6 +175,7 @@ fn test_golden_block1_hash() {
         target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
         consensus_version: 1,
         state_root: [0u8; 32],
+        tx_root: [0u8; 32],
     };
     let h1 = block_hash(&block1);
     let h2 = block_hash(&block1);
@@ -195,6 +196,7 @@ fn test_golden_block1() {
         target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
         consensus_version: 1,
         state_root: [0u8; 32],
+        tx_root: [0u8; 32],
     };
     let serialized = serialize_block(&block1);
     let actual_hex = hex::encode(&serialized);
@@ -237,6 +239,7 @@ fn test_golden_block2_header() {
         target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
         consensus_version: 1,
         state_root: [0u8; 32],
+        tx_root: [0u8; 32],
     };
     let serialized = serialize_block_header(&block2);
     let actual_hex = hex::encode(&serialized);
@@ -279,6 +282,7 @@ fn test_golden_block2_hash() {
         target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
         consensus_version: 1,
         state_root: [0u8; 32],
+        tx_root: [0u8; 32],
     };
     let h1 = block_hash(&block2);
     let h2 = block_hash(&block2);
@@ -321,6 +325,7 @@ fn test_golden_block2() {
         target: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
         consensus_version: 1,
         state_root: [0u8; 32],
+        tx_root: [0u8; 32],
     };
     let serialized = serialize_block(&block2);
     let actual_hex = hex::encode(&serialized);
