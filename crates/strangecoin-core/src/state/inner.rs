@@ -364,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn total_supply tracks_correctly() {
+    fn total_supply_tracks_correctly() {
         let state = State::new();
         let txs = vec![coinbase_tx("miner", 100)];
         let block = test_block(0, txs);

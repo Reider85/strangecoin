@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 pub type Height = u64;
+pub type ScipId = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ScipStatus {
