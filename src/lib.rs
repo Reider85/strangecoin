@@ -54,6 +54,8 @@ pub struct BlockchainDeserialize {
     pub difficulty: u32,
     pub pending_transactions: Vec<Transaction>,
     pub mempool_txs: Vec<Transaction>,
+    #[serde(default)]
+    pub total_work: strangecoin_core::consensus::U256,
 }
 
 #[derive(Clone)]
@@ -64,6 +66,7 @@ pub struct Blockchain {
     pub mempool: crate::mempool::Mempool,
     pub storage: crate::storage::Storage,
     pub allow_grant_blocks: bool,
+    pub total_work: strangecoin_core::consensus::U256,
 }
 
 impl Serialize for Blockchain {
@@ -72,11 +75,12 @@ impl Serialize for Blockchain {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("Blockchain", 4)?;
+        let mut state = serializer.serialize_struct("Blockchain", 5)?;
         state.serialize_field("chain", &self.chain)?;
         state.serialize_field("balances", &self.balances)?;
         state.serialize_field("difficulty", &self.difficulty)?;
         state.serialize_field("mempool_txs", &self.mempool.transactions())?;
+        state.serialize_field("total_work", &self.total_work)?;
         state.end()
     }
 }
@@ -92,6 +96,7 @@ impl<'de> Deserialize<'de> for Blockchain {
             difficulty,
             pending_transactions,
             mempool_txs,
+            total_work,
         } = BlockchainDeserialize::deserialize(deserializer)?;
 
         let port = std::env::var("PORT")
@@ -132,6 +137,7 @@ impl<'de> Deserialize<'de> for Blockchain {
             mempool,
             storage,
             allow_grant_blocks: false,
+            total_work,
         })
     }
 }
@@ -233,6 +239,7 @@ impl Blockchain {
             mempool: crate::mempool::Mempool::new(),
             storage,
             allow_grant_blocks: false,
+            total_work: [0, 0, 0, 0],
         };
         blockchain.debug_db();
 
@@ -403,6 +410,8 @@ impl Blockchain {
             blockchain.difficulty = difficulty;
         }
 
+        blockchain.total_work = strangecoin_core::consensus::cumulative_work(&blockchain.chain);
+
         blockchain.migrate_initial_wallet_balance();
 
         blockchain.save_state();
@@ -447,6 +456,7 @@ impl Blockchain {
         genesis_block.tx_root = tx_root;
         genesis_block.hash = hash;
         self.chain.push(genesis_block.clone());
+        self.total_work = strangecoin_core::consensus::cumulative_work(&self.chain);
         // Обновляем балансы на основе транзакций генезис-блока, только для получателя
         for tx in &genesis_block.transactions {
             if tx.sender != "genesis" {
@@ -505,6 +515,7 @@ impl Blockchain {
         block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
         block.hash = self.calculate_hash(&block);
         self.chain.push(block);
+        self.total_work = strangecoin_core::consensus::cumulative_work(&self.chain);
         self.balances.remove("initial_wallet_address");
         self.balances
             .entry(wallet_address.to_string())
@@ -676,6 +687,7 @@ impl Blockchain {
             }
 
             self.chain.push(block.clone());
+            self.total_work = strangecoin_core::consensus::cumulative_work(&self.chain);
             let db_arc = self.storage.db();
             let mut db = db_arc
                 .lock()
@@ -1491,6 +1503,7 @@ impl Node {
                                         mempool: crate::mempool::Mempool::new(),
                                         storage,
                                         allow_grant_blocks: blockchain.allow_grant_blocks,
+                                        total_work: strangecoin_core::consensus::cumulative_work(&temp_blockchain.chain),
                                     };
                                     // Объединяем mempool, добавляя только валидные
                                     let mut merged_pending = vec![];
@@ -1544,6 +1557,7 @@ impl Node {
                                             mempool: crate::mempool::Mempool::new(),
                                             storage: blockchain.storage.clone(),
                                             allow_grant_blocks: blockchain.allow_grant_blocks,
+                                            total_work: blockchain.total_work,
                                         });
                                     } else {
                                         warn!("Полученный блокчейн не прошёл валидацию");
@@ -1698,6 +1712,7 @@ impl Node {
                                 },
                                 storage: crate::storage::Storage::from_db(existing_db.clone()),
                                 allow_grant_blocks: false,
+                                total_work: strangecoin_core::consensus::cumulative_work(&received_blockchain.chain),
                             };
                             info!(peer = %peer, chain_len = temp_blockchain.chain.len(), chain = ?temp_blockchain.chain, "Полученная цепочка от узла");
                             let received_hash = temp_blockchain
@@ -1726,6 +1741,7 @@ impl Node {
                                     mempool: crate::mempool::Mempool::new(),
                                     storage: crate::storage::Storage::from_db(existing_db.clone()),
                                     allow_grant_blocks: false,
+                                    total_work: temp_blockchain.total_work,
                                 };
                                 let mut added_transactions = 0;
 
@@ -1817,6 +1833,7 @@ impl Node {
                                             existing_db.clone(),
                                         ),
                                         allow_grant_blocks: blockchain.allow_grant_blocks,
+                                        total_work: blockchain.total_work,
                                     });
                                 } else {
                                     warn!(peer = %peer, "Полученный блокчейн с узла не прошёл валидацию после объединения");
@@ -2693,6 +2710,7 @@ pub mod test_support {
             mempool: crate::mempool::Mempool::new(),
             storage,
             allow_grant_blocks: true,
+            total_work: [0, 0, 0, 0],
         };
         bc.create_genesis_block();
         bc
@@ -2706,27 +2724,47 @@ pub mod test_support {
     }
 
     pub fn sync_to_longest(wallets: &[Arc<RwLock<Blockchain>>]) {
-        let (idx, len) = wallets
+        use crate::blockchain::chain_selector::{ChainInfo, ChainSelector};
+
+        let chain_infos: Vec<(usize, Option<ChainInfo>)> = wallets
             .iter()
             .enumerate()
-            .map(|(i, w)| (i, w.read().unwrap().chain.len()))
-            .max_by_key(|(_, l)| *l)
+            .map(|(i, w)| {
+                let bc = w.read().unwrap();
+                (i, ChainSelector::chain_info(&bc.chain))
+            })
+            .collect();
+
+        let best_idx = chain_infos
+            .iter()
+            .filter_map(|(i, info)| info.as_ref().map(|info| (*i, info)))
+            .reduce(|(best_i, best_info), (i, info)| {
+                if ChainSelector::is_better(info, best_info) {
+                    (i, info)
+                } else {
+                    (best_i, best_info)
+                }
+            })
+            .map(|(i, _)| i)
             .expect("Wallet list is empty");
-        let (chain, balances, difficulty, pending) = {
-            let w = wallets[idx].read().unwrap();
+
+        let (chain, balances, difficulty, pending, total_work) = {
+            let w = wallets[best_idx].read().unwrap();
             (
                 w.chain.clone(),
                 w.balances.clone(),
                 w.difficulty,
                 w.mempool.transactions(),
+                w.total_work,
             )
         };
         for (i, w) in wallets.iter().enumerate() {
             let mut guard = w.write().unwrap();
-            if i != idx && guard.chain.len() < len {
+            if i != best_idx {
                 guard.chain = chain.clone();
                 guard.balances = balances.clone();
                 guard.difficulty = difficulty;
+                guard.total_work = total_work;
                 guard.mempool = crate::mempool::Mempool::new();
                 for tx in &pending {
                     let _ = guard.mempool.insert(tx.clone(), &AccountState::default());
@@ -2784,6 +2822,8 @@ pub mod test_support {
         target: &Arc<RwLock<Blockchain>>,
         source: &Arc<RwLock<Blockchain>>,
     ) -> bool {
+        use crate::blockchain::chain_selector::ChainSelector;
+
         let src = source.read().unwrap();
         let (src_chain, src_balances, src_difficulty, src_pending) = (
             src.chain.clone(),
@@ -2794,11 +2834,19 @@ pub mod test_support {
         drop(src);
 
         let mut tgt = target.write().unwrap();
-        let current_len = tgt.chain.len();
         if src_chain.is_empty() || src_chain.len() <= 1 {
             return false;
         }
-        if src_chain.len() <= current_len {
+
+        let src_info = match ChainSelector::chain_info(&src_chain) {
+            Some(info) => info,
+            None => return false,
+        };
+        let tgt_info = match ChainSelector::chain_info(&tgt.chain) {
+            Some(info) => info,
+            None => return true,
+        };
+        if !ChainSelector::is_better(&src_info, &tgt_info) {
             return false;
         }
 
@@ -2809,6 +2857,7 @@ pub mod test_support {
             mempool: crate::mempool::Mempool::new(),
             storage: tgt.storage.clone(),
             allow_grant_blocks: tgt.allow_grant_blocks,
+            total_work: src_info.total_work,
         };
         let mut merged_pending = vec![];
         for tx in src_pending.iter() {

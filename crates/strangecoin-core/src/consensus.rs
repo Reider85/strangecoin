@@ -283,3 +283,35 @@ pub fn validate_tx_root(block: &Block) -> Result<(), CoreError> {
 pub fn is_regtest(network_id: u32) -> bool {
     network_id == CHAIN_ID_REGTEST
 }
+
+pub fn work_from_target(target: &[u8; 32]) -> U256 {
+    let target_u256 = u256_from_bytes(target);
+    if target_u256 == [0, 0, 0, 0] {
+        return [0, 0, 0, 0];
+    }
+    let max_u256: U256 = [u64::MAX, u64::MAX, u64::MAX, u64::MAX];
+    u256_div(max_u256, target_u256)
+}
+
+pub fn cumulative_work(chain: &[Block]) -> U256 {
+    let mut total: U256 = [0, 0, 0, 0];
+    for block in chain {
+        let target_bytes = hex::decode(&block.target).expect("valid target hex");
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&target_bytes);
+        let w = work_from_target(&arr);
+        total = u256_add(total, w);
+    }
+    total
+}
+
+pub fn u256_add(a: U256, b: U256) -> U256 {
+    let mut result = [0u64; 4];
+    let mut carry: u64 = 0;
+    for i in 0..4 {
+        let sum = a[i] as u128 + b[i] as u128 + carry as u128;
+        result[i] = sum as u64;
+        carry = (sum >> 64) as u64;
+    }
+    result
+}
