@@ -16,7 +16,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc, Arc, Mutex, RwLock,
 };
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 pub mod address;
@@ -39,6 +39,13 @@ pub mod wallet;
 pub use strangecoin_core::types::{Block, Transaction};
 pub use strangecoin_core::serialize;
 pub use strangecoin_core::AccountState;
+
+/// Sync task tick period: how often the shutdown flag is re-checked.
+pub const SYNC_TICK: Duration = Duration::from_millis(100);
+/// Number of `SYNC_TICK`s between two `sync_blockchain` rounds (~1s).
+pub const SYNC_TICKS_PER_SYNC: u32 = 10;
+/// Budget granted to in-flight work after a shutdown signal (P17).
+pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Deserialize, Serialize)]
 pub struct BlockchainDeserialize {
@@ -149,7 +156,7 @@ pub struct Node {
     pub rate_limiter: Arc<crate::network::RateLimiter>,
     pub shutdown: Arc<AtomicBool>,
     pub listener: Arc<Mutex<Option<TcpListener>>>,
-    pub sync_thread_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    pub sync_thread_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pub event_bus: Arc<events::EventBus>,
 }
 
@@ -1869,11 +1876,11 @@ impl Drop for Node {
             }
         }
 
-        // Wait for sync thread to finish (with timeout)
+        // Cancel the sync task (tokio cancellation is abort-based, not blocking)
         if let Ok(mut handle) = self.sync_thread_handle.lock() {
             if let Some(h) = handle.take() {
-                let _ = h.join();
-                info!("Sync thread joined");
+                h.abort();
+                info!("Sync task aborted");
             }
         }
 
@@ -2365,7 +2372,16 @@ if let Some(ref progress_rx) = self.progress_rx {
     }
 }
 
+/// Sync-точка входа: собственный runtime, блокирует до завершения `run_async()`.
+///
+/// Существует для утилит и тестов, которым нужен запуск ноды без `#[tokio::main]`.
+/// Основной путь — `main.rs`, который вызывает `run_async().await` напрямую.
 pub fn run() {
+    let rt = tokio::runtime::Runtime::new().expect("Не удалось создать runtime tokio");
+    rt.block_on(run_async());
+}
+
+pub async fn run_async() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_target(false)
@@ -2491,7 +2507,7 @@ pub fn run() {
     node.start_server(port, sync_tx.clone());
     node.discover_peers();
 
-    // Spawn sync thread with shutdown handling
+    // Spawn sync task on the tokio runtime (ADR-0007: polling loop migrated to async)
     let shutdown_sync = Arc::clone(&shutdown);
     let shutdown_sync_node = Arc::clone(&shutdown);
     let node_blockchain = Arc::clone(&node.blockchain);
@@ -2501,7 +2517,7 @@ pub fn run() {
     let node_event_bus = Arc::clone(&node.event_bus);
     let sync_tx_clone = sync_tx.clone();
 
-    let sync_thread_handle = thread::spawn(move || {
+    let sync_task_handle = tokio::spawn(async move {
         let mut sync_node = Node {
             blockchain: node_blockchain,
             peers: node_peers,
@@ -2513,23 +2529,28 @@ pub fn run() {
             sync_thread_handle: Arc::new(Mutex::new(None)),
             event_bus: node_event_bus,
         };
-        while !shutdown_sync.load(Ordering::Relaxed) {
-            sync_node.sync_blockchain(sync_tx_clone.clone());
-            // Sleep with periodic shutdown checks
-            for _ in 0..10 {
-                if shutdown_sync.load(Ordering::Relaxed) {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(100));
+        // Tick at SYNC_TICK for prompt shutdown checks, but only sync every
+        // SYNC_TICKS_PER_SYNC ticks to preserve the original ~1s sync period
+        // (sync_blockchain performs blocking TCP I/O with a 1s connect timeout).
+        let mut ticker = tokio::time::interval(SYNC_TICK);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut ticks: u32 = 0;
+        loop {
+            ticker.tick().await;
+            if shutdown_sync.load(Ordering::Relaxed) {
+                break;
+            }
+            ticks += 1;
+            if ticks >= SYNC_TICKS_PER_SYNC {
+                ticks = 0;
+                sync_node.sync_blockchain(sync_tx_clone.clone());
             }
         }
-        info!("Sync thread stopped");
+        info!("Sync task stopped");
     });
 
-    // Store sync thread handle in node for graceful shutdown
-    *node.sync_thread_handle.lock().unwrap() = Some(sync_thread_handle);
-
-    let blockchain = Arc::clone(&node.blockchain);
+    // Store sync task handle in node for graceful shutdown
+    *node.sync_thread_handle.lock().unwrap() = Some(sync_task_handle);
 
     let app = WalletApp {
         node: Node {
@@ -2561,36 +2582,61 @@ pub fn run() {
         data_dir: config.data_dir.clone(),
     };
 
-    // Graceful shutdown handler
-    ctrlc::set_handler(move || {
+    // Graceful shutdown — async primary handler (ADR-0007).
+    // The AtomicBool is the single shutdown signal shared with the legacy threads;
+    // they keep polling it exactly as before, so P17 behaviour is unchanged.
+    let shutdown_signal = Arc::clone(&shutdown);
+    tokio::spawn(async move {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            error!(error = %e, "Не удалось установить async-обработчик завершения");
+            return;
+        }
         info!("Shutdown signal received, initiating graceful shutdown...");
+        shutdown_signal.store(true, Ordering::Relaxed);
+
+        // Wait out the same 30s budget the ctrlc fallback grants to mining/sync (P17).
+        // The legacy threads observe the AtomicBool and unwind on their own; reaching
+        // this point means they did not finish in time.
+        tokio::time::sleep(SHUTDOWN_TIMEOUT).await;
+
+        error!("Shutdown timeout exceeded, forcing exit");
+        info!("Graceful shutdown complete, exiting");
+        std::process::exit(0);
+    });
+
+    // Fallback handler: `ctrlc` covers console-detach edge cases on Windows that
+    // tokio::signal does not. Both handlers write the same AtomicBool, so whichever
+    // fires first initiates shutdown and the other is terminated by process::exit.
+    ctrlc::set_handler(move || {
+        info!("Shutdown signal received (ctrlc fallback), initiating graceful shutdown...");
         shutdown_ctrlc.store(true, Ordering::Relaxed);
 
-        // Give time for threads to shut down gracefully
-        let shutdown_start = Instant::now();
-        let shutdown_timeout = Duration::from_secs(30);
-
         // Wait for mining and sync threads to finish
-        while shutdown_start.elapsed() < shutdown_timeout {
-            std::thread::sleep(Duration::from_millis(100));
+        let shutdown_start = Instant::now();
+        while shutdown_start.elapsed() < SHUTDOWN_TIMEOUT {
+            std::thread::sleep(SYNC_TICK);
             // The Drop impls will handle cleanup when node goes out of scope
         }
 
-        if shutdown_start.elapsed() >= shutdown_timeout {
-            error!("Shutdown timeout exceeded, forcing exit");
-        }
-
+        error!("Shutdown timeout exceeded, forcing exit");
         info!("Graceful shutdown complete, exiting");
         std::process::exit(0);
     })
     .expect("Ошибка установки обработчика завершения");
 
-    eframe::run_native(
-        "Blockchain Wallet",
-        eframe::NativeOptions::default(),
-        Box::new(|_cc| Box::new(app)),
-    )
-    .expect("Ошибка запуска приложения");
+    // eframe::run_native is blocking and owns a windowing event loop, so it runs on
+    // a dedicated thread from tokio's blocking pool (ADR-0007) rather than occupying
+    // a runtime worker.
+    tokio::task::spawn_blocking(move || {
+        eframe::run_native(
+            "Blockchain Wallet",
+            eframe::NativeOptions::default(),
+            Box::new(|_cc| Box::new(app)),
+        )
+        .expect("Ошибка запуска приложения");
+    })
+    .await
+    .expect("GUI task panicked");
 }
 
 #[cfg(test)]

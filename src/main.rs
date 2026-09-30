@@ -1,3 +1,4 @@
-fn main() {
-    strangecoin::run();
+#[tokio::main]
+async fn main() {
+    strangecoin::run_async().await;
 }

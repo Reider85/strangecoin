@@ -1,6 +1,10 @@
-use crossbeam_channel::{unbounded, Receiver, SendError, Sender};
+use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, SendError, Sender};
 use std::sync::Mutex;
+use std::time::Duration;
 use tracing::debug;
+
+/// Poll cadence of the crossbeam -> tokio bridge in [`EventBus::subscribe_async`].
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Debug)]
 pub enum NodeEvent {
@@ -29,6 +33,38 @@ impl EventBus {
         let (tx, rx) = unbounded();
         let mut subs = self.subscribers.lock().expect("EventBus lock poisoned");
         subs.push(tx);
+        rx
+    }
+
+    /// Async bridge for tokio consumers (ADR-0007).
+    ///
+    /// Producers stay synchronous (mining, P2P threads) and keep publishing into
+    /// crossbeam; this pumps those events into a `tokio::sync::mpsc` channel so
+    /// `async` subsystems can `recv().await` without blocking a runtime worker.
+    ///
+    /// The pump polls on `poll_interval`, so subscribers inherit up to one interval
+    /// of latency. That is fine for the intended consumer (S1-P18 SyncEngine) but
+    /// latency-sensitive subscribers should keep using [`EventBus::subscribe`].
+    pub fn subscribe_async(&self, capacity: usize) -> tokio::sync::mpsc::Receiver<NodeEvent> {
+        let crossbeam_rx = self.subscribe();
+        let (tx, rx) = tokio::sync::mpsc::channel(capacity);
+        tokio::spawn(async move {
+            loop {
+                match crossbeam_rx.recv_timeout(POLL_INTERVAL) {
+                    Ok(event) => {
+                        if tx.send(event).await.is_err() {
+                            debug!("Async EventBus subscriber dropped, stopping bridge");
+                            break;
+                        }
+                    }
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => {
+                        debug!("EventBus publisher dropped, stopping bridge");
+                        break;
+                    }
+                }
+            }
+        });
         rx
     }
 
@@ -130,5 +166,44 @@ mod tests {
         drop(_rx);
         bus.publish(NodeEvent::MiningStarted);
         assert_eq!(bus.subscriber_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn async_bridge_delivers_events() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe_async(8);
+
+        bus.publish(NodeEvent::BlockApplied {
+            height: 7,
+            hash: "deadbeef".into(),
+        });
+        bus.publish(NodeEvent::MiningFinished);
+
+        let first = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("bridge timed out")
+            .expect("bridge closed early");
+        assert!(matches!(first, NodeEvent::BlockApplied { height: 7, .. }));
+
+        let second = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("bridge timed out")
+            .expect("bridge closed early");
+        assert!(matches!(second, NodeEvent::MiningFinished));
+    }
+
+    #[tokio::test]
+    async fn async_bridge_does_not_block_publish() {
+        let bus = EventBus::new();
+        // Subscriber that never reads: the bounded async channel fills up, but
+        // publish() must still return promptly.
+        let _rx = bus.subscribe_async(1);
+
+        for i in 0..100u64 {
+            bus.publish(NodeEvent::BlockApplied {
+                height: i,
+                hash: "x".into(),
+            });
+        }
     }
 }
