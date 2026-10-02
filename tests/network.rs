@@ -34,7 +34,7 @@ fn three_instances_receive_transfer() {
         let mut bc = instances[i].write().unwrap();
         if !bc.balances.contains_key(&addrs[i]) {
             if !bc.grant_initial_balance_to_first_wallet(&addrs[i]).unwrap_or(false) {
-                bc.balances.entry(addrs[i].clone()).or_default();
+                bc.balances.ensure_account(&addrs[i]);
             }
         }
     }
@@ -115,7 +115,7 @@ fn real_network_three_nodes() {
         let mut bc = nodes[i].1.write().unwrap();
         if !bc.balances.contains_key(&addrs[i]) {
             if !bc.grant_initial_balance_to_first_wallet(&addrs[i]).unwrap_or(false) {
-                bc.balances.entry(addrs[i].clone()).or_default();
+                bc.balances.ensure_account(&addrs[i]);
             }
             bc.save_state();
         }
@@ -194,7 +194,7 @@ fn real_network_fast_registration_race() {
         let mut bc = nodes[i].1.write().unwrap();
         if !bc.balances.contains_key(&addrs[i]) {
             if !bc.grant_initial_balance_to_first_wallet(&addrs[i]).unwrap_or(false) {
-                bc.balances.entry(addrs[i].clone()).or_default();
+                bc.balances.ensure_account(&addrs[i]);
             }
             bc.save_state();
         }

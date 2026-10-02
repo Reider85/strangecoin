@@ -58,6 +58,8 @@ pub enum StrangecoinError {
     ConfigError(String),
     #[error("grant blocks are disabled (allow_grant_blocks = false)")]
     GrantBlocksDisabled,
+    #[error("invalid block: {0}")]
+    InvalidBlock(String),
 }
 
 impl From<strangecoin_core::CoreError> for StrangecoinError {

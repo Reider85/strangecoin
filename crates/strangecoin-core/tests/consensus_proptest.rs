@@ -4,7 +4,7 @@ use strangecoin_core::consensus::{
     RETARGET_INTERVAL, TARGET_BLOCK_TIME,
 };
 use strangecoin_core::economics::emission::{
-    block_reward_at_height_for_chain, HALVING_INTERVAL, MAX_SUPPLY_PRE_TAIL,
+    block_reward_at_height_for_chain, HALVING_INTERVAL, INITIAL_REWARD, MAX_SUPPLY_PRE_TAIL,
 };
 use strangecoin_core::Transaction;
 use strangecoin_core::serialize;
@@ -135,9 +135,9 @@ proptest! {
     }
 
     #[test]
-    fn block_reward_never_negative(height in 0u64..1_000_000u64, supply in 0u64..MAX_SUPPLY_PRE_TAIL) {
+    fn block_reward_bounded_by_schedule(height in 0u64..1_000_000u64, supply in 0u64..MAX_SUPPLY_PRE_TAIL) {
         let reward = block_reward_at_height_for_chain(height, supply, current_chain_id());
-        prop_assert!(reward >= 0);
+        prop_assert!(reward <= INITIAL_REWARD);
     }
 
     #[test]

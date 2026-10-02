@@ -66,3 +66,17 @@
 - Updated all 29 Block literal sites across codebase
 - Created `crates/strangecoin-core/tests/merkle.rs` — 10 unit tests + 2 proptests: empty, single, pair, odd, 7-tx, deterministic, different inputs, compute_tx_root round-trip, proptest determinism, proptest non-zero
 - All golden vector tests updated for new serialization format
+
+### S1-P12: block_executor + state_cache
+
+- Created `src/blockchain/block_executor.rs` — `validate_and_apply(parent_state, block, view)`: the single "validate + apply" path for one block (position/header hash, `consensus_version`, `tx_root`, timestamp MTP + future bound, PoW + retarget schedule for `block.target`, transaction signatures with the grant-block exemption, `core::state::apply_block`, `state_root`); it never selects a tip and never writes to storage
+- Added `BlockView { chain, now, allow_grant_blocks }` (`new`/`next`) and `now_secs()` — everything a block is validated against besides its parent state
+- Created `src/blockchain/state_cache.rs` — `StateCache` is the only reader of balances/nonces: read API (`balance`, `nonce`, `keys`, `iter`, `nonzero_balances`, …), write API (`commit`, `replace`, `invalidate`, `unapply_block`, `credit`, `ensure_account`) and `rebuild_from_chain` (reconstruction from the chain, mechanism lifted out of `validate_chain`)
+- Added `Blockchain::rebuild_state_cache()`; `validate_chain` now delegates validation to the executor and compares against the reconstructed balances for invariant #1 (the chain wins over the cache)
+- Switched the monolith apply paths to the executor: `create_genesis_block`, `create_grant_block`, `mine_block` all run through `validate_and_apply` + `StateCache::commit`
+- `Blockchain.balances` is now a `StateCache`; `BlockchainDeserialize` and the chain-adoption/sync paths build it with `StateCache::from_accounts`. Direct `balances` mutations outside `state_cache` removed (rg control: only a commented-out legacy block in `Blockchain::new` remains)
+- Added `StrangecoinError::InvalidBlock(String)` carrying `block N: <reason>`
+- Created `tests/block_executor.rs` — 20 component tests: valid block applied to parent state + rejection matrix (index, previous_hash, header hash, `consensus_version`, `tx_root`, MTP/future timestamp, PoW above target, target change outside a retarget height, unsigned transfer, spending without funds, coinbase inflation, missing coinbase, wrong `state_root`, matching `state_root`, grant-block opt-in flag, genesis on a non-empty chain)
+- Created `tests/state_cache.rs` — 5 component tests: rebuild reproduces the chain state, rebuild repairs a tampered cache (invariant #1), `unapply_block` rolls the cache back on reorg, `invalidate`, tampered chain rejected (header hash and `tx_root` paths)
+- Fixed two clippy deny-level lints that stopped `cargo clippy` from compiling (`consensus_proptest` reward bound, `first_wallet` loop); the workspace now clippies without errors — 89 pre-existing warnings in untouched files remain as debt
+- `cargo test --workspace` green (strangecoin 15 + 24 integration targets, strangecoin-core 38 + 7 test targets)

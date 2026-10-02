@@ -42,6 +42,9 @@ pub use strangecoin_core::types::{Block, Transaction};
 pub use strangecoin_core::serialize;
 pub use strangecoin_core::AccountState;
 
+use crate::blockchain::block_executor::{self, BlockView};
+use crate::blockchain::state_cache::StateCache;
+
 /// Sync task tick period: how often the shutdown flag is re-checked.
 pub const SYNC_TICK: Duration = Duration::from_millis(100);
 /// Number of `SYNC_TICK`s between two `sync_blockchain` rounds (~1s).
@@ -70,7 +73,9 @@ pub struct BlockchainDeserialize {
 #[derive(Clone)]
 pub struct Blockchain {
     pub chain: Vec<Block>,
-    pub balances: HashMap<String, AccountState>,
+    /// Sole read path for balances/nonces (ARCHITECT3 §3.4): every balance
+    /// change goes through `block_executor`, every read through `StateCache`.
+    pub balances: StateCache,
     pub difficulty: u32,
     pub mempool: crate::mempool::Mempool,
     pub storage: crate::storage::Storage,
@@ -141,7 +146,7 @@ impl<'de> Deserialize<'de> for Blockchain {
 
         Ok(Blockchain {
             chain,
-            balances,
+            balances: StateCache::from_accounts(balances),
             difficulty,
             mempool,
             storage,
@@ -243,7 +248,7 @@ impl Blockchain {
 
         let mut blockchain = Blockchain {
             chain: vec![],
-            balances: HashMap::new(),
+            balances: StateCache::new(),
             difficulty: 1,
             mempool: crate::mempool::Mempool::new(),
             storage,
@@ -371,29 +376,27 @@ impl Blockchain {
             // Initialize balances with genesis allocation
             for tx in &genesis_block.transactions {
                 if tx.sender != "genesis" {
-                    blockchain
-                        .balances
-                        .entry(tx.receiver.clone())
-                        .or_default()
-                        .balance += tx.amount;
+                    blockchain.balances.credit(&tx.receiver, tx.amount);
                 }
             }
         }
 
         if let Some(balances) = balances_opt {
             // Convert old u64 balances to AccountState
-            blockchain.balances = balances
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        k,
-                        AccountState {
-                            balance: v,
-                            nonce: 0,
-                        },
-                    )
-                })
-                .collect();
+            blockchain.balances = StateCache::from_accounts(
+                balances
+                    .into_iter()
+                    .map(|(k, v)| {
+                        (
+                            k,
+                            AccountState {
+                                balance: v,
+                                nonce: 0,
+                            },
+                        )
+                    })
+                    .collect(),
+            );
         } else { /*
              blockchain.balances = HashMap::new();
              debug!("Балансы не найдены в LevelDB, инициализация на основе цепочки блоков");
@@ -463,28 +466,25 @@ impl Blockchain {
         // иначе сохранённый хэш не совпадёт с пересчётом в validate_chain().
         genesis_block.tx_root = strangecoin_core::serialize::compute_tx_root(&genesis_block.transactions);
         genesis_block.hash = self.calculate_hash(&genesis_block);
-        self.chain.push(genesis_block.clone());
-        self.total_work = strangecoin_core::consensus::cumulative_work(&self.chain);
-        // Обновляем балансы на основе транзакций генезис-блока, только для получателя
-        for tx in &genesis_block.transactions {
-            if tx.sender != "genesis" {
-                let sender_balance = self
-                    .balances
-                    .get(&tx.sender)
-                    .map(|a| a.balance)
-                    .unwrap_or(0);
-                if sender_balance < tx.amount {
-                    panic!(
-                        "Недостаточно средств у {} для транзакции nonce={}",
-                        tx.sender, tx.nonce
-                    );
-                }
-                self.balances.entry(tx.sender.clone()).or_default().balance -= tx.amount;
+
+        // Валидация и применение — через block_executor, а не ручной
+        // правкой balances: иначе состояние расходилось бы с пересчётом
+        // из цепочки в validate_chain().
+        let empty_prefix: &[Block] = &[];
+        let applied = {
+            let view = BlockView::new(empty_prefix, block_executor::now_secs(), self.allow_grant_blocks);
+            block_executor::validate_and_apply(&strangecoin_core::state::State::new(), &genesis_block, &view)
+        };
+        match applied {
+            Ok(new_state) => {
+                self.chain.push(genesis_block);
+                self.balances.commit(new_state);
+                self.total_work = strangecoin_core::consensus::cumulative_work(&self.chain);
             }
-            self.balances
-                .entry(tx.receiver.clone())
-                .or_default()
-                .balance += tx.amount;
+            Err(e) => {
+                error!(error = %e, "Не удалось применить генезис-блок");
+                return;
+            }
         }
         let duration = SystemTime::now()
             .duration_since(start_time)
@@ -537,13 +537,18 @@ impl Blockchain {
         block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
         block.hash = self.calculate_hash(&block);
 
-        let parent_state = strangecoin_core::state::State {
-            balances: self.balances.clone(),
+        // Как и генезис: состояние получается из block_executor, а не
+        // правится вручную — иначе validate_chain() (пересчитывающая
+        // состояние из цепочки) расходилась бы с хранимыми балансами.
+        let applied = {
+            let parent_state = self.balances.to_state();
+            let view = BlockView::new(&self.chain, block_executor::now_secs(), self.allow_grant_blocks);
+            block_executor::validate_and_apply(&parent_state, &block, &view)
         };
-        match strangecoin_core::state::apply_block(&parent_state, &block) {
+        match applied {
             Ok(new_state) => {
-                self.balances = new_state.balances;
                 self.chain.push(block);
+                self.balances.commit(new_state);
                 self.total_work = strangecoin_core::consensus::cumulative_work(&self.chain);
                 info!(from = "initial_wallet_address", to = %wallet_address, amount, "Создан блок первичной эмиссии");
             }
@@ -646,7 +651,7 @@ impl Blockchain {
         }
 
         // Calculate total supply before mining this block
-        let total_supply: u64 = self.balances.values().map(|a| a.balance).sum();
+        let total_supply = self.balances.total_supply();
         let height = previous_block.index + 1;
         let coinbase_amount =
             crate::economics::emission::block_reward_at_height(height, total_supply);
@@ -681,13 +686,15 @@ impl Blockchain {
         if let Some(block) = block {
             let balance_start_time = SystemTime::now();
 
-            let core_state = strangecoin_core::state::State {
-                balances: self.balances.clone(),
+            // Добытый блок проходит тот же validate+apply, что и любой чужой:
+            // блок с невалидной подписью или неверным наградом не попадёт в цепочку.
+            let applied = {
+                let parent_state = self.balances.to_state();
+                let view = BlockView::new(&self.chain, block_executor::now_secs(), self.allow_grant_blocks);
+                block_executor::validate_and_apply(&parent_state, &block, &view)
             };
-            match strangecoin_core::state::apply_block(&core_state, &block) {
-                Ok(new_state) => {
-                    self.balances = new_state.balances;
-                }
+            match applied {
+                Ok(new_state) => self.balances.commit(new_state),
                 Err(e) => {
                     error!(error = %e, "Failed to apply block to state");
                     return None;
@@ -906,11 +913,7 @@ impl Blockchain {
             );
             return Err(StrangecoinError::SizeLimitExceeded("transaction"));
         }
-        let account_state = self
-            .balances
-            .get(&transaction.sender)
-            .cloned()
-            .unwrap_or_default();
+        let account_state = self.balances.get(&transaction.sender).unwrap_or_default();
         self.mempool.insert(transaction, &account_state)?;
         let duration = SystemTime::now()
             .duration_since(start_time)
@@ -932,24 +935,6 @@ impl Blockchain {
             return false;
         }
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        let genesis_block = &self.chain[0];
-        info!(index = genesis_block.index, previous_hash = %genesis_block.previous_hash, "Проверка генезис-блока");
-        if genesis_block.index != 0 || genesis_block.previous_hash != "0".repeat(64) {
-            warn!(?genesis_block, "Некорректный генезис-блок");
-            return false;
-        }
-        let genesis_hash = self.calculate_hash(genesis_block);
-        debug!(calculated_hash = %genesis_hash, stored_hash = %genesis_block.hash, "Хэш генезис-блока");
-        if genesis_block.hash != genesis_hash {
-            warn!(?genesis_block, "Некорректный хэш генезис-блока");
-            return false;
-        }
-
         // Block size validation (invariant #7)
         for block in &self.chain {
             let block_size = strangecoin_core::serialize::serialize_block(block).len();
@@ -964,70 +949,23 @@ impl Blockchain {
             }
         }
 
-        // Consensus version validation (invariant #21)
-        for block in &self.chain {
-            let expected_version = strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION;
-            if block.consensus_version != expected_version {
-                warn!(
-                    block_index = block.index,
-                    got = block.consensus_version,
-                    expected = expected_version,
-                    "Block consensus_version mismatch"
-                );
+        // Все проверки блоков (consensus_version, подписи, позиция в цепочке,
+        // хэш, timestamp, difficulty/target, tx_root, эмиссия, state_root) и
+        // пересчёт состояния выполняет block_executor — блок за блоком.
+        let reconstructed = match StateCache::rebuild_from_chain(
+            &self.chain,
+            block_executor::now_secs(),
+            self.allow_grant_blocks,
+        ) {
+            Ok(cache) => cache,
+            Err(e) => {
+                warn!(error = %e, "Цепочка отклонена: блок не прошёл валидацию");
                 return false;
             }
-        }
-
-        // Валидация подписей всех транзакций в цепочке.
-        //
-        // Исключение — блок первичной эмиссии (index == 1) при явно
-        // включённом allow_grant_blocks: его перевод от генезис-адреса
-        // подписать нечем (у адреса нет ключа). Флаг по умолчанию выключен,
-        // поэтому в проде блок с такими транзакциями будет отклонён здесь же.
-        for block in &self.chain {
-            let is_opt_in_grant_block =
-                self.allow_grant_blocks && block.index == GRANT_BLOCK_INDEX;
-            if is_opt_in_grant_block {
-                debug!(block_index = block.index, "Пропуск проверки подписей блока первичной эмиссии");
-                continue;
-            }
-            for tx in &block.transactions {
-                if let Err(e) = crate::consensus::verify_transaction(tx) {
-                    warn!(block_index = block.index, tx = ?tx, error = %e, "Неверная подпись транзакции в блоке");
-                    return false;
-                }
-            }
-        }
-
-        // Восстанавливаем балансы из цепочки блоков, начиная с пустого состояния
-        let mut expected_state = strangecoin_core::state::State::new();
-        for block in &self.chain {
-            info!(
-                block_index = block.index,
-                tx_count = block.transactions.len(),
-                "Обработка блока"
-            );
-            match strangecoin_core::state::apply_block(&expected_state, block) {
-                Ok(new_state) => {
-                    expected_state = new_state;
-                }
-                Err(e) => {
-                    warn!(block_index = block.index, error = %e, "Block application failed during validation");
-                    return false;
-                }
-            }
-        }
-
-        // Tx root validation (invariant: merkle_root(txs) == block.tx_root)
-        for block in &self.chain {
-            if let Err(e) = strangecoin_core::consensus::validate_tx_root(block) {
-                warn!(block_index = block.index, error = %e, "Tx root mismatch");
-                return false;
-            }
-        }
+        };
 
         // Проверяем неподтверждённые транзакции (mempool)
-        let mut temp_state = expected_state.clone();
+        let mut temp_state = reconstructed.to_state();
         for tx in self.mempool.transactions() {
             let sender_balance = temp_state.get_balance(&tx.sender);
             if sender_balance < tx.amount {
@@ -1045,78 +983,14 @@ impl Blockchain {
             );
         }
 
-        // Проверяем структуру цепочки и timestamp'ы
-        for i in 1..self.chain.len() {
-            let current_block = &self.chain[i];
-            let previous_block = &self.chain[i - 1];
-            debug!(block_index = i, current_index = current_block.index, previous_hash = %current_block.previous_hash, "Проверка блока");
-            if current_block.index != previous_block.index + 1 {
-                warn!(
-                    block_index = i,
-                    expected_index = previous_block.index + 1,
-                    actual_index = current_block.index,
-                    "Некорректный индекс блока"
-                );
-                return false;
-            }
-            if current_block.previous_hash != previous_block.hash {
-                warn!(block_index = i, expected_hash = %previous_block.hash, actual_hash = %current_block.previous_hash, "Некорректный previous_hash");
-                return false;
-            }
-            // Валидация timestamp текущего блока
-            if let Err(e) =
-                crate::consensus::validate_timestamp(current_block, &self.chain[..i], now)
-            {
-                warn!(block_index = current_block.index, error = %e, "Некорректный timestamp блока");
-                return false;
-            }
-            let current_hash = self.calculate_hash(current_block);
-            debug!(block_index = i, calculated_hash = %current_hash, stored_hash = %current_block.hash, "Хэш блока");
-            if current_block.hash != current_hash {
-                warn!(block_index = i, ?current_block, "Некорректный хэш в блоке");
-                return false;
-            }
-            // Валидация difficulty
-            if let Err(e) = crate::consensus::validate_difficulty(current_block) {
-                warn!(block_index = current_block.index, error = %e, "Неверная сложность блока");
-                return false;
-            }
-            // Проверка retarget
-            if current_block.index > 0
-                && current_block.index % crate::consensus::RETARGET_INTERVAL == 0
-            {
-                let expected_target =
-                    crate::consensus::compute_target(&self.chain[..current_block.index as usize]);
-                let expected_target_hex = hex::encode(expected_target);
-                if current_block.target != expected_target_hex {
-                    warn!(block_index = current_block.index, expected = %expected_target_hex, got = %current_block.target, "Неверный target на retarget height");
-                    return false;
-                }
-            } else if current_block.index > 0 {
-                // На не-retarget height target должен совпадать с предыдущим блоком
-                let prev_target = &self.chain[current_block.index as usize - 1].target;
-                if current_block.target != *prev_target {
-                    warn!(block_index = current_block.index, expected = %prev_target, got = %current_block.target, "Target изменён вне retarget height");
-                    return false;
-                }
-            }
-        }
-
-        // Сверяем восстановленные балансы с хранимыми, игнорируя нулевые остатки
-        let reconstructed: HashMap<String, u64> = expected_state
-            .balances
-            .iter()
-            .filter(|(_, v)| v.balance != 0)
-            .map(|(k, v)| (k.clone(), v.balance))
-            .collect();
-        let stored: HashMap<String, u64> = self
-            .balances
-            .iter()
-            .filter(|(_, v)| v.balance != 0)
-            .map(|(k, v)| (k.clone(), v.balance))
-            .collect();
-        debug!(?reconstructed, ?stored, "Сверка восстановленных балансов");
-        if reconstructed != stored {
+        // Инвариант №1 («вся валидность — из цепочки»): если хранимый кэш
+        // расходится с реконструкцией из цепочки, побеждает реконструкция —
+        // здесь расхождение делает цепочку невалидной, а
+        // StateCache::rebuild_from_chain() пересчитывает кэш из цепочки.
+        let rebuilt = reconstructed.nonzero_balances();
+        let stored = self.balances.nonzero_balances();
+        debug!(?rebuilt, ?stored, "Сверка восстановленных балансов");
+        if rebuilt != stored {
             warn!("Восстановленные балансы не совпадают с хранимыми");
             return false;
         }
@@ -1127,6 +1001,14 @@ impl Blockchain {
             .as_secs_f64();
         info!(duration_secs = duration, "Валидация цепочки завершена");
         true
+    }
+
+    /// Пересчитывает кэш балансов из цепочки: единственная авторитетная
+    /// версия состояния — та, что следует из цепочки (инвариант №1).
+    pub fn rebuild_state_cache(&mut self) -> Result<(), StrangecoinError> {
+        let now = block_executor::now_secs();
+        self.balances = StateCache::rebuild_from_chain(&self.chain, now, self.allow_grant_blocks)?;
+        Ok(())
     }
 
     pub fn save_state(&mut self) {
@@ -1457,9 +1339,7 @@ impl Node {
                 .blockchain
                 .read()
                 .expect("Не удалось захватить read lock для blockchain");
-            for (wallet, _) in blockchain.balances.iter() {
-                return Some(wallet.clone());
-            }
+            return blockchain.balances.keys().next().cloned();
         }
         None
     }
@@ -1542,7 +1422,7 @@ impl Node {
                                     let storage = blockchain.storage.clone();
                                     let mut new_blockchain = Blockchain {
                                         chain: temp_blockchain.chain.clone(),
-                                        balances: temp_blockchain.balances.clone(),
+                                        balances: StateCache::from_accounts(temp_blockchain.balances.clone()),
                                         difficulty: temp_blockchain.difficulty,
                                         mempool: crate::mempool::Mempool::new(),
                                         storage,
@@ -1596,7 +1476,7 @@ impl Node {
                                         });
                                         let _ = sync_tx.send(Blockchain {
                                             chain: temp_blockchain.chain,
-                                            balances: temp_blockchain.balances,
+                                            balances: StateCache::from_accounts(temp_blockchain.balances),
                                             difficulty: temp_blockchain.difficulty,
                                             mempool: crate::mempool::Mempool::new(),
                                             storage: blockchain.storage.clone(),
@@ -1746,7 +1626,7 @@ impl Node {
                             }
                             let temp_blockchain = Blockchain {
                                 chain: received_blockchain.chain.clone(),
-                                balances: received_blockchain.balances.clone(),
+                                balances: StateCache::from_accounts(received_blockchain.balances.clone()),
                                 difficulty: received_blockchain.difficulty,
                                 mempool: {
                                     let mut mp = crate::mempool::Mempool::new();
@@ -2169,15 +2049,15 @@ impl eframe::App for WalletApp {
                                     match blockchain.grant_initial_balance_to_first_wallet(&self.wallet_address) {
                                         Ok(true) => {}
                                         Ok(false) => {
-                                            blockchain.balances.entry(self.wallet_address.clone()).or_default();
+                                            blockchain.balances.ensure_account(&self.wallet_address);
                                         }
                                         Err(StrangecoinError::GrantBlocksDisabled) => {
                                             warn!("Grant blocks disabled, creating zero-balance entry");
-                                            blockchain.balances.entry(self.wallet_address.clone()).or_default();
+                                            blockchain.balances.ensure_account(&self.wallet_address);
                                         }
                                         Err(e) => {
                                             warn!(error = %e, "Failed to grant initial balance");
-                                            blockchain.balances.entry(self.wallet_address.clone()).or_default();
+                                            blockchain.balances.ensure_account(&self.wallet_address);
                                         }
                                     }
                                     blockchain.save_state();
@@ -2756,7 +2636,7 @@ pub mod test_support {
             crate::storage::Storage::new(db_path).expect("Failed to open test DB");
         let mut bc = Blockchain {
             chain: vec![],
-            balances: HashMap::new(),
+            balances: StateCache::new(),
             difficulty: 0,
             mempool: crate::mempool::Mempool::new(),
             storage,
@@ -2818,11 +2698,7 @@ pub mod test_support {
                 guard.total_work = total_work;
                 guard.mempool = crate::mempool::Mempool::new();
                 for tx in &pending {
-                    let account = guard
-                        .balances
-                        .get(&tx.sender)
-                        .cloned()
-                        .unwrap_or_default();
+                    let account = guard.balances.get(&tx.sender).unwrap_or_default();
                     let _ = guard.mempool.insert(tx.clone(), &account);
                 }
                 guard.save_state();
