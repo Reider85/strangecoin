@@ -201,10 +201,7 @@ mod unit_tests {
     fn chain_of_blocks_roundtrip() {
         let state = State::new();
 
-        let genesis = genesis_block(vec![
-            coinbase("alice", 10_000),
-            coinbase("bob", 5_000),
-        ]);
+        let genesis = genesis_block(vec![coinbase("alice", 10_000), coinbase("bob", 5_000)]);
         let s0 = apply_block(&state, &genesis).unwrap();
 
         let b1 = transfer_block(1, vec![transfer("alice", "bob", 1000, 1)]);

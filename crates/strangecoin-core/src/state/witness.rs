@@ -69,12 +69,13 @@ pub fn verify_block_stateless(
 
     let mut reconstructed = State::new();
     for (addr, account_proof) in &witness.proofs {
-        reconstructed
-            .balances
-            .insert(addr.clone(), AccountState {
+        reconstructed.balances.insert(
+            addr.clone(),
+            AccountState {
                 balance: account_proof.balance,
                 nonce: account_proof.nonce,
-            });
+            },
+        );
     }
 
     // The witness covers only the addresses the block touches, so the full

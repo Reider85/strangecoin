@@ -9,7 +9,10 @@ use std::collections::HashMap;
 use crate::types::AccountState;
 use verkle::VerkleTrie;
 
-pub fn root_after(state: &State, block: &crate::types::Block) -> Result<[u8; 32], crate::error::CoreError> {
+pub fn root_after(
+    state: &State,
+    block: &crate::types::Block,
+) -> Result<[u8; 32], crate::error::CoreError> {
     let new_state = apply_block(state, block)?;
     let computed = VerkleTrie::compute_root(&new_state.balances);
     // A zero state_root means the block does not commit to one yet

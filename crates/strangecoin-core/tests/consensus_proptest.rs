@@ -1,3 +1,7 @@
+use blake3;
+use hex;
+use proptest::prelude::*;
+use secp256k1::{ecdsa::RecoverableSignature, PublicKey, Secp256k1, SecretKey};
 use strangecoin_core::consensus::{
     compute_target, current_chain_id, u256_div, u256_from_bytes, u256_from_u64, u256_gt, u256_le,
     u256_max, u256_min, u256_mul, u256_to_bytes, validate_difficulty, MAX_TARGET_CHANGE_FACTOR,
@@ -6,12 +10,8 @@ use strangecoin_core::consensus::{
 use strangecoin_core::economics::emission::{
     block_reward_at_height_for_chain, HALVING_INTERVAL, INITIAL_REWARD, MAX_SUPPLY_PRE_TAIL,
 };
-use strangecoin_core::Transaction;
 use strangecoin_core::serialize;
-use blake3;
-use hex;
-use proptest::prelude::*;
-use secp256k1::{ecdsa::RecoverableSignature, PublicKey, Secp256k1, SecretKey};
+use strangecoin_core::Transaction;
 
 fn arbitrary_public_key() -> impl Strategy<Value = PublicKey> {
     any::<[u8; 32]>().prop_map(|bytes| {
@@ -27,14 +27,12 @@ fn arbitrary_public_key() -> impl Strategy<Value = PublicKey> {
 fn arbitrary_secret_key() -> impl Strategy<Value = SecretKey> {
     any::<[u8; 32]>().prop_map(|bytes| {
         let secp = Secp256k1::new();
-        SecretKey::from_slice(&bytes)
-            .unwrap_or_else(|_| SecretKey::from_slice(&[1u8; 32]).unwrap())
+        SecretKey::from_slice(&bytes).unwrap_or_else(|_| SecretKey::from_slice(&[1u8; 32]).unwrap())
     })
 }
 
 fn arbitrary_address() -> impl Strategy<Value = String> {
-    arbitrary_public_key()
-        .prop_map(|pk| strangecoin_core::address::address_from_public_key(&pk))
+    arbitrary_public_key().prop_map(|pk| strangecoin_core::address::address_from_public_key(&pk))
 }
 
 fn arbitrary_signature() -> impl Strategy<Value = Vec<u8>> {
@@ -97,8 +95,8 @@ fn arbitrary_signed_transaction() -> impl Strategy<Value = Transaction> {
             };
             let msg_bytes = serialize::serialize_transaction(&tx);
             let msg_hash = blake3::hash(&msg_bytes);
-            let msg = secp256k1::Message::from_digest_slice(msg_hash.as_bytes())
-                .expect("valid message");
+            let msg =
+                secp256k1::Message::from_digest_slice(msg_hash.as_bytes()).expect("valid message");
             let sig: RecoverableSignature = secp.sign_ecdsa_recoverable(&msg, &secret_key);
             let (rec_id, sig_bytes) = sig.serialize_compact();
             let mut sig_vec = Vec::with_capacity(65);

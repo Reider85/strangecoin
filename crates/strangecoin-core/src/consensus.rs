@@ -179,11 +179,7 @@ pub fn median_time_past(blocks: &[Block], current_height: u64) -> u64 {
     times[times.len() / 2]
 }
 
-pub fn validate_timestamp(
-    block: &Block,
-    prev_blocks: &[Block],
-    now: u64,
-) -> Result<(), CoreError> {
+pub fn validate_timestamp(block: &Block, prev_blocks: &[Block], now: u64) -> Result<(), CoreError> {
     if block.index == 0 {
         return Ok(());
     }
@@ -231,8 +227,7 @@ pub fn compute_target(prev_blocks: &[Block]) -> [u8; 32] {
 
 pub fn validate_difficulty(block: &Block) -> Result<(), CoreError> {
     let hash = serialize::block_hash(block);
-    let target_bytes = hex::decode(&block.target)
-        .map_err(|_| CoreError::InvalidDifficulty)?;
+    let target_bytes = hex::decode(&block.target).map_err(|_| CoreError::InvalidDifficulty)?;
     let mut target_arr = [0u8; 32];
     target_arr.copy_from_slice(&target_bytes);
 
@@ -280,9 +275,8 @@ pub fn verify_transaction(tx: &Transaction) -> Result<(), CoreError> {
 }
 
 pub const EXPECTED_GENESIS_HASH: [u8; 32] = [
-    0x56, 0x3c, 0x9e, 0x51, 0x34, 0x23, 0x44, 0xc0, 0x1b, 0x93, 0x18, 0x53, 0xc4, 0x9e, 0x22,
-    0x74, 0xb6, 0xfb, 0xd2, 0xde, 0x99, 0xed, 0x50, 0xb8, 0xd6, 0xd3, 0xbd, 0x7a, 0x7e, 0x65,
-    0xab, 0x50,
+    0x56, 0x3c, 0x9e, 0x51, 0x34, 0x23, 0x44, 0xc0, 0x1b, 0x93, 0x18, 0x53, 0xc4, 0x9e, 0x22, 0x74,
+    0xb6, 0xfb, 0xd2, 0xde, 0x99, 0xed, 0x50, 0xb8, 0xd6, 0xd3, 0xbd, 0x7a, 0x7e, 0x65, 0xab, 0x50,
 ];
 
 pub fn validate_tx_root(block: &Block) -> Result<(), CoreError> {

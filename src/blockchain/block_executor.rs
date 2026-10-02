@@ -23,13 +23,17 @@ use strangecoin_core::state::{apply_block, compute_state_root, State};
 use strangecoin_core::types::Block;
 use tracing::warn;
 
+use super::consensus_manager::ConsensusPhase;
 use crate::error::StrangecoinError;
 use crate::GRANT_BLOCK_INDEX;
 
 /// Everything a block is validated against besides its parent state.
 ///
 /// Pure data: no locks, no I/O, so the executor can be unit-tested without a
-/// running node.
+/// running node. Consensus *rules* are never resolved inside the executor —
+/// the caller (facade/state_cache) obtains them from `ConsensusManager` and
+/// passes them in here (ARCHITECT3 §3.4: consensus_manager is the single
+/// source of rules for the executor).
 pub struct BlockView<'a> {
     /// Chain prefix ending in the parent block. For a well-formed chain
     /// `chain.len() == block.index`.
@@ -39,20 +43,46 @@ pub struct BlockView<'a> {
     /// Opt-in primary-issuance grant block (height 1) may carry an unsigned
     /// transfer from the genesis address, which has no key to sign with.
     pub allow_grant_blocks: bool,
+    /// Consensus version a block at this height must carry, resolved by
+    /// `ConsensusManager::expected_version`.
+    pub expected_consensus_version: u32,
+    /// Consensus phase active at this height, from `ConsensusManager::phase_at`.
+    pub phase: ConsensusPhase,
 }
 
 impl<'a> BlockView<'a> {
-    pub fn new(chain: &'a [Block], now: u64, allow_grant_blocks: bool) -> Self {
+    pub fn new(
+        chain: &'a [Block],
+        now: u64,
+        allow_grant_blocks: bool,
+        expected_consensus_version: u32,
+    ) -> Self {
         Self {
             chain,
             now,
             allow_grant_blocks,
+            expected_consensus_version,
+            phase: ConsensusPhase::Pow,
         }
     }
 
+    pub fn with_phase(mut self, phase: ConsensusPhase) -> Self {
+        self.phase = phase;
+        self
+    }
+
     /// `BlockView` for a block about to be appended to `chain`.
-    pub fn next(chain: &'a [Block], allow_grant_blocks: bool) -> Self {
-        Self::new(chain, now_secs(), allow_grant_blocks)
+    pub fn next(
+        chain: &'a [Block],
+        allow_grant_blocks: bool,
+        expected_consensus_version: u32,
+    ) -> Self {
+        Self::new(
+            chain,
+            now_secs(),
+            allow_grant_blocks,
+            expected_consensus_version,
+        )
     }
 }
 
@@ -79,17 +109,25 @@ pub fn validate_and_apply(
     if block.hash != computed_hash {
         return Err(invalid(
             block,
-            format!("header hash mismatch: stored {}, computed {}", block.hash, computed_hash),
+            format!(
+                "header hash mismatch: stored {}, computed {}",
+                block.hash, computed_hash
+            ),
         ));
     }
 
-    let expected_version = strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION;
-    if block.consensus_version != expected_version {
+    if matches!(view.phase, ConsensusPhase::Pos) {
+        return Err(invalid(
+            block,
+            "PoS validation phase is not active until Stage 7",
+        ));
+    }
+    if block.consensus_version != view.expected_consensus_version {
         return Err(invalid(
             block,
             format!(
                 "consensus_version mismatch: got {}, expected {}",
-                block.consensus_version, expected_version
+                block.consensus_version, view.expected_consensus_version
             ),
         ));
     }
@@ -169,12 +207,18 @@ fn validate_position(block: &Block, chain: &[Block]) -> Result<(), StrangecoinEr
 /// `block.target` must be inherited from the parent, or recomputed on a
 /// retarget height.
 fn validate_target(block: &Block, chain: &[Block]) -> Result<(), StrangecoinError> {
-    if block.index.is_multiple_of(crate::consensus::RETARGET_INTERVAL) {
+    if block
+        .index
+        .is_multiple_of(crate::consensus::RETARGET_INTERVAL)
+    {
         let expected = hex::encode(strangecoin_core::consensus::compute_target(chain));
         if block.target != expected {
             return Err(invalid(
                 block,
-                format!("target {} at retarget height, expected {}", block.target, expected),
+                format!(
+                    "target {} at retarget height, expected {}",
+                    block.target, expected
+                ),
             ));
         }
         return Ok(());

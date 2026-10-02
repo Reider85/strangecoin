@@ -1,29 +1,25 @@
 mod common;
 
 use common::*;
+use std::sync::Arc;
 use strangecoin::Transaction;
-use std::sync::{Arc, RwLock};
 
 #[test]
 fn mining_on_regtest_low_difficulty() {
     let dir1 = TestDir::new("pow_1");
     let dir2 = TestDir::new("pow_2");
-    let bc1 = Arc::new(RwLock::new(create_test_blockchain(dir1.path())));
-    let bc2 = Arc::new(RwLock::new(create_test_blockchain(dir2.path())));
+    let bc1 = Arc::new(create_test_blockchain(dir1.path()));
+    let bc2 = Arc::new(create_test_blockchain(dir2.path()));
 
     let keypairs = generate_keypairs(1);
     let addr = keypairs[0].0.clone();
 
-    {
-        let mut bc = bc1.write().unwrap();
-        assert!(bc.grant_initial_balance_to_first_wallet(&addr).unwrap());
-    }
+    assert!(bc1.grant_initial_balance_to_first_wallet(&addr).unwrap());
 
     adopt_from(&bc2, &bc1);
-    assert_eq!(bc2.read().unwrap().chain.len(), 2);
+    assert_eq!(bc2.chain_len(), 2);
 
     {
-        let mut bc = bc1.write().unwrap();
         let mut tx = Transaction {
             sender: addr.clone(),
             receiver: "recipient".to_string(),
@@ -34,11 +30,11 @@ fn mining_on_regtest_low_difficulty() {
             is_coinbase: false,
         };
         sign_transaction(&mut tx, &keypairs[0].1);
-        assert!(bc.add_transaction(tx).is_ok());
+        assert!(bc1.apply_tx(tx).is_ok());
 
         let start = std::time::Instant::now();
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let block = bc.mine_block(std::sync::mpsc::channel().0, &shutdown);
+        let block = bc1.mine_block(std::sync::mpsc::channel().0, &shutdown);
         let elapsed = start.elapsed();
         assert!(block.is_some(), "Block should be mined");
         assert!(
@@ -48,7 +44,6 @@ fn mining_on_regtest_low_difficulty() {
     }
 
     adopt_from(&bc2, &bc1);
-    let bc2_guard = bc2.read().unwrap();
-    assert_eq!(bc2_guard.chain.len(), 3);
-    assert!(bc2_guard.validate_chain(), "Chain should be valid after mining");
+    assert_eq!(bc2.chain_len(), 3);
+    assert!(bc2.validate_chain(), "Chain should be valid after mining");
 }

@@ -1,6 +1,6 @@
 use crate::consensus;
-use strangecoin_core::serialize;
 use std::path::Path;
+use strangecoin_core::serialize;
 
 pub fn print_genesis_hash() {
     // Try current dir first, then exe dir

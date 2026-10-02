@@ -13,12 +13,14 @@ fn arb_chain_info() -> impl Strategy<Value = ChainInfo> {
         arb_u256(),
         0u64..1_000_000u64,
     )
-        .prop_map(|(tip_height, tip_hash, total_work, tip_timestamp)| ChainInfo {
-            tip_height,
-            tip_hash,
-            total_work,
-            tip_timestamp,
-        })
+        .prop_map(
+            |(tip_height, tip_hash, total_work, tip_timestamp)| ChainInfo {
+                tip_height,
+                tip_hash,
+                total_work,
+                tip_timestamp,
+            },
+        )
 }
 
 proptest! {

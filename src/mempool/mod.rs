@@ -1,8 +1,8 @@
 use crate::consensus::{current_chain_id, verify_transaction};
 use crate::error::StrangecoinError;
-use strangecoin_core::serialize::txid;
 use crate::{AccountState, Transaction};
 use std::collections::{BTreeMap, HashMap};
+use strangecoin_core::serialize::txid;
 
 pub const MAX_PENDING_TXS: usize = 10_000;
 

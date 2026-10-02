@@ -1,27 +1,21 @@
 mod common;
 
 use common::*;
+use std::sync::Arc;
 use strangecoin::Transaction;
-use std::sync::{Arc, RwLock};
 
 #[test]
 fn double_spend_rejected() {
     let _dir = TestDir::new("double_spend");
-    let bc = Arc::new(RwLock::new(create_test_blockchain(_dir.path())));
+    let bc = Arc::new(create_test_blockchain(_dir.path()));
     let keypairs = generate_keypairs(2);
     let sender = keypairs[0].0.clone();
     let receiver1 = keypairs[1].0.clone();
     let receiver2 = "some_other_address".to_string();
 
-    {
-        let mut bc = bc.write().unwrap();
-        assert!(bc.grant_initial_balance_to_first_wallet(&sender).unwrap());
-    }
+    assert!(bc.grant_initial_balance_to_first_wallet(&sender).unwrap());
 
-    let balance_before = {
-        let bc = bc.read().unwrap();
-        bc.balances.get(&sender).map(|a| a.balance).unwrap_or(0)
-    };
+    let balance_before = bc.get_balance(&sender);
     assert_eq!(balance_before, 10000);
 
     let tx_amount = 5000u64;
@@ -47,24 +41,15 @@ fn double_spend_rejected() {
     };
     sign_transaction(&mut tx2, &keypairs[0].1);
 
-    {
-        let mut bc = bc.write().unwrap();
-        let result1 = bc.add_transaction(tx1);
-        assert!(result1.is_ok(), "First transaction should be accepted");
+    let result1 = bc.apply_tx(tx1);
+    assert!(result1.is_ok(), "First transaction should be accepted");
 
-        let result2 = bc.add_transaction(tx2);
-        assert!(result2.is_err(), "Double spend should be rejected");
-    }
+    let result2 = bc.apply_tx(tx2);
+    assert!(result2.is_err(), "Double spend should be rejected");
 
-    {
-        let mut bc = bc.write().unwrap();
-        mine_current(&mut bc);
-    }
+    mine_current(&bc);
 
-    let balance_after = {
-        let bc = bc.read().unwrap();
-        bc.balances.get(&sender).map(|a| a.balance).unwrap_or(0)
-    };
+    let balance_after = bc.get_balance(&sender);
     assert_eq!(
         balance_after,
         balance_before - tx_amount,

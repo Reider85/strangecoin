@@ -1,26 +1,26 @@
 mod common;
 
 use common::*;
-use strangecoin::{Blockchain, Transaction};
 use std::sync::Arc;
-use std::sync::RwLock;
 use std::time::Duration;
+use strangecoin::{Blockchain, BlockchainFacade, Transaction};
 
 #[test]
 fn hundred_transactions_five_wallets() {
     let keypairs = generate_keypairs(5);
     let addrs: Vec<String> = keypairs.iter().map(|(a, _)| a.clone()).collect();
 
-    let dirs: Vec<TestDir> = (0..5).map(|i| TestDir::new(&format!("wallet_{}", i))).collect();
-    let mut wallets: Vec<Arc<RwLock<Blockchain>>> = Vec::new();
+    let dirs: Vec<TestDir> = (0..5)
+        .map(|i| TestDir::new(&format!("wallet_{}", i)))
+        .collect();
+    let mut wallets: Vec<Arc<BlockchainFacade>> = Vec::new();
     for dir in &dirs {
-        wallets.push(Arc::new(RwLock::new(create_test_blockchain(dir.path()))));
+        wallets.push(Arc::new(create_test_blockchain(dir.path())));
     }
 
-    {
-        let mut bc = wallets[0].write().unwrap();
-        assert!(bc.grant_initial_balance_to_first_wallet(&addrs[0]).unwrap());
-    }
+    assert!(wallets[0]
+        .grant_initial_balance_to_first_wallet(&addrs[0])
+        .unwrap());
     sync_to_longest(&wallets);
     assert_balances(&wallets, &addrs, &[10000, 0, 0, 0, 0]);
 
@@ -33,10 +33,7 @@ fn hundred_transactions_five_wallets() {
         let (s, r) = edges[edge];
         let amount = amount_for(edge, pass);
 
-        let sender_nonce = {
-            let bc = wallets[s].read().unwrap();
-            bc.balances.get(&addrs[s]).map(|a| a.nonce).unwrap_or(0)
-        };
+        let sender_nonce = wallets[s].get_nonce(&addrs[s]);
 
         let mut transaction = Transaction {
             sender: addrs[s].clone(),
@@ -50,15 +47,12 @@ fn hundred_transactions_five_wallets() {
 
         sign_transaction(&mut transaction, &keypairs[s].1);
 
-        {
-            let mut bc = wallets[s].write().unwrap();
-            assert!(
-                bc.add_transaction(transaction).is_ok(),
-                "Transaction {} rejected",
-                tx_index
-            );
-            mine_current(&mut bc);
-        }
+        assert!(
+            wallets[s].apply_tx(transaction).is_ok(),
+            "Transaction {} rejected",
+            tx_index
+        );
+        mine_current(&wallets[s]);
         sync_to_longest(&wallets);
 
         ref_balances[s] -= amount;
@@ -72,9 +66,8 @@ fn hundred_transactions_five_wallets() {
     assert_balances(&wallets, &addrs, &[0, 0, 0, 0, 10000]);
 
     for w in &wallets {
-        let bc = w.read().unwrap();
-        assert_eq!(bc.chain.len(), 102);
-        assert!(bc.validate_chain());
+        assert_eq!(w.chain_len(), 102);
+        assert!(w.validate_chain());
     }
 }
 
@@ -87,7 +80,7 @@ fn hundred_transactions_five_wallets() {
 async fn node_runs_on_tokio_and_shuts_down_cleanly() {
     let dir = TestDir::new("tokio_runtime");
     let port = random_port();
-    let bc = Arc::new(RwLock::new(create_test_blockchain(dir.path())));
+    let bc = Arc::new(create_test_blockchain(dir.path()));
     let (node, _peers) = create_node_for_test(&bc, port);
     let event_bus = node.event_bus.clone();
     let shutdown = Arc::clone(&node.shutdown);
@@ -120,11 +113,9 @@ async fn node_runs_on_tokio_and_shuts_down_cleanly() {
     // A block is applied while the async task is ticking. The grant block
     // itself is the block under test — mine_block() needs a non-empty mempool
     // and there is no signer available here beyond the grant.
-    {
-        let mut guard = bc.write().unwrap();
-        guard.grant_initial_balance_to_first_wallet(&test_address()).unwrap();
-    }
-    let height = bc.read().unwrap().chain.len();
+    bc.grant_initial_balance_to_first_wallet(&test_address())
+        .unwrap();
+    let height = bc.chain_len();
     assert!(height > 0, "no block was applied");
 
     event_bus.publish(strangecoin::events::NodeEvent::BlockApplied {
@@ -152,7 +143,7 @@ async fn node_runs_on_tokio_and_shuts_down_cleanly() {
     // Node::drop cancels an already-finished task without panicking.
     drop(node);
     assert!(shutdown.load(std::sync::atomic::Ordering::Relaxed));
-    assert!(bc.read().unwrap().validate_chain());
+    assert!(bc.validate_chain());
 }
 
 fn test_address() -> String {

@@ -27,10 +27,7 @@ impl State {
     }
 
     pub fn set_balance(&mut self, addr: &str, balance: u64) {
-        self.balances
-            .entry(addr.to_string())
-            .or_default()
-            .balance = balance;
+        self.balances.entry(addr.to_string()).or_default().balance = balance;
         self.prune_if_empty(addr);
     }
 
@@ -77,14 +74,12 @@ fn apply_non_genesis(state: &mut State, block: &Block) -> Result<(), CoreError> 
     let total_supply = state.total_supply();
     let expected_reward = block_reward_at_height(block.index, total_supply);
 
-    let coinbase = block
-        .transactions
-        .iter()
-        .find(|tx| tx.is_coinbase)
-        .ok_or(CoreError::InvalidCoinbaseAmount {
+    let coinbase = block.transactions.iter().find(|tx| tx.is_coinbase).ok_or(
+        CoreError::InvalidCoinbaseAmount {
             expected: expected_reward,
             got: 0,
-        })?;
+        },
+    )?;
 
     if coinbase.amount > expected_reward {
         return Err(CoreError::InvalidCoinbaseAmount {
@@ -262,10 +257,7 @@ mod tests {
     #[test]
     fn apply_genesis_multiple_recipients() {
         let state = State::new();
-        let txs = vec![
-            coinbase_tx("alice", 500),
-            coinbase_tx("bob", 300),
-        ];
+        let txs = vec![coinbase_tx("alice", 500), coinbase_tx("bob", 300)];
         let block = test_block(0, txs);
         let new_state = apply_block(&state, &block).unwrap();
         assert_eq!(new_state.get_balance("alice"), 500);

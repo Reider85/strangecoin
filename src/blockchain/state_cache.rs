@@ -165,14 +165,23 @@ impl StateCache {
     ///
     /// This is the mechanism `validate_chain` used to run inline: whatever the
     /// cache says, this result is what the chain actually implies.
+    /// `rules` supplies the consensus version per height (consensus_manager is
+    /// the single source of rules — ARCHITECT3 §3.4).
     pub fn rebuild_from_chain(
         chain: &[Block],
         now: u64,
         allow_grant_blocks: bool,
+        rules: &super::consensus_manager::ConsensusManager,
     ) -> Result<Self, StrangecoinError> {
         let mut state = State::new();
         for (height, block) in chain.iter().enumerate() {
-            let view = BlockView::new(&chain[..height], now, allow_grant_blocks);
+            let view = BlockView::new(
+                &chain[..height],
+                now,
+                allow_grant_blocks,
+                rules.expected_version(height as u64),
+            )
+            .with_phase(rules.phase_at(height as u64));
             state = block_executor::validate_and_apply(&state, block, &view).map_err(|e| {
                 tracing::warn!(block_index = height, error = %e, "Rebuild stopped at an invalid block");
                 e

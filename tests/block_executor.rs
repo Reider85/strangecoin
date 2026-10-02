@@ -14,6 +14,16 @@ const TARGET_MAX: &str = "ffffffffffffffffffffffffffffffffffffffffffffffffffffff
 const TARGET_EASY: &str = "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 const ZERO_TARGET: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
+/// BlockView helper: test blocks carry CURRENT_CONSENSUS_VERSION, PoW phase.
+fn view(chain: &[Block], allow_grant_blocks: bool) -> BlockView<'_> {
+    BlockView::new(
+        chain,
+        now_secs(),
+        allow_grant_blocks,
+        CURRENT_CONSENSUS_VERSION,
+    )
+}
+
 fn coinbase(receiver: &str, amount: u64) -> Transaction {
     Transaction {
         sender: "coinbase".to_string(),
@@ -81,8 +91,8 @@ fn child_of(parent: &Block, transactions: Vec<Transaction>, timestamp: u64) -> B
 /// Standard fixture: genesis granting `funded` 1000, plus the state after it.
 fn fixture_for(funded: &str) -> (Block, State) {
     let genesis = genesis_with(TARGET_MAX, funded);
-    let state = validate_and_apply(&State::new(), &genesis, &BlockView::new(&[], now_secs(), false))
-        .expect("genesis must apply");
+    let state =
+        validate_and_apply(&State::new(), &genesis, &view(&[], false)).expect("genesis must apply");
     (genesis, state)
 }
 
@@ -92,11 +102,14 @@ fn fixture() -> (Block, State) {
 }
 
 /// Apply `block` on top of a caller-supplied genesis block.
-fn apply_block_on(genesis: &Block, block: &Block, allow_grant_blocks: bool) -> Result<State, StrangecoinError> {
-    let parent_state =
-        validate_and_apply(&State::new(), genesis, &BlockView::new(&[], now_secs(), allow_grant_blocks))
-            .expect("genesis must apply");
-    let view = BlockView::new(std::slice::from_ref(genesis), now_secs(), allow_grant_blocks);
+fn apply_block_on(
+    genesis: &Block,
+    block: &Block,
+    allow_grant_blocks: bool,
+) -> Result<State, StrangecoinError> {
+    let parent_state = validate_and_apply(&State::new(), genesis, &view(&[], allow_grant_blocks))
+        .expect("genesis must apply");
+    let view = view(std::slice::from_ref(genesis), allow_grant_blocks);
     validate_and_apply(&parent_state, block, &view)
 }
 
@@ -109,7 +122,7 @@ fn valid_block_is_applied_to_parent_state() {
     sign_transaction(&mut tx, &alice_sk);
 
     let block = child_of(&genesis, vec![coinbase("miner", 0), tx], 600);
-    let view = BlockView::new(std::slice::from_ref(&genesis), now_secs(), false);
+    let view = view(std::slice::from_ref(&genesis), false);
     let state = validate_and_apply(&parent_state, &block, &view).expect("valid block must apply");
 
     assert_eq!(state.get_balance(&alice), 900);
@@ -120,7 +133,7 @@ fn valid_block_is_applied_to_parent_state() {
 #[test]
 fn genesis_is_applied_to_an_empty_chain() {
     let genesis = genesis_with(TARGET_MAX, "alice");
-    let view = BlockView::new(&[], now_secs(), false);
+    let view = view(&[], false);
     let state = validate_and_apply(&State::new(), &genesis, &view).expect("genesis applies");
     assert_eq!(state.get_balance("alice"), 1000);
 }
@@ -128,7 +141,7 @@ fn genesis_is_applied_to_an_empty_chain() {
 #[test]
 fn rejects_genesis_on_a_non_empty_chain() {
     let (genesis, _) = fixture();
-    let view = BlockView::new(std::slice::from_ref(&genesis), now_secs(), false);
+    let view = view(std::slice::from_ref(&genesis), false);
     let err = validate_and_apply(&State::new(), &genesis_with(TARGET_MAX, "alice"), &view)
         .expect_err("genesis cannot follow a block");
     assert!(matches!(err, StrangecoinError::InvalidBlock(_)), "{err:?}");
@@ -140,7 +153,7 @@ fn rejects_index_that_does_not_follow_the_parent() {
     let mut block = child_of(&genesis, vec![coinbase("miner", 0)], 600);
     block.index = 7;
     let block = rehash(block);
-    let view = BlockView::new(std::slice::from_ref(&genesis), now_secs(), false);
+    let view = view(std::slice::from_ref(&genesis), false);
     let err = validate_and_apply(&parent_state, &block, &view)
         .expect_err("height 7 cannot follow height 0");
     assert!(matches!(err, StrangecoinError::InvalidBlock(_)), "{err:?}");
@@ -152,7 +165,7 @@ fn rejects_broken_previous_hash() {
     let mut block = child_of(&genesis, vec![coinbase("miner", 0)], 600);
     block.previous_hash = "11".repeat(32);
     let block = rehash(block);
-    let view = BlockView::new(std::slice::from_ref(&genesis), now_secs(), false);
+    let view = view(std::slice::from_ref(&genesis), false);
     let err = validate_and_apply(&parent_state, &block, &view)
         .expect_err("previous_hash must match the parent");
     assert!(matches!(err, StrangecoinError::InvalidBlock(_)), "{err:?}");
@@ -163,7 +176,7 @@ fn rejects_tampered_header_hash() {
     let (genesis, parent_state) = fixture();
     let mut block = child_of(&genesis, vec![coinbase("miner", 0)], 600);
     block.hash = "00".repeat(32);
-    let view = BlockView::new(std::slice::from_ref(&genesis), now_secs(), false);
+    let view = view(std::slice::from_ref(&genesis), false);
     let err = validate_and_apply(&parent_state, &block, &view)
         .expect_err("stored hash must match the recomputed one");
     assert!(matches!(err, StrangecoinError::InvalidBlock(_)), "{err:?}");
@@ -175,7 +188,7 @@ fn rejects_stale_consensus_version() {
     let mut block = child_of(&genesis, vec![coinbase("miner", 0)], 600);
     block.consensus_version = CURRENT_CONSENSUS_VERSION + 1;
     let block = rehash(block);
-    let view = BlockView::new(std::slice::from_ref(&genesis), now_secs(), false);
+    let view = view(std::slice::from_ref(&genesis), false);
     let err = validate_and_apply(&parent_state, &block, &view)
         .expect_err("consensus rules are height-locked");
     assert!(matches!(err, StrangecoinError::InvalidBlock(_)), "{err:?}");
@@ -187,7 +200,7 @@ fn rejects_wrong_tx_root() {
     let mut block = child_of(&genesis, vec![coinbase("miner", 0)], 600);
     block.tx_root = [0xff; 32];
     let block = rehash(block);
-    let view = BlockView::new(std::slice::from_ref(&genesis), now_secs(), false);
+    let view = view(std::slice::from_ref(&genesis), false);
     assert!(
         validate_and_apply(&parent_state, &block, &view).is_err(),
         "tx_root must commit to the transaction set"
@@ -199,7 +212,7 @@ fn rejects_timestamp_not_after_median_time_past() {
     let (genesis, parent_state) = fixture();
     // Median time past of the prefix is 0, so the child must be strictly newer.
     let block = child_of(&genesis, vec![coinbase("miner", 0)], 0);
-    let view = BlockView::new(std::slice::from_ref(&genesis), now_secs(), false);
+    let view = view(std::slice::from_ref(&genesis), false);
     let err = validate_and_apply(&parent_state, &block, &view)
         .expect_err("timestamp must be > median time past");
     assert!(matches!(err, StrangecoinError::TimestampTooOld), "{err:?}");
@@ -213,10 +226,13 @@ fn rejects_timestamp_too_far_in_the_future() {
         vec![coinbase("miner", 0)],
         now_secs() + MAX_FUTURE_TIME + 60,
     );
-    let view = BlockView::new(std::slice::from_ref(&genesis), now_secs(), false);
+    let view = view(std::slice::from_ref(&genesis), false);
     let err = validate_and_apply(&parent_state, &block, &view)
         .expect_err("timestamp must be <= now + MAX_FUTURE_TIME");
-    assert!(matches!(err, StrangecoinError::TimestampInFuture), "{err:?}");
+    assert!(
+        matches!(err, StrangecoinError::TimestampInFuture),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -225,7 +241,10 @@ fn rejects_proof_of_work_above_target() {
     let block = child_of(&genesis, vec![coinbase("miner", 0)], 600);
     let err = apply_block_on(&genesis, &block, false)
         .expect_err("a hash above the target must not validate");
-    assert!(matches!(err, StrangecoinError::InvalidDifficulty), "{err:?}");
+    assert!(
+        matches!(err, StrangecoinError::InvalidDifficulty),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -234,13 +253,12 @@ fn rejects_target_changed_outside_a_retarget_height() {
     // work passes and the target comparison is what rejects the block.
     let genesis = genesis_with(TARGET_EASY, "alice");
     let parent_state =
-        validate_and_apply(&State::new(), &genesis, &BlockView::new(&[], now_secs(), false))
-            .expect("genesis must apply");
+        validate_and_apply(&State::new(), &genesis, &view(&[], false)).expect("genesis must apply");
 
     let mut block = child_of(&genesis, vec![coinbase("miner", 0)], 600);
     block.target = TARGET_MAX.to_string();
     let block = rehash(block);
-    let view = BlockView::new(std::slice::from_ref(&genesis), now_secs(), false);
+    let view = view(std::slice::from_ref(&genesis), false);
     let err = validate_and_apply(&parent_state, &block, &view)
         .expect_err("target only changes at a retarget height");
     assert!(matches!(err, StrangecoinError::InvalidBlock(_)), "{err:?}");
@@ -254,7 +272,7 @@ fn accepts_the_target_computed_at_a_retarget_height() {
     let block = child_of(&genesis, vec![coinbase("miner", 0)], 600);
     assert_eq!(block.target, genesis.target);
     assert_eq!(1 % RETARGET_INTERVAL, 1);
-    let view = BlockView::new(std::slice::from_ref(&genesis), now_secs(), false);
+    let view = view(std::slice::from_ref(&genesis), false);
     validate_and_apply(&parent_state, &block, &view).expect("inherited target is valid");
 }
 
@@ -267,7 +285,7 @@ fn rejects_unsigned_transfer() {
         vec![coinbase("miner", 0), transfer("alice", &receiver, 100, 1)],
         600,
     );
-    let view = BlockView::new(std::slice::from_ref(&genesis), now_secs(), false);
+    let view = view(std::slice::from_ref(&genesis), false);
     let err = validate_and_apply(&parent_state, &block, &view)
         .expect_err("a transfer without a valid signature must be rejected");
     assert!(matches!(err, StrangecoinError::InvalidSignature), "{err:?}");
@@ -281,10 +299,13 @@ fn rejects_transfer_without_funds() {
     let mut tx = transfer(&alice, &receiver, 5000, 1);
     sign_transaction(&mut tx, &alice_sk);
     let block = child_of(&genesis, vec![coinbase("miner", 0), tx], 600);
-    let view = BlockView::new(std::slice::from_ref(&genesis), now_secs(), false);
+    let view = view(std::slice::from_ref(&genesis), false);
     let err = validate_and_apply(&parent_state, &block, &view)
         .expect_err("spending more than the balance must be rejected");
-    assert!(matches!(err, StrangecoinError::InsufficientBalance { .. }), "{err:?}");
+    assert!(
+        matches!(err, StrangecoinError::InsufficientBalance { .. }),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -292,10 +313,13 @@ fn rejects_coinbase_above_the_block_reward() {
     let (genesis, parent_state) = fixture();
     // Regtest emission is zero, so any non-zero coinbase is inflation.
     let block = child_of(&genesis, vec![coinbase("miner", 1)], 600);
-    let view = BlockView::new(std::slice::from_ref(&genesis), now_secs(), false);
+    let view = view(std::slice::from_ref(&genesis), false);
     let err = validate_and_apply(&parent_state, &block, &view)
         .expect_err("coinbase must not exceed the emission schedule");
-    assert!(matches!(err, StrangecoinError::InvalidCoinbaseAmount { .. }), "{err:?}");
+    assert!(
+        matches!(err, StrangecoinError::InvalidCoinbaseAmount { .. }),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -306,10 +330,13 @@ fn rejects_block_without_a_coinbase() {
     let mut tx = transfer(&alice, &receiver, 100, 1);
     sign_transaction(&mut tx, &alice_sk);
     let block = child_of(&genesis, vec![tx], 600);
-    let view = BlockView::new(std::slice::from_ref(&genesis), now_secs(), false);
+    let view = view(std::slice::from_ref(&genesis), false);
     let err = validate_and_apply(&parent_state, &block, &view)
         .expect_err("every non-genesis block needs a coinbase");
-    assert!(matches!(err, StrangecoinError::InvalidCoinbaseAmount { .. }), "{err:?}");
+    assert!(
+        matches!(err, StrangecoinError::InvalidCoinbaseAmount { .. }),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -318,7 +345,7 @@ fn rejects_state_root_that_does_not_match_the_applied_state() {
     let mut block = child_of(&genesis, vec![coinbase("miner", 0)], 600);
     block.state_root = [0xff; 32];
     let block = rehash(block);
-    let view = BlockView::new(std::slice::from_ref(&genesis), now_secs(), false);
+    let view = view(std::slice::from_ref(&genesis), false);
     let err = validate_and_apply(&parent_state, &block, &view)
         .expect_err("a wrong state_root must be rejected");
     assert!(matches!(err, StrangecoinError::InvalidBlock(_)), "{err:?}");
@@ -335,7 +362,7 @@ fn accepts_state_root_matching_the_applied_state() {
     committed.state_root = root;
     let committed = rehash(committed);
 
-    let view = BlockView::new(std::slice::from_ref(&genesis), now_secs(), false);
+    let view = view(std::slice::from_ref(&genesis), false);
     validate_and_apply(&parent_state, &committed, &view)
         .expect("a matching state_root must be accepted");
 }

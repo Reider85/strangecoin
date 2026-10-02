@@ -1,6 +1,4 @@
-use strangecoin_core::consensus::{
-    cumulative_work, u256_from_bytes, u256_gt, u256_to_bytes, U256,
-};
+use strangecoin_core::consensus::{cumulative_work, u256_from_bytes, u256_gt, u256_to_bytes, U256};
 use strangecoin_core::types::Block;
 
 #[derive(Clone, Debug)]
@@ -131,8 +129,18 @@ mod tests {
     #[test]
     fn chain_info_from_blocks() {
         let blocks = vec![
-            make_block(0, "0000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 1000, "genesis"),
-            make_block(1, "0000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 2000, "block1"),
+            make_block(
+                0,
+                "0000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                1000,
+                "genesis",
+            ),
+            make_block(
+                1,
+                "0000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                2000,
+                "block1",
+            ),
         ];
         let info = ChainSelector::chain_info(&blocks).unwrap();
         assert_eq!(info.tip_height, 1);

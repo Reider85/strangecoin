@@ -1,6 +1,6 @@
-pub use strangecoin::test_support::*;
-use strangecoin::events::{EventBus, NodeEvent};
 use std::time::Duration;
+use strangecoin::events::{EventBus, NodeEvent};
+pub use strangecoin::test_support::*;
 
 pub fn wait_for_event(
     bus: &EventBus,
@@ -26,5 +26,9 @@ pub fn wait_for_event(
 }
 
 pub fn wait_for_block_applied(bus: &EventBus, timeout: Duration) -> Option<NodeEvent> {
-    wait_for_event(bus, |e| matches!(e, NodeEvent::BlockApplied { .. }), timeout)
+    wait_for_event(
+        bus,
+        |e| matches!(e, NodeEvent::BlockApplied { .. }),
+        timeout,
+    )
 }

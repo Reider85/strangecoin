@@ -1,6 +1,6 @@
-use strangecoin_core::serialize::{merkle_root, compute_tx_root, txid};
-use strangecoin_core::types::Transaction;
 use proptest::prelude::*;
+use strangecoin_core::serialize::{compute_tx_root, merkle_root, txid};
+use strangecoin_core::types::Transaction;
 
 fn make_tx(sender: &str, receiver: &str, amount: u64, nonce: u64) -> Transaction {
     Transaction {
@@ -102,7 +102,14 @@ fn three_txids_odd_duplication() {
 #[test]
 fn seven_txids_multi_level() {
     let txs: Vec<Transaction> = (0..7)
-        .map(|i| make_tx("sender", &format!("recv_{}", i), (i + 1) * 100, i as u64 + 1))
+        .map(|i| {
+            make_tx(
+                "sender",
+                &format!("recv_{}", i),
+                (i + 1) * 100,
+                i as u64 + 1,
+            )
+        })
         .collect();
     let ids: Vec<[u8; 32]> = txs.iter().map(|tx| txid(tx)).collect();
 

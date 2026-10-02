@@ -55,20 +55,18 @@ impl EventBus {
     pub fn subscribe_async(&self, capacity: usize) -> tokio::sync::mpsc::Receiver<NodeEvent> {
         let crossbeam_rx = self.subscribe();
         let (tx, rx) = tokio::sync::mpsc::channel(capacity);
-        tokio::task::spawn_blocking(move || {
-            loop {
-                match crossbeam_rx.recv_timeout(POLL_INTERVAL) {
-                    Ok(event) => {
-                        if tx.blocking_send(event).is_err() {
-                            debug!("Async EventBus subscriber dropped, stopping bridge");
-                            break;
-                        }
-                    }
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => {
-                        debug!("EventBus publisher dropped, stopping bridge");
+        tokio::task::spawn_blocking(move || loop {
+            match crossbeam_rx.recv_timeout(POLL_INTERVAL) {
+                Ok(event) => {
+                    if tx.blocking_send(event).is_err() {
+                        debug!("Async EventBus subscriber dropped, stopping bridge");
                         break;
                     }
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    debug!("EventBus publisher dropped, stopping bridge");
+                    break;
                 }
             }
         });

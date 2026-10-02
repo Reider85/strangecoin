@@ -1,14 +1,14 @@
-pub mod types;
-pub mod serialize;
-pub mod economics;
-pub mod consensus;
 pub mod address;
+pub mod consensus;
+pub mod economics;
 pub mod error;
-pub mod state;
 pub mod governance;
+pub mod serialize;
+pub mod state;
+pub mod types;
 
-pub use types::{AccountState, Block, Transaction};
 pub use error::CoreError;
-pub use state::{apply_block, unapply_block, State, root_after, compute_state_root};
-pub use serialize::{merkle_root, compute_tx_root};
-pub use state::witness::{StateWitness, AccountProof, build_witness, verify_block_stateless};
+pub use serialize::{compute_tx_root, merkle_root};
+pub use state::witness::{build_witness, verify_block_stateless, AccountProof, StateWitness};
+pub use state::{apply_block, compute_state_root, root_after, unapply_block, State};
+pub use types::{AccountState, Block, Transaction};

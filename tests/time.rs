@@ -1,8 +1,8 @@
 mod common;
 
 use common::*;
-use strangecoin::{Block, Blockchain, Transaction};
 use std::time::{SystemTime, UNIX_EPOCH};
+use strangecoin::{Block, BlockchainFacade, Transaction};
 
 // Ненулевой coinbase обязателен: state::apply_block отклоняет блоки без него,
 // а tx_root должен быть посчитан по фактическому списку транзакций.
@@ -18,8 +18,8 @@ fn zero_reward_coinbase() -> Transaction {
     }
 }
 
-fn create_block_with_timestamp(bc: &mut Blockchain, timestamp: u64) -> bool {
-    let previous_block = bc.chain.last().unwrap().clone();
+fn create_block_with_timestamp(bc: &BlockchainFacade, timestamp: u64) -> bool {
+    let previous_block = bc.tip().unwrap();
     let mut block = Block {
         index: previous_block.index + 1,
         timestamp,
@@ -34,14 +34,14 @@ fn create_block_with_timestamp(bc: &mut Blockchain, timestamp: u64) -> bool {
     };
     block.tx_root = strangecoin::serialize::compute_tx_root(&block.transactions);
     block.hash = bc.calculate_hash(&block);
-    bc.chain.push(block);
+    bc.push_block_unchecked(block);
     bc.validate_chain()
 }
 
 #[test]
 fn reject_block_timestamp_too_far_future() {
     let _dir = TestDir::new("time_future");
-    let mut bc = create_test_blockchain(_dir.path());
+    let bc = create_test_blockchain(_dir.path());
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -49,37 +49,39 @@ fn reject_block_timestamp_too_far_future() {
         .as_secs();
     let future_time = now + 7200 + 1;
 
-    let result = create_block_with_timestamp(&mut bc, future_time);
+    let result = create_block_with_timestamp(&bc, future_time);
     assert!(!result, "Block with timestamp > now+2h should be rejected");
 }
 
 #[test]
 fn accept_valid_timestamp() {
     let _dir = TestDir::new("time_valid");
-    let mut bc = create_test_blockchain(_dir.path());
+    let bc = create_test_blockchain(_dir.path());
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
 
-    let result = create_block_with_timestamp(&mut bc, now);
+    let result = create_block_with_timestamp(&bc, now);
     assert!(result, "Block with current timestamp should be accepted");
 }
 
 #[test]
 fn reject_block_before_mtp() {
     let _dir = TestDir::new("time_mtp");
-    let mut bc = create_test_blockchain(_dir.path());
+    let bc = create_test_blockchain(_dir.path());
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
 
-    let timestamps = [100u64, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200];
+    let timestamps = [
+        100u64, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200,
+    ];
     for &ts in &timestamps {
-        let previous_block = bc.chain.last().unwrap().clone();
+        let previous_block = bc.tip().unwrap();
         let mut block = Block {
             index: previous_block.index + 1,
             timestamp: ts,
@@ -94,14 +96,22 @@ fn reject_block_before_mtp() {
         };
         block.tx_root = strangecoin::serialize::compute_tx_root(&block.transactions);
         block.hash = bc.calculate_hash(&block);
-        bc.chain.push(block);
+        bc.push_block_unchecked(block);
     }
 
-    assert!(bc.validate_chain(), "Chain with valid timestamps should pass");
+    assert!(
+        bc.validate_chain(),
+        "Chain with valid timestamps should pass"
+    );
 
-    let mtp = strangecoin::consensus::median_time_past(&bc.chain, bc.chain.len() as u64);
+    let chain = bc.chain_snapshot();
+    let mtp = strangecoin::consensus::median_time_past(&chain, chain.len() as u64);
     let too_old = mtp;
 
-    let result = create_block_with_timestamp(&mut bc, too_old);
-    assert!(!result, "Block with timestamp <= MTP ({} should be rejected", too_old);
+    let result = create_block_with_timestamp(&bc, too_old);
+    assert!(
+        !result,
+        "Block with timestamp <= MTP ({} should be rejected",
+        too_old
+    );
 }

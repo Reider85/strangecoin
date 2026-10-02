@@ -8,16 +8,16 @@ use strangecoin::Transaction;
 #[test]
 fn stale_consensus_version_rejected() {
     let dir = TestDir::new("stale_version");
-    let mut bc = create_test_blockchain(dir.path());
+    let bc = create_test_blockchain(dir.path());
 
-    let previous_block = bc.chain.last().unwrap().clone();
+    let previous_block = bc.tip().unwrap();
 
     let coinbase_tx = Transaction {
         sender: "coinbase".to_string(),
         receiver: "miner".to_string(),
         amount: strangecoin::economics::emission::block_reward_at_height(
             previous_block.index + 1,
-            bc.balances.values().map(|a| a.balance).sum(),
+            bc.total_supply(),
         ),
         nonce: 0,
         chain_id: strangecoin::consensus::current_chain_id(),
@@ -42,7 +42,7 @@ fn stale_consensus_version_rejected() {
     };
     block.tx_root = strangecoin::serialize::compute_tx_root(&block.transactions);
     block.hash = hex::encode(strangecoin::serialize::block_hash(&block));
-    bc.chain.push(block);
+    bc.push_block_unchecked(block);
 
     assert!(
         !bc.validate_chain(),
@@ -53,16 +53,16 @@ fn stale_consensus_version_rejected() {
 #[test]
 fn future_consensus_version_rejected() {
     let dir = TestDir::new("future_version");
-    let mut bc = create_test_blockchain(dir.path());
+    let bc = create_test_blockchain(dir.path());
 
-    let previous_block = bc.chain.last().unwrap().clone();
+    let previous_block = bc.tip().unwrap();
 
     let coinbase_tx = Transaction {
         sender: "coinbase".to_string(),
         receiver: "miner".to_string(),
         amount: strangecoin::economics::emission::block_reward_at_height(
             previous_block.index + 1,
-            bc.balances.values().map(|a| a.balance).sum(),
+            bc.total_supply(),
         ),
         nonce: 0,
         chain_id: strangecoin::consensus::current_chain_id(),
@@ -87,7 +87,7 @@ fn future_consensus_version_rejected() {
     };
     block.tx_root = strangecoin::serialize::compute_tx_root(&block.transactions);
     block.hash = hex::encode(strangecoin::serialize::block_hash(&block));
-    bc.chain.push(block);
+    bc.push_block_unchecked(block);
 
     assert!(
         !bc.validate_chain(),
@@ -98,7 +98,7 @@ fn future_consensus_version_rejected() {
 #[test]
 fn correct_consensus_version_accepted() {
     let dir = TestDir::new("correct_version");
-    let mut bc = create_test_blockchain(dir.path());
+    let bc = create_test_blockchain(dir.path());
 
     let keypairs = generate_keypairs(1);
     let addr = keypairs[0].0.clone();
@@ -115,9 +115,9 @@ fn correct_consensus_version_accepted() {
         is_coinbase: false,
     };
     sign_transaction(&mut tx, &keypairs[0].1);
-    bc.add_transaction(tx).expect("transaction rejected");
+    bc.apply_tx(tx).expect("transaction rejected");
 
-    mine_current(&mut bc);
+    mine_current(&bc);
 
     assert!(
         bc.validate_chain(),

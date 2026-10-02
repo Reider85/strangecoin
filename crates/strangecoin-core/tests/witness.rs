@@ -1,6 +1,6 @@
-use strangecoin_core::state::{apply_block, State};
 use strangecoin_core::state::verkle::VerkleTrie;
 use strangecoin_core::state::witness::{build_witness, verify_block_stateless};
+use strangecoin_core::state::{apply_block, State};
 use strangecoin_core::types::{AccountState, Block, Transaction};
 
 use proptest::prelude::*;
@@ -143,11 +143,7 @@ fn witness_contains_only_touched_addresses() {
     let mut genesis_block = genesis;
     genesis_block.state_root = genesis_root;
 
-    let block = transfer_block(
-        1,
-        vec![transfer("alice", "bob", 100, 1)],
-        &after_genesis,
-    );
+    let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)], &after_genesis);
     let witness = build_witness(&after_genesis, &block);
 
     assert!(witness.proofs.contains_key("alice"));

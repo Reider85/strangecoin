@@ -1,7 +1,7 @@
 pub use strangecoin_core::consensus::*;
 
-use strangecoin_core::serialize;
 use sha2::Digest;
+use strangecoin_core::serialize;
 
 #[derive(serde::Deserialize)]
 pub struct GenesisConfig {

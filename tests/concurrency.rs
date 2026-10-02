@@ -3,13 +3,13 @@ mod common;
 use common::*;
 use rand::seq::SliceRandom;
 use rand::{rngs::StdRng, SeedableRng};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 #[test]
 fn deadlock_test_blockchain_wallet_lock_order() {
     let _dir = TestDir::new("deadlock");
-    let blockchain = Arc::new(RwLock::new(create_test_blockchain(_dir.path())));
+    let blockchain = Arc::new(create_test_blockchain(_dir.path()));
     let wallet_lock = Arc::new(Mutex::new(()));
 
     let mut handles = vec![];
@@ -25,7 +25,7 @@ fn deadlock_test_blockchain_wallet_lock_order() {
             for &o in &order {
                 match o {
                     0 => {
-                        let _g = bc.read().unwrap();
+                        bc.with_inner(|_| {});
                     }
                     1 => {
                         let _g = wl.lock().unwrap();

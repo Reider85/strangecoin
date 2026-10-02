@@ -2,7 +2,7 @@
 //!
 //! To prevent deadlocks, locks must always be acquired in this order:
 //!
-//! 1. **blockchain** (via `RwLock<BlockchainInner>`) — outer, first.
+//! 1. **blockchain** (via `BlockchainFacade`, internally `RwLock<Blockchain>`) — outer, first.
 //!    The blockchain is the top-level container owning chain, balances, mempool.
 //!    See `ARCHITECT3.md §3.4`: state_cache is the sole read path for balances,
 //!    facade is the sole entry point.
@@ -12,7 +12,7 @@
 //!
 //! Never acquire wallet lock while holding blockchain write lock from a different call site.
 //! Read locks on blockchain may be held while acquiring wallet lock.
-//! This ordering is enforced by the deadlock test in `main.rs` test module.
+//! This ordering is enforced by the deadlock test in `tests/concurrency.rs`.
 
 use thiserror::Error;
 
@@ -84,16 +84,16 @@ impl From<strangecoin_core::CoreError> for StrangecoinError {
                 StrangecoinError::InvalidCoinbaseAmount { expected, got }
             }
             strangecoin_core::CoreError::InsufficientBalance {
-                sender,
+                sender: _,
                 available,
                 required,
             } => StrangecoinError::InsufficientBalance {
                 available,
                 required,
             },
-            strangecoin_core::CoreError::StateOverflow => StrangecoinError::ConfigError(
-                "arithmetic overflow in state transition".to_string(),
-            ),
+            strangecoin_core::CoreError::StateOverflow => {
+                StrangecoinError::ConfigError("arithmetic overflow in state transition".to_string())
+            }
             strangecoin_core::CoreError::StateRootMismatch { expected, got } => {
                 StrangecoinError::ConfigError(format!(
                     "state root mismatch: expected {:?}, got {:?}",
