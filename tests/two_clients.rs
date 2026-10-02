@@ -1,6 +1,7 @@
 mod common;
 
 use common::*;
+use strangecoin::{Blockchain, Transaction};
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -97,13 +98,14 @@ async fn node_runs_on_tokio_and_shuts_down_cleanly() {
     // The sync task: same shape as run_async(), with sync_blockchain stubbed out
     // (peers list is empty, so the real one is a no-op that would only add TCP noise).
     let peers = Arc::clone(&node.peers);
+    let task_shutdown = Arc::clone(&shutdown);
     let sync_task = tokio::spawn(async move {
         let mut ticker = tokio::time::interval(strangecoin::SYNC_TICK);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut ticks: u32 = 0;
         loop {
             ticker.tick().await;
-            if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+            if task_shutdown.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
             ticks += 1;
@@ -115,11 +117,12 @@ async fn node_runs_on_tokio_and_shuts_down_cleanly() {
         }
     });
 
-    // A block is applied while the async task is ticking.
+    // A block is applied while the async task is ticking. The grant block
+    // itself is the block under test — mine_block() needs a non-empty mempool
+    // and there is no signer available here beyond the grant.
     {
         let mut guard = bc.write().unwrap();
         guard.grant_initial_balance_to_first_wallet(&test_address()).unwrap();
-        mine_current(&mut guard);
     }
     let height = bc.read().unwrap().chain.len();
     assert!(height > 0, "no block was applied");

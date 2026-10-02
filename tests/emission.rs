@@ -1,6 +1,7 @@
 mod common;
 
 use common::*;
+use strangecoin::Transaction;
 
 #[test]
 fn emission_matches_block_reward() {

@@ -1,6 +1,7 @@
 mod common;
 
 use common::*;
+use strangecoin::Blockchain;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -59,7 +60,7 @@ fn three_instances_receive_transfer() {
 
 #[test]
 fn real_network_three_nodes() {
-    let _net_lock = NETWORK_TEST_LOCK.lock().unwrap();
+    let _net_lock = NETWORK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ports = [random_port(), random_port(), random_port()];
     let exe_dir = std::env::current_exe()
         .unwrap()
@@ -78,7 +79,8 @@ fn real_network_three_nodes() {
     let mut nodes: Vec<(strangecoin::Node, Arc<RwLock<Blockchain>>)> = Vec::new();
     for (i, p) in ports.iter().enumerate() {
         let bc = Arc::new(RwLock::new(create_test_blockchain(dirs[i].path())));
-        let (node, _peers) = create_node_for_test(&bc, *p);
+        let (mut node, _peers) = create_node_for_test(&bc, *p);
+        node.start_server(*p, sync_tx.clone());
         nodes.push((node, bc));
     }
 
@@ -154,7 +156,7 @@ fn real_network_three_nodes() {
 
 #[test]
 fn real_network_fast_registration_race() {
-    let _net_lock = NETWORK_TEST_LOCK.lock().unwrap();
+    let _net_lock = NETWORK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ports = [random_port(), random_port(), random_port()];
     let exe_dir = std::env::current_exe()
         .unwrap()
@@ -177,7 +179,8 @@ fn real_network_fast_registration_race() {
     )> = Vec::new();
     for (i, p) in ports.iter().enumerate() {
         let bc = Arc::new(RwLock::new(create_test_blockchain(dirs[i].path())));
-        let (node, peers) = create_node_for_test(&bc, *p);
+        let (mut node, peers) = create_node_for_test(&bc, *p);
+        node.start_server(*p, sync_tx.clone());
         nodes.push((node, bc, peers));
     }
 

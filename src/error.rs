@@ -98,6 +98,12 @@ impl From<strangecoin_core::CoreError> for StrangecoinError {
                     expected, got
                 ))
             }
+            strangecoin_core::CoreError::TxRootMismatch { expected, got } => {
+                StrangecoinError::ConfigError(format!(
+                    "tx root mismatch: expected {:?}, got {:?}",
+                    expected, got
+                ))
+            }
             strangecoin_core::CoreError::WitnessVerificationFailed => {
                 StrangecoinError::ConfigError("witness verification failed".to_string())
             }

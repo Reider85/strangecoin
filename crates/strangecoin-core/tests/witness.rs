@@ -152,8 +152,9 @@ fn witness_contains_only_touched_addresses() {
 
     assert!(witness.proofs.contains_key("alice"));
     assert!(witness.proofs.contains_key("bob"));
+    assert!(witness.proofs.contains_key("miner"));
     assert!(!witness.proofs.contains_key("charlie"));
-    assert_eq!(witness.proofs.len(), 2);
+    assert_eq!(witness.proofs.len(), 3);
 }
 
 #[test]

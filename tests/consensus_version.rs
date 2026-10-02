@@ -104,6 +104,19 @@ fn correct_consensus_version_accepted() {
     let addr = keypairs[0].0.clone();
     assert!(bc.grant_initial_balance_to_first_wallet(&addr).unwrap());
 
+    // mine_block() needs a pending transaction to build a block from.
+    let mut tx = Transaction {
+        sender: addr.clone(),
+        receiver: "recipient".to_string(),
+        amount: 100,
+        nonce: 1,
+        chain_id: strangecoin::consensus::current_chain_id(),
+        signature: Vec::new(),
+        is_coinbase: false,
+    };
+    sign_transaction(&mut tx, &keypairs[0].1);
+    bc.add_transaction(tx).expect("transaction rejected");
+
     mine_current(&mut bc);
 
     assert!(

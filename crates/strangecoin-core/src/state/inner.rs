@@ -31,13 +31,26 @@ impl State {
             .entry(addr.to_string())
             .or_default()
             .balance = balance;
+        self.prune_if_empty(addr);
     }
 
     pub fn set_nonce(&mut self, addr: &str, nonce: u64) {
-        self.balances
-            .entry(addr.to_string())
-            .or_default()
-            .nonce = nonce;
+        self.balances.entry(addr.to_string()).or_default().nonce = nonce;
+        self.prune_if_empty(addr);
+    }
+
+    /// An account with neither balance nor nonce carries no information: every
+    /// read path defaults a missing account to `AccountState { 0, 0 }`. Keeping
+    /// the state free of empty accounts is what makes `apply`/`unapply` an exact
+    /// round-trip, which reorg and state-cache invalidation depend on.
+    fn prune_if_empty(&mut self, addr: &str) {
+        let empty = self
+            .balances
+            .get(addr)
+            .is_some_and(|account| account.balance == 0 && account.nonce == 0);
+        if empty {
+            self.balances.remove(addr);
+        }
     }
 }
 

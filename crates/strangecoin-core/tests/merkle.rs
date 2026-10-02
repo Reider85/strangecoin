@@ -1,5 +1,6 @@
 use strangecoin_core::serialize::{merkle_root, compute_tx_root, txid};
 use strangecoin_core::types::Transaction;
+use proptest::prelude::*;
 
 fn make_tx(sender: &str, receiver: &str, amount: u64, nonce: u64) -> Transaction {
     Transaction {
@@ -155,43 +156,45 @@ fn compute_tx_root_empty() {
     assert_eq!(compute_tx_root(&txs), [0u8; 32]);
 }
 
-#[proptest::proptest]
-fn proptest_deterministic_root(txs in proptest::collection::vec(
-    proptest::arbitrary::any::<(String, String, u64, u64)>(), 0..20
-)) {
-    let txs: Vec<Transaction> = txs.into_iter().map(|(s, r, a, n)| {
-        Transaction {
-            sender: s,
-            receiver: r,
-            amount: a,
-            nonce: n,
-            chain_id: 3,
-            signature: vec![],
-            is_coinbase: false,
-        }
-    }).collect();
-    let ids: Vec<[u8; 32]> = txs.iter().map(|tx| txid(tx)).collect();
-    let root1 = merkle_root(&ids);
-    let root2 = merkle_root(&ids);
-    prop_assert_eq!(root1, root2);
-}
+proptest! {
+    #[test]
+    fn proptest_deterministic_root(txs in proptest::collection::vec(
+        proptest::arbitrary::any::<(String, String, u64, u64)>(), 0..20
+    )) {
+        let txs: Vec<Transaction> = txs.into_iter().map(|(s, r, a, n)| {
+            Transaction {
+                sender: s,
+                receiver: r,
+                amount: a,
+                nonce: n,
+                chain_id: 3,
+                signature: vec![],
+                is_coinbase: false,
+            }
+        }).collect();
+        let ids: Vec<[u8; 32]> = txs.iter().map(|tx| txid(tx)).collect();
+        let root1 = merkle_root(&ids);
+        let root2 = merkle_root(&ids);
+        prop_assert_eq!(root1, root2);
+    }
 
-#[proptest::proptest]
-fn proptest_root_non_zero_for_non_empty(txs in proptest::collection::vec(
-    proptest::arbitrary::any::<(String, String, u64, u64)>(), 1..20
-)) {
-    let txs: Vec<Transaction> = txs.into_iter().map(|(s, r, a, n)| {
-        Transaction {
-            sender: s,
-            receiver: r,
-            amount: a,
-            nonce: n,
-            chain_id: 3,
-            signature: vec![],
-            is_coinbase: false,
-        }
-    }).collect();
-    let ids: Vec<[u8; 32]> = txs.iter().map(|tx| txid(tx)).collect();
-    let root = merkle_root(&ids);
-    prop_assert_ne!(root, [0u8; 32]);
+    #[test]
+    fn proptest_root_non_zero_for_non_empty(txs in proptest::collection::vec(
+        proptest::arbitrary::any::<(String, String, u64, u64)>(), 1..20
+    )) {
+        let txs: Vec<Transaction> = txs.into_iter().map(|(s, r, a, n)| {
+            Transaction {
+                sender: s,
+                receiver: r,
+                amount: a,
+                nonce: n,
+                chain_id: 3,
+                signature: vec![],
+                is_coinbase: false,
+            }
+        }).collect();
+        let ids: Vec<[u8; 32]> = txs.iter().map(|tx| txid(tx)).collect();
+        let root = merkle_root(&ids);
+        prop_assert_ne!(root, [0u8; 32]);
+    }
 }

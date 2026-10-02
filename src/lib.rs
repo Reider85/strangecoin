@@ -16,9 +16,11 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc, Arc, Mutex, RwLock,
 };
+use rusty_leveldb::LdbIterator;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
+
 pub mod address;
 pub mod api;
 pub mod blockchain;
@@ -46,13 +48,20 @@ pub const SYNC_TICK: Duration = Duration::from_millis(100);
 pub const SYNC_TICKS_PER_SYNC: u32 = 10;
 /// Budget granted to in-flight work after a shutdown signal (P17).
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+/// Height reserved for the opt-in primary-issuance grant block
+/// (created only when `allow_grant_blocks` is explicitly enabled).
+pub const GRANT_BLOCK_INDEX: u64 = 1;
 
 #[derive(Deserialize, Serialize)]
 pub struct BlockchainDeserialize {
     pub chain: Vec<Block>,
     pub balances: HashMap<String, AccountState>,
     pub difficulty: u32,
+    // Serialize for Blockchain пишет только mempool_txs; оба поля обязаны
+    // иметь #[serde(default)], иначе приёмник отклоняет весь payload.
+    #[serde(default)]
     pub pending_transactions: Vec<Transaction>,
+    #[serde(default)]
     pub mempool_txs: Vec<Transaction>,
     #[serde(default)]
     pub total_work: strangecoin_core::consensus::U256,
@@ -424,7 +433,6 @@ impl Blockchain {
         blockchain
     }
 
-    #[cfg(test)]
     pub fn create_genesis_block(&mut self) {
         let start_time = SystemTime::now();
         // Детерминированный генезис-блок: одинаков для всех узлов сети,
@@ -450,11 +458,11 @@ impl Blockchain {
             state_root: [0u8; 32],
             tx_root: [0u8; 32],
         };
-        let tx_root = strangecoin_core::serialize::compute_tx_root(&genesis_block.transactions);
-        let hash = self.calculate_hash(&genesis_block);
         let mut genesis_block = genesis_block;
-        genesis_block.tx_root = tx_root;
-        genesis_block.hash = hash;
+        // tx_root обязан вычисляться ДО хэша: block_hash включает tx_root,
+        // иначе сохранённый хэш не совпадёт с пересчётом в validate_chain().
+        genesis_block.tx_root = strangecoin_core::serialize::compute_tx_root(&genesis_block.transactions);
+        genesis_block.hash = self.calculate_hash(&genesis_block);
         self.chain.push(genesis_block.clone());
         self.total_work = strangecoin_core::consensus::cumulative_work(&self.chain);
         // Обновляем балансы на основе транзакций генезис-блока, только для получателя
@@ -485,17 +493,31 @@ impl Blockchain {
         info!(duration_secs = duration, "Создание генезис-блока завершено");
     }
 
-    // Создаёт блок первичной эмиссии: переводит 10000 с генезис-адреса на первый реальный кошелёк
+    // Создаёт блок первичной эмиссии: переводит 10000 с генезис-адреса на первый реальный кошелёк.
+    //
+    // Блок содержит нулевой coinbase (регион: эмиссия на regtest равна 0) и
+    // транзакцию перевода. Новое состояние получается из `core::state::apply_block`,
+    // а не правится вручную — иначе `validate_chain()` (которая пересчитывает
+    // состояние из цепочки) расходилась бы с хранимыми балансами.
     pub fn create_grant_block(&mut self, wallet_address: &str, amount: u64) {
         let previous_block = self.chain.last().unwrap().clone();
-        let transaction = Transaction {
+        let coinbase = Transaction {
+            sender: "coinbase".to_string(),
+            receiver: wallet_address.to_string(),
+            amount: 0,
+            nonce: 0,
+            chain_id: crate::consensus::current_chain_id(),
+            signature: Vec::new(),
+            is_coinbase: true,
+        };
+        let transfer = Transaction {
             sender: "initial_wallet_address".to_string(),
             receiver: wallet_address.to_string(),
             amount,
             nonce: 0,
             chain_id: crate::consensus::current_chain_id(),
             signature: Vec::new(),
-            is_coinbase: true,
+            is_coinbase: false,
         };
         let mut block = Block {
             index: previous_block.index + 1,
@@ -503,7 +525,7 @@ impl Blockchain {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
-            transactions: vec![transaction],
+            transactions: vec![coinbase, transfer],
             previous_hash: previous_block.hash.clone(),
             hash: String::new(),
             nonce: 0,
@@ -514,14 +536,21 @@ impl Blockchain {
         };
         block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
         block.hash = self.calculate_hash(&block);
-        self.chain.push(block);
-        self.total_work = strangecoin_core::consensus::cumulative_work(&self.chain);
-        self.balances.remove("initial_wallet_address");
-        self.balances
-            .entry(wallet_address.to_string())
-            .or_default()
-            .balance += amount;
-        info!(from = "initial_wallet_address", to = %wallet_address, amount, "Создан блок первичной эмиссии");
+
+        let parent_state = strangecoin_core::state::State {
+            balances: self.balances.clone(),
+        };
+        match strangecoin_core::state::apply_block(&parent_state, &block) {
+            Ok(new_state) => {
+                self.balances = new_state.balances;
+                self.chain.push(block);
+                self.total_work = strangecoin_core::consensus::cumulative_work(&self.chain);
+                info!(from = "initial_wallet_address", to = %wallet_address, amount, "Создан блок первичной эмиссии");
+            }
+            Err(e) => {
+                error!(error = %e, "Не удалось применить блок первичной эмиссии к состоянию");
+            }
+        }
     }
 
     // Начисляет первоначальный баланс (10000 из генезис-блока) первому реальному кошельку
@@ -949,8 +978,19 @@ impl Blockchain {
             }
         }
 
-        // Валидация подписей всех транзакций в цепочке
+        // Валидация подписей всех транзакций в цепочке.
+        //
+        // Исключение — блок первичной эмиссии (index == 1) при явно
+        // включённом allow_grant_blocks: его перевод от генезис-адреса
+        // подписать нечем (у адреса нет ключа). Флаг по умолчанию выключен,
+        // поэтому в проде блок с такими транзакциями будет отклонён здесь же.
         for block in &self.chain {
+            let is_opt_in_grant_block =
+                self.allow_grant_blocks && block.index == GRANT_BLOCK_INDEX;
+            if is_opt_in_grant_block {
+                debug!(block_index = block.index, "Пропуск проверки подписей блока первичной эмиссии");
+                continue;
+            }
             for tx in &block.transactions {
                 if let Err(e) = crate::consensus::verify_transaction(tx) {
                     warn!(block_index = block.index, tx = ?tx, error = %e, "Неверная подпись транзакции в блоке");
@@ -1184,14 +1224,18 @@ impl Node {
                                 "Транзакция успешно добавлена, начало майнинга"
                             );
                             task.event_bus.publish(events::NodeEvent::TxAccepted {
-                                txid: strangecoin_core::serialize::txid(&task.transaction),
+                                txid: hex::encode(strangecoin_core::serialize::txid(
+                                    &task.transaction,
+                                )),
                             });
                             blockchain.mine_block(progress_tx_clone, &task.shutdown)
                         }
                         Err(e) => {
                             warn!(mining_count, error = %e, "Транзакция отклонена, попытка майнить существующие транзакции");
                             task.event_bus.publish(events::NodeEvent::TxRejected {
-                                txid: strangecoin_core::serialize::txid(&task.transaction),
+                                txid: hex::encode(strangecoin_core::serialize::txid(
+                                    &task.transaction,
+                                )),
                                 reason: format!("{}", e),
                             });
                             if !blockchain.mempool.is_empty() {
@@ -1623,6 +1667,7 @@ impl Node {
             .filter(|b| !b.transactions.is_empty())
             .count();
         let current_balances = blockchain.balances.clone();
+        let allow_grant_blocks = blockchain.allow_grant_blocks;
         let wallet_address = self.address.clone();
         let existing_db = blockchain.storage.db().clone();
         debug!(current_chain_length, chain = ?blockchain.chain, "Текущая длина chain");
@@ -1706,12 +1751,17 @@ impl Node {
                                 mempool: {
                                     let mut mp = crate::mempool::Mempool::new();
                                     for tx in received_blockchain.mempool_txs.iter() {
-                                        let _ = mp.insert(tx.clone(), &AccountState::default());
+                                        let account = received_blockchain
+                                            .balances
+                                            .get(&tx.sender)
+                                            .cloned()
+                                            .unwrap_or_default();
+                                        let _ = mp.insert(tx.clone(), &account);
                                     }
                                     mp
                                 },
                                 storage: crate::storage::Storage::from_db(existing_db.clone()),
-                                allow_grant_blocks: false,
+                                allow_grant_blocks,
                                 total_work: strangecoin_core::consensus::cumulative_work(&received_blockchain.chain),
                             };
                             info!(peer = %peer, chain_len = temp_blockchain.chain.len(), chain = ?temp_blockchain.chain, "Полученная цепочка от узла");
@@ -1740,7 +1790,7 @@ impl Node {
                                     difficulty: temp_blockchain.difficulty,
                                     mempool: crate::mempool::Mempool::new(),
                                     storage: crate::storage::Storage::from_db(existing_db.clone()),
-                                    allow_grant_blocks: false,
+                                    allow_grant_blocks,
                                     total_work: temp_blockchain.total_work,
                                 };
                                 let mut added_transactions = 0;
@@ -2300,6 +2350,7 @@ if let Some(ref progress_rx) = self.progress_rx {
                             status_tx,
                             rate_limiter: self.node.rate_limiter.clone(),
                             shutdown: self.node.shutdown.clone(),
+                            event_bus: Arc::clone(&self.node.event_bus),
                         }) {
                             self.status = format!("Ошибка отправки задачи майнинга: {}", e);
                             error!(error = %e, "Ошибка отправки задачи майнинга");
@@ -2656,7 +2707,6 @@ pub async fn run_async() {
     .expect("GUI task panicked");
 }
 
-#[cfg(test)]
 pub mod test_support {
     use super::*;
     use base64::engine::general_purpose::STANDARD as BASE64;
@@ -2687,7 +2737,8 @@ pub mod test_support {
     }
 
     pub fn temp_db_dir(tag: &str) -> PathBuf {
-        TestDir::new(tag).0
+        let dir = TestDir::new(tag);
+        dir.0.clone()
     }
 
     pub fn random_port() -> u16 {
@@ -2767,7 +2818,12 @@ pub mod test_support {
                 guard.total_work = total_work;
                 guard.mempool = crate::mempool::Mempool::new();
                 for tx in &pending {
-                    let _ = guard.mempool.insert(tx.clone(), &AccountState::default());
+                    let account = guard
+                        .balances
+                        .get(&tx.sender)
+                        .cloned()
+                        .unwrap_or_default();
+                    let _ = guard.mempool.insert(tx.clone(), &account);
                 }
                 guard.save_state();
             }

@@ -127,11 +127,11 @@ proptest! {
 
         if let Ok(s3) = apply_block(&s2, &b3) {
             let r2 = unapply_block(&s3, &b3).unwrap();
-            prop_assert_eq!(r2, s2);
+            prop_assert_eq!(&r2, &s2);
             let r1 = unapply_block(&r2, &b2).unwrap();
-            prop_assert_eq!(r1, s1);
+            prop_assert_eq!(&r1, &s1);
             let r0 = unapply_block(&r1, &b1).unwrap();
-            prop_assert_eq!(r0, s0);
+            prop_assert_eq!(&r0, &s0);
         }
     }
 
@@ -199,10 +199,7 @@ mod unit_tests {
 
     #[test]
     fn chain_of_blocks_roundtrip() {
-        let state = make_state(vec![
-            ("alice".to_string(), 10_000),
-            ("bob".to_string(), 5_000),
-        ]);
+        let state = State::new();
 
         let genesis = genesis_block(vec![
             coinbase("alice", 10_000),
@@ -220,7 +217,8 @@ mod unit_tests {
         let s3 = apply_block(&s2, &b3).unwrap();
 
         assert_eq!(s3.get_balance("alice"), 7500);
-        assert_eq!(s3.get_balance("bob"), 9500);
+        assert_eq!(s3.get_balance("bob"), 7500);
+        assert_eq!(s3.total_supply(), 15_000);
 
         let r3 = unapply_block(&s3, &b3).unwrap();
         assert_eq!(r3, s2);
@@ -264,8 +262,7 @@ mod unit_tests {
 
     #[test]
     fn zero_amount_transfer() {
-        let mut state = State::new();
-        state.set_balance("alice", 1000);
+        let state = State::new();
 
         let genesis = genesis_block(vec![coinbase("alice", 1000)]);
         let s0 = apply_block(&state, &genesis).unwrap();
@@ -279,8 +276,7 @@ mod unit_tests {
 
     #[test]
     fn self_transfer() {
-        let mut state = State::new();
-        state.set_balance("alice", 1000);
+        let state = State::new();
 
         let genesis = genesis_block(vec![coinbase("alice", 1000)]);
         let s0 = apply_block(&state, &genesis).unwrap();

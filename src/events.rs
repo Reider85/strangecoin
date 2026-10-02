@@ -1,4 +1,4 @@
-use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, SendError, Sender};
+use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender, TrySendError};
 use std::sync::Mutex;
 use std::time::Duration;
 use tracing::debug;
@@ -42,17 +42,24 @@ impl EventBus {
     /// crossbeam; this pumps those events into a `tokio::sync::mpsc` channel so
     /// `async` subsystems can `recv().await` without blocking a runtime worker.
     ///
-    /// The pump polls on `poll_interval`, so subscribers inherit up to one interval
-    /// of latency. That is fine for the intended consumer (S1-P18 SyncEngine) but
-    /// latency-sensitive subscribers should keep using [`EventBus::subscribe`].
+    /// The pump is a blocking task, not an async task: `crossbeam`'s
+    /// `recv_timeout` cannot be cancelled by the runtime, so running it inside
+    /// `tokio::spawn` would block the worker thread for the whole poll interval
+    /// and starve every other task on that worker (including the consumer that
+    /// is waiting for the event). `spawn_blocking` keeps the blocking wait off
+    /// the runtime workers entirely.
+    ///
+    /// Subscribers inherit up to one interval of latency. That is fine for the
+    /// intended consumer (S1-P18 SyncEngine) but latency-sensitive subscribers
+    /// should keep using [`EventBus::subscribe`].
     pub fn subscribe_async(&self, capacity: usize) -> tokio::sync::mpsc::Receiver<NodeEvent> {
         let crossbeam_rx = self.subscribe();
         let (tx, rx) = tokio::sync::mpsc::channel(capacity);
-        tokio::spawn(async move {
+        tokio::task::spawn_blocking(move || {
             loop {
                 match crossbeam_rx.recv_timeout(POLL_INTERVAL) {
                     Ok(event) => {
-                        if tx.send(event).await.is_err() {
+                        if tx.blocking_send(event).is_err() {
                             debug!("Async EventBus subscriber dropped, stopping bridge");
                             break;
                         }
@@ -71,7 +78,7 @@ impl EventBus {
     pub fn publish(&self, event: NodeEvent) {
         let mut subs = self.subscribers.lock().expect("EventBus lock poisoned");
         subs.retain(|tx| {
-            if let Err(SendError(_)) = tx.try_send(event.clone()) {
+            if let Err(TrySendError::Disconnected(_)) = tx.try_send(event.clone()) {
                 debug!("Removing disconnected EventBus subscriber");
                 false
             } else {

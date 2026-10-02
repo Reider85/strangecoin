@@ -16,7 +16,7 @@ fn test_golden_tx1_unsigned() {
         ],
         is_coinbase: false,
     };
-    let expected = hex::decode("030000000773656e6465723100000009726563656976657231000000000000006400000000000000010000000100").unwrap();
+    let expected = hex::decode("040000000773656e6465723100000009726563656976657231000000000000006400000000000000010000000100").unwrap();
     assert_eq!(serialize_transaction(&tx1), expected);
 }
 
@@ -35,7 +35,7 @@ fn test_golden_tx1_signed() {
         ],
         is_coinbase: false,
     };
-    let expected = hex::decode("030000000773656e6465723100000009726563656976657231000000000000006400000000000000010000000100000000410102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f4041").unwrap();
+    let expected = hex::decode("040000000773656e6465723100000009726563656976657231000000000000006400000000000000010000000100000000410102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f4041").unwrap();
     assert_eq!(serialize_transaction_signed(&tx1), expected);
 }
 
@@ -72,7 +72,7 @@ fn test_golden_tx2_unsigned() {
         is_coinbase: true,
     };
     let expected =
-        hex::decode("0300000000000000066d696e657231000000012a05f20000000000000000000000000101")
+        hex::decode("0400000000000000066d696e657231000000012a05f20000000000000000000000000101")
             .unwrap();
     assert_eq!(serialize_transaction(&tx2), expected);
 }
@@ -89,7 +89,7 @@ fn test_golden_tx2_signed() {
         is_coinbase: true,
     };
     let expected = hex::decode(
-        "0300000000000000066d696e657231000000012a05f2000000000000000000000000010100000000",
+        "0400000000000000066d696e657231000000012a05f2000000000000000000000000010100000000",
     )
     .unwrap();
     assert_eq!(serialize_transaction_signed(&tx2), expected);
@@ -124,7 +124,7 @@ fn test_golden_tx3_unsigned() {
         is_coinbase: false,
     };
     let expected = hex::decode(
-        "0300000005616c69636500000003626f6200000000000f423f000000000000002a0000000300",
+        "0400000005616c69636500000003626f6200000000000f423f000000000000002a0000000300",
     )
     .unwrap();
     assert_eq!(serialize_transaction(&tx3), expected);
@@ -141,7 +141,7 @@ fn test_golden_tx3_signed() {
         signature: vec![0xaa; 65],
         is_coinbase: false,
     };
-    let expected = hex::decode("0300000005616c69636500000003626f6200000000000f423f000000000000002a000000030000000041aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+    let expected = hex::decode("0400000005616c69636500000003626f6200000000000f423f000000000000002a000000030000000041aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
     assert_eq!(serialize_transaction_signed(&tx3), expected);
 }
 

@@ -44,61 +44,77 @@ pub fn u256_to_bytes(v: U256) -> [u8; 32] {
 }
 
 pub fn u256_mul(a: U256, b: U256) -> U256 {
-    let mut result = [0u128; 8];
+    // Schoolbook multiplication: 4x4 limbs into a 8-limb intermediate,
+    // keeping only the low 256 bits. Each step fits in u128 because
+    // (2^64-1)^2 + (2^64-1) + (2^64-1) == 2^128 - 1.
+    let mut r = [0u64; 8];
     for i in 0..4 {
+        if a[i] == 0 {
+            continue;
+        }
+        let mut carry: u128 = 0;
         for j in 0..4 {
-            result[i + j] += a[i] as u128 * b[j] as u128;
+            let idx = i + j;
+            let cur = (a[i] as u128) * (b[j] as u128) + r[idx] as u128 + carry;
+            r[idx] = cur as u64;
+            carry = cur >> 64;
+        }
+        let mut k = i + 4;
+        while carry != 0 && k < 8 {
+            let cur = r[k] as u128 + carry;
+            r[k] = cur as u64;
+            carry = cur >> 64;
+            k += 1;
         }
     }
-    let mut carry: u128 = 0;
-    for i in 0..8 {
-        result[i] += carry;
-        carry = result[i] >> 64;
-        result[i] &= 0xFFFFFFFFFFFFFFFF;
-    }
-    [
-        result[0] as u64,
-        result[1] as u64,
-        result[2] as u64,
-        result[3] as u64,
-    ]
+    [r[0], r[1], r[2], r[3]]
 }
 
+fn u256_shl1(v: &mut U256) -> u64 {
+    let mut carry = 0u64;
+    for i in 0..4 {
+        let next = v[i] >> 63;
+        v[i] = (v[i] << 1) | carry;
+        carry = next;
+    }
+    carry
+}
+
+fn u256_sub_assign(a: &mut U256, b: &U256) {
+    let mut borrow = 0u64;
+    for i in 0..4 {
+        let (d1, b1) = a[i].overflowing_sub(b[i]);
+        let (d2, b2) = d1.overflowing_sub(borrow);
+        a[i] = d2;
+        borrow = (b1 as u64) + (b2 as u64);
+    }
+}
+
+/// Truncating 256/256 division (restoring binary long division).
+/// Returns `[0; 4]` for a zero divisor, matching the previous behaviour.
 pub fn u256_div(a: U256, b: U256) -> U256 {
-    let mut remainder = [0u128; 8];
+    if b == [0, 0, 0, 0] {
+        return [0, 0, 0, 0];
+    }
+    if u256_gt(b, a) {
+        return [0, 0, 0, 0];
+    }
     let mut quotient = [0u64; 4];
-
-    for i in (0..4).rev() {
-        remainder[i + 4] = a[i] as u128;
-    }
-
-    for i in (0..4).rev() {
-        let mut divisor = 0u128;
-        for j in 0..4 {
-            divisor = (divisor << 64) | b[j] as u128;
+    let mut remainder = [0u64; 4];
+    for bit in (0..256usize).rev() {
+        // The previous remainder is strictly < b, so after the shift the value
+        // is < 2b and a single conditional subtraction is enough. When the top
+        // bit was shifted out the true value is 2^256 + remainder, which is
+        // still >= b, and wrapping subtraction yields exactly value - b.
+        let overflowed = u256_shl1(&mut remainder) == 1;
+        if (a[bit / 64] >> (bit % 64)) & 1 == 1 {
+            remainder[0] |= 1;
         }
-
-        let mut dividend = 0u128;
-        for j in 0..8 {
-            dividend = (dividend << 64) | remainder[j];
-        }
-
-        if divisor == 0 {
-            return [0, 0, 0, 0];
-        }
-
-        let q = dividend / divisor;
-        quotient[i] = q as u64;
-
-        let mut sub = 0u128;
-        for j in (0..4).rev() {
-            let prod = (quotient[i] as u128) * b[j] as u128 + sub;
-            sub = prod >> 64;
-            let diff = remainder[j + 4] - (prod & 0xFFFFFFFFFFFFFFFF);
-            remainder[j + 4] = diff & 0xFFFFFFFFFFFFFFFF;
+        if overflowed || !u256_gt(b, remainder) {
+            u256_sub_assign(&mut remainder, &b);
+            quotient[bit / 64] |= 1u64 << (bit % 64);
         }
     }
-
     quotient
 }
 

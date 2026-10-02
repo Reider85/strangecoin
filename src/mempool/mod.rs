@@ -45,16 +45,38 @@ impl Mempool {
             });
         }
 
-        if tx.nonce != account_state.nonce + 1 {
+        // Nonce должен продолжать подтверждённую последовательность с учётом
+        // уже ожидающих транзакций отправителя: иначе две транзакции с одним
+        // nonce (двойной спенд) обе пройдут проверку.
+        let pending_count = self
+            .by_sender
+            .get(&tx.sender)
+            .map(|m| m.len() as u64)
+            .unwrap_or(0);
+        let expected_nonce = account_state.nonce + 1 + pending_count;
+        if tx.nonce != expected_nonce {
             return Err(StrangecoinError::InvalidNonce {
-                expected: account_state.nonce + 1,
+                expected: expected_nonce,
                 got: tx.nonce,
             });
         }
 
-        if tx.amount > account_state.balance {
+        // Доступный баланс — это подтверждённый баланс минус сумма уже
+        // ожидающих расходов отправителя (иначе мемпул пропустит overspend).
+        let pending_spent: u64 = self
+            .by_sender
+            .get(&tx.sender)
+            .map(|m| {
+                m.values()
+                    .filter_map(|id| self.txs.get(id))
+                    .map(|t| t.amount)
+                    .sum()
+            })
+            .unwrap_or(0);
+        let available = account_state.balance.saturating_sub(pending_spent);
+        if tx.amount > available {
             return Err(StrangecoinError::InsufficientBalance {
-                available: account_state.balance,
+                available,
                 required: tx.amount,
             });
         }

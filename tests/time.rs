@@ -1,14 +1,29 @@
 mod common;
 
 use common::*;
+use strangecoin::{Block, Blockchain, Transaction};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+// Ненулевой coinbase обязателен: state::apply_block отклоняет блоки без него,
+// а tx_root должен быть посчитан по фактическому списку транзакций.
+fn zero_reward_coinbase() -> Transaction {
+    Transaction {
+        sender: "coinbase".to_string(),
+        receiver: "miner".to_string(),
+        amount: 0,
+        nonce: 0,
+        chain_id: strangecoin::consensus::current_chain_id(),
+        signature: Vec::new(),
+        is_coinbase: true,
+    }
+}
 
 fn create_block_with_timestamp(bc: &mut Blockchain, timestamp: u64) -> bool {
     let previous_block = bc.chain.last().unwrap().clone();
-    let block = Block {
+    let mut block = Block {
         index: previous_block.index + 1,
         timestamp,
-        transactions: vec![],
+        transactions: vec![zero_reward_coinbase()],
         previous_hash: previous_block.hash.clone(),
         hash: String::new(),
         nonce: 0,
@@ -17,9 +32,8 @@ fn create_block_with_timestamp(bc: &mut Blockchain, timestamp: u64) -> bool {
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
     };
-    let hash = bc.calculate_hash(&block);
-    let mut block = block;
-    block.hash = hash;
+    block.tx_root = strangecoin::serialize::compute_tx_root(&block.transactions);
+    block.hash = bc.calculate_hash(&block);
     bc.chain.push(block);
     bc.validate_chain()
 }
@@ -66,10 +80,10 @@ fn reject_block_before_mtp() {
     let timestamps = [100u64, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200];
     for &ts in &timestamps {
         let previous_block = bc.chain.last().unwrap().clone();
-        let block = Block {
+        let mut block = Block {
             index: previous_block.index + 1,
             timestamp: ts,
-            transactions: vec![],
+            transactions: vec![zero_reward_coinbase()],
             previous_hash: previous_block.hash.clone(),
             hash: String::new(),
             nonce: 0,
@@ -78,9 +92,8 @@ fn reject_block_before_mtp() {
             state_root: [0u8; 32],
             tx_root: [0u8; 32],
         };
-        let hash = bc.calculate_hash(&block);
-        let mut block = block;
-        block.hash = hash;
+        block.tx_root = strangecoin::serialize::compute_tx_root(&block.transactions);
+        block.hash = bc.calculate_hash(&block);
         bc.chain.push(block);
     }
 

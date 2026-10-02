@@ -118,6 +118,11 @@ impl VerkleTrie {
             .collect()
     }
 
+    /// Prove `account` (or its absence) against `root`.
+    ///
+    /// Accounts with `balance == 0 && nonce == 0` are pruned from the state, so
+    /// they have no leaf in the trie: such an account is proven by showing the
+    /// empty slot instead of a leaf hash.
     pub fn verify_proof(
         root: &[u8; 32],
         address: &str,
@@ -125,18 +130,23 @@ impl VerkleTrie {
         proof: &[[u8; 32]],
     ) -> bool {
         let key = account_key_hash(address);
-        let leaf = account_leaf_hash(&key, account);
         let slot = key[0] as usize;
 
         if proof.len() != 255 {
             return false;
         }
 
+        let slot_value = if account.balance == 0 && account.nonce == 0 {
+            EMPTY_HASH
+        } else {
+            account_leaf_hash(&key, account)
+        };
+
         let mut hasher = Hasher::new();
         let mut proof_idx = 0;
         for i in 0..256 {
             if i == slot {
-                hasher.update(&leaf);
+                hasher.update(&slot_value);
             } else {
                 hasher.update(&proof[proof_idx]);
                 proof_idx += 1;

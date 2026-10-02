@@ -1,6 +1,7 @@
 mod common;
 
 use common::*;
+use strangecoin::Transaction;
 use std::sync::{Arc, RwLock};
 
 #[test]

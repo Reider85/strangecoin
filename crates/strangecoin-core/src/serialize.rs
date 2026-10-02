@@ -47,6 +47,14 @@ pub fn merkle_root(txids: &[[u8; 32]]) -> [u8; 32] {
     if txids.is_empty() {
         return [0u8; 32];
     }
+    if txids.len() == 1 {
+        // Same odd-node duplication rule as every other level: a lone txid is
+        // hashed with itself instead of being promoted as-is.
+        let mut combined = Vec::with_capacity(64);
+        combined.extend_from_slice(&txids[0]);
+        combined.extend_from_slice(&txids[0]);
+        return *blake3::hash(&combined).as_bytes();
+    }
     let mut hashes: Vec<[u8; 32]> = txids.to_vec();
     while hashes.len() > 1 {
         let mut next = Vec::new();
@@ -146,7 +154,7 @@ pub fn deserialize_transaction(bytes: &[u8]) -> Result<Transaction, &'static str
     }
     let format_version = bytes[offset];
     offset += 1;
-    if format_version != 1 && format_version != 2 {
+    if format_version != FORMAT_VERSION {
         return Err("Unsupported format version");
     }
 

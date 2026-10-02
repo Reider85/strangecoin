@@ -38,7 +38,7 @@ fn arbitrary_address() -> impl Strategy<Value = String> {
 }
 
 fn arbitrary_signature() -> impl Strategy<Value = Vec<u8>> {
-    (any::<[u8; 64]>, 0..4u8).prop_map(|(sig_bytes, rec_id)| {
+    (proptest::collection::vec(any::<u8>(), 64), 0..4u8).prop_map(|(sig_bytes, rec_id)| {
         let mut out = Vec::with_capacity(65);
         out.extend_from_slice(&sig_bytes);
         out.push(rec_id);
@@ -75,15 +75,17 @@ fn arbitrary_transaction() -> impl Strategy<Value = Transaction> {
 fn arbitrary_signed_transaction() -> impl Strategy<Value = Transaction> {
     (
         arbitrary_address(),
-        arbitrary_address(),
         0u64..1_000_000_000u64,
         0u64..1_000_000u64,
         prop_oneof![Just(1u32), Just(2u32), Just(3u32)],
         arbitrary_secret_key(),
     )
-        .prop_map(|(sender, receiver, amount, nonce, chain_id, secret_key)| {
+        .prop_map(|(receiver, amount, nonce, chain_id, secret_key)| {
             let secp = Secp256k1::new();
             let public_key = PublicKey::from_secret_key(&secp, &secret_key);
+            // verify_transaction() recovers the signer and compares its address
+            // against tx.sender, so the sender must be derived from this key.
+            let sender = strangecoin_core::address::address_from_public_key(&public_key);
             let mut tx = Transaction {
                 sender: sender.clone(),
                 receiver,
