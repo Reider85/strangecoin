@@ -103,6 +103,16 @@ impl RateLimiter {
         Ok(())
     }
 
+    /// Ban a specific peer by address, useful for protocol violations
+    pub fn ban(&self, addr: SocketAddr) {
+        let mut peers = self.peers.lock().unwrap();
+        let now = Instant::now();
+        if let Some(counter) = peers.get_mut(&addr) {
+            counter.ban(self.ban_duration);
+            tracing::warn!(peer = %addr, "Peer banned for protocol violation");
+        }
+    }
+
     #[cfg(test)]
     pub fn is_banned(&self, addr: SocketAddr) -> bool {
         let peers = self.peers.lock().unwrap();

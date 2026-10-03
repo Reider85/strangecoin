@@ -70,6 +70,7 @@ pub struct Node {
     pub listener: Arc<Mutex<Option<TcpListener>>>,
     pub sync_thread_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pub event_bus: Arc<events::EventBus>,
+    pub network_id: u32,
 }
 
 pub struct WalletApp {
@@ -107,6 +108,7 @@ impl Node {
         sync_tx: mpsc::Sender<Blockchain>,
         port: u16,
         event_bus: Arc<events::EventBus>,
+        network_id: u32,
     ) -> Self {
         let blockchain = Arc::new(BlockchainFacade::new(port));
         let peers = Arc::new(Mutex::new(vec![]));
@@ -122,6 +124,7 @@ impl Node {
             listener: Arc::new(Mutex::new(None)),
             sync_thread_handle: Arc::new(Mutex::new(None)),
             event_bus: event_bus.clone(),
+            network_id,
         };
         thread::spawn(move || {
             info!("Фоновый поток майнинга запущен");
@@ -217,6 +220,7 @@ impl Node {
                                     listener: Arc::new(Mutex::new(None)),
                                     sync_thread_handle: Arc::new(Mutex::new(None)),
                                     event_bus: task.event_bus.clone(),
+                                    network_id: crate::consensus::CHAIN_ID_REGTEST,
                                 };
                                 node_temp.sync_blockchain(sync_tx.clone());
                                 task.event_bus.publish(events::NodeEvent::BlockApplied {
@@ -404,15 +408,53 @@ impl Node {
                         let rate_limiter = Arc::clone(&rate_limiter);
                         let event_bus = Arc::clone(&event_bus);
                         let peer_addr = stream.peer_addr().ok();
+                        let rate_limiter_clone = Arc::clone(&rate_limiter);
+                        let event_bus_clone = Arc::clone(&event_bus);
+                        let network_id = node.network_id;
+                        
                         thread::spawn(move || {
                             if let Some(addr) = peer_addr {
-                                if let Err(e) = rate_limiter.check(addr) {
+                                if let Err(e) = rate_limiter_clone.check(addr) {
                                     warn!(peer = %addr, error = %e, "Rate limit exceeded, closing connection");
                                     return;
                                 }
                             }
                             let mut reader = BufReader::new(stream.try_clone().unwrap());
                             let mut writer = BufWriter::new(stream);
+                            
+                            // First message must be HELLO handshake
+                            let hello_bytes =
+                                match crate::network::protocol::read_length_prefixed(&mut reader) {
+                                    Ok(bytes) => bytes,
+                                    Err(e) => {
+                                        warn!(error = %e, "Failed to read HELLO handshake");
+                                        return;
+                                    }
+                                };
+                            let peer_network_id = match crate::network::protocol::parse_hello(&hello_bytes) {
+                                Ok(id) => id,
+                                Err(e) => {
+                                    warn!(error = %e, "Invalid HELLO message from peer");
+                                    return;
+                                }
+                            };
+                            
+                            if peer_network_id != network_id {
+                                warn!(
+                                    peer = %peer_addr.map_or_else(|| "unknown".to_string(), |addr| addr.to_string()),
+                                    expected = network_id,
+                                    got = peer_network_id,
+                                    "Peer rejected: foreign network_id"
+                                );
+                                if let Some(addr) = peer_addr {
+                                    rate_limiter_clone.ban(addr);
+                                }
+                                return;
+                            }
+                            
+                            debug!(peer_network_id, "HELLO handshake successful");
+                            
+                            // Read the actual request after HELLO
                             let request_bytes =
                                 match crate::network::protocol::read_length_prefixed(&mut reader) {
                                     Ok(bytes) => bytes,
@@ -423,6 +465,9 @@ impl Node {
                                 };
                             let request = String::from_utf8_lossy(&request_bytes).to_string();
                             debug!(request = %request, "Получен запрос");
+                            
+                            let blockchain = Arc::clone(&node.blockchain);
+                            let event_bus = Arc::clone(&event_bus_clone);
 
                             if request == "GET_BLOCKCHAIN" {
                                 let response = blockchain.to_wire_json();
@@ -526,9 +571,20 @@ impl Node {
                 info!("Новый узел, только получение данных, отправка цепочки запрещена");
                 continue;
             }
-            // Отправка UPDATE_BLOCKCHAIN
+            // Отправка UPDATE_BLOCKCHAIN with HELLO handshake
             if let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
                 let mut writer = BufWriter::new(stream.try_clone().unwrap());
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                
+                // Send HELLO handshake first
+                let hello_data = crate::network::protocol::encode_hello(self.network_id);
+                if writer.write_all(&hello_data).is_err() {
+                    warn!(peer = %peer, "Failed to send HELLO handshake");
+                    continue;
+                }
+                writer.flush().ok();
+                
+                // Send UPDATE_BLOCKCHAIN
                 let response = self.blockchain.to_wire_json();
                 let message = format!("UPDATE_BLOCKCHAIN:{}", response);
                 let length = message.len() as u32;
@@ -540,10 +596,18 @@ impl Node {
                 }
             }
 
-            // Запрос GET_BLOCKCHAIN
+            // Запрос GET_BLOCKCHAIN with HELLO handshake
             if let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut writer = BufWriter::new(stream);
+
+                // Send HELLO handshake first
+                let hello_data = crate::network::protocol::encode_hello(self.network_id);
+                if writer.write_all(&hello_data).is_err() {
+                    warn!(peer = %peer, "Failed to send HELLO handshake");
+                    continue;
+                }
+                writer.flush().ok();
 
                 let message = "GET_BLOCKCHAIN";
                 let length = message.len() as u32;
@@ -1231,6 +1295,7 @@ pub async fn run_async() {
         sync_tx.clone(),
         port,
         event_bus.clone(),
+        config.network_id,
     );
     node.blockchain
         .set_allow_grant_blocks(config.allow_grant_blocks);
@@ -1258,6 +1323,7 @@ pub async fn run_async() {
             listener: Arc::new(Mutex::new(None)),
             sync_thread_handle: Arc::new(Mutex::new(None)),
             event_bus: node_event_bus,
+            network_id: config.network_id,
         };
         // Tick at SYNC_TICK for prompt shutdown checks, but only sync every
         // SYNC_TICKS_PER_SYNC ticks to preserve the original ~1s sync period
@@ -1293,6 +1359,7 @@ pub async fn run_async() {
             listener: Arc::new(Mutex::new(None)),
             sync_thread_handle: Arc::new(Mutex::new(None)),
             event_bus: Arc::clone(&node.event_bus),
+            network_id: config.network_id,
         },
         wallet_address: String::new(),
         password: String::new(),
@@ -1546,6 +1613,7 @@ pub mod test_support {
             listener: Arc::new(Mutex::new(None)),
             sync_thread_handle: Arc::new(Mutex::new(None)),
             event_bus: Arc::new(events::EventBus::new()),
+            network_id: crate::consensus::CHAIN_ID_REGTEST,
         };
         (node, peers)
     }
@@ -1566,6 +1634,7 @@ pub mod test_support {
             listener: Arc::new(Mutex::new(None)),
             sync_thread_handle: Arc::new(Mutex::new(None)),
             event_bus: Arc::new(events::EventBus::new()),
+            network_id: crate::consensus::CHAIN_ID_REGTEST,
         }
     }
 

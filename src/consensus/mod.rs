@@ -34,6 +34,14 @@ pub fn load_genesis(path: &str) -> Result<crate::Block, crate::error::Strangecoi
     let json = std::fs::read_to_string(path)?;
     let genesis: GenesisConfig = serde_json::from_str(&json)?;
 
+    // Enforce network_id == chain_id (invariant #10)
+    if genesis.network_id != genesis.chain_id {
+        return Err(crate::error::StrangecoinError::GenesisNetworkMismatch {
+            network_id: genesis.network_id,
+            chain_id: genesis.chain_id,
+        });
+    }
+
     let pk_hex = genesis
         .initial_holder
         .strip_prefix("0x")

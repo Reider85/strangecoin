@@ -60,6 +60,12 @@ pub enum StrangecoinError {
     GrantBlocksDisabled,
     #[error("invalid block: {0}")]
     InvalidBlock(String),
+    #[error("invalid HELLO message")]
+    InvalidHelloMessage,
+    #[error("foreign network: peer {peer} has network_id {got}, expected {expected}")]
+    ForeignNetworkId { peer: String, expected: u32, got: u32 },
+    #[error("genesis network_id {network_id} does not match chain_id {chain_id}")]
+    GenesisNetworkMismatch { network_id: u32, chain_id: u32 },
 }
 
 impl From<strangecoin_core::CoreError> for StrangecoinError {
