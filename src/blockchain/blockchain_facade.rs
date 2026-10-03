@@ -921,7 +921,7 @@ impl Blockchain {
     pub(crate) fn add_transaction(
         &mut self,
         transaction: Transaction,
-    ) -> Result<(), StrangecoinError> {
+    ) -> Result<crate::mempool::InsertOutcome, StrangecoinError> {
         let start_time = SystemTime::now();
         debug!(?transaction, "Начало добавления транзакции");
         if transaction.sender.is_empty() || transaction.receiver.is_empty() {
@@ -960,7 +960,7 @@ impl Blockchain {
             return Err(StrangecoinError::SizeLimitExceeded("transaction"));
         }
         let account_state = self.balances.get(&transaction.sender).unwrap_or_default();
-        self.mempool.insert(transaction, &account_state)?;
+        let outcome = self.mempool.insert(transaction, &account_state)?;
         let duration = SystemTime::now()
             .duration_since(start_time)
             .unwrap()
@@ -970,7 +970,7 @@ impl Blockchain {
             pending_count = self.mempool.len(),
             "Транзакция добавлена в mempool"
         );
-        Ok(())
+        Ok(outcome)
     }
 
     pub(crate) fn validate_chain(&self) -> bool {
@@ -1095,6 +1095,9 @@ impl Blockchain {
 #[derive(Clone)]
 pub struct BlockchainFacade {
     inner: Arc<RwLock<Blockchain>>,
+    /// Шина событий: RBF-замена публикует `TxRejected { reason: Replaced }`
+    /// для каждой вытесненной tx.
+    event_bus: Arc<crate::events::EventBus>,
 }
 
 impl BlockchainFacade {
@@ -1102,6 +1105,15 @@ impl BlockchainFacade {
     pub fn new(port: u16) -> Self {
         Self {
             inner: Arc::new(RwLock::new(Blockchain::new(port))),
+            event_bus: Arc::new(crate::events::EventBus::new()),
+        }
+    }
+
+    /// Production constructor sharing the node's event bus (S1-P17 RBF).
+    pub fn with_event_bus(port: u16, event_bus: Arc<crate::events::EventBus>) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(Blockchain::new(port))),
+            event_bus,
         }
     }
 
@@ -1109,7 +1121,13 @@ impl BlockchainFacade {
     pub fn from_blockchain(bc: Blockchain) -> Self {
         Self {
             inner: Arc::new(RwLock::new(bc)),
+            event_bus: Arc::new(crate::events::EventBus::new()),
         }
+    }
+
+    /// Bus this facade publishes to (RBF `TxRejected` events).
+    pub fn event_bus(&self) -> Arc<crate::events::EventBus> {
+        Arc::clone(&self.event_bus)
     }
 
     // ------------------------------------------------------------------ chain
@@ -1302,11 +1320,24 @@ impl BlockchainFacade {
     }
 
     /// Validate a transaction against current state and queue it in the mempool.
+    ///
+    /// RBF-замена вытесняет конфликтующие tx: каждая вытесненная публикует
+    /// `TxRejected { reason: Replaced }` в event bus (уже вне write-lock).
     pub fn apply_tx(&self, transaction: Transaction) -> Result<(), StrangecoinError> {
-        self.inner
+        let outcome = self
+            .inner
             .write()
             .expect(BLOCKCHAIN_LOCK)
-            .add_transaction(transaction)
+            .add_transaction(transaction)?;
+        if let crate::mempool::InsertOutcome::Replaced(evicted) = outcome {
+            for evicted_id in evicted {
+                self.event_bus.publish(crate::events::NodeEvent::TxRejected {
+                    txid: hex::encode(evicted_id),
+                    reason: crate::events::REASON_REPLACED.to_string(),
+                });
+            }
+        }
+        Ok(())
     }
 
     // ------------------------------------------------------------------- flags

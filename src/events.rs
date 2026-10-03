@@ -6,6 +6,9 @@ use tracing::debug;
 /// Poll cadence of the crossbeam -> tokio bridge in [`EventBus::subscribe_async`].
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
+/// Причина [`NodeEvent::TxRejected`] для tx, вытесненных RBF-заменой.
+pub const REASON_REPLACED: &str = "Replaced";
+
 #[derive(Clone, Debug)]
 pub enum NodeEvent {
     BlockApplied { height: u64, hash: String },

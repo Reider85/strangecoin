@@ -15,6 +15,16 @@ pub const RETARGET_INTERVAL: u64 = 2016;
 pub const TARGET_BLOCK_TIME: u64 = 600;
 pub const MAX_TARGET_CHANGE_FACTOR: u64 = 4;
 
+/// Минимальный прирост feerate для RBF-замены, в базисных пунктах (1 bps =
+/// 0.01%). Замена допустима только если новый feerate ≥ старый × (1 + Δ/10000).
+///
+/// Δ = 30%: ниже ~25% правило не отличает замену от обычного дубля по nonce
+/// с более короткой (а значит, более «дорогой» по прокси-метрике) сериализацией
+/// — тест double_spend (D01) обязан оставаться зелёным.
+pub const RBF_MIN_DELTA_BPS: u64 = 3000;
+pub const RBF_BPS_DENOMINATOR: u64 = 10_000;
+pub const MAX_RBF_REPLACEMENTS: u32 = 10;
+
 pub type U256 = [u64; 4];
 
 pub fn u256_from_bytes(bytes: &[u8; 32]) -> U256 {

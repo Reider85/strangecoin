@@ -110,7 +110,10 @@ impl Node {
         event_bus: Arc<events::EventBus>,
         network_id: u32,
     ) -> Self {
-        let blockchain = Arc::new(BlockchainFacade::new(port));
+        let blockchain = Arc::new(BlockchainFacade::with_event_bus(
+            port,
+            event_bus.clone(),
+        ));
         let peers = Arc::new(Mutex::new(vec![]));
         let rate_limiter = Arc::new(crate::network::RateLimiter::new(10, 100));
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -1763,7 +1766,9 @@ pub mod test_support {
             shutdown: Arc::new(AtomicBool::new(false)),
             listener: Arc::new(Mutex::new(None)),
             sync_thread_handle: Arc::new(Mutex::new(None)),
-            event_bus: Arc::new(events::EventBus::new()),
+            // Один bus на node и facade — как в проде: RBF-замена публикует
+            // TxRejected из facade, а майнинг-задача — из node.
+            event_bus: bc.event_bus(),
             network_id: crate::consensus::CHAIN_ID_REGTEST,
         };
         (node, peers)
@@ -1784,7 +1789,7 @@ pub mod test_support {
             shutdown: Arc::new(AtomicBool::new(false)),
             listener: Arc::new(Mutex::new(None)),
             sync_thread_handle: Arc::new(Mutex::new(None)),
-            event_bus: Arc::new(events::EventBus::new()),
+            event_bus: bc.event_bus(),
             network_id: crate::consensus::CHAIN_ID_REGTEST,
         }
     }

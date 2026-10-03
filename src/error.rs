@@ -66,6 +66,10 @@ pub enum StrangecoinError {
     ForeignNetworkId { peer: String, expected: u32, got: u32 },
     #[error("genesis network_id {network_id} does not match chain_id {chain_id}")]
     GenesisNetworkMismatch { network_id: u32, chain_id: u32 },
+    #[error("rbf feerate too low: need >= {needed}, got {got}")]
+    RbfFeerateTooLow { needed: u64, got: u64 },
+    #[error("rbf replacement limit reached: max {0} sequential replacements")]
+    RbfReplacementLimit(u32),
 }
 
 impl From<strangecoin_core::CoreError> for StrangecoinError {
