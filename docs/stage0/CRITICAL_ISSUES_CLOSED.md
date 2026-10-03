@@ -2,15 +2,15 @@
 
 **Source:** `analytics/ARCHITECT2.md` §1.1 (13 critical issues)
 **Date:** 2026-09-28
-**Status:** 9 closed, 3 partially closed, 1 deferred to Stage 1
+**Status:** 10 closed, 3 partially closed, 0 deferred to Stage 1
 
 ## Summary
 
 | Status | Count |
 |--------|-------|
-| Closed | 9 |
+| Closed | 10 |
 | Partially closed | 3 |
-| Deferred | 1 |
+| Deferred | 0 |
 
 ## Detailed Status
 
@@ -21,7 +21,7 @@
 | 3 | Tautological balance validation | **Closed** | P07, P11 | Balance reconstruction from chain history + cross-check against stored balances | `validate_chain` rebuilds from scratch |
 | 4 | No block rewards / emission | **Closed** | P11 | `src/economics/emission.rs`: `block_reward_at_height` + tail emission formula | Grant block exception in `validate_chain` — closed by D01 test coverage, full cleanup in S1-P01 |
 | 5 | Non-deterministic genesis | **Closed** | P10 | `genesis.json` + `EXPECTED_GENESIS_HASH` + panic on mismatch; regtest has own genesis (chain_id=3) | |
-| 6 | Addresses without checksum | **Deferred** | — | `address_from_public_key` returns base64(pubkey) without checksum | Deferred to Stage 1: bech32 addresses (S1-P15) |
+| 6 | Addresses without checksum | **Closed** | S1-P15 | `address_from_public_key` returns bech32(pubkey) with checksum | Closed on Stage 1: bech32 addresses with network HRP |
 | 7 | `find_wallet_by_ip` returns random balance | **Closed** | P04 | Function removed from codebase | |
 | 8 | Registration mutates `balances` directly | **Partially closed** | P14 | Registration goes through `mempool.insert` with validation | Grant mechanism still mutates balances outside blockchain rules — closed by S1-P01 |
 | 9 | Password in plaintext in config | **Closed** | P15 | `config.json` deleted; password only via env var / interactive prompt | |
@@ -34,9 +34,6 @@
 
 ## Deferred to Stage 1
 
-| Issue | Closure Prompt | Description |
-|-------|----------------|-------------|
-| #6 — Addresses without checksum | S1-P15 | Migrate to bech32 addresses (HRP sc1/tsc1/rsc1) |
 
 ## Residual Risks
 

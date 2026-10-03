@@ -36,4 +36,14 @@ pub enum CoreError {
     TxRootMismatch { expected: [u8; 32], got: [u8; 32] },
     #[error("witness verification failed")]
     WitnessVerificationFailed,
+    #[error("invalid address checksum")]
+    InvalidAddressChecksum,
+    #[error("invalid address format: {reason}")]
+    InvalidAddressFormat { reason: String },
+    #[error("unknown address HRP: {hrp}")]
+    UnknownAddressHrp { hrp: String },
+    #[error("unknown network ID: {network_id}")]
+    UnknownNetworkId { network_id: u32 },
+    #[error("bech32 encode error: {0}")]
+    Bech32EncodeError(#[from] bech32::EncodeError),
 }

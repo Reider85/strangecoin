@@ -80,3 +80,16 @@
 - Created `tests/state_cache.rs` — 5 component tests: rebuild reproduces the chain state, rebuild repairs a tampered cache (invariant #1), `unapply_block` rolls the cache back on reorg, `invalidate`, tampered chain rejected (header hash and `tx_root` paths)
 - Fixed two clippy deny-level lints that stopped `cargo clippy` from compiling (`consensus_proptest` reward bound, `first_wallet` loop); the workspace now clippies without errors — 89 pre-existing warnings in untouched files remain as debt
 - `cargo test --workspace` green (strangecoin 15 + 24 integration targets, strangecoin-core 38 + 7 test targets)
+
+### S1-P15: bech32 addresses with network HRP
+
+- Added `bech32 = "0.11"` to `crates/strangecoin-core/Cargo.toml`; `crates/strangecoin-core/src/address.rs` rewritten: `hrp_for_network` (sc / tsc / rsc for mainnet / testnet / regtest), `encode_address(pk, network_id)`, `decode_address(s) -> (PublicKey, network_id)`, `address_from_public_key` now returns `Result<String, CoreError>` (bech32m of the 33-byte compressed pubkey) — base64 addresses eliminated from the core crate
+- Added `CoreError` variants: `InvalidAddressChecksum`, `InvalidAddressFormat`, `UnknownAddressHrp`, `UnknownNetworkId`, `Bech32EncodeError`; mapped to `StrangecoinError` in `src/error.rs`
+- `src/consensus/mod.rs::load_genesis` now derives the genesis receiver via `encode_address` — genesis block hash changed (breaking, mainnet not launched): recomputed `EXPECTED_GENESIS_HASH` = `0xcf3440b9…a356375` via `--print-genesis-hash`, updated `genesis.json`
+- `src/blockchain/blockchain_facade.rs`: legacy base64-address migration on DB open (existing account keys and wire fields re-encoded to bech32, unknown strings left as-is)
+- `crates/strangecoin-core/tests/consensus_proptest.rs`: address strategies now handle the `Result` return
+- Added `tests/two_clients.rs::bech32_address_transfer` — HRP assertions (`rsc1…`) + transfer between bech32 addresses
+- Fixed the build: `eframe`/`winapi` made optional with a declared `gui` feature (`gui = ["dep:eframe", "dep:winapi"]`), eframe usage in `src/lib.rs` gated with `#[cfg(feature = "gui")]`, headless path drains the sync channel until shutdown
+- Closed issue #6 ("Addresses without checksum") in `docs/stage0/CRITICAL_ISSUES_CLOSED.md` — 10 closed, 0 deferred
+- Audit: zero base64 in `strangecoin-core/src`; remaining base64 only in `wallet.rs` (keystore key material) and the intentional legacy-migration path in `blockchain_facade.rs`
+- `cargo test --workspace` green (all targets, including the network suite)

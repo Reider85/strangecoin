@@ -19,6 +19,8 @@
 //! `BlockView` from [`ConsensusManager`](super::consensus_manager::ConsensusManager)
 //! held on [`Blockchain::rules`].
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -332,6 +334,7 @@ impl Blockchain {
         blockchain.total_work = strangecoin_core::consensus::cumulative_work(&blockchain.chain);
 
         blockchain.migrate_initial_wallet_balance();
+        blockchain.migrate_addresses_to_bech32();
 
         blockchain.save_state();
         blockchain.debug_db();
@@ -536,6 +539,145 @@ impl Blockchain {
         }
         self.create_grant_block(wallet, placeholder_amount);
         info!(amount = placeholder_amount, wallet = %wallet, "Первоначальный баланс перенесён первому кошельку");
+    }
+
+    // Миграция legacy base64-адресов на bech32 при открытии базы данных
+    pub(crate) fn migrate_addresses_to_bech32(&mut self) {
+        let network_id = crate::consensus::current_chain_id();
+        
+        // Миграция балансов
+        let mut new_balances = std::collections::HashMap::new();
+        let mut migrated_count = 0;
+        let mut unchanged_count = 0;
+        
+        for (addr, balance) in self.balances.accounts().iter() {
+            let new_addr = if let Ok((_, _)) = crate::address::decode_address(addr) {
+                // Уже bech32 - оставляем как есть
+                unchanged_count += 1;
+                addr.clone()
+            } else if let Ok(pk_bytes) = BASE64.decode(addr) {
+                // Пытаемся интерпретировать как base64 pubkey
+                if let Ok(pk) = secp256k1::PublicKey::from_slice(&pk_bytes) {
+                    if let Ok(bech32_addr) = crate::address::encode_address(&pk, network_id) {
+                        migrated_count += 1;
+                        info!(old_address = %addr, new_address = %bech32_addr, "Миграция адреса");
+                        bech32_addr
+                    } else {
+                        // Не удалось закодировать - оставляем как есть
+                        unchanged_count += 1;
+                        addr.clone()
+                    }
+                } else {
+                    // Не удалось распарсить как pubkey - оставляем как есть
+                    unchanged_count += 1;
+                    addr.clone()
+                }
+            } else {
+                // Не base64 - оставляем как есть
+                unchanged_count += 1;
+                addr.clone()
+            };
+            
+            *new_balances.entry(new_addr).or_insert(0) += balance.balance;
+        }
+        
+        if migrated_count > 0 {
+            info!(
+                migrated_count = migrated_count,
+                unchanged_count = unchanged_count,
+                "Миграция балансов завершена"
+            );
+            
+            // Заменяем балансы на новые
+            let mut new_accounts = std::collections::HashMap::new();
+            for (addr, balance) in new_balances {
+                new_accounts.insert(addr, AccountState { balance, nonce: 0 });
+            }
+            self.balances = StateCache::from_accounts(new_accounts);
+        }
+        
+        // Проверка цепи на наличие legacy-адресов
+        let mut legacy_in_chain = false;
+        for block in &self.chain {
+            for tx in &block.transactions {
+                // Проверяем sender и receiver
+                for field in [&tx.sender, &tx.receiver] {
+                    if crate::address::decode_address(field).is_err() {
+                        // Проверяем, это не magic-строка
+                        if !matches!(field.as_str(), "genesis" | "coinbase" | "initial_wallet_address" | "regtest_initial_holder" | "recipient") {
+                            if let Ok(pk_bytes) = BASE64.decode(field) {
+                                if secp256k1::PublicKey::from_slice(&pk_bytes).is_ok() {
+                                    legacy_in_chain = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if legacy_in_chain {
+                    break;
+                }
+            }
+            if legacy_in_chain {
+                break;
+            }
+        }
+        
+        if legacy_in_chain {
+            info!("Обнаружены legacy-адреса в цепи; сбрасываем цепь до генезиса");
+            // Сбрасываем цепь до генезиса
+            self.chain = vec![];
+            let is_regtest = crate::consensus::is_regtest(network_id);
+            
+            let genesis_block = if is_regtest {
+                let genesis_tx = crate::Transaction {
+                    sender: "genesis".to_string(),
+                    receiver: "regtest_initial_holder".to_string(),
+                    amount: 1_000_000_000,
+                    nonce: 0,
+                    chain_id: network_id,
+                    signature: Vec::new(),
+                    is_coinbase: true,
+                };
+                let target_bytes =
+                    hex::decode("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+                        .expect("valid target hex");
+                let mut target_arr = [0u8; 32];
+                target_arr.copy_from_slice(&target_bytes);
+                let mut block = crate::Block {
+                    index: 0,
+                    timestamp: 0,
+                    transactions: vec![genesis_tx],
+                    previous_hash: "0".repeat(64),
+                    hash: String::new(),
+                    nonce: 0,
+                    target: hex::encode(target_arr),
+                    consensus_version: self.rules.expected_version(0),
+                    state_root: [0u8; 32],
+                    tx_root: [0u8; 32],
+                };
+                block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
+                let hash = strangecoin_core::serialize::block_hash(&block);
+                block.hash = hex::encode(hash);
+                block
+            } else {
+                let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
+                let exe_dir = exe_path
+                    .parent()
+                    .expect("Не удалось получить директорию исполняемого файла");
+                let genesis_path = exe_dir.join("genesis.json");
+                crate::consensus::load_genesis(genesis_path.to_str().unwrap())
+                    .expect("Failed to load genesis from genesis.json")
+            };
+            
+            self.chain.push(genesis_block.clone());
+            
+            for tx in &genesis_block.transactions {
+                if tx.sender != "genesis" {
+                    self.balances.credit(&tx.receiver, tx.amount);
+                }
+            }
+        }
     }
 
     pub(crate) fn calculate_hash(&self, block: &Block) -> String {

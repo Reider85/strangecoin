@@ -115,6 +115,21 @@ impl From<strangecoin_core::CoreError> for StrangecoinError {
             strangecoin_core::CoreError::WitnessVerificationFailed => {
                 StrangecoinError::ConfigError("witness verification failed".to_string())
             }
+            strangecoin_core::CoreError::InvalidAddressChecksum => {
+                StrangecoinError::ConfigError("invalid address checksum".to_string())
+            }
+            strangecoin_core::CoreError::InvalidAddressFormat { reason } => {
+                StrangecoinError::ConfigError(format!("invalid address format: {}", reason))
+            }
+            strangecoin_core::CoreError::UnknownAddressHrp { hrp } => {
+                StrangecoinError::ConfigError(format!("unknown address HRP: {}", hrp))
+            }
+            strangecoin_core::CoreError::UnknownNetworkId { network_id } => {
+                StrangecoinError::ConfigError(format!("unknown network ID: {}", network_id))
+            }
+            strangecoin_core::CoreError::Bech32EncodeError(e) => {
+                StrangecoinError::ConfigError(format!("bech32 encode error: {}", e))
+            }
         }
     }
 }

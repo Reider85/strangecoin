@@ -1,6 +1,6 @@
+#[cfg(feature = "gui")]
 use crate::error::StrangecoinError;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine;
+#[cfg(feature = "gui")]
 use eframe::egui;
 use std::fs;
 use std::io::Write;
@@ -386,10 +386,11 @@ impl Node {
 
     pub fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
         let start_time = SystemTime::now();
-        let blockchain = Arc::clone(&self.blockchain);
+let blockchain = Arc::clone(&self.blockchain);
         let rate_limiter = Arc::clone(&self.rate_limiter);
         let shutdown = Arc::clone(&self.shutdown);
         let event_bus = Arc::clone(&self.event_bus);
+        let network_id = self.network_id;
         let address = format!("0.0.0.0:{}", port);
         let listener = TcpListener::bind(&address).expect("Не удалось запустить сервер");
         // Store listener for graceful shutdown
@@ -410,7 +411,6 @@ impl Node {
                         let peer_addr = stream.peer_addr().ok();
                         let rate_limiter_clone = Arc::clone(&rate_limiter);
                         let event_bus_clone = Arc::clone(&event_bus);
-                        let network_id = node.network_id;
                         
                         thread::spawn(move || {
                             if let Some(addr) = peer_addr {
@@ -466,7 +466,7 @@ impl Node {
                             let request = String::from_utf8_lossy(&request_bytes).to_string();
                             debug!(request = %request, "Получен запрос");
                             
-                            let blockchain = Arc::clone(&node.blockchain);
+                            let blockchain = Arc::clone(&blockchain);
                             let event_bus = Arc::clone(&event_bus_clone);
 
                             if request == "GET_BLOCKCHAIN" {
@@ -725,6 +725,7 @@ impl Drop for Node {
     }
 }
 
+#[cfg(feature = "gui")]
 impl eframe::App for WalletApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = ctx.input(|i| i.time);
@@ -823,7 +824,9 @@ impl eframe::App for WalletApp {
                                 };
                                 match wallet::Wallet::load(&password, keystore_path) {
                                     Ok(wallet) => {
-                                        if BASE64.encode(wallet.public_key.serialize()) == self.wallet_address {
+                                        let expected_address = crate::address::encode_address(&wallet.public_key, self.node.network_id)
+                        .unwrap_or_else(|_| "invalid_address".to_string());
+                                        if expected_address == self.wallet_address {
                                             self.is_authenticated = true;
                                             self.status = "Успешная аутентификация".to_string();
                                             self.node.discover_peers();
@@ -886,7 +889,8 @@ impl eframe::App for WalletApp {
                         let data_dir = self.data_dir.clone();
                         match wallet::Wallet::new(&password, &data_dir) {
                             Ok(wallet) => {
-                                self.wallet_address = BASE64.encode(wallet.public_key.serialize());
+                                self.wallet_address = crate::address::encode_address(&wallet.public_key, self.node.network_id)
+                        .unwrap_or_else(|_| "invalid_address".to_string());
                                 self.password = password;
                                 self.is_authenticated = true;
                                 self.status = format!("Кошелёк успешно создан: {}", self.wallet_address);
@@ -1348,6 +1352,7 @@ pub async fn run_async() {
     // Store sync task handle in node for graceful shutdown
     *node.sync_thread_handle.lock().unwrap() = Some(sync_task_handle);
 
+    #[cfg(feature = "gui")]
     let app = WalletApp {
         node: Node {
             blockchain: Arc::clone(&node.blockchain),
@@ -1378,6 +1383,10 @@ pub async fn run_async() {
         new_wallet_password: String::new(),
         data_dir: config.data_dir.clone(),
     };
+    // Headless: keep the mining sender alive (mining thread idles on recv) and
+    // retain the sync receiver so adoption events can be drained below.
+    #[cfg(not(feature = "gui"))]
+    let (_headless_mining_tx, sync_rx) = (mining_tx, sync_rx);
 
     // Graceful shutdown — async primary handler (ADR-0007).
     // The AtomicBool is the single shutdown signal shared with the legacy threads;
@@ -1424,22 +1433,35 @@ pub async fn run_async() {
     // eframe::run_native is blocking and owns a windowing event loop, so it runs on
     // a dedicated thread from tokio's blocking pool (ADR-0007) rather than occupying
     // a runtime worker.
-    tokio::task::spawn_blocking(move || {
-        eframe::run_native(
-            "Blockchain Wallet",
-            eframe::NativeOptions::default(),
-            Box::new(|_cc| Box::new(app)),
-        )
-        .expect("Ошибка запуска приложения");
-    })
-    .await
-    .expect("GUI task panicked");
+    #[cfg(feature = "gui")]
+    {
+        tokio::task::spawn_blocking(move || {
+            eframe::run_native(
+                "Blockchain Wallet",
+                eframe::NativeOptions::default(),
+                Box::new(|_cc| Box::new(app)),
+            )
+            .expect("Ошибка запуска приложения");
+        })
+        .await
+        .expect("GUI task panicked");
+    }
+    // Headless mode: no GUI event loop; keep the node running until the shared
+    // shutdown flag flips (ctrlc / tokio signal handlers above), draining the
+    // UI sync channel so adoption events do not accumulate unbounded.
+    #[cfg(not(feature = "gui"))]
+    {
+        info!("Headless mode (gui feature off): running until shutdown signal");
+        while !shutdown.load(Ordering::Relaxed) {
+            while let Ok(_) = sync_rx.try_recv() {}
+            tokio::time::sleep(SYNC_TICK).await;
+        }
+        info!("Headless mode: shutdown signal received, exiting");
+    }
 }
 
 pub mod test_support {
     use super::*;
-    use base64::engine::general_purpose::STANDARD as BASE64;
-    use base64::Engine;
     use rand::rngs::OsRng;
     use secp256k1::{ecdsa::RecoverableSignature, Message, PublicKey, Secp256k1, SecretKey};
     use std::path::Path;
@@ -1655,7 +1677,8 @@ pub mod test_support {
         let secp = Secp256k1::new();
         let sk = SecretKey::new(&mut OsRng);
         let pk = PublicKey::from_secret_key(&secp, &sk);
-        let addr = BASE64.encode(pk.serialize());
+        let addr = crate::address::encode_address(&pk, crate::consensus::current_chain_id())
+            .expect("Failed to encode address for current chain");
         (addr, sk)
     }
 

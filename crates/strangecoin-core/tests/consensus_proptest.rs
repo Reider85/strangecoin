@@ -32,7 +32,10 @@ fn arbitrary_secret_key() -> impl Strategy<Value = SecretKey> {
 }
 
 fn arbitrary_address() -> impl Strategy<Value = String> {
-    arbitrary_public_key().prop_map(|pk| strangecoin_core::address::address_from_public_key(&pk))
+    arbitrary_public_key().prop_map(|pk| {
+        strangecoin_core::address::address_from_public_key(&pk)
+            .expect("Failed to generate address in proptest")
+    })
 }
 
 fn arbitrary_signature() -> impl Strategy<Value = Vec<u8>> {
@@ -83,7 +86,8 @@ fn arbitrary_signed_transaction() -> impl Strategy<Value = Transaction> {
             let public_key = PublicKey::from_secret_key(&secp, &secret_key);
             // verify_transaction() recovers the signer and compares its address
             // against tx.sender, so the sender must be derived from this key.
-            let sender = strangecoin_core::address::address_from_public_key(&public_key);
+            let sender = strangecoin_core::address::address_from_public_key(&public_key)
+                .expect("Failed to generate sender address in proptest");
             let mut tx = Transaction {
                 sender: sender.clone(),
                 receiver,

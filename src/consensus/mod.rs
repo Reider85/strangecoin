@@ -1,7 +1,6 @@
 pub use strangecoin_core::consensus::*;
 
 use sha2::Digest;
-use strangecoin_core::serialize;
 
 #[derive(serde::Deserialize)]
 pub struct GenesisConfig {
@@ -48,7 +47,7 @@ pub fn load_genesis(path: &str) -> Result<crate::Block, crate::error::Strangecoi
         .unwrap_or(&genesis.initial_holder);
     let pk_bytes = hex::decode(pk_hex)?;
     let public_key = secp256k1::PublicKey::from_slice(&pk_bytes)?;
-    let initial_holder_addr = crate::address::address_from_public_key(&public_key);
+    let initial_holder_addr = crate::address::encode_address(&public_key, genesis.network_id)?;
 
     let genesis_tx = crate::Transaction {
         sender: "genesis".to_string(),

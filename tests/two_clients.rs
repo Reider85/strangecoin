@@ -149,3 +149,40 @@ async fn node_runs_on_tokio_and_shuts_down_cleanly() {
 fn test_address() -> String {
     generate_keypairs(1).remove(0).0
 }
+
+#[test]
+fn bech32_address_transfer() {
+    // Test that addresses are properly formatted as bech32 and transfers work
+    let keypairs = generate_keypairs(2);
+    let addrs: Vec<String> = keypairs.iter().map(|(a, _)| a.clone()).collect();
+    
+    // Verify addresses start with correct HRP (should be rsc1 for regtest)
+    assert!(addrs[0].starts_with("rsc1"));
+    assert!(addrs[1].starts_with("rsc1"));
+    
+    let dirs: Vec<TestDir> = (0..2)
+        .map(|i| TestDir::new(&format!("wallet_{}", i)))
+        .collect();
+    let mut wallets: Vec<Arc<BlockchainFacade>> = Vec::new();
+    for dir in &dirs {
+        wallets.push(Arc::new(create_test_blockchain(dir.path())));
+    }
+    
+    // Grant to first wallet
+    assert!(wallets[0]
+        .grant_initial_balance_to_first_wallet(&addrs[0])
+        .unwrap());
+    sync_to_longest(&wallets);
+    assert_balances(&wallets, &addrs, &[10000, 0]);
+    
+    // Transfer 1000 from wallet 0 to wallet 1
+    create_and_mine_tx(&wallets[0], &addrs[0], &addrs[1], 1000, &keypairs[0].1);
+    sync_to_longest(&wallets);
+    assert_balances(&wallets, &addrs, &[9000, 1000]);
+    
+    // Verify both chains are valid
+    for w in &wallets {
+        assert_eq!(w.chain_len(), 3); // genesis + grant + 1 tx
+        assert!(w.validate_chain());
+    }
+}
