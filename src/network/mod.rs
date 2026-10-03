@@ -1,5 +1,6 @@
 pub mod protocol;
 pub mod rate_limiter;
+pub mod sync;
 pub use rate_limiter::RateLimiter;
 
 use std::net::{SocketAddr, TcpListener};

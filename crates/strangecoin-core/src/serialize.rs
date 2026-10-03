@@ -1,4 +1,4 @@
-use crate::types::{Block, Transaction};
+use crate::types::{Block, BlockHeader, Transaction};
 use blake3;
 use hex;
 
@@ -28,19 +28,80 @@ pub fn txid(tx: &Transaction) -> [u8; 32] {
 }
 
 pub fn serialize_block_header(block: &Block) -> Vec<u8> {
+    serialize_header(&block.header())
+}
+
+/// Canonical header encoding (identical to the block-header prefix of
+/// [`serialize_block`]): the `hash` field is excluded because it is derived
+/// from exactly these bytes.
+pub fn serialize_header(header: &BlockHeader) -> Vec<u8> {
     let mut out = Vec::new();
     out.push(FORMAT_VERSION);
-    out.extend_from_slice(&block.index.to_be_bytes());
-    out.extend_from_slice(&block.timestamp.to_be_bytes());
-    write_bytes32(&mut out, &block.previous_hash);
-    out.extend_from_slice(&block.tx_root);
-    let target_bytes = hex::decode(&block.target).expect("Invalid target hex");
+    out.extend_from_slice(&header.index.to_be_bytes());
+    out.extend_from_slice(&header.timestamp.to_be_bytes());
+    write_bytes32(&mut out, &header.previous_hash);
+    out.extend_from_slice(&header.tx_root);
+    let target_bytes = hex::decode(&header.target).expect("Invalid target hex");
     assert_eq!(target_bytes.len(), 32, "Target must be 32 bytes");
     out.extend_from_slice(&target_bytes);
-    out.extend_from_slice(&block.nonce.to_be_bytes());
-    out.extend_from_slice(&block.consensus_version.to_be_bytes());
-    out.extend_from_slice(&block.state_root);
+    out.extend_from_slice(&header.nonce.to_be_bytes());
+    out.extend_from_slice(&header.consensus_version.to_be_bytes());
+    out.extend_from_slice(&header.state_root);
     out
+}
+
+/// Byte length of [`serialize_header`] output.
+pub const HEADER_WIRE_LEN: usize = 1 + 8 + 8 + 32 + 32 + 32 + 8 + 4 + 32;
+
+/// PoW hash of a header: `blake3(serialize_header(header))`.
+pub fn header_hash(header: &BlockHeader) -> [u8; 32] {
+    *blake3::hash(&serialize_header(header)).as_bytes()
+}
+
+/// Decode a canonical header. The `hash` field is recomputed from the
+/// encoded bytes, never trusted from the wire.
+pub fn deserialize_header(bytes: &[u8]) -> Result<BlockHeader, &'static str> {
+    if bytes.len() != HEADER_WIRE_LEN {
+        return Err("Header length mismatch");
+    }
+    let mut offset = 0usize;
+    if bytes[offset] != FORMAT_VERSION {
+        return Err("Unsupported format version");
+    }
+    offset += 1;
+    let index = read_u64_be(bytes, &mut offset);
+    let timestamp = read_u64_be(bytes, &mut offset);
+    let mut previous_hash_bytes = [0u8; 32];
+    previous_hash_bytes.copy_from_slice(&bytes[offset..offset + 32]);
+    offset += 32;
+    let previous_hash = hex::encode(previous_hash_bytes);
+    let mut tx_root = [0u8; 32];
+    tx_root.copy_from_slice(&bytes[offset..offset + 32]);
+    offset += 32;
+    let mut target_bytes = [0u8; 32];
+    target_bytes.copy_from_slice(&bytes[offset..offset + 32]);
+    offset += 32;
+    let target = hex::encode(target_bytes);
+    let nonce = read_u64_be(bytes, &mut offset);
+    let consensus_version = read_u32_be(bytes, &mut offset);
+    let mut state_root = [0u8; 32];
+    state_root.copy_from_slice(&bytes[offset..offset + 32]);
+    offset += 32;
+    debug_assert_eq!(offset, HEADER_WIRE_LEN);
+
+    let mut header = BlockHeader {
+        index,
+        timestamp,
+        previous_hash,
+        hash: String::new(),
+        nonce,
+        target,
+        consensus_version,
+        state_root,
+        tx_root,
+    };
+    header.hash = hex::encode(header_hash(&header));
+    Ok(header)
 }
 
 pub fn merkle_root(txids: &[[u8; 32]]) -> [u8; 32] {
@@ -94,6 +155,39 @@ pub fn serialize_block(block: &Block) -> Vec<u8> {
         out.extend_from_slice(&tx_bytes);
     }
     out
+}
+
+/// Inverse of [`serialize_block`]: canonical header prefix + length-prefixed
+/// signed transactions. Rejects trailing bytes and absurd transaction counts
+/// before any allocation (invariant #7).
+pub fn deserialize_block(bytes: &[u8]) -> Result<Block, &'static str> {
+    if bytes.len() < HEADER_WIRE_LEN + 4 {
+        return Err("Block too short");
+    }
+    let header = deserialize_header(&bytes[..HEADER_WIRE_LEN])?;
+    let mut offset = HEADER_WIRE_LEN;
+    let tx_count = read_u32_be(bytes, &mut offset) as usize;
+    // Every transaction needs at least its length prefix, so a count larger
+    // than the remaining bytes can divide by 4 is garbage: bail before
+    // reserving capacity for it.
+    let remaining = bytes.len() - offset;
+    if tx_count > remaining / 4 {
+        return Err("Transaction count exceeds buffer");
+    }
+    let mut transactions = Vec::with_capacity(tx_count);
+    for _ in 0..tx_count {
+        let tx_len = read_u32_be(bytes, &mut offset) as usize;
+        if tx_len > remaining || offset + tx_len > bytes.len() {
+            return Err("Transaction length exceeds buffer");
+        }
+        let tx = deserialize_transaction_signed(&bytes[offset..offset + tx_len])?;
+        offset += tx_len;
+        transactions.push(tx);
+    }
+    if offset != bytes.len() {
+        return Err("Trailing bytes after block");
+    }
+    Ok(Block::from_header(header, transactions))
 }
 
 fn write_string(out: &mut Vec<u8>, s: &str) {
@@ -178,6 +272,48 @@ pub fn deserialize_transaction(bytes: &[u8]) -> Result<Transaction, &'static str
         nonce,
         chain_id,
         signature: Vec::new(),
+        is_coinbase,
+    })
+}
+
+/// Full round-trip parser for [`serialize_transaction_signed`]: all fields
+/// plus the signature, rejecting truncated buffers and trailing bytes.
+pub fn deserialize_transaction_signed(bytes: &[u8]) -> Result<Transaction, &'static str> {
+    let mut offset = 0;
+
+    if offset >= bytes.len() {
+        return Err("Empty buffer");
+    }
+    let format_version = bytes[offset];
+    offset += 1;
+    if format_version != FORMAT_VERSION {
+        return Err("Unsupported format version");
+    }
+
+    let sender = read_string(bytes, &mut offset)?;
+    let receiver = read_string(bytes, &mut offset)?;
+    let amount = read_u64_be(bytes, &mut offset);
+    let nonce = read_u64_be(bytes, &mut offset);
+    let chain_id = read_u32_be(bytes, &mut offset);
+    if offset >= bytes.len() {
+        return Err("Buffer too short for is_coinbase");
+    }
+    let is_coinbase = bytes[offset] != 0;
+    offset += 1;
+
+    let sig_len = read_u32_be(bytes, &mut offset) as usize;
+    if offset + sig_len != bytes.len() {
+        return Err("Signature length mismatch");
+    }
+    let signature = bytes[offset..].to_vec();
+
+    Ok(Transaction {
+        sender,
+        receiver,
+        amount,
+        nonce,
+        chain_id,
+        signature,
         is_coinbase,
     })
 }

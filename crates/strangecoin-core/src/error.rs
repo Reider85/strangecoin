@@ -46,4 +46,6 @@ pub enum CoreError {
     UnknownNetworkId { network_id: u32 },
     #[error("bech32 encode error: {0}")]
     Bech32EncodeError(#[from] bech32::EncodeError),
+    #[error("header hash mismatch: expected {expected}, got {got}")]
+    HeaderHashMismatch { expected: String, got: String },
 }

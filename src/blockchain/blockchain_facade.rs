@@ -38,7 +38,7 @@ use super::consensus_manager::ConsensusManager;
 use super::state_cache::StateCache;
 use crate::error::StrangecoinError;
 use crate::AccountState;
-use strangecoin_core::types::{Block, Transaction};
+use strangecoin_core::types::{Block, BlockHeader, Transaction};
 
 /// Wire shape of a chain snapshot: what peers send and what `sync_rx` carries.
 ///
@@ -1384,6 +1384,39 @@ impl BlockchainFacade {
     pub fn to_wire_json(&self) -> String {
         let guard = self.inner.read().expect(BLOCKCHAIN_LOCK);
         serde_json::to_string(&*guard).unwrap()
+    }
+
+    /// Headers for the HEADERS response (S1-P16): headers with
+    /// `index >= from_height`, ascending, at most `max` of them.
+    pub fn headers_from_height(&self, from_height: u64, max: usize) -> Vec<BlockHeader> {
+        let guard = self.inner.read().expect(BLOCKCHAIN_LOCK);
+        guard
+            .chain
+            .iter()
+            .filter(|b| b.index >= from_height)
+            .take(max)
+            .map(|b| b.header())
+            .collect()
+    }
+
+    /// Full blocks for the BLOCKS response (S1-P16): one block per requested
+    /// hash, in request order; unknown hashes are skipped. One hash→index
+    /// pass over the chain regardless of how many hashes were asked for.
+    pub fn blocks_by_hashes(&self, hashes: &[[u8; 32]], max: usize) -> Vec<Block> {
+        if hashes.is_empty() {
+            return Vec::new();
+        }
+        let guard = self.inner.read().expect(BLOCKCHAIN_LOCK);
+        let mut by_hash: HashMap<&str, &Block> = HashMap::with_capacity(guard.chain.len());
+        for block in &guard.chain {
+            by_hash.insert(&block.hash, block);
+        }
+        hashes
+            .iter()
+            .filter_map(|hash| by_hash.get(hex::encode(hash).as_str()))
+            .take(max)
+            .map(|b| (*b).clone())
+            .collect()
     }
 
     /// Adopt a deserialized wire snapshot if it beats the current chain.

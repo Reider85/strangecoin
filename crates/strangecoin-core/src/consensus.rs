@@ -239,6 +239,31 @@ pub fn validate_difficulty(block: &Block) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// Header-only PoW check (S1-P16): the header's own hash must meet its
+/// declared target, and a non-empty declared `hash` field must match the
+/// recomputed one. Body rules (retarget schedule, tx_root, signatures) are
+/// deliberately NOT checked here — headers only lay out the route.
+pub fn validate_header_pow(header: &crate::types::BlockHeader) -> Result<(), CoreError> {
+    let computed = serialize::header_hash(header);
+    if !header.hash.is_empty() && header.hash != hex::encode(computed) {
+        return Err(CoreError::HeaderHashMismatch {
+            expected: hex::encode(computed),
+            got: header.hash.clone(),
+        });
+    }
+    let target_bytes =
+        hex::decode(&header.target).map_err(|_| CoreError::InvalidDifficulty)?;
+    if target_bytes.len() != 32 {
+        return Err(CoreError::InvalidDifficulty);
+    }
+    let mut target_arr = [0u8; 32];
+    target_arr.copy_from_slice(&target_bytes);
+    if u256_gt(u256_from_bytes(&computed), u256_from_bytes(&target_arr)) {
+        return Err(CoreError::InvalidDifficulty);
+    }
+    Ok(())
+}
+
 pub fn recover_pubkey_from_sig(
     signature: &[u8],
     message: &[u8],
@@ -307,6 +332,20 @@ pub fn cumulative_work(chain: &[Block]) -> U256 {
     let mut total: U256 = [0, 0, 0, 0];
     for block in chain {
         let target_bytes = hex::decode(&block.target).expect("valid target hex");
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&target_bytes);
+        let w = work_from_target(&arr);
+        total = u256_add(total, w);
+    }
+    total
+}
+
+/// Header-only cumulative work (S1-P16): same rule as [`cumulative_work`],
+/// applied to headers — lets fork choice run before any body is downloaded.
+pub fn cumulative_work_headers(headers: &[crate::types::BlockHeader]) -> U256 {
+    let mut total: U256 = [0, 0, 0, 0];
+    for header in headers {
+        let target_bytes = hex::decode(&header.target).expect("valid target hex");
         let mut arr = [0u8; 32];
         arr.copy_from_slice(&target_bytes);
         let w = work_from_target(&arr);

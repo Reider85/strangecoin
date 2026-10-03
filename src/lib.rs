@@ -411,6 +411,10 @@ let blockchain = Arc::clone(&self.blockchain);
                         let peer_addr = stream.peer_addr().ok();
                         let rate_limiter_clone = Arc::clone(&rate_limiter);
                         let event_bus_clone = Arc::clone(&event_bus);
+                        let shutdown = Arc::clone(&shutdown);
+                        let _ = stream.set_read_timeout(Some(
+                            crate::network::sync::SYNC_IO_TIMEOUT,
+                        ));
                         
                         thread::spawn(move || {
                             if let Some(addr) = peer_addr {
@@ -454,72 +458,150 @@ let blockchain = Arc::clone(&self.blockchain);
                             
                             debug!(peer_network_id, "HELLO handshake successful");
                             
-                            // Read the actual request after HELLO
-                            let request_bytes =
-                                match crate::network::protocol::read_length_prefixed(&mut reader) {
-                                    Ok(bytes) => bytes,
-                                    Err(e) => {
-                                        warn!(error = %e, "Failed to read length-prefixed message");
-                                        return;
-                                    }
-                                };
-                            let request = String::from_utf8_lossy(&request_bytes).to_string();
-                            debug!(request = %request, "Получен запрос");
-                            
                             let blockchain = Arc::clone(&blockchain);
                             let event_bus = Arc::clone(&event_bus_clone);
+                            use crate::network::protocol as proto;
 
-                            if request == "GET_BLOCKCHAIN" {
-                                let response = blockchain.to_wire_json();
-                                let length = response.len() as u32;
-                                let mut data = length.to_be_bytes().to_vec();
-                                data.extend_from_slice(response.as_bytes());
-                                if writer.write_all(&data).is_ok() {
-                                    writer.flush().ok();
-                                    info!("Отправлен блокчейн клиенту");
+                            // S1-P16: one connection serves many requests —
+                            // a headers-first client iterates GET_HEADERS /
+                            // GET_BLOCKS on a single session. The read
+                            // timeout bounds idle handler threads; a client
+                            // that just closes surfaces as EOF here.
+                            loop {
+                                if shutdown.load(Ordering::Relaxed) {
+                                    break;
                                 }
-                            } else if request.starts_with("UPDATE_BLOCKCHAIN:") {
-                                let blockchain_data =
-                                    request.strip_prefix("UPDATE_BLOCKCHAIN:").unwrap_or("");
-                                let temp_blockchain: BlockchainDeserialize =
-                                    match serde_json::from_str(blockchain_data) {
-                                        Ok(data) => data,
+                                let request_bytes =
+                                    match proto::read_length_prefixed(&mut reader) {
+                                        Ok(bytes) => bytes,
                                         Err(e) => {
-                                            error!(error = %e, "Ошибка десериализации данных блокчейна");
-                                            return;
+                                            debug!(error = %e, "Соединение закрыто после HELLO");
+                                            break;
                                         }
                                     };
-                                let adopted = match blockchain.adopt_candidate(
-                                    temp_blockchain.chain.clone(),
-                                    Some(temp_blockchain.balances.clone()),
-                                    temp_blockchain.mempool_txs.clone(),
-                                    temp_blockchain.difficulty,
-                                ) {
-                                    Ok(adopted) => adopted,
-                                    Err(e) => {
-                                        warn!(error = %e, "Кандидат отклонён фасадом");
-                                        false
-                                    }
-                                };
-                                if adopted {
-                                    info!("Блокчейн обновлён через UPDATE_BLOCKCHAIN");
-                                    let height = blockchain.chain_len() as u64 - 1;
-                                    event_bus.publish(events::NodeEvent::StatePersisted { height });
-                                    event_bus.publish(events::NodeEvent::BlockApplied {
-                                        height,
-                                        hash: blockchain.tip_hash(),
-                                    });
-                                    let _ = sync_tx.send(blockchain.snapshot_wire());
-                                } else {
-                                    for tx in temp_blockchain.pending_transactions.iter() {
-                                        if !blockchain.mempool_contains(
-                                            &strangecoin_core::serialize::txid(tx),
-                                        ) {
-                                            let _ = blockchain.apply_tx(tx.clone());
+
+                                // Binary requests (S1-P16) — checked before
+                                // the UTF-8 text path; text messages start
+                                // with ASCII letters, tags with 0x01..=0x04.
+                                match request_bytes.first() {
+                                    Some(&proto::MSG_GET_HEADERS) => {
+                                        let payload = match proto::parse_get_headers(&request_bytes)
+                                        {
+                                            Ok(from_height) => {
+                                                let headers = blockchain.headers_from_height(
+                                                    from_height,
+                                                    proto::MAX_HEADERS_BATCH,
+                                                );
+                                                proto::encode_headers(&headers).map_err(|e| {
+                                                    warn!(error = %e, "Не удалось закодировать заголовки");
+                                                })
+                                            }
+                                            Err(e) => {
+                                                warn!(error = %e, "Некорректный GET_HEADERS");
+                                                Err(())
+                                            }
+                                        };
+                                        match payload {
+                                            Ok(payload) => {
+                                                if let Err(e) =
+                                                    proto::write_length_prefixed(&mut writer, &payload)
+                                                {
+                                                    debug!(error = %e, "Не удалось отправить заголовки");
+                                                    break;
+                                                }
+                                            }
+                                            Err(()) => break,
                                         }
+                                        continue;
                                     }
-                                    blockchain.save_state();
-                                    info!("Обновлены pending_transactions через UPDATE_BLOCKCHAIN");
+                                    Some(&proto::MSG_GET_BLOCKS) => {
+                                        let payload = match proto::parse_get_blocks(&request_bytes)
+                                        {
+                                            Ok(hashes) => {
+                                                let blocks = blockchain.blocks_by_hashes(
+                                                    &hashes,
+                                                    proto::MAX_BLOCKS_BATCH,
+                                                );
+                                                proto::encode_blocks(&blocks).map_err(|e| {
+                                                    warn!(error = %e, "Не удалось закодировать блоки");
+                                                })
+                                            }
+                                            Err(e) => {
+                                                warn!(error = %e, "Некорректный GET_BLOCKS");
+                                                Err(())
+                                            }
+                                        };
+                                        match payload {
+                                            Ok(payload) => {
+                                                if let Err(e) =
+                                                    proto::write_length_prefixed(&mut writer, &payload)
+                                                {
+                                                    debug!(error = %e, "Не удалось отправить блоки");
+                                                    break;
+                                                }
+                                            }
+                                            Err(()) => break,
+                                        }
+                                        continue;
+                                    }
+                                    _ => {}
+                                }
+
+                                let request = String::from_utf8_lossy(&request_bytes).to_string();
+                                debug!(request = %request, "Получен запрос");
+
+                                if request == "GET_BLOCKCHAIN" {
+                                    let response = blockchain.to_wire_json();
+                                    let length = response.len() as u32;
+                                    let mut data = length.to_be_bytes().to_vec();
+                                    data.extend_from_slice(response.as_bytes());
+                                    if writer.write_all(&data).is_ok() {
+                                        writer.flush().ok();
+                                        info!("Отправлен блокчейн клиенту");
+                                    }
+                                } else if request.starts_with("UPDATE_BLOCKCHAIN:") {
+                                    let blockchain_data =
+                                        request.strip_prefix("UPDATE_BLOCKCHAIN:").unwrap_or("");
+                                    let temp_blockchain: BlockchainDeserialize =
+                                        match serde_json::from_str(blockchain_data) {
+                                            Ok(data) => data,
+                                            Err(e) => {
+                                                error!(error = %e, "Ошибка десериализации данных блокчейна");
+                                                return;
+                                            }
+                                        };
+                                    let adopted = match blockchain.adopt_candidate(
+                                        temp_blockchain.chain.clone(),
+                                        Some(temp_blockchain.balances.clone()),
+                                        temp_blockchain.mempool_txs.clone(),
+                                        temp_blockchain.difficulty,
+                                    ) {
+                                        Ok(adopted) => adopted,
+                                        Err(e) => {
+                                            warn!(error = %e, "Кандидат отклонён фасадом");
+                                            false
+                                        }
+                                    };
+                                    if adopted {
+                                        info!("Блокчейн обновлён через UPDATE_BLOCKCHAIN");
+                                        let height = blockchain.chain_len() as u64 - 1;
+                                        event_bus.publish(events::NodeEvent::StatePersisted { height });
+                                        event_bus.publish(events::NodeEvent::BlockApplied {
+                                            height,
+                                            hash: blockchain.tip_hash(),
+                                        });
+                                        let _ = sync_tx.send(blockchain.snapshot_wire());
+                                    } else {
+                                        for tx in temp_blockchain.pending_transactions.iter() {
+                                            if !blockchain.mempool_contains(
+                                                &strangecoin_core::serialize::txid(tx),
+                                            ) {
+                                                let _ = blockchain.apply_tx(tx.clone());
+                                            }
+                                        }
+                                        blockchain.save_state();
+                                        info!("Обновлены pending_transactions через UPDATE_BLOCKCHAIN");
+                                    }
                                 }
                             }
                         });
@@ -548,9 +630,6 @@ let blockchain = Arc::clone(&self.blockchain);
             .collect();
         info!(peers = ?peers, "Список пиров для синхронизации");
 
-        let current_chain_length = self.blockchain.chain_len();
-        debug!(current_chain_length, "Текущая длина chain");
-
         for peer in peers.iter() {
             if shutdown.load(Ordering::Relaxed) {
                 info!("Shutdown signal received, stopping sync");
@@ -567,33 +646,83 @@ let blockchain = Arc::clone(&self.blockchain);
                 warn!(peer = %peer, error = %e, "Rate limit exceeded for outgoing request, skipping peer");
                 continue;
             }
+            let current_chain_length = self.blockchain.chain_len();
+            debug!(current_chain_length, "Текущая длина chain");
             if current_chain_length <= 1 {
                 info!("Новый узел, только получение данных, отправка цепочки запрещена");
-                continue;
-            }
-            // Отправка UPDATE_BLOCKCHAIN with HELLO handshake
-            if let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
-                let mut writer = BufWriter::new(stream.try_clone().unwrap());
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                
-                // Send HELLO handshake first
-                let hello_data = crate::network::protocol::encode_hello(self.network_id);
-                if writer.write_all(&hello_data).is_err() {
-                    warn!(peer = %peer, "Failed to send HELLO handshake");
-                    continue;
-                }
-                writer.flush().ok();
-                
-                // Send UPDATE_BLOCKCHAIN
-                let response = self.blockchain.to_wire_json();
-                let message = format!("UPDATE_BLOCKCHAIN:{}", response);
-                let length = message.len() as u32;
-                let mut data = length.to_be_bytes().to_vec();
-                data.extend_from_slice(message.as_bytes());
-                if writer.write_all(&data).is_ok() {
+            } else {
+                // Отправка UPDATE_BLOCKCHAIN with HELLO handshake
+                if let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
+                    let mut writer = BufWriter::new(stream.try_clone().unwrap());
+
+                    // Send HELLO handshake first
+                    let hello_data = crate::network::protocol::encode_hello(self.network_id);
+                    if writer.write_all(&hello_data).is_err() {
+                        warn!(peer = %peer, "Failed to send HELLO handshake");
+                        continue;
+                    }
                     writer.flush().ok();
-                    info!(peer = %peer, message_len = data.len(), "Блокчейн отправлен узлу");
+
+                    // Send UPDATE_BLOCKCHAIN
+                    let response = self.blockchain.to_wire_json();
+                    let message = format!("UPDATE_BLOCKCHAIN:{}", response);
+                    let length = message.len() as u32;
+                    let mut data = length.to_be_bytes().to_vec();
+                    data.extend_from_slice(message.as_bytes());
+                    if writer.write_all(&data).is_ok() {
+                        writer.flush().ok();
+                        info!(peer = %peer, message_len = data.len(), "Блокчейн отправлен узлу");
+                    }
                 }
+            }
+
+            // S1-P16: headers-first sync. Errors mean the peer does not
+            // serve the binary protocol (pre-P16 peers never answer) — then
+            // we fall back to GET_BLOCKCHAIN below. Adoption skips the
+            // fallback; "nothing better" does not (mempool gossip lives
+            // there).
+            let mut adopted_via_headers = false;
+            match crate::network::sync::sync_headers_first(
+                addr,
+                self.network_id,
+                &self.blockchain,
+                &shutdown,
+            ) {
+                Ok(outcome) if outcome.adopted => {
+                    adopted_via_headers = true;
+                    info!(
+                        peer = %peer,
+                        new_chain_len = self.blockchain.chain_len(),
+                        headers = outcome.headers_ingested,
+                        blocks = outcome.blocks_downloaded,
+                        "Блокчейн обновлён (headers-first)"
+                    );
+                    let height = self.blockchain.chain_len() as u64 - 1;
+                    self.event_bus
+                        .publish(events::NodeEvent::StatePersisted { height });
+                    self.event_bus.publish(events::NodeEvent::BlockApplied {
+                        height,
+                        hash: self.blockchain.tip_hash(),
+                    });
+                    let _ = sync_tx.send(self.blockchain.snapshot_wire());
+                }
+                Ok(outcome) => {
+                    debug!(
+                        peer = %peer,
+                        headers = outcome.headers_ingested,
+                        "Лучшей ветки у пира нет"
+                    );
+                }
+                Err(e) => {
+                    debug!(
+                        peer = %peer,
+                        error = %e,
+                        "Headers-first недоступен, переходим к GET_BLOCKCHAIN"
+                    );
+                }
+            }
+            if adopted_via_headers {
+                continue;
             }
 
             // Запрос GET_BLOCKCHAIN with HELLO handshake

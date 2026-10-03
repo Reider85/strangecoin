@@ -11,4 +11,4 @@ pub use error::CoreError;
 pub use serialize::{compute_tx_root, merkle_root};
 pub use state::witness::{build_witness, verify_block_stateless, AccountProof, StateWitness};
 pub use state::{apply_block, compute_state_root, root_after, unapply_block, State};
-pub use types::{AccountState, Block, Transaction};
+pub use types::{AccountState, Block, BlockHeader, Transaction};

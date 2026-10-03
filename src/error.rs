@@ -130,6 +130,12 @@ impl From<strangecoin_core::CoreError> for StrangecoinError {
             strangecoin_core::CoreError::Bech32EncodeError(e) => {
                 StrangecoinError::ConfigError(format!("bech32 encode error: {}", e))
             }
+            strangecoin_core::CoreError::HeaderHashMismatch { expected, got } => {
+                StrangecoinError::InvalidBlock(format!(
+                    "header hash mismatch: expected {}, got {}",
+                    expected, got
+                ))
+            }
         }
     }
 }
