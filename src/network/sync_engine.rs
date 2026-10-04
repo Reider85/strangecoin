@@ -21,8 +21,8 @@ use tracing::{debug, info, warn};
 use crate::blockchain::BlockchainFacade;
 use crate::events::{EventBus, NodeEvent};
 use crate::network::RateLimiter;
-use crate::{AccountState, Block, Blockchain, Transaction};
-use strangecoin_core::types::BlockHeader;
+use crate::{AccountState, Block, Transaction};
+use strangecoin_core::types::{BlockHeader, ChainSnapshot};
 
 /// Capacity of the headers lane (ADR-0010: headers get priority).
 const HEADERS_INBOX_CAP: usize = 64;
@@ -207,7 +207,7 @@ pub struct SyncEngine {
     blocks_rx: Receiver<Incoming>,
     facade: Arc<BlockchainFacade>,
     bus: Arc<EventBus>,
-    sync_tx: std_mpsc::Sender<Blockchain>,
+    sync_tx: std_mpsc::Sender<ChainSnapshot>,
     shutdown: Arc<AtomicBool>,
 }
 
@@ -264,7 +264,7 @@ impl SyncEngine {
 pub fn spawn(
     facade: Arc<BlockchainFacade>,
     bus: Arc<EventBus>,
-    sync_tx: std_mpsc::Sender<Blockchain>,
+    sync_tx: std_mpsc::Sender<ChainSnapshot>,
     shutdown: Arc<AtomicBool>,
     rate_limiter: Arc<RateLimiter>,
 ) -> Inbox {
@@ -309,7 +309,7 @@ pub fn spawn(
 fn process(
     facade: &BlockchainFacade,
     bus: &EventBus,
-    sync_tx: &std_mpsc::Sender<Blockchain>,
+    sync_tx: &std_mpsc::Sender<ChainSnapshot>,
     msg: Incoming,
 ) {
     match msg {
@@ -391,7 +391,7 @@ fn process(
 fn announce(
     facade: &BlockchainFacade,
     bus: &EventBus,
-    sync_tx: &std_mpsc::Sender<Blockchain>,
+    sync_tx: &std_mpsc::Sender<ChainSnapshot>,
     old_tip: String,
 ) {
     let height = facade.chain_len() as u64 - 1;

@@ -38,7 +38,7 @@ use super::consensus_manager::ConsensusManager;
 use super::state_cache::StateCache;
 use crate::error::StrangecoinError;
 use crate::AccountState;
-use strangecoin_core::types::{Block, BlockHeader, Transaction};
+use strangecoin_core::types::{Block, BlockHeader, ChainSnapshot, Transaction};
 
 /// Wire shape of a chain snapshot: what peers send and what `sync_rx` carries.
 ///
@@ -1398,17 +1398,14 @@ impl BlockchainFacade {
     // ------------------------------------------------------------------- wire
 
     /// Clone of the chain for the sync channel: full state, empty mempool.
-    pub fn snapshot_wire(&self) -> Blockchain {
+    pub fn snapshot_wire(&self) -> ChainSnapshot {
         let guard = self.inner.read().expect(BLOCKCHAIN_LOCK);
-        Blockchain {
+        ChainSnapshot {
             chain: guard.chain.clone(),
-            balances: guard.balances.clone(),
+            balances: guard.balances.accounts().clone(),
             difficulty: guard.difficulty,
-            mempool: crate::mempool::Mempool::new(),
-            storage: guard.storage.clone(),
-            allow_grant_blocks: guard.allow_grant_blocks,
+            mempool_txs: Vec::new(),
             total_work: guard.total_work,
-            rules: guard.rules.clone(),
         }
     }
 
@@ -1451,12 +1448,12 @@ impl BlockchainFacade {
     }
 
     /// Adopt a deserialized wire snapshot if it beats the current chain.
-    pub fn adopt_wire(&self, wire: Blockchain) -> Result<bool, StrangecoinError> {
+    pub fn adopt_wire(&self, snapshot: ChainSnapshot) -> Result<bool, StrangecoinError> {
         self.adopt_candidate(
-            wire.chain,
-            Some(wire.balances.accounts().clone()),
-            wire.mempool.transactions(),
-            wire.difficulty,
+            snapshot.chain,
+            Some(snapshot.balances),
+            snapshot.mempool_txs,
+            snapshot.difficulty,
         )
     }
 

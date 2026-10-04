@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use strangecoin::events::NodeEvent;
 use strangecoin::network::sync_engine::{self, Incoming};
-use strangecoin::{Block, Blockchain, BlockchainFacade};
+use strangecoin::{Block, Blockchain, BlockchainFacade, ChainSnapshot};
 
 /// S1-P18 / ADR-0010: two peers race the same candidate (and competing
 /// forks) into the inbox simultaneously. The SyncEngine is the single
@@ -63,7 +63,7 @@ fn concurrent_candidates_race_through_one_engine() {
     }
     assert_eq!(fork_c.chain_len(), 5);
 
-    let (sync_tx, _sync_rx) = mpsc::channel::<Blockchain>();
+    let (sync_tx, _sync_rx) = mpsc::channel::<ChainSnapshot>();
     let shutdown = Arc::new(AtomicBool::new(false));
     // Subscribe before spawning the engine so no event can be missed.
     let events = main.event_bus().subscribe();

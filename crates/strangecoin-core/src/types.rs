@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use crate::consensus::U256;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Block {
@@ -87,4 +89,14 @@ pub struct Transaction {
     pub signature: Vec<u8>,
     #[serde(default)]
     pub is_coinbase: bool,
+}
+
+/// Chain snapshot for sync channel and GUI updates
+#[derive(Clone, Debug)]
+pub struct ChainSnapshot {
+    pub chain: Vec<Block>,
+    pub balances: HashMap<String, AccountState>,
+    pub difficulty: u32,
+    pub mempool_txs: Vec<Transaction>,
+    pub total_work: U256,
 }

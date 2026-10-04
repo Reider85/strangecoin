@@ -2,7 +2,7 @@ mod common;
 
 use common::*;
 use std::sync::Arc;
-use strangecoin::{Blockchain, BlockchainFacade};
+use strangecoin::{Blockchain, BlockchainFacade, ChainSnapshot};
 
 #[test]
 fn three_instances_receive_transfer() {
@@ -72,7 +72,7 @@ fn real_network_three_nodes() {
         ports[0], ports[1], ports[2]
     );
     std::fs::write(&net_path, net_content).unwrap();
-    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<Blockchain>();
+    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<ChainSnapshot>();
     let dirs: Vec<TestDir> = (0..3)
         .map(|i| TestDir::new(&format!("net_{}", i)))
         .collect();
@@ -171,7 +171,7 @@ fn real_network_fast_registration_race() {
         ports[0], ports[1], ports[2]
     );
     std::fs::write(&net_path, net_content).unwrap();
-    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<Blockchain>();
+    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<ChainSnapshot>();
     let dirs: Vec<TestDir> = (0..3)
         .map(|i| TestDir::new(&format!("fast_{}", i)))
         .collect();

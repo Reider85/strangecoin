@@ -10,13 +10,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use strangecoin::events::NodeEvent;
 use strangecoin::network::sync_engine::Incoming;
-use strangecoin::{Blockchain, Transaction};
+use strangecoin::{Blockchain, ChainSnapshot, Transaction};
 
 #[test]
 fn three_subscribers_each_receive_live_node_events() {
     let _net_lock = NETWORK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let port = random_port();
-    let (sync_tx, _sync_rx) = mpsc::channel::<Blockchain>();
+    let (sync_tx, _sync_rx) = mpsc::channel::<ChainSnapshot>();
 
     let dir = TestDir::new("events_live");
     let bc = Arc::new(create_test_blockchain(dir.path()));

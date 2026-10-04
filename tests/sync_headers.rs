@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use strangecoin::network::sync;
-use strangecoin::Blockchain;
+use strangecoin::ChainSnapshot;
 
 fn to_addr(port: u16) -> SocketAddr {
     format!("127.0.0.1:{}", port)
@@ -21,7 +21,7 @@ fn shutdown_flag() -> Arc<AtomicBool> {
 fn new_node_syncs_20_blocks_via_headers_first() {
     let _net_lock = NETWORK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let port = random_port();
-    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<Blockchain>();
+    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<ChainSnapshot>();
 
     let server_dir = TestDir::new("hf_server");
     let client_dir = TestDir::new("hf_client");
@@ -81,7 +81,7 @@ fn new_node_syncs_20_blocks_via_headers_first() {
 fn equal_chain_reports_nothing_better() {
     let _net_lock = NETWORK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let port = random_port();
-    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<Blockchain>();
+    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<ChainSnapshot>();
 
     let server_dir = TestDir::new("hf_eq_server");
     let client_dir = TestDir::new("hf_eq_client");
@@ -126,7 +126,7 @@ fn equal_chain_reports_nothing_better() {
 fn longer_fork_resolved_via_headers_first() {
     let _net_lock = NETWORK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let port = random_port();
-    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<Blockchain>();
+    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<ChainSnapshot>();
 
     let server_dir = TestDir::new("hf_fork_server");
     let client_dir = TestDir::new("hf_fork_client");

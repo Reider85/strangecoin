@@ -9,7 +9,7 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::time::Duration;
-use strangecoin::network::protocol;
+use strangecoin::{network::protocol, ChainSnapshot};
 
 fn to_addr(port: u16) -> SocketAddr {
     format!("127.0.0.1:{}", port)
@@ -25,7 +25,7 @@ fn connect(port: u16) -> TcpStream {
 fn foreign_network_id_is_rejected_and_banned() {
     let _net_lock = NETWORK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let port = random_port();
-    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<strangecoin::Blockchain>();
+    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<ChainSnapshot>();
 
     let dir = TestDir::new("netid_server");
     let bc = Arc::new(create_test_blockchain(dir.path()));

@@ -37,7 +37,7 @@ pub mod wallet;
 
 pub use blockchain::{Blockchain, BlockchainDeserialize, BlockchainFacade, ConsensusManager};
 pub use strangecoin_core::serialize;
-pub use strangecoin_core::types::{Block, Transaction};
+pub use strangecoin_core::types::{Block, ChainSnapshot, Transaction};
 pub use strangecoin_core::AccountState;
 
 /// Sync task tick period: how often the shutdown flag is re-checked.
@@ -69,7 +69,7 @@ pub struct Node {
     pub blockchain: Arc<BlockchainFacade>,
     pub peers: Arc<Mutex<Vec<String>>>,
     pub address: String,
-    pub sync_rx: mpsc::Receiver<Blockchain>,
+    pub sync_rx: mpsc::Receiver<ChainSnapshot>,
     pub rate_limiter: Arc<crate::network::RateLimiter>,
     pub shutdown: Arc<AtomicBool>,
     pub listener: Arc<Mutex<Option<TcpListener>>>,
@@ -397,7 +397,7 @@ impl Node {
         None
     }
 
-    pub fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
+    pub fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<ChainSnapshot>) {
         let start_time = SystemTime::now();
         // ADR-0010: the engine spawned here is the only adopter of incoming
         // data; the handlers below only enqueue into its inbox.
@@ -851,8 +851,8 @@ impl eframe::App for WalletApp {
             self.last_repaint = now;
         }
 
-        while let Ok(received_blockchain) = self.node.sync_rx.try_recv() {
-            if received_blockchain.chain.len() <= 1 {
+        while let Ok(received_snapshot) = self.node.sync_rx.try_recv() {
+            if received_snapshot.chain.len() <= 1 {
                 debug!("Получена пустая или минимальная цепочка через sync_rx, игнорируем");
                 continue;
             }
@@ -861,7 +861,7 @@ impl eframe::App for WalletApp {
             let adopted = self
                 .node
                 .blockchain
-                .adopt_wire(received_blockchain)
+                .adopt_wire(received_snapshot)
                 .unwrap_or(false);
             if adopted {
                 info!("UI: Блокчейн обновлён через канал синхронизации");

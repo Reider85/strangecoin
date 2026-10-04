@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use tracing::{debug, info, warn};
 
-use crate::blockchain::chain_selector::{ChainInfo, ChainSelector};
+use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 use crate::error::StrangecoinError;
 use crate::network::protocol::{self, MAX_BLOCKS_BATCH, MAX_HEADERS_BATCH};
 use strangecoin_core::consensus::{cumulative_work_headers, validate_header_pow};
