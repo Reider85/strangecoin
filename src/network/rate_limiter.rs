@@ -25,7 +25,7 @@ impl PeerCounter {
     }
 
     fn is_banned(&self, now: Instant) -> bool {
-        self.banned_until.map_or(false, |until| now < until)
+        self.banned_until.is_some_and(|until| now < until)
     }
 
     fn check_and_clear_ban(&mut self, now: Instant) -> bool {
@@ -106,7 +106,6 @@ impl RateLimiter {
     /// Ban a specific peer by address, useful for protocol violations
     pub fn ban(&self, addr: SocketAddr) {
         let mut peers = self.peers.lock().unwrap();
-        let now = Instant::now();
         if let Some(counter) = peers.get_mut(&addr) {
             counter.ban(self.ban_duration);
             tracing::warn!(peer = %addr, "Peer banned for protocol violation");
@@ -117,7 +116,7 @@ impl RateLimiter {
     pub fn is_banned(&self, addr: SocketAddr) -> bool {
         let peers = self.peers.lock().unwrap();
         let now = Instant::now();
-        peers.get(&addr).map_or(false, |c| c.is_banned(now))
+        peers.get(&addr).is_some_and(|c| c.is_banned(now))
     }
 }
 

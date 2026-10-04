@@ -7,7 +7,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use blake3;
 use pbkdf2::{
-    password_hash::{rand_core::RngCore, PasswordHash, PasswordHasher, SaltString},
+    password_hash::{rand_core::RngCore, PasswordHasher, SaltString},
     Pbkdf2,
 };
 use rand::rngs::OsRng;
@@ -129,10 +129,9 @@ impl Wallet {
         let nonce_bytes = BASE64
             .decode(&keystore.nonce)
             .map_err(|e| StrangecoinError::ConfigError(format!("Error decoding nonce: {}", e)))?;
-        let salt = SaltString::new(&keystore.salt)
+        let salt = SaltString::from_b64(&keystore.salt)
             .map_err(|e| StrangecoinError::ConfigError(format!("Error parsing salt: {}", e)))?;
 
-        let secp = Secp256k1::new();
         let public_key = PublicKey::from_slice(&public_key_bytes).map_err(|e| {
             StrangecoinError::ConfigError(format!("Error restoring public key: {}", e))
         })?;

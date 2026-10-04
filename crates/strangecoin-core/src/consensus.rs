@@ -29,12 +29,9 @@ pub type U256 = [u64; 4];
 
 pub fn u256_from_bytes(bytes: &[u8; 32]) -> U256 {
     let mut words = [0u64; 4];
-    for i in 0..4 {
-        let start = i * 8;
-        let end = start + 8;
-        let mut word_bytes = [0u8; 8];
-        word_bytes.copy_from_slice(&bytes[start..end]);
-        words[i] = u64::from_be_bytes(word_bytes);
+    let (chunks, _) = bytes.as_chunks::<8>();
+    for (i, chunk) in chunks.iter().enumerate() {
+        words[i] = u64::from_be_bytes(*chunk);
     }
     words
 }
@@ -45,8 +42,8 @@ pub fn u256_from_u64(v: u64) -> U256 {
 
 pub fn u256_to_bytes(v: U256) -> [u8; 32] {
     let mut bytes = [0u8; 32];
-    for i in 0..4 {
-        let word_bytes = v[i].to_be_bytes();
+    for (i, word) in v.iter().enumerate() {
+        let word_bytes = word.to_be_bytes();
         bytes[i * 8..(i + 1) * 8].copy_from_slice(&word_bytes);
     }
     bytes
@@ -57,14 +54,14 @@ pub fn u256_mul(a: U256, b: U256) -> U256 {
     // keeping only the low 256 bits. Each step fits in u128 because
     // (2^64-1)^2 + (2^64-1) + (2^64-1) == 2^128 - 1.
     let mut r = [0u64; 8];
-    for i in 0..4 {
-        if a[i] == 0 {
+    for (i, &ai) in a.iter().enumerate() {
+        if ai == 0 {
             continue;
         }
         let mut carry: u128 = 0;
-        for j in 0..4 {
+        for (j, &bj) in b.iter().enumerate() {
             let idx = i + j;
-            let cur = (a[i] as u128) * (b[j] as u128) + r[idx] as u128 + carry;
+            let cur = (ai as u128) * (bj as u128) + r[idx] as u128 + carry;
             r[idx] = cur as u64;
             carry = cur >> 64;
         }
@@ -81,9 +78,9 @@ pub fn u256_mul(a: U256, b: U256) -> U256 {
 
 fn u256_shl1(v: &mut U256) -> u64 {
     let mut carry = 0u64;
-    for i in 0..4 {
-        let next = v[i] >> 63;
-        v[i] = (v[i] << 1) | carry;
+    for limb in v.iter_mut() {
+        let next = *limb >> 63;
+        *limb = (*limb << 1) | carry;
         carry = next;
     }
     carry

@@ -3,18 +3,13 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeMode {
+    #[default]
     Full,
     Light,
     Archival,
-}
-
-impl Default for NodeMode {
-    fn default() -> Self {
-        NodeMode::Full
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,9 +53,10 @@ impl Config {
             ));
         }
         if self.network_id != 1 && self.network_id != 2 && self.network_id != 3 {
-            return Err(StrangecoinError::ConfigError(
-                format!("network_id must be 1 (mainnet), 2 (testnet), or 3 (regtest), got {}", self.network_id).into(),
-            ));
+            return Err(StrangecoinError::ConfigError(format!(
+                "network_id must be 1 (mainnet), 2 (testnet), or 3 (regtest), got {}",
+                self.network_id
+            )));
         }
         if self.network.max_peers == 0 {
             return Err(StrangecoinError::ConfigError(

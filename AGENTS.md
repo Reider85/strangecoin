@@ -1,124 +1,116 @@
 # AGENTS.md — Strangecoin Developer Guide
 
 ## Project Overview
-Strangecoin is a Rust cryptocurrency (v1.0.0, edition 2021) — PoW blockchain with secp256k1 signatures, blake3 hashing, LevelDB storage. Monolithic `src/main.rs` (~3452 lines) + `src/wallet.rs`, modularized per Stage 0 roadmap (completed with D03, see `docs/stage0/STAGE0_SUMMARY.md`).
+Strangecoin is a Rust cryptocurrency (**v1.1.0**, edition 2021) — PoW blockchain with secp256k1 signatures, blake3 hashing, LevelDB storage. **Stage 1 complete** (tag `v1.1.0-stage1`, see `docs/stage1/STAGE1_SUMMARY.md`): pure core in `crates/strangecoin-core`, Verkle state root, headers-first sync, EventBus, bech32, tokio, 5-component blockchain split. Stage 0 closed with D03 (`docs/stage0/STAGE0_SUMMARY.md`).
 
-**Key docs**: `analytics/prompt-stage0.md` (26 prompts for Stage 0), `analytics/ARCHITECT3.md` (architecture), `analytics/ROADMAP3.md` (phases), `docs/ADR/` (architecture decisions), `docs/CONTRIBUTING.md` (workflow, style, ADR process).
+**Key docs**: `analytics/prompt-stage0.md`, `analytics/prompt-stage1.md`, `analytics/ARCHITECT3.md`, `analytics/ROADMAP3.md`, `docs/ADR/`, `docs/stage1/STAGE1_SUMMARY.md`, `docs/security/THREAT_MODEL.md`.
 
 ## Build & Test Commands
 ```bash
-cargo check          # fast typecheck
-cargo test           # runs all tests (~6s+)
-cargo build          # debug build
+cargo check                      # fast typecheck
+cargo test --workspace           # all tests (workspace)
+cargo clippy --all-targets -- -D warnings
+cargo build
 cargo build --release
-cargo clippy         # lints (no clippy.toml — default config)
+cargo run --example canonical_decode_soak   # fuzz smoke (fallback; cargo-fuzz needs Linux/MSVC)
 ```
 
 ## Running the Node
 ```bash
-# GUI client (default)
-cargo run
-
-# Headless (if implemented)
+# Headless (gui feature off by default)
 STRANGECOIN_WALLET_PASSWORD=xxx cargo run -- --headless
+
+# GUI client (requires --features gui)
+cargo run --features gui
 ```
 
 ## Test Notes
-- Integration tests are in `src/main.rs` bottom (`#[cfg(test)]` module)
-- Unit tests in `src/serialize.rs`, `src/consensus/`, `src/economics/emission.rs`, `src/network/rate_limiter.rs`
-- Tests create temporary LevelDB instances in system temp dir (`std::env::temp_dir()`) — not `target/debug/`
-- Network tests use `NETWORK_TEST_LOCK` static mutex to serialize execution (they write `network.json` next to test exe)
-- Tests spin up real nodes with real TCP ports — no mocks or fixtures
-- `proptest` (dev-dependency) used for property-based tests in `src/consensus/proptest.rs`
+- Integration tests live in top-level `tests/` (not in `src/main.rs`)
+- Core unit tests: `crates/strangecoin-core/src/**` and `crates/strangecoin-core/tests/`
+- Tests create temporary LevelDB instances in system temp dir — not `target/debug/`
+- Network tests use `NETWORK_TEST_LOCK` (write `network.json` next to test exe)
+- Real TCP nodes, random ports; no mocks
+- `proptest` for property tests (core consensus, chain_selector, state round-trip, merkle, witness)
 
-## Current Architecture (Stage 0)
+## Current Architecture (Stage 1)
 ```
-src/
-├── main.rs           # Blockchain, Node, WalletApp (GUI), mining, P2P sync
+crates/strangecoin-core/src/     # pure core, 0 I/O
+├── lib.rs            # modules + re-exports (incl. VmExecutor)
+├── types.rs          # Block, BlockHeader, Transaction, AccountState
+├── serialize.rs      # canonical binary (blake3), FORMAT_VERSION, merkle_root
+├── consensus.rs      # chain_id, U256, retarget, MTP, CURRENT_CONSENSUS_VERSION
+├── state/            # inner (apply/unapply), verkle.rs, witness.rs
+├── economics/        # emission.rs, fee_market.rs (Stage 5 stub)
+├── governance/       # scip.rs (SCIP + activation height)
+├── chain_selector.rs # fork choice: work → timestamp → hash
+├── address.rs        # bech32 (sc1/tsc1/rsc1)
+├── vm/traits.rs      # VmExecutor trait only (Stage 1.5 wasmi lives outside)
+└── error.rs          # CoreError
+
+src/                  # node monolith (orchestrator)
+├── lib.rs            # Node, mining, P2P orchestration
+├── blockchain/       # facade, block_executor, state_cache, chain_selector, consensus_manager
+├── network/          # protocol (headers-first), rate_limiter, sync, sync_engine
+├── events.rs         # EventBus (crossbeam)
+├── mempool/          # RBF-capable mempool
 ├── wallet.rs         # secp256k1 keystore (PBKDF2+AES-GCM)
-├── error.rs          # StrangecoinError (thiserror) — includes lock ordering docs
-├── config.rs         # Config struct, TOML loading, validation
-├── address.rs        # address_from_public_key (secp256k1 → base64)
-├── serialize.rs      # canonical binary serialization (blake3), txid, block_hash
-├── consensus/        # real impl: chain_id, U256 math, retarget, verify_transaction
-├── network/          # real impl: Node, RateLimiter, protocol, P2P TCP
-├── mempool/          # real impl: Mempool with insert/eviction/size tracking
-├── storage/          # real impl: LevelDB wrapper (Arc<Mutex<DB>>)
-├── economics/        # real impl: emission schedule
-├── cli/              # print_genesis_hash
-├── blockchain/       # stub (// TODO: P03+)
-├── api/              # stub (// TODO: P15+)
-├── gui/              # stub, feature-gated (#[cfg(feature = "gui")]) — feature not in Cargo.toml
-└── governance/       # re-exports strangecoin_core::governance (SCIP process)
+├── config.rs         # allow_grant_blocks flag, TOML config
+├── storage/          # LevelDB wrapper
+└── error.rs          # StrangecoinError + lock ordering docs
 ```
 
-## Current Architecture (Stage 1 — strangecoin-core crate)
-```
-crates/strangecoin-core/src/
-├── lib.rs            # module declarations, re-exports
-├── types.rs          # Block, Transaction, AccountState structs
-├── serialize.rs      # canonical binary serialization (blake3, FORMAT_VERSION=2), txid, block_hash
-├── consensus.rs      # chain_id, U256 math, retarget, verify_transaction, CURRENT_CONSENSUS_VERSION
-├── state.rs          # State, apply_block, unapply_block (pure, 0 I/O)
-├── economics/        # emission.rs, fee_market.rs (stub)
-├── governance/       # scip.rs: ScipDocument, ConsensusRules, activation height logic
-├── address.rs        # address_from_public_key
-├── error.rs          # CoreError (thiserror)
-```
-
-## Key Constraints (from ARCHITECT3.md)
-- **No tokio** until Stage 1 (current: std threads + mpsc channels)
-- **No state rent, PoS, EIP-1559, AA** — deferred to later stages
-- **Consensus changes only via SCIP + activation height** (post Stage 0 freeze)
+## Key Constraints (from ARCHITECT3.md / ROADMAP3)
+- **Strangler**: core grows in `strangecoin-core`; monolith remains working orchestrator
+- **0 I/O in core**: no fs/net/tokio/leveldb in `crates/strangecoin-core/src`
+- **Consensus changes** via SCIP + activation height (post mainnet freeze)
 - **Canonical binary serialization** (blake3) — serde_json only for config/api
-- **22 invariants** (ARCHITECT3 §5) must be enforced by end of Stage 0
-- **25 STRIDE attack vectors** (ARCHITECT3 §6) must be mitigated by end of Stage 0
+- **Grant blocks**: only with `allow_grant_blocks=true` (regtest / legacy migration)
+- **Anti-goals Stage 1.5+**: WASM until 1.5, Noise/Erlay Stage 2, RocksDB Stage 3, EIP-1559/AA Stage 5, PoS Stage 7
+- **22 invariants** enforced (`docs/stage1/INVARIANTS_ENFORCED.md`)
 
 ## Lock Ordering (critical — see `src/error.rs`)
-1. **blockchain** (via `RwLock<BlockchainInner>`) — outer, first
+1. **blockchain** (via `BlockchainFacade`, internally `RwLock`) — outer, first
 2. **wallet** (file-based keystore lock) — inner, second
 Never acquire wallet lock while holding blockchain write lock from a different call site.
 
 ## Development Workflow
-1. Work through `analytics/prompt-stage0.md` prompts sequentially (P01→P26) — Stage 0 completed with D03 (see `docs/stage0/STAGE0_SUMMARY.md`)
-2. Each prompt: implement → `cargo check` → `cargo test` → verify checklist
-3. Do not commit unless explicitly asked
-4. New modules declared in `main.rs` with `mod xyz;` — code stays in main.rs until later prompts move it
+1. Stage 0 prompts: `analytics/prompt-stage0.md` (done, D01–D03)
+2. Stage 1 prompts: `analytics/prompt-stage1.md` (done, S1-P01–S1-P22)
+3. Each prompt: implement → `cargo check` → `cargo test --workspace` → verify checklist
+4. Do not commit unless explicitly asked
+5. ADR before code that changes architecture; Changelog only after artifacts exist
 
 ## Config & Secrets
-- `config.toml` — non-secret config only (network_id, node_mode, listen_addr, seeds, data_dir, log_level)
+- `config.toml` — non-secret config only
 - **Never** put passwords/keys in config files
 - Wallet password: env var `STRANGECOIN_WALLET_PASSWORD` or interactive prompt
-- Keystore: `keystore/*.json` (encrypted PBKDF2+AES-GCM, filenames sanitize public key with `_` replacing `/`, `+`, `=`)
-- `config.json` is legacy — migrated to `config.toml` on first run
+- Keystore: `keystore/*.json` (encrypted PBKDF2+AES-GCM)
+- Genesis key residual: seed string is public until offline key replacement (see STAGE1_SUMMARY obligations)
 
 ## Database
 - LevelDB at `./data/leveldb/` (configurable via `config.toml` `[storage]` path)
-- Keys: `chain`, `balances`, `difficulty`, `<txid>` for pending txs
-- `LOCK` file contention handled with retry logic
+- State cache rebuilt from chain on adoption (invariant #1)
 
 ## Important Files to Know
 | File | Purpose |
 |------|---------|
-| `analytics/prompt-stage0.md` | Stage 0 task breakdown (26 prompts) |
-| `analytics/prompt-stage1.md` | Stage 1 task breakdown (D01-D03 debt + S1-P01..S1-P22) |
-| `analytics/ARCHITECT3.md` | Full architecture spec (invariants, STRIDE, subsystems) |
-| `analytics/ROADMAP3.md` | Phase timeline |
-| `docs/stage0/STAGE0_SUMMARY.md` | Stage 0 completion summary |
-| `docs/ADR/0001-secp256k1-vs-ed25519.md` | Migration decision record |
-| `src/error.rs` | All typed errors + lock ordering docs |
+| `analytics/prompt-stage1.md` | Stage 1 task breakdown (D01–D03 + S1-P01..S1-P22) |
+| `docs/stage1/STAGE1_SUMMARY.md` | Stage 1 DoD evidence + open obligations |
+| `docs/stage1/INVARIANTS_ENFORCED.md` | 22 invariants, Stage 1 locations |
+| `docs/security/THREAT_MODEL.md` | STRIDE model v3.0 (Stage 0 + Stage 1 vectors) |
+| `docs/ADR/0006..0010` | Stage 1 architecture decisions |
+| `crates/strangecoin-core/src/vm/traits.rs` | VmExecutor (Stage 1.5 hook) |
 | `genesis.json` | Genesis block definition |
 
 ## Common Gotchas
 - **Windows paths**: Use `C:\projects\strangecoin` not `/c/projects/strangecoin`
 - **PowerShell**: Use `;` not `&&` for command chaining
-- **GUI feature gate**: `#[cfg(feature = "gui")]` is in main.rs but `gui` feature is not defined in Cargo.toml — building with gui feature requires adding it to Cargo.toml first
-- **Module stubs** have `// TODO: P0X наполнит` comments — real implementation comes in later prompts
-- **tracing** already in use (not println!) — `tracing::info/warn/error/debug` throughout codebase
-- **secp256k1 migration complete**: ed25519-dalek removed from Cargo.toml, wallet.rs uses secp256k1 exclusively
-- **Network test isolation**: `real_network_three_nodes` test writes/reads `network.json` next to test exe — protected by `NETWORK_TEST_LOCK`
+- **GUI**: feature `gui` is defined; default build is headless
+- **cargo-fuzz**: not runnable on this Windows host — use `cargo run --example canonical_decode_soak`
+- **tracing** only (no println!)
+- **Network test isolation**: `NETWORK_TEST_LOCK` + `network.json` next to test exe
 
 ## PR / Commit Conventions
 - No commits without explicit user request
-- ADRs written **before** code changes (per ROADMAP3 §8)
-- Each prompt = one logical change set with verifiable artifacts
+- ADRs written **before** code changes
+- Each prompt = one logical change set; prompt ID in commit message

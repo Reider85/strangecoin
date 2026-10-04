@@ -2,7 +2,13 @@ mod common;
 
 use common::*;
 use std::sync::Arc;
-use strangecoin::{Blockchain, BlockchainFacade, ChainSnapshot};
+use strangecoin::{BlockchainFacade, ChainSnapshot};
+
+type FastNode = (
+    strangecoin::Node,
+    Arc<BlockchainFacade>,
+    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+);
 
 #[test]
 fn three_instances_receive_transfer() {
@@ -84,8 +90,8 @@ fn real_network_three_nodes() {
         nodes.push((node, bc));
     }
 
-    for i in 0..3 {
-        nodes[i].0.discover_peers();
+    for (node, _) in nodes.iter_mut() {
+        node.discover_peers();
     }
 
     let keypairs = generate_keypairs(3);
@@ -99,13 +105,13 @@ fn real_network_three_nodes() {
     );
 
     for _ in 0..4 {
-        for i in 0..3 {
+        for (node, bc) in nodes.iter() {
             let mut sync_node = create_sync_node(
-                &nodes[i].1,
-                &nodes[i].0.peers,
-                &nodes[i].0.address,
-                &nodes[i].0.rate_limiter,
-                nodes[i].0.inbox.clone(),
+                bc,
+                &node.peers,
+                &node.address,
+                &node.rate_limiter,
+                node.inbox.clone(),
             );
             sync_node.sync_blockchain();
         }
@@ -128,13 +134,13 @@ fn real_network_three_nodes() {
     create_and_mine_tx(&nodes[0].1, &addrs[0], &addrs[1], 1000, &keypairs[0].1);
 
     for _ in 0..6 {
-        for i in 0..3 {
+        for (node, bc) in nodes.iter() {
             let mut sync_node = create_sync_node(
-                &nodes[i].1,
-                &nodes[i].0.peers,
-                &nodes[i].0.address,
-                &nodes[i].0.rate_limiter,
-                nodes[i].0.inbox.clone(),
+                bc,
+                &node.peers,
+                &node.address,
+                &node.rate_limiter,
+                node.inbox.clone(),
             );
             sync_node.sync_blockchain();
         }
@@ -175,11 +181,7 @@ fn real_network_fast_registration_race() {
     let dirs: Vec<TestDir> = (0..3)
         .map(|i| TestDir::new(&format!("fast_{}", i)))
         .collect();
-    let mut nodes: Vec<(
-        strangecoin::Node,
-        Arc<BlockchainFacade>,
-        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    )> = Vec::new();
+    let mut nodes: Vec<FastNode> = Vec::new();
     for (i, p) in ports.iter().enumerate() {
         let bc = Arc::new(create_test_blockchain(dirs[i].path()));
         let (mut node, peers) = create_node_for_test(&bc, *p);
@@ -187,8 +189,8 @@ fn real_network_fast_registration_race() {
         nodes.push((node, bc, peers));
     }
 
-    for i in 0..3 {
-        nodes[i].0.discover_peers();
+    for (node, _, _) in nodes.iter_mut() {
+        node.discover_peers();
     }
 
     let keypairs = generate_keypairs(3);
@@ -207,13 +209,13 @@ fn real_network_fast_registration_race() {
     }
 
     for _ in 0..6 {
-        for i in 0..3 {
+        for (node, bc, peers) in nodes.iter() {
             let mut sync_node = create_sync_node(
-                &nodes[i].1,
-                &nodes[i].2,
-                &nodes[i].0.address,
-                &nodes[i].0.rate_limiter,
-                nodes[i].0.inbox.clone(),
+                bc,
+                peers,
+                &node.address,
+                &node.rate_limiter,
+                node.inbox.clone(),
             );
             sync_node.sync_blockchain();
         }
@@ -239,13 +241,13 @@ fn real_network_fast_registration_race() {
     );
 
     for _ in 0..6 {
-        for i in 0..3 {
+        for (node, bc, peers) in nodes.iter() {
             let mut sync_node = create_sync_node(
-                &nodes[i].1,
-                &nodes[i].2,
-                &nodes[i].0.address,
-                &nodes[i].0.rate_limiter,
-                nodes[i].0.inbox.clone(),
+                bc,
+                peers,
+                &node.address,
+                &node.rate_limiter,
+                node.inbox.clone(),
             );
             sync_node.sync_blockchain();
         }

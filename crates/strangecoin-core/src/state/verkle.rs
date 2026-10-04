@@ -15,13 +15,6 @@ fn hash_bytes(data: &[u8]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
-fn hash_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-    let mut data = [0u8; 64];
-    data[..32].copy_from_slice(left);
-    data[32..].copy_from_slice(right);
-    hash_bytes(&data)
-}
-
 fn account_key_hash(address: &str) -> [u8; 32] {
     hash_bytes(address.as_bytes())
 }
@@ -35,28 +28,14 @@ fn account_leaf_hash(key_hash: &[u8; 32], account: &AccountState) -> [u8; 32] {
 }
 
 #[derive(Clone, Debug)]
-enum Node {
-    Empty,
-    Leaf {
-        key_hash: [u8; 32],
-        account: AccountState,
-    },
-    Branch {
-        children: Box<[[u8; 32]; 256]>,
-    },
-}
-
-#[derive(Clone, Debug)]
 pub struct VerkleTrie {
     nodes: Box<[[u8; 32]; 256]>,
-    depth: usize,
 }
 
 impl VerkleTrie {
     pub fn new() -> Self {
         Self {
             nodes: Box::new([EMPTY_HASH; 256]),
-            depth: 0,
         }
     }
 
@@ -106,8 +85,8 @@ impl VerkleTrie {
     }
 
     pub fn prove(&self, address: &str, account: &AccountState) -> Vec<[u8; 32]> {
+        let _ = account;
         let key = account_key_hash(address);
-        let leaf = account_leaf_hash(&key, account);
         let slot = key[0] as usize;
         self.nodes
             .iter()

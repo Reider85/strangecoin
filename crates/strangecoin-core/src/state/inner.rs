@@ -224,7 +224,7 @@ mod tests {
     }
 
     fn test_block(index: u64, transactions: Vec<Transaction>) -> Block {
-        let mut txs = if index > 0 {
+        let txs = if index > 0 {
             let mut v = vec![coinbase_tx("miner", 0)];
             v.extend(transactions);
             v

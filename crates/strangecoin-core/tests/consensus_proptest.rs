@@ -1,11 +1,9 @@
 use blake3;
-use hex;
 use proptest::prelude::*;
 use secp256k1::{ecdsa::RecoverableSignature, PublicKey, Secp256k1, SecretKey};
 use strangecoin_core::consensus::{
-    compute_target, current_chain_id, u256_div, u256_from_bytes, u256_from_u64, u256_gt, u256_le,
-    u256_max, u256_min, u256_mul, u256_to_bytes, validate_difficulty, MAX_TARGET_CHANGE_FACTOR,
-    RETARGET_INTERVAL, TARGET_BLOCK_TIME,
+    current_chain_id, u256_div, u256_from_bytes, u256_from_u64, u256_gt, u256_le, u256_max, u256_min,
+    u256_mul, MAX_TARGET_CHANGE_FACTOR, RETARGET_INTERVAL, TARGET_BLOCK_TIME,
 };
 use strangecoin_core::economics::emission::{
     block_reward_at_height_for_chain, HALVING_INTERVAL, INITIAL_REWARD, MAX_SUPPLY_PRE_TAIL,
@@ -26,7 +24,7 @@ fn arbitrary_public_key() -> impl Strategy<Value = PublicKey> {
 
 fn arbitrary_secret_key() -> impl Strategy<Value = SecretKey> {
     any::<[u8; 32]>().prop_map(|bytes| {
-        let secp = Secp256k1::new();
+        let _secp = Secp256k1::new();
         SecretKey::from_slice(&bytes).unwrap_or_else(|_| SecretKey::from_slice(&[1u8; 32]).unwrap())
     })
 }

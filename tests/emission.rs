@@ -22,7 +22,7 @@ fn emission_matches_block_reward() {
             sender: addr.clone(),
             receiver: "recipient".to_string(),
             amount: 0,
-            nonce: (height - 1) as u64,
+            nonce: height - 1,
             chain_id: strangecoin::consensus::current_chain_id(),
             signature: Vec::new(),
             is_coinbase: false,

@@ -1574,7 +1574,7 @@ pub async fn run_async() {
     {
         info!("Headless mode (gui feature off): running until shutdown signal");
         while !shutdown.load(Ordering::Relaxed) {
-            while let Ok(_) = sync_rx.try_recv() {}
+            while sync_rx.try_recv().is_ok() {}
             tokio::time::sleep(SYNC_TICK).await;
         }
         info!("Headless mode: shutdown signal received, exiting");

@@ -72,11 +72,6 @@ fn reject_block_before_mtp() {
     let _dir = TestDir::new("time_mtp");
     let bc = create_test_blockchain(_dir.path());
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
     let timestamps = [
         100u64, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200,
     ];

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use strangecoin::events::NodeEvent;
 use strangecoin::network::sync_engine::Incoming;
-use strangecoin::{Blockchain, ChainSnapshot, Transaction};
+use strangecoin::{ChainSnapshot, Transaction};
 
 #[test]
 fn three_subscribers_each_receive_live_node_events() {

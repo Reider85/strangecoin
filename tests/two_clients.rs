@@ -3,7 +3,7 @@ mod common;
 use common::*;
 use std::sync::Arc;
 use std::time::Duration;
-use strangecoin::{Blockchain, BlockchainFacade, Transaction};
+use strangecoin::{BlockchainFacade, Transaction};
 
 #[test]
 fn hundred_transactions_five_wallets() {

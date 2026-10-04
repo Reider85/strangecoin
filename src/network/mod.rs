@@ -60,7 +60,7 @@ impl Node {
 
 impl Drop for Node {
     fn drop(&mut self) {
-        info!("Shutting down network node");
+        info!(addr = %self.addr, "Shutting down network node");
 
         // Signal shutdown
         self.shutdown
@@ -70,13 +70,6 @@ impl Drop for Node {
         if let Some(listener) = self.listener.take() {
             drop(listener);
             info!("TCP listener closed");
-        }
-
-        // Wait for peer connection threads to finish (with timeout)
-        let handles = self.peer_handles.lock().unwrap();
-        for handle in handles.iter() {
-            // Note: We can't join here because we only have a reference
-            // The threads should check the shutdown signal and exit on their own
         }
 
         // Give threads a moment to shut down

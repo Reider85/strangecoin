@@ -25,11 +25,11 @@ pub fn build_witness(pre_state: &State, block: &Block) -> StateWitness {
     let trie = build_trie(pre_state);
 
     let mut proofs = HashMap::new();
-    let mut touched = collect_touched_addresses(block);
+    let touched = collect_touched_addresses(block);
 
     for addr in &touched {
         let account = pre_state.balances.get(addr).cloned().unwrap_or_default();
-        let key_hash = blake3::hash(addr.as_bytes()).as_bytes().clone();
+        let key_hash = *blake3::hash(addr.as_bytes()).as_bytes();
         let proof = trie.prove(addr, &account);
         proofs.insert(
             addr.clone(),
@@ -91,7 +91,7 @@ pub fn verify_block_stateless(
 fn build_trie(state: &State) -> VerkleTrie {
     let mut trie = VerkleTrie::new();
     let mut sorted: Vec<(&String, &AccountState)> = state.balances.iter().collect();
-    sorted.sort_by_key(|(addr, _)| blake3::hash(addr.as_bytes()).as_bytes().clone());
+    sorted.sort_by_key(|(addr, _)| *blake3::hash(addr.as_bytes()).as_bytes());
     for (addr, account) in sorted {
         trie.insert(addr, account);
     }

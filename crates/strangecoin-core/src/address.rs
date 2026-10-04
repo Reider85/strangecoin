@@ -98,7 +98,7 @@ mod tests {
         
         // Invalid HRP in decode - use a valid bech32 string with unknown HRP
         // We need to encode a proper bech32 string with an unknown HRP to test UnknownAddressHrp
-        let unknown_hrp_address = "unknown1address"; // This will be encoded as a valid bech32 string
+        let _unknown_hrp_address = "unknown1address";
         // For now, test that invalid checksum gives InvalidAddressChecksum
         let invalid_checksum_address = "sc1invalidaddress12345";
         match decode_address(invalid_checksum_address) {

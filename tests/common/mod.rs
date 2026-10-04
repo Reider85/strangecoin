@@ -2,6 +2,7 @@ use std::time::Duration;
 use strangecoin::events::{EventBus, NodeEvent};
 pub use strangecoin::test_support::*;
 
+#[allow(dead_code)]
 pub fn wait_for_event(
     bus: &EventBus,
     predicate: impl Fn(&NodeEvent) -> bool,
@@ -25,6 +26,7 @@ pub fn wait_for_event(
     }
 }
 
+#[allow(dead_code)]
 pub fn wait_for_block_applied(bus: &EventBus, timeout: Duration) -> Option<NodeEvent> {
     wait_for_event(
         bus,

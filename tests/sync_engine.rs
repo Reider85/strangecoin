@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use strangecoin::events::NodeEvent;
 use strangecoin::network::sync_engine::{self, Incoming};
-use strangecoin::{Block, Blockchain, BlockchainFacade, ChainSnapshot};
+use strangecoin::{Block, BlockchainFacade, ChainSnapshot};
 
 /// S1-P18 / ADR-0010: two peers race the same candidate (and competing
 /// forks) into the inbox simultaneously. The SyncEngine is the single
