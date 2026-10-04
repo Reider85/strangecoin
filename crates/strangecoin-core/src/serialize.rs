@@ -69,8 +69,8 @@ pub fn deserialize_header(bytes: &[u8]) -> Result<BlockHeader, &'static str> {
         return Err("Unsupported format version");
     }
     offset += 1;
-    let index = read_u64_be(bytes, &mut offset);
-    let timestamp = read_u64_be(bytes, &mut offset);
+    let index = read_u64_be(bytes, &mut offset)?;
+    let timestamp = read_u64_be(bytes, &mut offset)?;
     let mut previous_hash_bytes = [0u8; 32];
     previous_hash_bytes.copy_from_slice(&bytes[offset..offset + 32]);
     offset += 32;
@@ -82,8 +82,8 @@ pub fn deserialize_header(bytes: &[u8]) -> Result<BlockHeader, &'static str> {
     target_bytes.copy_from_slice(&bytes[offset..offset + 32]);
     offset += 32;
     let target = hex::encode(target_bytes);
-    let nonce = read_u64_be(bytes, &mut offset);
-    let consensus_version = read_u32_be(bytes, &mut offset);
+    let nonce = read_u64_be(bytes, &mut offset)?;
+    let consensus_version = read_u32_be(bytes, &mut offset)?;
     let mut state_root = [0u8; 32];
     state_root.copy_from_slice(&bytes[offset..offset + 32]);
     offset += 32;
@@ -138,7 +138,7 @@ pub fn compute_tx_root(transactions: &[Transaction]) -> [u8; 32] {
     if transactions.is_empty() {
         return [0u8; 32];
     }
-    let txids: Vec<[u8; 32]> = transactions.iter().map(|tx| txid(tx)).collect();
+    let txids: Vec<[u8; 32]> = transactions.iter().map(txid).collect();
     merkle_root(&txids)
 }
 
@@ -166,7 +166,7 @@ pub fn deserialize_block(bytes: &[u8]) -> Result<Block, &'static str> {
     }
     let header = deserialize_header(&bytes[..HEADER_WIRE_LEN])?;
     let mut offset = HEADER_WIRE_LEN;
-    let tx_count = read_u32_be(bytes, &mut offset) as usize;
+    let tx_count = read_u32_be(bytes, &mut offset)? as usize;
     // Every transaction needs at least its length prefix, so a count larger
     // than the remaining bytes can divide by 4 is garbage: bail before
     // reserving capacity for it.
@@ -176,8 +176,8 @@ pub fn deserialize_block(bytes: &[u8]) -> Result<Block, &'static str> {
     }
     let mut transactions = Vec::with_capacity(tx_count);
     for _ in 0..tx_count {
-        let tx_len = read_u32_be(bytes, &mut offset) as usize;
-        if tx_len > remaining || offset + tx_len > bytes.len() {
+        let tx_len = read_u32_be(bytes, &mut offset)? as usize;
+        if offset + tx_len > bytes.len() {
             return Err("Transaction length exceeds buffer");
         }
         let tx = deserialize_transaction_signed(&bytes[offset..offset + tx_len])?;
@@ -202,7 +202,10 @@ fn write_bytes32(out: &mut Vec<u8>, s: &str) {
     out.extend_from_slice(&bytes);
 }
 
-pub fn read_u32_be(bytes: &[u8], offset: &mut usize) -> u32 {
+pub fn read_u32_be(bytes: &[u8], offset: &mut usize) -> Result<u32, &'static str> {
+    if *offset + 4 > bytes.len() {
+        return Err("Buffer too short for u32");
+    }
     let val = u32::from_be_bytes([
         bytes[*offset],
         bytes[*offset + 1],
@@ -210,10 +213,13 @@ pub fn read_u32_be(bytes: &[u8], offset: &mut usize) -> u32 {
         bytes[*offset + 3],
     ]);
     *offset += 4;
-    val
+    Ok(val)
 }
 
-pub fn read_u64_be(bytes: &[u8], offset: &mut usize) -> u64 {
+pub fn read_u64_be(bytes: &[u8], offset: &mut usize) -> Result<u64, &'static str> {
+    if *offset + 8 > bytes.len() {
+        return Err("Buffer too short for u64");
+    }
     let val = u64::from_be_bytes([
         bytes[*offset],
         bytes[*offset + 1],
@@ -225,11 +231,11 @@ pub fn read_u64_be(bytes: &[u8], offset: &mut usize) -> u64 {
         bytes[*offset + 7],
     ]);
     *offset += 8;
-    val
+    Ok(val)
 }
 
 pub fn read_string(bytes: &[u8], offset: &mut usize) -> Result<String, &'static str> {
-    let len = read_u32_be(bytes, offset) as usize;
+    let len = read_u32_be(bytes, offset)? as usize;
     if *offset + len > bytes.len() {
         return Err("Buffer too short for string");
     }
@@ -254,16 +260,10 @@ pub fn deserialize_transaction(bytes: &[u8]) -> Result<Transaction, &'static str
 
     let sender = read_string(bytes, &mut offset)?;
     let receiver = read_string(bytes, &mut offset)?;
-    let amount = read_u64_be(bytes, &mut offset);
-    let nonce = read_u64_be(bytes, &mut offset);
-    let chain_id = read_u32_be(bytes, &mut offset) as u32;
-    let is_coinbase = if offset < bytes.len() {
-        let b = bytes[offset];
-        offset += 1;
-        b != 0
-    } else {
-        false
-    };
+    let amount = read_u64_be(bytes, &mut offset)?;
+    let nonce = read_u64_be(bytes, &mut offset)?;
+    let chain_id = read_u32_be(bytes, &mut offset)?;
+    let is_coinbase = bytes.get(offset).copied().unwrap_or(0) != 0;
 
     Ok(Transaction {
         sender,
@@ -292,16 +292,16 @@ pub fn deserialize_transaction_signed(bytes: &[u8]) -> Result<Transaction, &'sta
 
     let sender = read_string(bytes, &mut offset)?;
     let receiver = read_string(bytes, &mut offset)?;
-    let amount = read_u64_be(bytes, &mut offset);
-    let nonce = read_u64_be(bytes, &mut offset);
-    let chain_id = read_u32_be(bytes, &mut offset);
+    let amount = read_u64_be(bytes, &mut offset)?;
+    let nonce = read_u64_be(bytes, &mut offset)?;
+    let chain_id = read_u32_be(bytes, &mut offset)?;
     if offset >= bytes.len() {
         return Err("Buffer too short for is_coinbase");
     }
     let is_coinbase = bytes[offset] != 0;
     offset += 1;
 
-    let sig_len = read_u32_be(bytes, &mut offset) as usize;
+    let sig_len = read_u32_be(bytes, &mut offset)? as usize;
     if offset + sig_len != bytes.len() {
         return Err("Signature length mismatch");
     }
