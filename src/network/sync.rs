@@ -10,7 +10,9 @@
 //!    [`ChainSelector`] (work → timestamp → hash) against the local chain.
 //! 3. [`sync_headers_first`] — the network loop: GET_HEADERS until the peer's
 //!    headers are exhausted, plan, GET_BLOCKS for exactly the missing hashes,
-//!    then `adopt_candidate` — which still runs the full `validate_chain`
+//!    and assemble the candidate chain (`local prefix + fork bodies`). Since
+//!    ADR-0010 the loop does **not** adopt: the caller enqueues the candidate
+//!    into the SyncEngine inbox, and the engine runs the full `validate_chain`
 //!    path over the bodies. Headers lay out the route; they never weaken it.
 
 use std::collections::{HashMap, HashSet};
@@ -23,7 +25,6 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::blockchain::chain_selector::{ChainInfo, ChainSelector};
-use crate::blockchain::BlockchainFacade;
 use crate::error::StrangecoinError;
 use crate::network::protocol::{self, MAX_BLOCKS_BATCH, MAX_HEADERS_BATCH};
 use strangecoin_core::consensus::{cumulative_work_headers, validate_header_pow};
@@ -247,8 +248,11 @@ fn walk_ancestry(cache: &HeaderCache, tip: &BlockHeader) -> Option<Vec<BlockHead
 
 #[derive(Debug, Clone, Default)]
 pub struct SyncOutcome {
-    /// `adopt_candidate` installed the candidate chain.
-    pub adopted: bool,
+    /// Candidate chain assembled from the local prefix plus the fork bodies,
+    /// when the peer's branch beats the local one (`None` = nothing better).
+    /// The caller enqueues it into the SyncEngine inbox; adoption happens
+    /// there (ADR-0010).
+    pub candidate: Option<Vec<Block>>,
     /// Headers accepted by the ingest validation.
     pub headers_ingested: usize,
     /// Bodies downloaded for the chosen branch.
@@ -262,10 +266,14 @@ pub struct SyncOutcome {
 /// Errors mean "this peer could not serve headers-first" — the caller falls
 /// back to the legacy `GET_BLOCKCHAIN` path (pre-P16 peers never answer a
 /// binary request, so this is the compatibility trigger).
+///
+/// The loop is pure download + plan: it never touches the local chain beyond
+/// reading `local_chain`, so handing the returned candidate to the engine is
+/// the caller's job.
 pub fn sync_headers_first(
     addr: SocketAddr,
     network_id: u32,
-    facade: &Arc<BlockchainFacade>,
+    local_chain: &[Block],
     shutdown: &Arc<AtomicBool>,
 ) -> Result<SyncOutcome, StrangecoinError> {
     let stream = TcpStream::connect_timeout(&addr, SYNC_CONNECT_TIMEOUT)?;
@@ -277,8 +285,7 @@ pub fn sync_headers_first(
     writer.write_all(&protocol::encode_hello(network_id))?;
     writer.flush()?;
 
-    // Local view taken once: this round is the only adopter of this facade.
-    let local_chain = facade.chain_snapshot();
+    // Local view taken once: this round plans against one consistent snapshot.
     let local_hashes: HashSet<String> = local_chain.iter().map(|b| b.hash.clone()).collect();
 
     // Phase 1: header sync.
@@ -310,9 +317,9 @@ pub fn sync_headers_first(
     debug!(peer = %addr, headers = cache.len(), "Headers ingested");
 
     // Phase 2: fork choice over headers.
-    let Some(plan) = plan_best_branch(&local_chain, &cache) else {
+    let Some(plan) = plan_best_branch(local_chain, &cache) else {
         return Ok(SyncOutcome {
-            adopted: false,
+            candidate: None,
             headers_ingested: cache.len(),
             blocks_downloaded: 0,
             peer_tip_height: cache.max_index().unwrap_or(0),
@@ -380,17 +387,18 @@ pub fn sync_headers_first(
         )));
     }
 
-    // Phase 4: assemble the candidate and hand it to the full validator.
-    // adopt_candidate runs the complete validate_chain rules over the bodies —
-    // headers only decided *what* to fetch (invariant: not weakened).
+    // Phase 4: assemble the candidate. The bodies still go through the full
+    // validate_chain rules — but in the SyncEngine, which is the only
+    // adopter now (ADR-0010); headers only decided *what* to fetch.
     let mut candidate: Vec<Block> = local_chain[..=plan.fork_index as usize].to_vec();
     candidate.extend(blocks);
-    let adopted = facade.adopt_candidate(candidate, None, Vec::new(), facade.difficulty())?;
+    let blocks_downloaded = plan.headers.len();
+    let peer_tip_height = plan.candidate_info.tip_height;
     Ok(SyncOutcome {
-        adopted,
+        candidate: Some(candidate),
         headers_ingested: cache.len(),
-        blocks_downloaded: plan.headers.len(),
-        peer_tip_height: plan.candidate_info.tip_height,
+        blocks_downloaded,
+        peer_tip_height,
     })
 }
 

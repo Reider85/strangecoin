@@ -105,8 +105,9 @@ fn real_network_three_nodes() {
                 &nodes[i].0.peers,
                 &nodes[i].0.address,
                 &nodes[i].0.rate_limiter,
+                nodes[i].0.inbox.clone(),
             );
-            sync_node.sync_blockchain(sync_tx.clone());
+            sync_node.sync_blockchain();
         }
         std::thread::sleep(std::time::Duration::from_millis(150));
     }
@@ -133,8 +134,9 @@ fn real_network_three_nodes() {
                 &nodes[i].0.peers,
                 &nodes[i].0.address,
                 &nodes[i].0.rate_limiter,
+                nodes[i].0.inbox.clone(),
             );
-            sync_node.sync_blockchain(sync_tx.clone());
+            sync_node.sync_blockchain();
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
@@ -211,8 +213,9 @@ fn real_network_fast_registration_race() {
                 &nodes[i].2,
                 &nodes[i].0.address,
                 &nodes[i].0.rate_limiter,
+                nodes[i].0.inbox.clone(),
             );
-            sync_node.sync_blockchain(sync_tx.clone());
+            sync_node.sync_blockchain();
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
@@ -242,8 +245,9 @@ fn real_network_fast_registration_race() {
                 &nodes[i].2,
                 &nodes[i].0.address,
                 &nodes[i].0.rate_limiter,
+                nodes[i].0.inbox.clone(),
             );
-            sync_node.sync_blockchain(sync_tx.clone());
+            sync_node.sync_blockchain();
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
     }

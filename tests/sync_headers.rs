@@ -44,17 +44,25 @@ fn new_node_syncs_20_blocks_via_headers_first() {
     node.start_server(port, sync_tx.clone());
 
     let shutdown = shutdown_flag();
+    let local = client_bc.chain_snapshot();
     let outcome = sync::sync_headers_first(
         to_addr(port),
         strangecoin::consensus::CHAIN_ID_REGTEST,
-        &client_bc,
+        &local,
         &shutdown,
     )
     .expect("headers-first sync must succeed against a P16 peer");
 
-    assert!(outcome.adopted, "fresh node must adopt the branch");
+    let candidate = outcome
+        .candidate
+        .expect("fresh node must plan an adoption");
     assert_eq!(outcome.headers_ingested, 21);
     assert_eq!(outcome.blocks_downloaded, 20);
+    // The loop only plans and downloads; adoption is the SyncEngine's job
+    // (ADR-0010), so this test adopts through the facade API directly.
+    assert!(client_bc
+        .adopt_candidate(candidate, None, Vec::new(), client_bc.difficulty())
+        .expect("downloaded candidate must pass validation"));
     assert_eq!(client_bc.chain_len(), 21, "client did not reach server tip");
     assert!(client_bc.validate_chain(), "synced chain failed validation");
     assert_eq!(
@@ -96,17 +104,18 @@ fn equal_chain_reports_nothing_better() {
     node.start_server(port, sync_tx.clone());
 
     let shutdown = shutdown_flag();
+    let local = client_bc.chain_snapshot();
     let outcome = sync::sync_headers_first(
         to_addr(port),
         strangecoin::consensus::CHAIN_ID_REGTEST,
-        &client_bc,
+        &local,
         &shutdown,
     )
     .expect("headers-first exchange must succeed");
 
     assert!(
-        !outcome.adopted,
-        "equal chain must not be reported as an adoption"
+        outcome.candidate.is_none(),
+        "equal chain must not be planned as a candidate"
     );
     assert_eq!(outcome.headers_ingested, 4);
     assert_eq!(outcome.blocks_downloaded, 0, "nothing was missing");
@@ -149,15 +158,21 @@ fn longer_fork_resolved_via_headers_first() {
     node.start_server(port, sync_tx.clone());
 
     let shutdown = shutdown_flag();
+    let local = client_bc.chain_snapshot();
     let outcome = sync::sync_headers_first(
         to_addr(port),
         strangecoin::consensus::CHAIN_ID_REGTEST,
-        &client_bc,
+        &local,
         &shutdown,
     )
     .expect("headers-first sync must succeed");
 
-    assert!(outcome.adopted, "longer fork must win fork choice");
+    let candidate = outcome
+        .candidate
+        .expect("longer fork must win fork choice");
+    assert!(client_bc
+        .adopt_candidate(candidate, None, Vec::new(), client_bc.difficulty())
+        .expect("fork candidate must pass validation"));
     assert_eq!(client_bc.chain_len(), 5, "client did not reorg onto tip");
     assert!(client_bc.validate_chain(), "reorged chain failed validation");
 

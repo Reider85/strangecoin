@@ -16,6 +16,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 use tracing::{debug, error, info, warn};
 
+use crate::network::sync_engine::{Inbox, Incoming};
+
 pub mod address;
 pub mod api;
 pub mod blockchain;
@@ -58,6 +60,9 @@ pub struct MiningTask {
     pub rate_limiter: Arc<crate::network::RateLimiter>,
     pub shutdown: Arc<AtomicBool>,
     pub event_bus: Arc<events::EventBus>,
+    /// SyncEngine inbox of the node this task was created for (ADR-0010):
+    /// the post-mining sync round enqueues candidates instead of adopting.
+    pub inbox: Option<Inbox>,
 }
 
 pub struct Node {
@@ -71,6 +76,9 @@ pub struct Node {
     pub sync_thread_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pub event_bus: Arc<events::EventBus>,
     pub network_id: u32,
+    /// SyncEngine inbox, spawned by `start_server` (ADR-0010). `None` until
+    /// the server starts; the sync task and mining inherit it from here.
+    pub inbox: Option<Inbox>,
 }
 
 pub struct WalletApp {
@@ -105,7 +113,6 @@ impl Node {
     fn new(
         address: String,
         mining_rx: mpsc::Receiver<MiningTask>,
-        sync_tx: mpsc::Sender<Blockchain>,
         port: u16,
         event_bus: Arc<events::EventBus>,
         network_id: u32,
@@ -128,6 +135,8 @@ impl Node {
             sync_thread_handle: Arc::new(Mutex::new(None)),
             event_bus: event_bus.clone(),
             network_id,
+            // Spawned by `start_server`.
+            inbox: None,
         };
         thread::spawn(move || {
             info!("Фоновый поток майнинга запущен");
@@ -224,8 +233,9 @@ impl Node {
                                     sync_thread_handle: Arc::new(Mutex::new(None)),
                                     event_bus: task.event_bus.clone(),
                                     network_id: crate::consensus::CHAIN_ID_REGTEST,
+                                    inbox: task.inbox.clone(),
                                 };
-                                node_temp.sync_blockchain(sync_tx.clone());
+                                node_temp.sync_blockchain();
                                 task.event_bus.publish(events::NodeEvent::BlockApplied {
                                     height: block.index,
                                     hash: block.hash.clone(),
@@ -389,10 +399,24 @@ impl Node {
 
     pub fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<Blockchain>) {
         let start_time = SystemTime::now();
-let blockchain = Arc::clone(&self.blockchain);
+        // ADR-0010: the engine spawned here is the only adopter of incoming
+        // data; the handlers below only enqueue into its inbox.
+        if self.inbox.is_none() {
+            self.inbox = Some(crate::network::sync_engine::spawn(
+                Arc::clone(&self.blockchain),
+                Arc::clone(&self.event_bus),
+                sync_tx.clone(),
+                Arc::clone(&self.shutdown),
+                Arc::clone(&self.rate_limiter),
+            ));
+        }
+        let inbox = self
+            .inbox
+            .clone()
+            .expect("SyncEngine inbox must exist after spawn");
+        let blockchain = Arc::clone(&self.blockchain);
         let rate_limiter = Arc::clone(&self.rate_limiter);
         let shutdown = Arc::clone(&self.shutdown);
-        let event_bus = Arc::clone(&self.event_bus);
         let network_id = self.network_id;
         let address = format!("0.0.0.0:{}", port);
         let listener = TcpListener::bind(&address).expect("Не удалось запустить сервер");
@@ -408,12 +432,10 @@ let blockchain = Arc::clone(&self.blockchain);
                 match stream {
                     Ok(stream) => {
                         let blockchain = Arc::clone(&blockchain);
-                        let sync_tx = sync_tx.clone();
+                        let inbox = inbox.clone();
                         let rate_limiter = Arc::clone(&rate_limiter);
-                        let event_bus = Arc::clone(&event_bus);
                         let peer_addr = stream.peer_addr().ok();
                         let rate_limiter_clone = Arc::clone(&rate_limiter);
-                        let event_bus_clone = Arc::clone(&event_bus);
                         let shutdown = Arc::clone(&shutdown);
                         let _ = stream.set_read_timeout(Some(
                             crate::network::sync::SYNC_IO_TIMEOUT,
@@ -460,9 +482,8 @@ let blockchain = Arc::clone(&self.blockchain);
                             }
                             
                             debug!(peer_network_id, "HELLO handshake successful");
-                            
+
                             let blockchain = Arc::clone(&blockchain);
-                            let event_bus = Arc::clone(&event_bus_clone);
                             use crate::network::protocol as proto;
 
                             // S1-P16: one connection serves many requests —
@@ -573,38 +594,17 @@ let blockchain = Arc::clone(&self.blockchain);
                                                 return;
                                             }
                                         };
-                                    let adopted = match blockchain.adopt_candidate(
-                                        temp_blockchain.chain.clone(),
-                                        Some(temp_blockchain.balances.clone()),
-                                        temp_blockchain.mempool_txs.clone(),
-                                        temp_blockchain.difficulty,
-                                    ) {
-                                        Ok(adopted) => adopted,
-                                        Err(e) => {
-                                            warn!(error = %e, "Кандидат отклонён фасадом");
-                                            false
-                                        }
-                                    };
-                                    if adopted {
-                                        info!("Блокчейн обновлён через UPDATE_BLOCKCHAIN");
-                                        let height = blockchain.chain_len() as u64 - 1;
-                                        event_bus.publish(events::NodeEvent::StatePersisted { height });
-                                        event_bus.publish(events::NodeEvent::BlockApplied {
-                                            height,
-                                            hash: blockchain.tip_hash(),
-                                        });
-                                        let _ = sync_tx.send(blockchain.snapshot_wire());
-                                    } else {
-                                        for tx in temp_blockchain.pending_transactions.iter() {
-                                            if !blockchain.mempool_contains(
-                                                &strangecoin_core::serialize::txid(tx),
-                                            ) {
-                                                let _ = blockchain.apply_tx(tx.clone());
-                                            }
-                                        }
-                                        blockchain.save_state();
-                                        info!("Обновлены pending_transactions через UPDATE_BLOCKCHAIN");
-                                    }
+                                    // ADR-0010: parse and enqueue only — the
+                                    // SyncEngine validates and adopts.
+                                    inbox.push_inbound(Incoming::CandidateChain {
+                                        chain: temp_blockchain.chain,
+                                        balances: Some(temp_blockchain.balances),
+                                        mempool_txs: temp_blockchain.mempool_txs,
+                                        pending_transactions: temp_blockchain
+                                            .pending_transactions,
+                                        difficulty: temp_blockchain.difficulty,
+                                        from: peer_addr,
+                                    });
                                 }
                             }
                         });
@@ -619,10 +619,11 @@ let blockchain = Arc::clone(&self.blockchain);
             .as_secs_f64();
         info!(port, duration_secs = duration, "Сервер запущен");
     }
-    pub fn sync_blockchain(&mut self, sync_tx: mpsc::Sender<Blockchain>) {
+    pub fn sync_blockchain(&mut self) {
         let start_time = SystemTime::now();
         let rate_limiter = Arc::clone(&self.rate_limiter);
         let shutdown = Arc::clone(&self.shutdown);
+        let inbox = self.inbox.clone();
         self.discover_peers();
         let peers: Vec<String> = self
             .peers
@@ -681,40 +682,49 @@ let blockchain = Arc::clone(&self.blockchain);
 
             // S1-P16: headers-first sync. Errors mean the peer does not
             // serve the binary protocol (pre-P16 peers never answer) — then
-            // we fall back to GET_BLOCKCHAIN below. Adoption skips the
-            // fallback; "nothing better" does not (mempool gossip lives
-            // there).
-            let mut adopted_via_headers = false;
+            // we fall back to GET_BLOCKCHAIN below. An enqueued candidate
+            // skips the fallback; "nothing better" does not (mempool gossip
+            // lives there). ADR-0010: the candidate is adopted by the engine.
+            let mut candidate_via_headers = false;
+            let local_chain = self.blockchain.chain_snapshot();
             match crate::network::sync::sync_headers_first(
                 addr,
                 self.network_id,
-                &self.blockchain,
+                &local_chain,
                 &shutdown,
             ) {
-                Ok(outcome) if outcome.adopted => {
-                    adopted_via_headers = true;
-                    info!(
-                        peer = %peer,
-                        new_chain_len = self.blockchain.chain_len(),
-                        headers = outcome.headers_ingested,
-                        blocks = outcome.blocks_downloaded,
-                        "Блокчейн обновлён (headers-first)"
-                    );
-                    let height = self.blockchain.chain_len() as u64 - 1;
-                    self.event_bus
-                        .publish(events::NodeEvent::StatePersisted { height });
-                    self.event_bus.publish(events::NodeEvent::BlockApplied {
-                        height,
-                        hash: self.blockchain.tip_hash(),
-                    });
-                    let _ = sync_tx.send(self.blockchain.snapshot_wire());
-                }
                 Ok(outcome) => {
-                    debug!(
-                        peer = %peer,
-                        headers = outcome.headers_ingested,
-                        "Лучшей ветки у пира нет"
-                    );
+                    if let Some(candidate) = outcome.candidate {
+                        candidate_via_headers = true;
+                        info!(
+                            peer = %peer,
+                            headers = outcome.headers_ingested,
+                            blocks = outcome.blocks_downloaded,
+                            "Кандидат (headers-first) поставлен в очередь"
+                        );
+                        match &inbox {
+                            Some(inbox) => {
+                                inbox.push(Incoming::CandidateChain {
+                                    chain: candidate,
+                                    balances: None,
+                                    mempool_txs: Vec::new(),
+                                    pending_transactions: Vec::new(),
+                                    difficulty: self.blockchain.difficulty(),
+                                    from: Some(addr),
+                                });
+                            }
+                            None => warn!(
+                                peer = %peer,
+                                "SyncEngine inbox отсутствует: кандидат headers-first отброшен"
+                            ),
+                        }
+                    } else {
+                        debug!(
+                            peer = %peer,
+                            headers = outcome.headers_ingested,
+                            "Лучшей ветки у пира нет"
+                        );
+                    }
                 }
                 Err(e) => {
                     debug!(
@@ -724,7 +734,7 @@ let blockchain = Arc::clone(&self.blockchain);
                     );
                 }
             }
-            if adopted_via_headers {
+            if candidate_via_headers {
                 continue;
             }
 
@@ -766,48 +776,23 @@ let blockchain = Arc::clone(&self.blockchain);
                                 continue;
                             }
                             info!(peer = %peer, chain_len = received.chain.len(), "Полученная цепочка от узла");
-                            let adopted = match self.blockchain.adopt_candidate(
-                                received.chain.clone(),
-                                Some(received.balances.clone()),
-                                received.mempool_txs.clone(),
-                                received.difficulty,
-                            ) {
-                                Ok(adopted) => adopted,
-                                Err(e) => {
-                                    warn!(peer = %peer, error = %e, "Кандидат отклонён фасадом");
-                                    false
+                            // ADR-0010: parse and enqueue only — the
+                            // SyncEngine validates and adopts.
+                            match &inbox {
+                                Some(inbox) => {
+                                    inbox.push(Incoming::CandidateChain {
+                                        chain: received.chain,
+                                        balances: Some(received.balances),
+                                        mempool_txs: received.mempool_txs,
+                                        pending_transactions: received.pending_transactions,
+                                        difficulty: received.difficulty,
+                                        from: Some(addr),
+                                    });
                                 }
-                            };
-                            if adopted {
-                                info!(peer = %peer, new_chain_len = self.blockchain.chain_len(), "Блокчейн обновлён с узла");
-                                let height = self.blockchain.chain_len() as u64 - 1;
-                                self.event_bus
-                                    .publish(events::NodeEvent::StatePersisted { height });
-                                self.event_bus.publish(events::NodeEvent::BlockApplied {
-                                    height,
-                                    hash: self.blockchain.tip_hash(),
-                                });
-                                let _ = sync_tx.send(self.blockchain.snapshot_wire());
-                            } else {
-                                for tx in received.mempool_txs.iter() {
-                                    if !self.blockchain.chain_contains_tx(tx)
-                                        && !self.blockchain.mempool_contains(
-                                            &strangecoin_core::serialize::txid(tx),
-                                        )
-                                    {
-                                        let _ = self.blockchain.apply_tx(tx.clone());
-                                    }
-                                }
-                                for tx in received.pending_transactions.iter() {
-                                    if !self.blockchain.chain_contains_tx(tx)
-                                        && !self.blockchain.mempool_contains(
-                                            &strangecoin_core::serialize::txid(tx),
-                                        )
-                                    {
-                                        let _ = self.blockchain.apply_tx(tx.clone());
-                                    }
-                                }
-                                self.blockchain.save_state();
+                                None => warn!(
+                                    peer = %peer,
+                                    "SyncEngine inbox отсутствует: кандидат отброшен"
+                                ),
                             }
                         }
                         Err(e) => {
@@ -1209,6 +1194,7 @@ if let Some(ref progress_rx) = self.progress_rx {
                             rate_limiter: self.node.rate_limiter.clone(),
                             shutdown: self.node.shutdown.clone(),
                             event_bus: Arc::clone(&self.node.event_bus),
+                            inbox: self.node.inbox.clone(),
                         }) {
                             self.status = format!("Ошибка отправки задачи майнинга: {}", e);
                             error!(error = %e, "Ошибка отправки задачи майнинга");
@@ -1428,7 +1414,6 @@ pub async fn run_async() {
     let mut node = Node::new(
         listen_addr.to_string(),
         mining_rx,
-        sync_tx.clone(),
         port,
         event_bus.clone(),
         config.network_id,
@@ -1446,7 +1431,9 @@ pub async fn run_async() {
     let node_address = node.address.clone();
     let node_rate_limiter = node.rate_limiter.clone();
     let node_event_bus = Arc::clone(&node.event_bus);
-    let sync_tx_clone = sync_tx.clone();
+    // The sync task shares the node's SyncEngine inbox (ADR-0010): pulled
+    // candidates are enqueued, not adopted inline.
+    let node_inbox = node.inbox.clone();
 
     let sync_task_handle = tokio::spawn(async move {
         let mut sync_node = Node {
@@ -1460,6 +1447,7 @@ pub async fn run_async() {
             sync_thread_handle: Arc::new(Mutex::new(None)),
             event_bus: node_event_bus,
             network_id: config.network_id,
+            inbox: node_inbox,
         };
         // Tick at SYNC_TICK for prompt shutdown checks, but only sync every
         // SYNC_TICKS_PER_SYNC ticks to preserve the original ~1s sync period
@@ -1475,7 +1463,7 @@ pub async fn run_async() {
             ticks += 1;
             if ticks >= SYNC_TICKS_PER_SYNC {
                 ticks = 0;
-                sync_node.sync_blockchain(sync_tx_clone.clone());
+                sync_node.sync_blockchain();
             }
         }
         info!("Sync task stopped");
@@ -1497,6 +1485,7 @@ pub async fn run_async() {
             sync_thread_handle: Arc::new(Mutex::new(None)),
             event_bus: Arc::clone(&node.event_bus),
             network_id: config.network_id,
+            inbox: node.inbox.clone(),
         },
         wallet_address: String::new(),
         password: String::new(),
@@ -1770,6 +1759,8 @@ pub mod test_support {
             // TxRejected из facade, а майнинг-задача — из node.
             event_bus: bc.event_bus(),
             network_id: crate::consensus::CHAIN_ID_REGTEST,
+            // Spawned by `start_server` when the test starts a server.
+            inbox: None,
         };
         (node, peers)
     }
@@ -1779,6 +1770,7 @@ pub mod test_support {
         peers: &Arc<Mutex<Vec<String>>>,
         address: &str,
         rate_limiter: &Arc<crate::network::RateLimiter>,
+        inbox: Option<Inbox>,
     ) -> Node {
         Node {
             blockchain: Arc::clone(bc),
@@ -1791,6 +1783,7 @@ pub mod test_support {
             sync_thread_handle: Arc::new(Mutex::new(None)),
             event_bus: bc.event_bus(),
             network_id: crate::consensus::CHAIN_ID_REGTEST,
+            inbox,
         }
     }
 
