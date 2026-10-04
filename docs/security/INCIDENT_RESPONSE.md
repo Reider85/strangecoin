@@ -1,9 +1,9 @@
 # INCIDENT_RESPONSE.md — Strangecoin Incident Response Plan
 
-**Версия:** 2.0 (D02)
-**Дата:** 2026-09-28
-**Статус:** Stage 0 — выполнен в D02 (debt prompt)
-**Связанные документы:** `THREAT_MODEL.md`, `ARCHITECT3.md`
+**Версия:** 3.0 (S1-P21)
+**Дата:** 2026-10-04
+**Статус:** Stage 1 — актуализирован в S1-P21 (Stage 0 — выполнен в D02)
+**Связанные документы:** `THREAT_MODEL.md` (v3.0), `ARCHITECT3.md`
 
 ---
 
@@ -11,10 +11,20 @@
 
 Настоящий документ описывает procedures для реагирования на security incidents в Strangecoin network. Охватывает:
 
+**Stage 0:**
 - Consensus bugs (chain split, inflation, double-spend)
 - Network attacks (eclipse, partition, DoS)
 - Key compromise (wallet, keystore)
 - Build compromise (malicious binary)
+
+**Stage 1 (добавлено в S1-P21):**
+- State/tx root mismatch (state_root/tx_root manipulation — V-35, V-37)
+- Consensus version downgrade (V-38)
+- Network_id confusion / foreign-peer floods (V-39)
+- Headers-first poisoning (V-34)
+- RBF fee-war DoS (V-40)
+- SyncEngine inbox flooding (V-41)
+- Bech32 HRP confusion (V-42)
 - Smart contract vulnerabilities (Stage 1.5+)
 
 ---
@@ -23,10 +33,10 @@
 
 | Level | Description | Examples | Response Time |
 |-------|-------------|----------|---------------|
-| **Critical** | Active exploit, funds at risk, chain halted | 51% attack, inflation bug, consensus split | **4 hours** |
-| **High** | Vulnerability confirmed, no active exploit yet | Key recovery, DoS vector, build compromise | **24 hours** |
-| **Medium** | Potential vulnerability, needs investigation | Unusual network behavior, suspicious tx patterns | **7 days** |
-| **Low** | Informational, minor issue | Documentation error, config misconfiguration | **30 days** |
+| **Critical** | Active exploit, funds at risk, chain halted | 51% attack, inflation bug, consensus split, state_root bypass | **4 hours** |
+| **High** | Vulnerability confirmed, no active exploit yet | Key recovery, DoS vector, build compromise, consensus_version downgrade | **24 hours** |
+| **Medium** | Potential vulnerability, needs investigation | Unusual network behavior, suspicious tx patterns, header reject spikes | **7 days** |
+| **Low** | Informational, minor issue | Documentation error, config misconfiguration, HRP UX errors | **30 days** |
 
 ---
 
@@ -37,11 +47,18 @@
 | Source | Metric | Alert Channel |
 |--------|--------|---------------|
 | Tracing logs | Error rate spikes | Log aggregation → Discord/Telegram |
-| Peer monitoring | Active peers < 8 | PagerDuty (Stage 1+) |
+| Peer monitoring | Active peers < 8 | PagerDuty |
 | Mempool | Size > 80% capacity | Discord bot |
-| Chain reorg | Depth > 3 blocks | PagerDuty (Stage 1+) |
+| Chain reorg | Depth > 3 blocks | PagerDuty |
 | Invalid blocks | Rate > 5/10min per peer | Discord bot |
 | Hash rate | Single miner > 33% | Community alert |
+| State root / tx root rejects | `StateRootMismatch` / `TxRootMismatch` spike | Discord bot → PagerDuty if sustained |
+| Consensus version rejects | Any reject on live network | PagerDuty (potential downgrade V-38) |
+| HELLO network_id mismatches | Spike in disconnect/ban | Discord bot (recon or misconfig V-39) |
+| Headers rejected | PoW/parent-fail rate per peer | Discord bot (header poisoning V-34) |
+| RBF replacements | Anomalous rate per sender | Discord bot (fee-war V-40) |
+| SyncEngine inbox | Full / dropped events recurring | Discord bot (flooding V-41) |
+| Soak runner (canonical decode) | Non-zero exit / panic | GitHub issue (security label) — decoder regression |
 
 ### 3.2 Manual Reports
 
@@ -243,7 +260,7 @@ Please upgrade immediately.
 
 ### 9.2 Chaos Engineering
 
-- (Stage 1+) Automated chaos testing
+- (Stage 1) Automated chaos testing — план: fault injection на regtest-нодах
 - Inject failures (network partition, disk failure)
 - Validate monitoring and alerting
 
@@ -253,10 +270,14 @@ Please upgrade immediately.
 
 | Document | Purpose |
 |----------|---------|
-| `THREAT_MODEL.md` | Threat vectors and mitigations |
-| `ARCHITECT3.md` §6 | Source threat model |
-| `ROADMAP3.md` §Stage 0 Security | Security requirements |
+| `THREAT_MODEL.md` (v3.0) | Threat vectors and mitigations (Stage 0 + Stage 1, V-01..V-42) |
+| `ARCHITECT3.md` §6 | Source threat model (25 vectors) |
+| `ARCHITECT3.md` §17 | PR/threat-model review checklist |
+| `ROADMAP3.md` | Security requirements (Stage 0/1 DoD) |
+| `docs/stage1/INVARIANTS_ENFORCED.md` | 22 invariants re-audit (S1-P20) |
 | `docs/ADR/0003-hybrid-pow-pos.md` | Consensus decisions |
+| `docs/ADR/0010-sync-engine.md` | SyncEngine inbox (V-41) |
+| `fuzz/README.md` | Fuzz/soak status (S1-P19) |
 | Immunefi program | Bug bounty details |
 
 ---

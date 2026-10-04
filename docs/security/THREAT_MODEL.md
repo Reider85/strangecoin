@@ -1,10 +1,10 @@
 # THREAT_MODEL.md — Strangecoin Threat Model (STRIDE)
 
-**Версия:** 2.0 (D02)
-**Дата:** 2026-09-28
-**Статус:** Stage 0 — выполнен в D02 (debt prompt)
-**Источник:** `analytics/ARCHITECT3.md` §6 (25 векторов атак) + `analytics/retro-stage0.md` (§4.3, §4.4, §8.2)
-**Связанные документы:** `INCIDENT_RESPONSE.md`, `ARCHITECT3.md`, `ROADMAP3.md`
+**Версия:** 3.0 (S1-P21)
+**Дата:** 2026-10-04
+**Статус:** Stage 1 — актуализирован в S1-P21 (Stage 0 — выполнен в D02)
+**Источник:** `analytics/ARCHITECT3.md` §6 (25 векторов атак) + `analytics/retro-stage0.md` (§4.3, §4.4, §8.2) + `analytics/prompt-stage1.md` S1-P21 (векторы Stage 1)
+**Связанные документы:** `INCIDENT_RESPONSE.md`, `ARCHITECT3.md`, `ROADMAP3.md`, `docs/stage1/INVARIANTS_ENFORCED.md`, `fuzz/README.md`
 
 ---
 
@@ -12,9 +12,10 @@
 
 ### 1.1 Scope
 
-Настоящий документ описывает threat model для Strangecoin v1.0.0 (Stage 0).
+Настоящий документ описывает threat model для Strangecoin (Stage 0 — v1.0.0, Stage 1 — v1.1.0-stage1).
 Анализ охватывает следующие подсистемы:
 
+**Stage 0:**
 - **Консенсус:** PoW валидация, difficulty retargeting, genesis, emission
 - **Криптография:** secp256k1 подписи, blake3 хеши, каноническая сериализация
 - **Сеть (P2P):** TCP соединения, gossip, sync, rate limiting
@@ -22,6 +23,19 @@
 - **Mempool:** валидация, eviction, лимиты
 - **Кошелёк:** keystore шифрование, sign/verify
 - **Сборка:** CI/CD, reproducible builds, signatures
+
+**Stage 1 (добавлено в S1-P21):**
+- **strangecoin-core:** serialize, consensus, state, economics, governance — 0 I/O
+- **Заголовок блока:** `state_root` (Verkle Trie), `tx_root` (merkle), `consensus_version`
+- **StateWitness:** генерация/проверка stateless-валидации (API ядра)
+- **Headers-first sync:** GET_HEADERS/HEADERS/GET_BLOCKS/BLOCKS, выбор вершины по cumulative work
+- **SyncEngine:** inbox pattern, разрыв цикла network↔blockchain
+- **Mempool RBF:** feerate, find_replaceable, лимиты замен
+- **network_id:** genesis + HELLO, изоляция сетей (mainnet=1, testnet=2, regtest=3)
+- **bech32-адреса:** HRP sc1/tsc1/rsc1 с контрольной суммой
+- **EventBus:** crossbeam multi-subscriber (BlockApplied, TxRejected, …)
+- **governance:** SCIP skeleton + activation height (инвариант №21)
+- **tokio:** async-рантайм для новых подсистем
 
 ### 1.2 Assumptions
 
@@ -501,9 +515,9 @@ Reproducible builds + cosign signatures для верификации бинар
 
 ---
 
-## 4. Additional Stage 0-Specific Vectors
+## 4. Additional Stage 0/1-Specific Vectors
 
-Помимо 25 основных векторов из ARCHITECT3.md §6,以下是在 Stage 0 специфичные векторы:
+Помимо 25 основных векторов из ARCHITECT3.md §6,以下是在 Stage 0/1 специфичные векторы. Подсекция 4.10 добавлена в S1-P21 (векторы поверхностей Stage 1).
 
 ---
 
@@ -604,11 +618,11 @@ Reproducible builds + cosign signatures для верификации бинар
 | **ID** | V-32 |
 | **Название** | Grant Blocks Bypass Consensus Rules |
 | **STRIDE** | Elevation of Privilege / Tampering |
-| **Описание** | Механизм `create_grant_block` (первичная эмиссия: 10000 монет «initial_wallet_address» первому кошельку) — это `is_coinbase: true` без подписи, прямая мутация `balances` в обход mempool и эмиссионных правил. В `validate_chain` захардкожено исключение `block.index != 1` (блок №1 выведен из проверки coinbase), а magic-строки `"genesis"`/`"coinbase"` в sender пропускают проверку баланса. |
-| **Stage 0 Mitigation** | Генезисный блок продолжает валидироваться по `EXPECTED_GENESIS_HASH` (якорь P10). Grant-блоки работают только на regtest/testnet. |
-| **Stage** | S1-P01 (consensus-санация: флаг `allow_grant_blocks`) |
-| **Residual Risk** | **Средний.** Любой узел с grant-блоком нарушает инвариант №6 («блок не содержит наград сверх эмиссии»). На mainnet это критично — закрытие в S1-P01 обязательно до mainnet. |
-| **Monitoring** | Мониторинг coinbase-транзакций с amount > block_reward_at_height; alert. |
+| **Описание** | Механизм `create_grant_block` (первичная эмиссия: 10000 монет «initial_wallet_address» первому кошельку) — это `is_coinbase: true` без подписи, прямая мутация `balances` в обход mempool и эмиссионных правил. В Stage 0 `validate_chain` содержал захардкоженное исключение `block.index != 1`, а magic-строки `"genesis"`/`"coinbase"` в sender пропускали проверку баланса. |
+| **Mitigation (закрыто S1-P01)** | Флаг `allow_grant_blocks` (default = false, true допустим только для regtest/легаси-миграций). При false: блок №1 валидируется по общим правилам (coinbase ≤ block_reward_at_height), magic-строки в sender → reject, grant-вызов → typed error `GrantBlocksDisabled`. Генезис по-прежнему валидируется по `EXPECTED_GENESIS_HASH`. Commit `cb0ac1a`. |
+| **Stage** | S1-P01 (закрыт) |
+| **Residual Risk** | Низкий. Консенсусный обход исключён при выключенном флаге. Остаток: флаг должен оставаться false на mainnet/testnet — операционная ответственность, не код. Легаси-миграции БД — отдельный путь (не консенсусный). |
+| **Monitoring** | Мониторинг coinbase-транзакций с amount > block_reward_at_height; alert; лог GrantBlocksDisabled. |
 
 ---
 
@@ -619,17 +633,176 @@ Reproducible builds + cosign signatures для верификации бинар
 | **ID** | V-33 |
 | **Название** | Release Pipeline Never Run — Artifacts Non-Reproducible |
 | **STRIDE** | Tampering |
-| **Описание** | `.github/workflows/release.yml` содержит дефекты (build-job не объявляет `outputs.hashes`, 5 таргетов вместо 6) и ни разу не запускался (нет тегов `v*`). Артефакты reproducible builds (cosign, SLSA provenance) существуют только на бумаге. КГ P24 («при push тега запускается pipeline») не проверен. |
-| **Stage 0 Mitigation** | Workflow и REPRODUCIBLE_BUILDS.md созданы (P24). Фикс — в D03 (PoC-тег `v0.0.0-rc1`). |
-| **Stage** | D03 (PoC-тег) |
-| **Residual Risk** | **Средний.** Пока pipeline не запущен, невозможно подтвердить воспроизводимость сборки. Пользователи не могут верифицировать бинарники. |
-| **Monitoring** | Нет (pipeline не активен). Мониторинг GitHub Actions после fix. |
+| **Описание** | `.github/workflows/release.yml` содержал дефекты (build-job не объявлял `outputs.hashes`, 5 таргетов вместо 6) и ни разу не запускался (нет тегов `v*` в GitHub Actions). Артефакты reproducible builds (cosign, SLSA provenance) существовали только на бумаге. |
+| **Mitigation** | Workflow исправлен в D03 (commit `60e1840`): добавлен job `aggregate-hashes` для SLSA subject, 6-й таргет `aarch64-pc-windows-msvc`. Локально: `cargo test`/`clippy` green. |
+| **Stage** | D03 (workflow fix) |
+| **Residual Risk** | **Средний.** Pipeline не верифицирован запуском на GitHub Actions (локального доступа к Actions нет; тег `v1.0.0-stage0` поставлен, но CI-прогон не подтверждён артефактом). Обязательство: первый запуск на `v1.1.0-stage1` (S1-P22) — evidence в STAGE1_SUMMARY. |
+| **Monitoring** | Мониторинг GitHub Actions после первого запуска тега; alert при failures/pipeline anomalies. |
 
 ---
 
-## 5. Mitigations Map
+## 5. Additional Stage 1-Specific Vectors
 
-### 5.1 Prompt → Vector Mapping
+Добавлено в S1-P21 (DoD Stage 1: «threat model актуализирован, если Stage добавляет новые attack vectors»). Нумерация продолжает V-33. Каждый вектор: Mitigation → промпт S1-PXX → код → тест; Residual Risk и Monitoring заполнены.
+
+---
+
+#### V-34: Headers-First Poisoning
+
+| Поле | Значение |
+|------|----------|
+| **ID** | V-34 |
+| **Название** | Headers-First Poisoning |
+| **STRIDE** | Tampering / Denial of Service |
+| **Описание** | Заголовки принимаются до тел блоков. Атакующий шлёт поток фальшивых заголовков (с валидным PoW-«островом» или без) для: (1) захвата выбора вершины через подделанный cumulative work, (2) исчерпания ресурсов узла валидацией мусорных заголовков, (3) отравления header-cache. |
+| **Mitigation** | PoW-проверка каждого заголовка (`validate_header_pow`: declared-hash + PoW) до включения в cache; проверка parent linkage и index continuity — `HeaderCache` останавливается на первом невалидном заголовке (bad header никогда не доходит до tip selection); выбор вершины по cumulative work через chain_selector; batch-лимиты `MAX_HEADERS_BATCH=2000`/`MAX_BLOCKS_BATCH=128` + size-checks до аллокации (инварианты #7/#16); rate limiter + ban по пире; полный `validate_chain` для тел блоков не ослаблен (заголовки только прокладывают маршрут). |
+| **Stage** | S1-P16 |
+| **Residual Risk** | Низкий/средний. PoW-проверка заголовков стоит CPU — при very-low difficulty (regtest) flood возможен, но rate limiter + ban ограничивают. Noise Protocol (Stage 2) усилит аутентификацию пиров. Cumulative work считается на заголовках — при компромете майнера >50% вектор деградирует в 51% attack (V-05). |
+| **Monitoring** | Мониторинг rejected headers rate per peer; alert при всплеске; chain tip divergence > 1 блока (partition indicator). |
+| **Код** | `src/network/sync.rs` (HeaderCache, plan_best_branch, sync_headers_first), `src/network/protocol.rs` (4 сообщения), `crates/strangecoin-core/src/consensus.rs` (validate_header_pow, cumulative_work_headers) |
+| **Тест** | `tests/sync_headers.rs::new_node_syncs_20_blocks_via_headers_first`, `::equal_chain_reports_nothing_better`, `::longer_fork_resolved_via_headers_first` |
+
+---
+
+#### V-35: State Root Manipulation
+
+| Поле | Значение |
+|------|----------|
+| **ID** | V-35 |
+| **Название** | State Root Manipulation |
+| **STRIDE** | Tampering |
+| **Описание** | `block.state_root` (Verkle Trie) коммитит post-state. Атакующий: (1) подделывает state_root в блоке (взломанный или невалидный корень), (2) пытается провести блок с корнем, не соответствующим применённому state, (3) эксплуатирует опциональный «zero root = no commitment» для обхода проверок узлов, требующих коммитмент. |
+| **Mitigation** | Инвариант №19 enforce: `root_after(parent_state, block) == block.state_root`, иначе typed error `StateRootMismatch` → reject; apply_block детерминирован (канонический порядок tx); zero state_root терпится только как явный opt-in «no commitment» (full-node с enforced commitments отклоняет). |
+| **Stage** | S1-P06 (ADR-0006), enforced в S1-P12 block_executor |
+| **Residual Risk** | Низкий при enforced commitments. Средний для узлов, работающих с zero root (light/SPV-режимы Stage 2+) — они не защищены от подделки state. Verkle witness-доказательства для stateless validation ещё не в сетевом протоколе (S1-P07 — только API ядра). |
+| **Monitoring** | Мониторинг StateRootMismatch reject rate; alert при всплеске (potential attack или desync). |
+| **Код** | `crates/strangecoin-core/src/state/verkle.rs`, `state.rs` (root_after), `src/blockchain/block_executor.rs` |
+| **Тест** | `tests/state_root.rs::tampered_state_root_is_rejected_by_the_second_node`, `::committed_state_root_chain_passes_on_a_second_node`; core `tests/state_root.rs::tamper_state_root_rejected`, `::proptest_root_consistent`; `tests/block_executor.rs::rejects_state_root_that_does_not_match_the_applied_state` |
+
+---
+
+#### V-36: Witness Spoofing
+
+| Поле | Значение |
+|------|----------|
+| **ID** | V-36 |
+| **Название** | Witness Spoofing |
+| **STRIDE** | Tampering / Spoofing |
+| **Описание** | StateWitness (пробы Verkle для затронутых адресов) позволяет верифицировать блок без полного state. Атакующий: (1) подделывает значения балансов/nonce в witness, (2) подставляет witness с неверными адресами, (3) манипулирует parent root в stateless-проверке. |
+| **Mitigation** | `verify_block_stateless(parent_state_root, block, witness)` пересчитывает post-state-root из parent root + witness + блока — подделка проб → Err; tamper-тесты на уровне ядра; minimality: witness не содержит лишних адресов (регрессионный критерий). Full-node валидация продолжает работать по полному state (не ослаблена). |
+| **Stage** | S1-P07 |
+| **Residual Risk** | Низкий на Stage 1 — witness API не в сетевом протоколе, спуфинг материализуется только когда light-клиенты начнут принимать witness по сети (Stage 2+, Noise + аутентификация full-node). Полный light client — вне Stage 1. |
+| **Monitoring** | N/A на Stage 1 (нет wire-протокола witness). Мониторинг — при введении witness-сообщений в Stage 2+. |
+| **Код** | `crates/strangecoin-core/src/state/witness.rs` |
+| **Тест** | `crates/strangecoin-core/tests/witness.rs::tampered_balance_rejected`, `::proptest_tamper_detected`, `::wrong_parent_root_rejected`, `::witness_contains_only_touched_addresses` |
+
+---
+
+#### V-37: Tx Root Manipulation
+
+| Поле | Значение |
+|------|----------|
+| **ID** | V-37 |
+| **Название** | Tx Root Manipulation |
+| **STRIDE** | Tampering |
+| **Описание** | `block.tx_root` (merkle root транзакций) — SPV-коммитмент. Атакующий: (1) подменяет список tx в блоке, оставив неверный tx_root, (2) подделывает tx_root под чужой набор tx, (3) манипулирует порядком tx для divergent root. |
+| **Mitigation** | Enforce: `merkle_root(txids блока) == block.tx_root`, иначе `TxRootMismatch` → reject; merkle детерминирован (blake3-пары, дублирование последнего при нечётности, канонический порядок tx — тот же, что в сериализации); tamper-тесты; property-тесты (чёт/нечёт, перестановка → другой root, но оба валидны при пересчёте). |
+| **Stage** | S1-P08 |
+| **Residual Risk** | Низкий. Коммитмент обязателен в заголовке (format_version bump, mainnet не запущен — миграция бесплатна). Residual связан с SPV-клиентами Stage 2+ (не проверяют PoW достаточно глубоко). |
+| **Monitoring** | Мониторинг TxRootMismatch reject rate; alert при аномалиях. |
+| **Код** | `crates/strangecoin-core/src/serialize.rs` (merkle_root, compute_tx_root), `src/blockchain/block_executor.rs` (проверка) |
+| **Тест** | `crates/strangecoin-core/tests/merkle.rs` (пустой/1/2/3/7 tx, proptest_deterministic_root); `tests/block_executor.rs::rejects_wrong_tx_root` |
+
+---
+
+#### V-38: Consensus Version Downgrade
+
+| Поле | Значение |
+|------|----------|
+| **ID** | V-38 |
+| **Название** | Consensus Version Downgrade |
+| **STRIDE** | Tampering / Elevation of Privilege |
+| **Описание** | `block.consensus_version` определяет набор правил. Атакующий: (1) шлёт блоки с устаревшей версией, чтобы обойти новые правила (downgrade attack), (2) шлёт будущую версию, чтобы обрушить валидацию узлов со старым кодом, (3) манипулирует activation height через SCIP. |
+| **Mitigation** | `validate_chain` проверяет `block.consensus_version` против `current_consensus_rules(height)` — версия ниже активной → reject; SCIP skeleton (governance/scip.rs): activation height, backward compatibility (старые узлы принимают блоки до activation, после — отвергают); единый источник `CURRENT_CONSENSUS_VERSION`; dummy-правило с enforce-тестом по высоте. |
+| **Stage** | S1-P05 |
+| **Residual Risk** | Низкий. Механизм работает; контентных SCIP пока нет (mainnet не запущен). Residual: при будущих активациях — социальная координация апгрейда (hard fork window). TLA+ spec не моделирует version switching (см. §7). |
+| **Monitoring** | Мониторинг consensus_version reject rate; alert при reject на testnet/mainnet (возможен downgrade-попытка или misconfigured peer). |
+| **Код** | `crates/strangecoin-core/src/governance/scip.rs`, `consensus.rs` (CURRENT_CONSENSUS_VERSION), `src/blockchain/consensus_manager.rs` |
+| **Тест** | `tests/consensus_version.rs::stale_consensus_version_rejected`, `::future_consensus_version_rejected`, `::correct_consensus_version_accepted`; `tests/block_executor.rs::rejects_stale_consensus_version` |
+
+---
+
+#### V-39: Network Downgrade / Confusion
+
+| Поле | Значение |
+|------|----------|
+| **ID** | V-39 |
+| **Название** | Network Downgrade / Confusion |
+| **STRIDE** | Spoofing |
+| **Описание** | Узел regtest теоретически может соединиться с узлом другой сети и получить «валидный» для себя мусор. Атакующий: (1) подставляет HELLO с чужим network_id, (2) мешает handshake для downgrade на более слабую сеть, (3) путает chain_id транзакций с чужой сетью (replay). |
+| **Mitigation** | `network_id` в genesis.json и в HELLO-сообщении; при handshake сверяет со своей сетью: mismatch → disconnect + ban + warn-лог, ДО обработки любых других данных; chain_id == network_id из единого источника констант (core::consensus: mainnet=1, testnet=2, regtest=3); EXPECTED_GENESIS_HASH обновлён per network. |
+| **Stage** | S1-P14 (+ константы из S1-P03/S1-P05) |
+| **Residual Risk** | Низкий. Изоляция протокольная и на уровне генезиса. Residual: plaintext TCP (Stage 2 Noise) — MITM может подменить DNS/список seeds (V-16), но не network_id валидного HELLO без компромета endpoints. |
+| **Monitoring** | Мониторинг HELLO network_id mismatch rate; alert при всплеске (recon или misconfiguration). |
+| **Код** | `genesis.json` (network_id), `src/network/protocol.rs` (HELLO + проверка), `crates/strangecoin-core/src/consensus.rs` (CHAIN_ID-константы) |
+| **Тест** | `tests/network_id.rs::foreign_network_id_is_rejected_and_banned`; связность chain_id/network_id — proptest `consensus_proptest.rs::chain_id_validation` |
+
+---
+
+#### V-40: RBF Fee-War DoS
+
+| Поле | Значение |
+|------|----------|
+| **ID** | V-40 |
+| **Название** | RBF Fee-War DoS |
+| **STRIDE** | Denial of Service |
+| **Описание** | Mempool RBF (replace-by-fee): атакующий шлёт бесконечные замены tx (один sender + nonce), чтобы: (1) сжигать CPU на re-validation, (2) вытеснять чужие tx из mempool, (3) провоцировать fee-war, (4) через RBF попытаться открыть double-spend (замена не-найденной tx). |
+| **Mitigation** | Детерминированные правила: feerate = fee/weight (пока fee=0 → proxy 1/serialized_len); замена только если new feerate ≥ old × (1 + `RBF_MIN_DELTA`); `MAX_RBF_REPLACEMENTS` (анти-DoS лимит цепочки замен); все insert-проверки обязательны при замене; nonce-правило приоритетнее RBF (RBF не открывает двойную трату); анонс `TxRejected { reason: Replaced }` через EventBus. |
+| **Stage** | S1-P17 |
+| **Residual Risk** | Низкий. Лимиты + feerate-delta ограничивают fee-war; real fee market (EIP-1559) — Stage 5. При fee=0 feerate — прокси по размеру: спам одинаковых tx возможен, но ограничен MAX_PENDING_TXS + rate limiter. |
+| **Monitoring** | Мониторинг RBF replacement rate per sender; alert при аномальном количестве замен; mempool size > 80%. |
+| **Код** | `src/mempool/mod.rs` (feerate, find_replaceable, RBF_MIN_DELTA, MAX_RBF_REPLACEMENTS) |
+| **Тест** | `tests/rbf.rs::rbf_replacement_emits_tx_rejected`, `::rbf_replacement_with_lower_feerate_rejected`, `::rbf_replacement_chain_is_limited`, `::rbf_replacement_evicts_dependencies`, `::rbf_replacement_is_what_gets_mined`; `tests/double_spend.rs` green (регрессий нет) |
+
+---
+
+#### V-41: SyncEngine Inbox Flooding
+
+| Поле | Значение |
+|------|----------|
+| **ID** | V-41 |
+| **Название** | SyncEngine Inbox Flooding |
+| **STRIDE** | Denial of Service |
+| **Описание** | SyncEngine — единственный validate→apply→announce; входящие блоки/заголовки/tx идут через inbox (mpsc). Атакующий: (1) переполняет inbox дубликатами/мусором, (2) флудит BLOCKS, чтобы HEADERS легитимных пиров задерживались, (3) давит на single-consumer порядок для лагов. |
+| **Mitigation** | Bounded inbox (backpressure); single-consumer строго последовательная обработка (детерминизм); приоритет: дубликаты дропаются, спамеры банятся через rate limiter, HEADERS обрабатываются до BLOCKS того же пира; network-обработчики только кладут в inbox (никаких прямых вызовов blockchain — rg-аудит чистый); lane separation (full pull lane / inbound lane) с ban на переполнение. |
+| **Stage** | S1-P18 (ADR-0010) |
+| **Residual Risk** | Низкий/средний. Bounded + ban ограничивают флуд; при недобросовестных пирах с высоким rate legit-блоки могут задерживаться до rate-limit окна. Gossip-оптимизации (Erlay) — Stage 2. |
+| **Monitoring** | Мониторинг inbox full / dropped events; alert при частых переполнениях; ban rate per peer. |
+| **Код** | `src/network/sync_engine.rs`, `src/network/mod.rs` (только inbox), `src/network/sync.rs` |
+| **Тест** | `tests/sync_engine.rs::concurrent_candidates_race_through_one_engine` (+ 4 engine unit-тесты: inbox dedupe, full pull lane drops, full inbound bans, lane separation); `tests/network.rs` race-тесты (fast_registration_race) |
+
+---
+
+#### V-42: HRP Confusion
+
+| Поле | Значение |
+|------|----------|
+| **ID** | V-42 |
+| **Название** | HRP Confusion (Cross-Network Address) |
+| **STRIDE** | Spoofing |
+| **Описание** | Перевод средств между сетями по человеческому фактору: пользователь копирует адрес regtest (rsc1...) и отправляет mainnet-средства, или вставляет битый адрес без контрольной суммы (Stage 0: base64-pubkey без checksum — ARCHITECT2 §1.1 №6). Спуфинг: подделка адреса в UI/клипборде без визуального отличия сетей. |
+| **Mitigation** | bech32 с HRP, несущим network: `sc1`/`tsc1`/`rsc1` (mainnet/testnet/regtest); checksum ошибки → typed error; чужой HRP → Err; все точки создания адреса (wallet, GUI, CLI, genesis) переведены на encode_address(pubkey, network_id); base64-pubkey-адресов выведены из кода; миграция legacy-DB — пересчёт адреса из pubkey. |
+| **Stage** | S1-P15 |
+| **Residual Risk** | Низкий. Checksum + HRP закрывают случайные ошибки. Residual: пользователь может намеренно/ошибочно ввести валидный HRP другой сети — UI должен визуально отличать префиксы (требование к GUI Stage 2+). |
+| **Monitoring** | Мониторинг reject из-за HRP/checksum mismatch; alert при систематических ошибках (potential UX issue или адрес-спуфинг). |
+| **Код** | `crates/strangecoin-core/src/address.rs` (encode_address/decode_address, bech32::Hrp), `src/address.rs` (re-export) |
+| **Тест** | Round-trip encode/decode + checksum/HRP reject (core address tests); интеграционный bech32-transfer на `rsc1` — `tests/two_clients.rs`, `tests/reorg.rs` |
+
+---
+
+## 6. Mitigations Map
+
+### 6.1 Prompt → Vector Mapping (Stage 0)
 
 | Prompt | Векторы, которые он mitigates |
 |--------|------------------------------|
@@ -646,21 +819,39 @@ Reproducible builds + cosign signatures для верификации бинар
 | **P13** | V-01 (eclipse — rate limiting), V-14 (spam txs — rate limit), V-15 (invalid blocks — ban), V-17 (sybil — connection limits) |
 | **P14** | V-14 (spam txs — mempool cap), V-30 (nonce — mempool validation) |
 | **P15** | V-28 (config leakage — secrets separation) |
-| **P22** | All vectors (documentation, monitoring) |
-| **P24** | V-22 (compromised build — reproducible builds, cosign, SLSA) |
+| **P22 → D02** | All vectors (documentation, monitoring) |
+| **P24 → D03** | V-22 (compromised build — reproducible builds, cosign, SLSA); V-33 (workflow fix) |
 
-### 5.2 Coverage Matrix
+### 6.2 Prompt → Vector Mapping (Stage 1, добавлено S1-P21)
 
-| STRIDE Category | Covered by P0X | Residual (deferred) |
-|-----------------|----------------|---------------------|
-| **Spoofing** | P05 (chain_id), P13 (peer limits) | V-06 (long-range → Stage 7), V-24 (MITM → Stage 2) |
-| **Tampering** | P06 (serialization), P07 (txid), P08-P09 (difficulty/time) | V-07 (nothing-at-stake → Stage 7), V-18-V-21 (contracts → Stage 1.5+) |
-| **Repudiation** | P07 (txid commitment) | — |
-| **Information Disclosure** | P04 (keystore), P15 (config) | V-08, V-10 (MEV → Stage 5) |
-| **Denial of Service** | P12 (size limits), P13 (rate limiting), P14 (mempool) | V-09 (censoring → Stage 7) |
-| **Elevation of Privilege** | P05 (nonce), P10 (genesis) | V-05 (51% → monitoring), V-23 (key compromise → Stage 5 AA) |
+| Prompt | Векторы, которые он mitigates |
+|--------|------------------------------|
+| **S1-P01** | V-32 (grant blocks → regtest-only flag; закрыт) |
+| **S1-P05** | V-38 (consensus_version + activation height), V-39 (константы chain_id/network_id) |
+| **S1-P06** | V-35 (state_root — инвариант #19) |
+| **S1-P07** | V-36 (witness spoofing — tamper tests) |
+| **S1-P08** | V-37 (tx_root — merkle enforce) |
+| **S1-P14** | V-39 (network_id в genesis + HELLO) |
+| **S1-P15** | V-42 (bech32 HRP) |
+| **S1-P16** | V-34 (headers-first poisoning) |
+| **S1-P17** | V-40 (RBF fee-war DoS) |
+| **S1-P18** | V-41 (SyncEngine inbox flooding) |
+| **S1-P19** | Fuzz/soak canonical decoders (V-13 adjacent; Monitoring §8.4) |
+| **S1-P20** | Ре-аудит 22 инвариантов (all vectors — no regressions) |
+| **S1-P21** | V-34..V-42 (документирование этого раздела) |
 
-### 5.3 Mitigations → Test Coverage Map
+### 6.3 Coverage Matrix
+
+| STRIDE Category | Covered by Stage 0 | Covered by Stage 1 | Residual (deferred) |
+|-----------------|--------------------|--------------------|---------------------|
+| **Spoofing** | P05 (chain_id), P13 (peer limits) | S1-P14 (network_id HELLO), S1-P15 (bech32 HRP) | V-06 (long-range → Stage 7), V-24 (MITM → Stage 2) |
+| **Tampering** | P06 (serialization), P07 (txid), P08-P09 (difficulty/time) | S1-P06 (state_root), S1-P08 (tx_root), S1-P05 (consensus_version), S1-P16 (headers) | V-07 (nothing-at-stake → Stage 7), V-18-V-21 (contracts → Stage 1.5+) |
+| **Repudiation** | P07 (txid commitment) | — | — |
+| **Information Disclosure** | P04 (keystore), P15 (config) | S1-P07 (witness minimality) | V-08, V-10 (MEV → Stage 5) |
+| **Denial of Service** | P12 (size limits), P13 (rate limiting), P14 (mempool) | S1-P17 (RBF limits), S1-P18 (inbox bounded) | V-09 (censoring → Stage 7) |
+| **Elevation of Privilege** | P05 (nonce), P10 (genesis) | S1-P01 (grant flag), S1-P05 (version enforce) | V-05 (51% → monitoring), V-23 (key compromise → Stage 5 AA) |
+
+### 6.4 Mitigations → Test Coverage Map
 
 Каждый вектор привязан к конкретному тесту. Если тест отсутствует — помечен как **gap**.
 
@@ -669,45 +860,55 @@ Reproducible builds + cosign signatures для верификации бинар
 | V-01 (Eclipse) | network/rate_limiter | `tests/network.rs::real_network_three_nodes` | ✅ D01 |
 | V-02 (Partition) | network/protocol | `tests/network.rs::real_network_three_nodes` | ✅ D01 |
 | V-03 (Selfish mining) | consensus/monitoring | gap: нет теста на orphan rate | ⚠️ gap |
-| V-04 (Time-warp) | consensus (MTP, retarget) | `tests/time.rs::mtp_rejection`, `tests/time.rs::future_timestamp_rejection` | ✅ D01 |
-| V-05 (51% attack) | consensus (difficulty) | `tests/pow.rs::mining_and_validation` | ✅ D01 |
+| V-04 (Time-warp) | consensus (MTP, retarget) | `tests/time.rs::mtp_rejection`, `tests/time.rs::future_timestamp_rejection`; `tests/block_executor.rs::rejects_timestamp_*` | ✅ D01 + S1-P12 |
+| V-05 (51% attack) | consensus (difficulty) | `tests/pow.rs::mining_and_validation`; `tests/block_executor.rs::rejects_proof_of_work_above_target` | ✅ D01 + S1-P12 |
 | V-06 (Long-range) | N/A (PoS, Stage 7) | N/A | Deferred |
 | V-07 (Nothing-at-stake) | N/A (PoS, Stage 7) | N/A | Deferred |
 | V-08 (MEV frontrunning) | N/A (Stage 5) | N/A | Deferred |
 | V-09 (MEV censoring) | N/A (Stage 7) | N/A | Deferred |
 | V-10 (MEV sandwich) | N/A (Stage 5) | N/A | Deferred |
-| V-11 (Cross-chain replay) | consensus (chain_id) | `tests/network.rs::network_id_rejection` (если создан) | ✅/gap |
+| V-11 (Cross-chain replay) | consensus (chain_id) + network (HELLO) | `tests/network_id.rs::foreign_network_id_is_rejected_and_banned`; proptest `chain_id_validation` | ✅ S1-P14/S1-P19 |
 | V-12 (Intra-chain replay) | mempool (nonce) | `tests/double_spend.rs::double_spend_rejected` | ✅ D01 |
-| V-13 (OOM) | network (framing) | unit-тесты в `src/mempool/`, `src/network/` | ✅ Stage 0 |
+| V-13 (OOM) | network (framing) + serialize (bounds-checked readers) | unit-тесты `src/network/`, `src/mempool/`; soak S1-P19 (fuzz) | ✅ Stage 0 + S1-P19 |
 | V-14 (Spam txs) | mempool (cap) | `tests/two_clients.rs` (нагрузочный) | ✅ D01 |
-| V-15 (Invalid blocks) | peer_manager (ban) | gap: нет теста на ban после N invalid | ⚠️ gap |
+| V-15 (Invalid blocks) | peer_manager (ban) + HeaderCache + block_executor | `tests/block_executor.rs` (reject-матрица), `tests/sync_headers.rs` (bad header не доходит до tip); ban-after-N — частично | ⚠️ частично |
 | V-16 (DNS poisoning) | config (seeds) | gap: нет теста на DNS | ⚠️ gap |
 | V-17 (Sybil) | peer_manager (limits) | gap: нет теста на connection limits | ⚠️ gap |
 | V-18-V-21 (Contracts) | N/A (Stage 1.5+) | N/A | Deferred |
-| V-22 (Compromised build) | CI/CD (P24) | gap: pipeline не запускался | ⚠️ gap (→ D03) |
+| V-22 (Compromised build) | CI/CD (P24) | gap: GitHub Actions run не верифицирован | ⚠️ gap (→ first v* tag) |
 | V-23 (Key compromise) | wallet (keystore) | unit-тесты wallet | ✅ Stage 0 |
 | V-24 (MITM) | N/A (Stage 2) | N/A | Deferred |
 | V-25 (Validator collusion) | N/A (Stage 7) | N/A | Deferred |
 | V-26 (Testnet low-diff) | consensus (chain_id) | `tests/pow.rs::mining_and_validation` | ✅ D01 |
 | V-27 (Keystore theft) | wallet (AES-GCM) | unit-тесты wallet | ✅ Stage 0 |
 | V-28 (Config leakage) | config (P15) | gap: нет теста на secrets в config | ⚠️ gap |
-| V-29 (Genesis manipulation) | consensus (hash) | `tests/common/mod.rs::genesis_validation` | ✅ D01 |
+| V-29 (Genesis manipulation) | consensus (hash) | `tests/common/mod.rs::genesis_validation`; panic-guard при mismatch | ✅ D01 |
 | V-30 (Nonce manipulation) | mempool (nonce) | `tests/double_spend.rs` | ✅ D01 |
 | V-31 (Genesis key) | consensus (genesis_keypair) | gap: нет теста на offline key | ⚠️ gap (→ pre-mainnet) |
-| V-32 (Grant blocks) | consensus (validate_chain) | `tests/emission.rs::coinbase_emission` | ✅ D01 |
-| V-33 (Release pipeline) | CI/CD (P24) | gap: pipeline не запускался | ⚠️ gap (→ D03) |
+| V-32 (Grant blocks) | consensus (validate_chain) + Config flag | `tests/grant_flag.rs` (4 теста), `tests/emission.rs`, `tests/block_executor.rs::grant_block_needs_the_opt_in_flag` | ✅ S1-P01 |
+| V-33 (Release pipeline) | CI/CD (D03 fix) | gap: GitHub Actions run не верифицирован | ⚠️ gap (→ S1-P22 first tag) |
+| V-34 (Headers-first poisoning) | network/sync.rs + consensus | `tests/sync_headers.rs` (3 теста) | ✅ S1-P16 |
+| V-35 (state_root manipulation) | core state/verkle + block_executor | `tests/state_root.rs` (3), core `tests/state_root.rs` (incl. tamper, proptest) | ✅ S1-P06/P12/P19 |
+| V-36 (Witness spoofing) | core state/witness | core `tests/witness.rs` (tamper, proptest, minimality) | ✅ S1-P07 |
+| V-37 (tx_root manipulation) | core serialize + block_executor | core `tests/merkle.rs`, `tests/block_executor.rs::rejects_wrong_tx_root` | ✅ S1-P08/P12 |
+| V-38 (consensus_version downgrade) | governance/scip + consensus_manager | `tests/consensus_version.rs` (3), `tests/block_executor.rs::rejects_stale_consensus_version` | ✅ S1-P05/P12 |
+| V-39 (Network confusion) | protocol HELLO + genesis | `tests/network_id.rs::foreign_network_id_is_rejected_and_banned` | ✅ S1-P14/P19 |
+| V-40 (RBF fee-war DoS) | mempool RBF | `tests/rbf.rs` (5 тестов), `tests/double_spend.rs` (регрессия) | ✅ S1-P17 |
+| V-41 (SyncEngine flooding) | network/sync_engine | `tests/sync_engine.rs` (+ unit-тесты lanes), race-тесты `tests/network.rs` | ✅ S1-P18 |
+| V-42 (HRP confusion) | core address (bech32) | core address round-trip/checksum tests; `tests/two_clients.rs`, `tests/reorg.rs` (rsc1) | ✅ S1-P15 |
 
-**Итого gaps:** 7 векторов без тестов (V-03, V-15, V-16, V-17, V-28, V-31, V-33). Из них:
-- V-03, V-15, V-16, V-17 — требуют интеграционных тестов (закрываются в D01/S1-P19)
-- V-28 — требует unit-теста на config validation
+**Итого gaps:** 7 векторов без полных тестов (V-03, V-15, V-16, V-17, V-28, V-31, V-22/V-33). Из них:
+- V-03, V-16, V-17, V-28 — требуют интеграционных/unit-тестов (не закрыты Stage 1)
+- V-15 — частично закрыт reject-тестами block_executor/sync; ban-after-N остаётся gap
 - V-31 — требует offline-ключа (pre-mainnet obligation)
-- V-33 — закрывается в D03 (PoC-тег)
+- V-22/V-33 — GitHub Actions run подтверждается первым тегом (S1-P22)
+- Новые V-34..V-42 — все с тестами, gaps нет
 
 ---
 
-## 6. Residual Risks
+## 7. Residual Risks
 
-### 6.1 Risks Deferred to Later Stages
+### 7.1 Risks Deferred to Later Stages
 
 | Risk | Deferred To | Mitigation Status | Impact |
 |------|-------------|-------------------|--------|
@@ -717,8 +918,11 @@ Reproducible builds + cosign signatures для верификации бинар
 | Network MITM (V-24) | Stage 2 | No Noise Protocol | High |
 | Account Abstraction (V-23) | Stage 5 | No social recovery | Medium |
 | Inclusion Lists (V-09) | Stage 7 | No censorship resistance | Medium |
+| Light client / SPV (V-36 wire) | Stage 2+ | Witness API только в ядре, не в протоколе | Medium |
+| TLA+ model: Verkle/state root/reorg | Stage 1 (spec update) | `docs/spec/README.md`: свойства state root/reorg — вне scope skeleton | Low |
+| Gossip/Noise/Erlay (усиливают V-01, V-34, V-41) | Stage 2 | Планируется | Medium |
 
-### 6.2 Risks Accepted at Stage 0
+### 7.2 Risks Accepted (Stage 0 + Stage 1)
 
 | Risk | Reason | Mitigation |
 |------|--------|------------|
@@ -727,21 +931,25 @@ Reproducible builds + cosign signatures для верификации бинар
 | Weak password (V-27) | User responsibility | PBKDF2 ≥210k iters |
 | Plaintext P2P (V-24) | Noise Protocol deferred to Stage 2 | Accept; mitigate with monitoring |
 | Genesis key from public string (V-31) | Testnet/regtest only; offline key before mainnet | **Obligation: offline key before mainnet freeze** |
-| Grant blocks bypass consensus (V-32) | Testnet/regtest only; mainnet not launched | **Obligation: S1-P01 flag before mainnet** |
-| Release pipeline non-functional (V-33) | Workflow exists but never run | **Obligation: D03 PoC-tag fix** |
+| Grant blocks (V-32) | Flag-gated (S1-P01); must stay off on mainnet | Flag default false + tests |
+| Release pipeline (V-33) | Workflow fixed (D03); GitHub Actions run pending | **Obligation: first tag run evidence (S1-P22)** |
+| cargo-fuzz не запускается на dev-хосте (Windows, нет MSVC/ASan) | ASan unsupported on `x86_64-pc-windows-gnu`; no MSVC; libFuzzer needs clang/MSVC | Fallback soak runner (S1-P19) нашёл и закрыл OOB-баг; 10-min soak clean. **Obligation: cargo-fuzz на Linux CI до Stage 2** |
+| Zero state_root tolerated (opt-in no commitment) | Явное поведение для совместимости | Узлы с enforced commitments отклоняют zero root; документировано |
+| RBF при fee=0 (feerate = proxy по размеру) | Fee market — Stage 5 | RBF_MIN_DELTA + MAX_RBF_REPLACEMENTS + rate limiter |
+| DNS poisoning (V-16) | Stage 0 residual | Hard-coded seeds; DNSSEC — Stage 2 |
 
-### 6.3 Risk Acceptance签字
+### 7.3 Risk Acceptance签字
 
-- [ ] Security team reviewed residual risks
-- [ ] Accepted risks documented in ADR (if needed)
-- [ ] Monitoring in place for all accepted risks
-- [ ] Stage 1+ roadmap includes mitigation for high-impact deferred risks
+- [x] Security team reviewed residual risks (self-review S1-P21 per ARCHITECT3 §17)
+- [ ] Accepted risks documented in ADR (if needed) — genesis key obligation фиксирована в D02/STAGE0_SUMMARY
+- [x] Monitoring plan expanded for Stage 1 surfaces (§8)
+- [x] Stage 1+ roadmap includes mitigation for high-impact deferred risks (Noise Stage 2, fee market Stage 5, PoS Stage 7)
 
 ---
 
-## 7. Monitoring Plan
+## 8. Monitoring Plan
 
-### 7.1 What to Monitor
+### 8.1 What to Monitor (Stage 0 + Stage 1)
 
 | Metric | Threshold | Alert Level | Action |
 |--------|-----------|-------------|--------|
@@ -755,48 +963,91 @@ Reproducible builds + cosign signatures для верификации бинар
 | TX time-to-inclusion | > 10 blocks | Warning | Check for censorship |
 | Failed decrypt attempts | > 10 in 1 min | Warning | Potential brute-force |
 | Chain tip divergence | > 1 block from peers | Warning | Check network partition |
+| StateRootMismatch / TxRootMismatch rejects | > threshold / spike | Critical | Investigate state manipulation or desync |
+| Consensus version rejects | Any on live network | Critical | Downgrade attempt or misconfigured peer |
+| HELLO network_id mismatches | Spike in bans | Warning | Recon or misconfiguration |
+| Headers rejected (PoW/parent fail) | Spike per peer | Warning | Header poisoning (V-34) |
+| RBF replacements per sender | Anomalous rate | Warning | Fee-war DoS (V-40) |
+| SyncEngine inbox full / drops | Recurring | Warning | Inbox flooding (V-41) |
+| Soak runner (canonical decode) | Non-zero exit / panic | Critical | Decoder regression — security issue |
 
-### 7.2 Monitoring Tools
+### 8.2 Monitoring Tools
 
-- **Tracing logs:** structured logging с levels (debug/info/warn/error)
+- **Tracing logs:** structured logging с levels (debug/info/warn/error) — уже в коде
+- **EventBus:** BlockApplied/BlockReorged/TxRejected/PeerScoreChanged — подписчики GUI/метрики/тесты (S1-P09)
 - **Metrics endpoint:** (Stage 1+) Prometheus-compatible
 - **Alerting:** (Stage 1+) integration с monitoring systems
 - **Community alerts:** (Stage 2+) Discord/Telegram bot для critical alerts
 
-### 7.3 Incident Response
+### 8.3 Incident Response
 
-См. `docs/security/INCIDENT_RESPONSE.md` для detailed incident response plan.
+См. `docs/security/INCIDENT_RESPONSE.md` для detailed incident response plan (актуализирован в S1-P21: Stage 1 alert-источники).
 
----
+### 8.4 Fuzzing Status (результат S1-P19, свёрнут в S1-P21)
 
-## 8. Review Checklist
-
-Перед финализацией Threat Model:
-
-- [ ] Все 25 векторов из ARCHITECT3.md §6 покрыты
-- [ ] Каждый вектор имеет: ID, Name, STRIDE, Description, Mitigation, Stage, Residual Risk
-- [ ] Mitigations ссылаются на конкретные промпты (P0X) или ADR
-- [ ] Residual risks явно отмечены (что НЕ закрыто на Stage 0)
-- [ ] Monitoring plan содержит thresholds и actions
-- [ ] Incident response plan написан (см. INCIDENT_RESPONSE.md)
-- [ ] Документ review'нут согласно ARCHITECT3.md §17 чек-листу
-- [ ] Все dependency vectors (V-18-V-21, V-06-V-07, V-25) помечены как deferred
+| Item | Status |
+|------|--------|
+| **Target** | `fuzz/fuzz_targets/canonical_decode.rs` — deserialize_header/block/transaction/transaction_signed на произвольных байтах |
+| **Contract** | Каждый вход декодируется или возвращает typed error; panic = crash |
+| **cargo-fuzz (libFuzzer+ASan)** | **Не запускается на dev-хосте** (Windows): ASan unsupported на `x86_64-pc-windows-gnu`; MSVC отсутствует; libFuzzer C++ runtime требует clang/MSVC. Детали: `fuzz/README.md` |
+| **Fallback** | `cargo run --example canonical_decode_soak` — детерминированный xorshift (garbage + mutated real blocks) |
+| **Результат 2026-10-04** | Fallback **нашёл реальный баг за секунды**: OOB panic в `deserialize_block` (bounds в `read_u32_be`/`read_u64_be`, truncated tx-slice при `sig_len`). Исправлено в `crates/strangecoin-core/src/serialize.rs` (bounds-checked readers, `?` propagation, live length check). Post-fix: 15 s smoke clean; **10-min run: 28,744,131 inputs, 0 panics, exit 0** |
+| **Ongoing monitoring** | Прогон soak после каждого изменения `serialize.rs`; при доступе к Linux CI+ASan — `cargo fuzz run canonical_decode -- -max_total_time=600` и обновление этого раздела |
 
 ---
 
-## 9. References
+## 9. Review Checklist
+
+### 9.1 Self-review S1-P21 (по ARCHITECT3 §17, security-пункты)
+
+- [x] Threat model: новые векторы Stage 1 (V-34..V-42) задокументированы, митигации добавлены (§5)
+- [x] Все 25 векторов из ARCHITECT3.md §6 покрыты (§3.1–§3.9)
+- [x] Каждый новый вектор имеет: ID, Name, STRIDE, Description, Mitigation, Stage, Residual Risk, Monitoring + Код/Тест
+- [x] Mitigations ссылаются на конкретные промпты (S1-PXX) и тесты
+- [x] Residual risks явно отмечены (§7) — включая obligations (genesis key, first tag run, cargo-fuzz on CI)
+- [x] Monitoring plan содержит thresholds и actions для Stage 1 поверхностей (§8.1)
+- [x] Fuzz-результат S1-P19 свёрнут в Monitoring (§8.4)
+- [x] Incident response актуализирован (INCIDENT_RESPONSE.md v3.0)
+- [x] Security: fuzzing target добавлен (S1-P19); TLA+ spec — результат D02 в `docs/spec/README.md` (state root/reorg вне scope skeleton — residual §7.1)
+- [x] Все dependency vectors (V-18-V-21, V-06-V-07, V-25) помечены как deferred
+- [x] Инварианты 1-22 enforce по актуализированной таблице `docs/stage1/INVARIANTS_ENFORCED.md` (S1-P20; №19, №21 — впервые enforced)
+
+### 9.2 Stage 0遗留 Review Checklist (D02)
+
+- [x] Все 25 векторов из ARCHITECT3.md §6 покрыты
+- [x] Каждый вектор имеет: ID, Name, STRIDE, Description, Mitigation, Stage, Residual Risk
+- [x] Mitigations ссылаются на конкретные промпты (P0X) или ADR
+- [x] Residual risks явно отмечены
+- [x] Monitoring plan содержит thresholds и actions
+- [x] Incident response plan написан (см. INCIDENT_RESPONSE.md)
+- [x] Документ review'нут согласно ARCHITECT3.md §17 чек-листу
+- [x] Все dependency vectors (V-18-V-21, V-06-V-07, V-25) помечены как deferred
+
+---
+
+## 10. References
 
 | Document | Purpose |
 |----------|---------|
 | `analytics/ARCHITECT3.md` §6 | Source: 25 threat vectors |
-| `analytics/ROADMAP3.md` §Stage 0 Security | Stage 0 security requirements |
+| `analytics/ARCHITECT3.md` §17 | PR/threat-model review checklist |
+| `analytics/ROADMAP3.md` | Stage requirements (DoD Stage 1 №9: threat model update) |
 | `analytics/prompt-stage0.md` P22 | Original creation prompt |
 | `analytics/prompt-stage1.md` D02 | Debt prompt execution |
+| `analytics/prompt-stage1.md` S1-P19 | Fuzz target + soak result |
+| `analytics/prompt-stage1.md` S1-P21 | Stage 1 threat model update (this revision) |
 | `analytics/retro-stage0.md` §4.3, §4.4, §8.2 | Genesis key, Changelog lie, remediation |
-| `docs/security/INCIDENT_RESPONSE.md` | Incident response plan |
+| `docs/security/INCIDENT_RESPONSE.md` | Incident response plan (v3.0, Stage 1 alert sources) |
+| `docs/stage1/INVARIANTS_ENFORCED.md` | 22 invariants re-audit (S1-P20) |
+| `docs/spec/README.md` | TLC model checker результат (D02) |
+| `fuzz/README.md` | Fuzz target + soak run log (S1-P19) |
 | `docs/ADR/0001-secp256k1-vs-ed25519.md` | Cryptographic decisions |
 | `docs/ADR/0002-tail-emission-vs-halving.md` | Economic decisions |
 | `docs/ADR/0003-hybrid-pow-pos.md` | Consensus decisions |
+| `docs/ADR/0006-verkle-trie-vs-smt.md` | State root (V-35) |
+| `docs/ADR/0007-tokio-on-stage-1.md` | Async runtime |
+| `docs/ADR/0009-events-bus.md` | EventBus (monitoring подписчики) |
+| `docs/ADR/0010-sync-engine.md` | SyncEngine inbox (V-41) |
 
 ---
 
