@@ -15,15 +15,20 @@ See `docs/ADR/0001-template.md` for the required structure: Context, Decision, C
 ## Development Workflow
 
 1. **Fork** the repository and create a feature branch.
-2. **Write code** following the style guide below.
-3. **Run checks** before pushing:
+2. **Enable git hooks** (once per clone):
+   ```bash
+   git config core.hooksPath .githooks
+   ```
+   The `commit-msg` hook validates prompt-style messages (`[S1-P13] …`, `[BUG-S0-002] …`) and warns on other formats. Process rule: **1 prompt = 1 atomic commit with the prompt ID in the message** (`analytics/retro-stage0.md` §8.1; see `analytics/bugfixes-stage0.md` BUG-S0-002).
+3. **Write code** following the style guide below.
+4. **Run checks** before pushing:
    ```bash
    cargo check
    cargo test
    cargo clippy -- -D warnings
    ```
-4. **Open a Pull Request** with a clear description of the change and motivation.
-5. **Reference ADRs** if your change relates to a documented decision.
+5. **Open a Pull Request** with a clear description of the change and motivation.
+6. **Reference ADRs** if your change relates to a documented decision.
 
 ## Code Style
 

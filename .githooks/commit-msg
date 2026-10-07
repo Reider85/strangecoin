@@ -1,0 +1,29 @@
+#!/bin/sh
+# commit-msg: enforce atomic-prompt commit messages — "1 prompt = 1 commit with ID".
+# Install: git config core.hooksPath .githooks
+# See bugfixes-stage0.md BUG-S0-002 (retro §8.1 process rule).
+
+msg_file="$1"
+first_line=$(head -n 1 "$msg_file" | tr -d '\r')
+
+# Allow empty / merge / fixup / revert messages untouched.
+case "$first_line" in
+  ""|Merge\ *|fixup!*|squash!*|Revert\ *) exit 0 ;;
+esac
+
+# Prompt-style IDs: [P01] … [P26], [D01]…[D03], [S1-P01]…[S1-P22], [BUG-S0-NNN]
+if printf '%s\n' "$first_line" | grep -Eq '^\[(P[0-9]{2}|D0[1-3]|S1-P[0-9]{2}|BUG-S0-[0-9]{3})\] '; then
+  exit 0
+fi
+
+# Historic Stage 0 style without brackets: "P24: reproducible builds …"
+if printf '%s\n' "$first_line" | grep -Eq '^(P[0-9]{2}|D0[1-3]|S1-P[0-9]{2}): '; then
+  exit 0
+fi
+
+# Non-prompt commits (docs-only fixes, chore) — warn, do not block.
+echo "commit-msg: warning — message does not match [<prompt-id>] format:" >&2
+echo "  $first_line" >&2
+echo "  Expected e.g. '[S1-P13] blockchain: facade …' or '[BUG-S0-002] docs: …'" >&2
+echo "  See docs/CONTRIBUTING.md (Git Hooks) and analytics/retro-stage0.md §8.1." >&2
+exit 0
