@@ -38,7 +38,7 @@
 | BUG-S0-001 | A | C | D03 | Тег `v1.0.0-stage0` отсутствует — Gate Stage 1 пройден формально | fixed |
 | BUG-S0-002 | A | C | S1-P22 | Git-история сквошена в 1 коммит `68e358f`, нарушена атомарность «1 промпт = 1 коммит» | fixed |
 | BUG-S0-003 | A | H | P22 / D02 | Ложная запись в Changelog о выполненном P22 сохраняет риск введения в заблуждение | fixed |
-| BUG-S0-004 | A | H | P19 / D01 | Каталог `tests/` создан в Stage 1, но 6 тестов остались в `src/main.rs` параллельно | open |
+| BUG-S0-004 | A | H | P19 / D01 | Каталог `tests/` создан в Stage 1, но 6 тестов остались в `src/main.rs` параллельно | fixed |
 | BUG-S0-005 | A | H | P24 / D03 | Release pipeline ни разу не запускался на CI — нет evidence reproducible builds | open |
 | BUG-S0-006 | A | M | P02 | Заглушки `fee_market.rs` и `governance/scip.rs` созданы только в S1-P02/S1-P05 — расхождение с P02-артефактами | open |
 | BUG-S0-007 | A | M | P01 | `.gitignore` содержит `*.lock` и `Cargo.lock` — противоречие с reproducible builds | open |
@@ -228,6 +228,7 @@ git rev-list --count HEAD origin/master  # 163 / 163
 | **Промпт-источник** | P19 / D01 |
 | **КГ нарушен** | D01 КГ: «В `src/main.rs` не осталось интеграционных тестов» |
 | **Файлы** | `src/main.rs` (3452 строки по retro §1), `tests/` (18 файлов) |
+| **Статус** | **fixed** (2026-10-07) |
 
 **Факт:** Каталог `tests/` создан (18 файлов: two_clients, reorg, double_spend, pow, emission, time, network, concurrency, sync_headers, sync_engine, events, rbf, network_id, grant_flag, consensus_version, state_root, state_cache, block_executor, chain_selector_proptest). Однако `src/main.rs` по retro §1 — 3452 строки; ретроспектива §5.1 фиксирует 6 тестов внутри main.rs.
 
@@ -239,6 +240,14 @@ git rev-list --count HEAD origin/master  # 163 / 163
 1. Прогнать: `rg "#\[test\]" src/main.rs` — получить список оставшихся тестов.
 2. Перенести оставшиеся в `tests/` (если есть) с сохранением семантики.
 3. Сократить `src/main.rs` ниже 3000 строк — целевой ориентир для Stage 1.5.
+
+**Решение (2026-10-07):** Баг был занесён как `open` по снапшоту retro (до исполнения debt-track) — статус устарел. Верификация показала, что D01 выполнен полностью:
+- `src/main.rs` — 4 строки (thin tokio wrapper `strangecoin::run_async()`); `rg "#\[test\]"` → 0 совпадений.
+- Все 6 тестов перенесены: `hundred_transactions_five_wallets` → `tests/two_clients.rs`; `three_instances_receive_transfer`, `real_network_three_nodes`, `real_network_fast_registration_race` → `tests/network.rs`; `no_rollback_on_shorter_chain` → `tests/reorg.rs`; `deadlock_test_blockchain_wallet_lock_order` → `tests/concurrency.rs`.
+- Коммиты D01: `9dd8077` `[D01] tests: extract integration tests from main.rs + add 5 missing scenarios` + follow-up `1929f2f` (TestDir RAII, random ports, MTP rejection test). Commit message явно фиксирует: «No integration tests remain in src/main.rs».
+- КГ D01 «В `src/main.rs` не осталось интеграционных тестов» — выполнен.
+
+Дополнительных правок кода не требуется; статус в §1 обновлён на `fixed`.
 
 ---
 
@@ -1023,7 +1032,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 
 | ID | Заголовок |
 |----|----------|
-| BUG-S0-004 | 6 тестов в main.rs |
+| ~~BUG-S0-004~~ | ~~6 тестов в main.rs~~ (**fixed 2026-10-07**: D01 `9dd8077`/`1929f2f` — main.rs 4 строки, 6 тестов в `tests/`) |
 | BUG-S0-016 | `prove()` не использует `account` |
 | BUG-S0-017 | Нет теста миграции base64 → bech32 |
 | BUG-S0-019 | `chain_selector.rs` — 2 строки re-export |
@@ -1065,7 +1074,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | P08 / P09 | BUG-S0-010 (wontfix) | — |
 | P10 | BUG-S0-015 (partially — seed строка) | — |
 | P18 | — | BUG-S0-025 (nonce proptest) |
-| P19 / D01 | BUG-S0-027, BUG-S0-028 | BUG-S0-004 (тесты в main.rs) |
+| P19 / D01 | BUG-S0-027, BUG-S0-028 | ~~BUG-S0-004 (тесты в main.rs)~~ — **fixed 2026-10-07** |
 | P22 / D02 | BUG-S0-003 (**fixed 2026-10-07**), BUG-S0-033, BUG-S0-034 | BUG-S0-026 (TLC-прогон) |
 | P23 / D02 | BUG-S0-026 | — |
 | P24 / D03 | BUG-S0-005 | — |
