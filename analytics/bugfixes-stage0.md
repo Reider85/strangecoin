@@ -41,8 +41,8 @@
 | BUG-S0-004 | A | H | P19 / D01 | Каталог `tests/` создан в Stage 1, но 6 тестов остались в `src/main.rs` параллельно | fixed |
 | BUG-S0-005 | A | H | P24 / D03 | Release pipeline ни разу не запускался на CI — нет evidence reproducible builds | open |
 | BUG-S0-006 | A | M | P02 | Заглушки `fee_market.rs` и `governance/scip.rs` созданы только в S1-P02/S1-P05 — расхождение с P02-артефактами | fixed |
-| BUG-S0-007 | A | M | P01 | `.gitignore` содержит `*.lock` и `Cargo.lock` — противоречие с reproducible builds | open |
-| BUG-S0-008 | A | L | P01 | Мусор в корне репо: `test.md`, `ComputeGenesisHash/`, `run_3_wallets.ps1`, `.idea/` | open |
+| BUG-S0-007 | A | M | P01 | `.gitignore` содержит `*.lock` и `Cargo.lock` — противоречие с reproducible builds | fixed |
+| BUG-S0-008 | A | L | P01 | Мусор в корне репо: `test.md`, `ComputeGenesisHash/`, `run_3_wallets.ps1`, `.idea/` | fixed |
 | BUG-S0-009 | A | L | P03 | Один `println!` остался в `cli/mod.rs` — формальное нарушение КГ P03 | open |
 | BUG-S0-010 | A | L | P09 / P08 | P09 выполнен раньше P08 — нарушение карты зависимостей §1 prompt-stage0 | wontfix |
 | BUG-S0-011 | B | C | S1-P06 | «Verkle Trie» — фактическая реализация flat 256-слотного Merkle, не Verkle | open |
@@ -66,7 +66,7 @@
 | BUG-S0-029 | E | H | S1-P22 | `STAGE1_SUMMARY.md §1` помечает критерий №2 (Verkle + state.root_after) ✅, а §6 — residual «zero state_root opt-in» → внутреннее противоречие | open |
 | BUG-S0-030 | E | H | S1-P22 | `STAGE1_SUMMARY §6` фиксирует residual, но не понижает соответствующие DoD-критерии в таблице §1 | open |
 | BUG-S0-031 | E | H | S1-P22 | `INVARIANTS_ENFORCED.md` ссылается на несуществующий файл `src/blockchain/blockchain.rs` (инвариант №5) | open |
-| BUG-S0-032 | E | M | S1-P22 | `STAGE1_SUMMARY §6.6` — «untracked artifacts on disk» (`test.md`, `ComputeGenesisHash/`) как residual — гигиена не закрыта | open |
+| BUG-S0-032 | E | M | S1-P22 | `STAGE1_SUMMARY §6.6` — «untracked artifacts on disk» (`test.md`, `ComputeGenesisHash/`) как residual — гигиена не закрыта | fixed |
 | BUG-S0-033 | E | M | P22 / D02 | `THREAT_MODEL.md` создан в D02, но 51%-риск на low-difficulty testnet не помечен как residual с явным сроком | open |
 | BUG-S0-034 | E | M | S1-P21 | THREAT_MODEL v3.0 — векторы V-34..V-42 добавлены, но «mapping вектор → тест» не ссылается на конкретные `tests/X.rs` | open |
 | BUG-S0-035 | E | L | AGENTS.md | `AGENTS.md` заявляет «Stage 1 complete» — обновлено до фактического статуса, но без оговорок о residual из STAGE1_SUMMARY §6 | fixed |
@@ -307,6 +307,7 @@ git rev-list --count HEAD origin/master  # 163 / 163
 | **Серьёзность** | M (Medium) |
 | **Промпт-источник** | P01 / P24 / retro §4.7 |
 | **Файлы** | `.gitignore` (28 строк) |
+| **Статус** | fixed 2026-10-07 |
 
 **Факт:** В retro §4.7: «.gitignore содержит `*.lock` и `Cargo.lock`, что противоречит фиксации Cargo.lock для reproducible builds». В STAGE1_SUMMARY §6.4 Cargo.lock трекается (4129 строк в коммите `68e358f`), но `.gitignore` остался без правки.
 
@@ -315,6 +316,12 @@ git rev-list --count HEAD origin/master  # 163 / 163
 **Рекомендуемое исправление:**
 - Удалить из `.gitignore` строки `Cargo.lock` и `*.lock`.
 - Оставить `*.lock` с уточняющим паттерном: `data/**/*.lock` (если LevelDB создаёт LOCK-файлы в data dir).
+
+**Исправление (2026-10-07):**
+- Строки `*.lock` / `Cargo.lock` удалены из `.gitignore` ещё в D03 (`60e1840`).
+- `Cargo.lock` трекается (`git ls-files` → present); `REPRODUCIBLE_BUILDS.md` фиксирует обязательность lockfile.
+- Дополнительно: в `.gitignore` добавлен `data/` — покрывает все артефакты LevelDB (`LOCK`, `LOG`, `*.sst`, `MANIFEST-*`) в дефолтном пути `./data/leveldb` (`config.toml` `[storage] path`), а не только `*.lock`.
+- Верификация: `git check-ignore -v data/leveldb/LOCK` → matched; `git check-ignore Cargo.lock` → no match.
 
 ---
 
@@ -332,6 +339,27 @@ git rev-list --count HEAD origin/master  # 163 / 163
 - Удалить `test.md`, `ComputeGenesisHash/` из рабочего дерева.
 - `run_3_wallets.ps1` — перенести в `scripts/dev/` или удалить.
 - `.idea/` — проверить, что не в индексе (`git ls-files | grep .idea` должен вернуть пусто).
+
+**Решение (2026-10-07):** Гигиена корня репозитория закрыта.
+
+1. Удалены из рабочего дерева: `test.md`, `ComputeGenesisHash/` (включая `target/`), `compute_genesis_hash.rs`, `compute_genesis_hash_toml`.
+2. `run_3_wallets.ps1` → `git mv` в `scripts/dev/run_3_wallets.ps1` (внутренняя ссылка на путь запуска обновлена).
+3. `.idea/`, `.codebuddy/` — подтверждено: в git-индексе отсутствуют (`git ls-files` → пусто); остаются на диске, покрыты `.gitignore`.
+4. `.opencodeignore` — оставлен: конфиг opencode-тулинга, в git-индексе отсутствует.
+5. Сопутствующий residual BUG-S0-032 (`STAGE1_SUMMARY §6.6`) закрыт одновременно.
+
+Верификация:
+```bash
+git ls-files | grep -E "test\.md|ComputeGenesisHash|compute_genesis"
+# → пусто
+git ls-files | grep run_3_wallets
+# → scripts/dev/run_3_wallets.ps1
+git ls-files | grep -E "^\.idea|^\.codebuddy"
+# → пусто
+```
+
+| Статус | fixed (2026-10-07) |
+|--------|-------------------|
 
 ---
 
@@ -951,6 +979,11 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 1. Удалить `test.md`, `ComputeGenesisHash/` из рабочего дерева в первом же коммите Stage 1.5.
 2. Закрыть BUG-S0-008 и BUG-S0-032 одновременно.
 
+**Решение (2026-10-07):** Закрыто одновременно с BUG-S0-008. `STAGE1_SUMMARY.md §6.6` обновлён: residual о гигиене репозитория снят, зафиксирован фактический состав очистки. Подробности — в разделе BUG-S0-008.
+
+| Статус | fixed (2026-10-07) |
+|--------|-------------------|
+
 ---
 
 ### BUG-S0-033 — THREAT_MODEL: 51% на testnet не помечен сроком
@@ -1063,7 +1096,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | ID | Заголовок |
 |----|----------|
 | BUG-S0-006 | Заглушки P02 в другом пути |
-| BUG-S0-007 | `.gitignore` `*.lock` |
+| ~~BUG-S0-007~~ | ~~`.gitignore` `*.lock`~~ (**fixed 2026-10-07**: строки `*.lock`/`Cargo.lock` удалены ещё в D03 `60e1840`; `Cargo.lock` трекается; добавлен `data/` в `.gitignore` для LevelDB-артефактов) |
 | BUG-S0-008 | Мусор в корне |
 | BUG-S0-009 | Один `println!` в cli |
 | BUG-S0-010 | P09 раньше P08 (исторический) |

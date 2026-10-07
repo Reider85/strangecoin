@@ -4,6 +4,7 @@
 
 # Blockchain database
 blockchain_db_*
+data/
 
 # Keystore (encrypted private keys)
 keystore/*.json

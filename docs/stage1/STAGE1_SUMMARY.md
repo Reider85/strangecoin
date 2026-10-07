@@ -136,7 +136,7 @@ S1-P22 itself: `68e358f` — annotated tag `v1.1.0-stage1` placed on this commit
 3. **TLA+ coverage** — `NoDoubleSpend`/`NoInflation`/`AllTxSigned`/`NonceMonotonic`/`PowValidity` not model-checked by TLC (state-space limits); structural properties hold by construction + Rust tests. Spec does not yet model Verkle/reorg.
 4. **Release pipeline** — workflow fixed in D03; first `v*` tag run still pending GitHub Actions verification (residual in THREAT_MODEL V-33).
 5. **Zero `state_root` opt-in** — blocks with zero state_root still adopt (documented residual; enforcement tightening — later SCIP).
-6. **Repo hygiene** — untracked artifacts on disk (`test.md`, `ComputeGenesisHash/`, etc.) are outside the git index; clean when convenient.
+6. **Repo hygiene** — **closed 2026-10-07** (BUG-S0-008 / BUG-S0-032): removed `test.md`, `ComputeGenesisHash/`, `compute_genesis_hash.rs`, `compute_genesis_hash_toml` from the working tree; moved `run_3_wallets.ps1` → `scripts/dev/run_3_wallets.ps1`; `.idea/`/`.codebuddy/` confirmed untracked (gitignored). No untracked repo-root artifacts remain in the git index.
 
 ---
 
