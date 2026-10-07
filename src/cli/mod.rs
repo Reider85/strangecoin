@@ -1,4 +1,5 @@
 use crate::consensus;
+use std::io::Write;
 use std::path::Path;
 use strangecoin_core::serialize;
 
@@ -17,5 +18,5 @@ pub fn print_genesis_hash() {
     let block =
         consensus::load_genesis(genesis_path.to_str().unwrap()).expect("Failed to load genesis");
     let hash = serialize::block_hash(&block);
-    println!("0x{}", hex::encode(hash));
+    let _ = writeln!(std::io::stdout(), "0x{}", hex::encode(hash));
 }

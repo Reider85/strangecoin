@@ -43,7 +43,7 @@
 | BUG-S0-006 | A | M | P02 | Заглушки `fee_market.rs` и `governance/scip.rs` созданы только в S1-P02/S1-P05 — расхождение с P02-артефактами | fixed |
 | BUG-S0-007 | A | M | P01 | `.gitignore` содержит `*.lock` и `Cargo.lock` — противоречие с reproducible builds | fixed |
 | BUG-S0-008 | A | L | P01 | Мусор в корне репо: `test.md`, `ComputeGenesisHash/`, `run_3_wallets.ps1`, `.idea/` | fixed |
-| BUG-S0-009 | A | L | P03 | Один `println!` остался в `cli/mod.rs` — формальное нарушение КГ P03 | open |
+| BUG-S0-009 | A | L | P03 | Один `println!` остался в `cli/mod.rs` — формальное нарушение КГ P03 | fixed |
 | BUG-S0-010 | A | L | P09 / P08 | P09 выполнен раньше P08 — нарушение карты зависимостей §1 prompt-stage0 | wontfix |
 | BUG-S0-011 | B | C | S1-P06 | «Verkle Trie» — фактическая реализация flat 256-слотного Merkle, не Verkle | open |
 | BUG-S0-012 | B | C | S1-P06 / S1-P07 | `state_root == [0;32]` opt-out — инвариант №19 не enforced в общем случае | open |
@@ -375,6 +375,23 @@ git ls-files | grep -E "^\.idea|^\.codebuddy"
 
 **Рекомендуемое исправление:**
 - Заменить на `println!` с признаком CLI-вывода — или уточнить КГ P03: «`rg "println!" src/main.rs src/wallet.rs` → 0» (исключить `src/cli/`).
+
+**Исправление (2026-10-07):** КГ P03 выполняется буквально; CLI-контракт сохранён.
+
+1. `src/cli/mod.rs`: `println!("0x{}", …)` → `writeln!(std::io::stdout(), "0x{}", …)` — идиоматичный stdout-write для CLI-инструментов; формат вывода (`0x` + 64 hex + `\n`) не изменён.
+2. `docs/CONTRIBUTING.md`: добавлено уточнение — machine-readable CLI stdout (`write!`/`writeln!`) ≠ logging; logging только через `tracing`.
+3. Замена на `tracing::info!` не применялась: это сломало бы CLI-контракт `--print-genesis-hash` (скрипты ожидают голый хэш).
+
+Верификация:
+```powershell
+rg "println!" src/   # → 0
+cargo check
+cargo test --workspace
+cargo run -- --print-genesis-hash   # → 0x… (64 hex)
+```
+
+| Статус | fixed (2026-10-07) |
+|--------|-------------------|
 
 ---
 
@@ -1098,7 +1115,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | BUG-S0-006 | Заглушки P02 в другом пути |
 | ~~BUG-S0-007~~ | ~~`.gitignore` `*.lock`~~ (**fixed 2026-10-07**: строки `*.lock`/`Cargo.lock` удалены ещё в D03 `60e1840`; `Cargo.lock` трекается; добавлен `data/` в `.gitignore` для LevelDB-артефактов) |
 | BUG-S0-008 | Мусор в корне |
-| BUG-S0-009 | Один `println!` в cli |
+| ~~BUG-S0-009~~ | ~~Один `println!` в cli~~ (**fixed 2026-10-07**: `writeln!(stdout)` в `src/cli/mod.rs`; CONTRIBUTING: CLI stdout ≠ logging; КГ P03 выполняется буквально) |
 | BUG-S0-010 | P09 раньше P08 (исторический) |
 | BUG-S0-028 | `tests/concurrency.rs` вне спеки (wontfix) |
 

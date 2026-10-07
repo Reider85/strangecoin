@@ -35,7 +35,7 @@ See `docs/ADR/0001-template.md` for the required structure: Context, Decision, C
 - **Rust edition 2021**. Run `cargo fmt` before committing.
 - **No comments** unless explaining *why* (not *what*). Code should be self-documenting.
 - **Error handling**: Use `thiserror` for error types, `anyhow` for application-level errors.
-- **Logging**: Use `tracing` macros (`info!`, `warn!`, `error!`, `debug!`) with structured fields. No `println!` or `eprintln!`.
+- **Logging**: Use `tracing` macros (`info!`, `warn!`, `error!`, `debug!`) with structured fields. No `println!` or `eprintln!`. CLI machine-readable output (stdout via `write!`/`writeln!`) is not logging and is allowed.
 - **Dependencies**: Minimize external crates. Prefer stdlib. Audit new dependencies for maintenance status and license compatibility (MIT/Apache-2.0).
 
 ## Testing
