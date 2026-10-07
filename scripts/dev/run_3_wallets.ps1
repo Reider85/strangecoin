@@ -3,7 +3,7 @@
 # Каждый инстанс работает в своей папке instances\wallet_<port> с собственным config.json,
 # network.json и базой данных blockchain_db_<port>.
 #
-# Запуск:  powershell -ExecutionPolicy Bypass -File .\run_3_wallets.ps1
+# Запуск:  powershell -ExecutionPolicy Bypass -File .\scripts\dev\run_3_wallets.ps1
 
 $ErrorActionPreference = "Stop"
 
