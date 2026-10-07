@@ -35,7 +35,7 @@
 
 | ID | Категория | Серьёзность | Промпт | Заголовок | Статус |
 |----|-----------|-------------|--------|-----------|--------|
-| BUG-S0-001 | A | C | D03 | Тег `v1.0.0-stage0` отсутствует — Gate Stage 1 пройден формально | open |
+| BUG-S0-001 | A | C | D03 | Тег `v1.0.0-stage0` отсутствует — Gate Stage 1 пройден формально | fixed |
 | BUG-S0-002 | A | C | S1-P22 | Git-история сквошена в 1 коммит `68e358f`, нарушена атомарность «1 промпт = 1 коммит» | open |
 | BUG-S0-003 | A | H | P22 / D02 | Ложная запись в Changelog о выполненном P22 сохраняет риск введения в заблуждение | open |
 | BUG-S0-004 | A | H | P19 / D01 | Каталог `tests/` создан в Stage 1, но 6 тестов остались в `src/main.rs` параллельно | open |
@@ -85,8 +85,9 @@
 | **Промпт-источник** | D03 (закрытие долга P26) |
 | **КГ нарушен** | D03 КГ п.7: «Тег `v1.0.0-stage0` поставлен ПОСЛЕ прохождения чек-листа» |
 | **Файлы** | `git tag -l` |
+| **Статус** | **fixed** (2026-10-07) |
 
-**Факт:** `git tag -l` возвращает только `v1.1.0-stage1`. Тега `v1.0.0-stage0` нет. В Changelog.md (строки 150+) есть запись о теге `v1.0.0-stage0`, но в git его нет.
+**Факт (при аудите):** `git tag -l` возвращал только `v1.1.0-stage1`. Тега `v1.0.0-stage0` нет. В Changelog.md (строки 150+) есть запись о теге `v1.0.0-stage0`, но в git его нет.
 
 **Ожидание (D03, S1-P22 §1):** D03 = «Gate Stage 1: ни один промпт S1-PXX не начинается до тега `v1.0.0-stage0`». S1-P22 (Changelog строка 189) пишет: `Tag v1.0.0-stage0` в Predecessor. Тег должен физически существовать в git.
 
@@ -105,6 +106,24 @@ git tag -l
    git push origin v1.0.0-stage0
    ```
 2. Если Stage 0 не был закрыт — удалить претензию на Stage 1 completion и оформить Stage 0.5 — промежуточную верификацию.
+
+**Решение (2026-10-07):** Оба тега уже существуют на `origin`. Аудит вёлся по коммиту `68e358f` до пуша/видимости тегов.
+
+| Тег | Тип | Коммит | Сообщение |
+|-----|-----|--------|-----------|
+| `v1.0.0-stage0` | annotated | `3dd37ef` | `[D03] docs: stage0 DoD verification (critical issues, invariants, summary)` |
+| `v1.1.0-stage1` | annotated | `68e358f` | `[S1-P22] docs: stage1 dod verification + summary + tag` |
+
+Проверка:
+```bash
+git ls-remote --tags origin
+# 2a099dd…  refs/tags/v1.0.0-stage0
+# 3dd37ef…  refs/tags/v1.0.0-stage0^{}
+# 64d1477…  refs/tags/v1.1.0-stage1
+# 68e358f…  refs/tags/v1.1.0-stage1^{}
+```
+
+Gate Stage 1 физически пройден: тег `v1.0.0-stage0` стоит на последнем D03-коммите, все S1-PXX идут после него. КГ D03 п.7 выполнен. Претензия «Stage 1 complete без gate» снимается. Дополнительных правок кода/документации не требуется; статус в §1 обновлён на `fixed`.
 
 ---
 
@@ -155,13 +174,13 @@ git log --all --oneline     # 1
 - Entry corrected: P22 was NOT completed during Stage 0.
 - P22 is executed in D02 (debt prompt, see analytics/prompt-stage1.md).
 ```
-Это формальное исправление — хорошо. Но `AGENTS.md` (строка 4) и `STAGE1_SUMMARY.md §1` продолжают утверждать «Stage 1 complete» без оговорки, что Stage 0 был пройден с долгами, которые формально закрыты только в D02/D03, а тег `v1.0.0-stage0` (D03) отсутствует (BUG-S0-001).
+Это формальное исправление — хорошо. Но `AGENTS.md` (строка 4) и `STAGE1_SUMMARY.md §1` продолжают утверждать «Stage 1 complete» без оговорки, что Stage 0 был пройден с долгами, которые формально закрыты только в D02/D03. Тег `v1.0.0-stage0` (D03) **существует** (`3dd37ef`) — BUG-S0-001 закрыт (см. §2); цепочка «P22 → D02 → тег → Gate Stage 1 → S1-PXX» физически восстановима, но в финальных документах явно не отслеживается.
 
 **Ожидание (retro §8.1):** «никаких записей о работе, для которой нет коммита». Запись в Changelog исправлена в D02, но цепочка зависимостей «P22 → D02 → тег v1.0.0-stage0 → Gate Stage 1 → S1-PXX» в финальных документах не отслеживается.
 
 **Рекомендуемое исправление:**
-- В `STAGE1_SUMMARY.md §1` добавить колонку «Predecessor verified»: для каждого S1-PXX — да/нет (для всех, кроме D03 — нет, см. BUG-S0-001).
-- В `AGENTS.md` заменить «Stage 1 complete» на «Stage 1 complete pending v1.0.0-stage0 tag and atomic commit history».
+- В `STAGE1_SUMMARY.md §1` добавить колонку «Predecessor verified»: для каждого S1-PXX — да/нет. Для D03 predecessor = **да** (тег `v1.0.0-stage0` = `3dd37ef` существует); для остальных — зависит от факта выполнения промпта (BUG-S0-002 — история сквошена, полная трассировка невозможна).
+- В `AGENTS.md` «Stage 1 complete» можно оставить, но добавить ссылку на residual obligations из `STAGE1_SUMMARY.md §6` (BUG-S0-035).
 
 ---
 
@@ -928,7 +947,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 
 **Рекомендуемое исправление:**
 1. В AGENTS.md строка 4 после «5-component blockchain split» добавить: «See `docs/stage1/STAGE1_SUMMARY.md §6` for open obligations (genesis key replacement, real Verkle Trie, cargo-fuzz on CI, release pipeline verification, state_root opt-out, repo hygiene)».
-2. Зафиксировать, что тег `v1.0.0-stage0` (Gate Stage 1) — отсутствует (BUG-S0-001).
+2. ~~Зафиксировать, что тег `v1.0.0-stage0` (Gate Stage 1) — отсутствует (BUG-S0-001)~~ — тег существует (`3dd37ef`); BUG-S0-001 закрыт. Оговорка о gate не требуется.
 
 ---
 
@@ -948,7 +967,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 
 | ID | Заголовок | Почему блокирует |
 |----|----------|------------------|
-| BUG-S0-001 | Тег `v1.0.0-stage0` отсутствует | Gate Stage 1 формально не пройден; Stage 2 требует честной верификации |
+| ~~BUG-S0-001~~ | ~~Тег `v1.0.0-stage0` отсутствует~~ | **fixed 2026-10-07**: тег существует (`3dd37ef`); Gate Stage 1 пройден |
 | BUG-S0-002 | Git-история сквошена | Невозможность `git bisect` замедлит дебаг Stage 2 |
 | BUG-S0-018 | `blockchain_facade.rs` 1578 строк | Stage 2 network migration требует чистого facade; монолит будет ломать async-переписывание |
 | BUG-S0-029 | STAGE1_SUMMARY противоречие | Без честной верификации Stage 2 унаследует нерешённые долги |
@@ -1018,7 +1037,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | S1-P19 | BUG-S0-023 | — |
 | S1-P20 | BUG-S0-024, BUG-S0-031 | — |
 | S1-P21 | BUG-S0-034 | — |
-| S1-P22 | BUG-S0-029, BUG-S0-030, BUG-S0-032, BUG-S0-035 | BUG-S0-001 (тег v1.0.0-stage0), BUG-S0-002 (атомарные коммиты) |
+| S1-P22 | BUG-S0-029, BUG-S0-030, BUG-S0-032, BUG-S0-035 | BUG-S0-001 (тег v1.0.0-stage0) — **fixed 2026-10-07**, BUG-S0-002 (атомарные коммиты) |
 
 **Главный вывод:** S1-P22 (DoD-верификация) должен был поймать большинство багов категорий A, D, E, но не сделал этого. S1-P06 (Verkle Trie) и S1-P07 (StateWitness) породили все криптографические баги категории B. P26 / D03 (DoD Stage 0) не были выполнены, что породило процессные баги категории A.
 
