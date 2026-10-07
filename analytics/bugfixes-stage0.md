@@ -40,7 +40,7 @@
 | BUG-S0-003 | A | H | P22 / D02 | Ложная запись в Changelog о выполненном P22 сохраняет риск введения в заблуждение | fixed |
 | BUG-S0-004 | A | H | P19 / D01 | Каталог `tests/` создан в Stage 1, но 6 тестов остались в `src/main.rs` параллельно | fixed |
 | BUG-S0-005 | A | H | P24 / D03 | Release pipeline ни разу не запускался на CI — нет evidence reproducible builds | open |
-| BUG-S0-006 | A | M | P02 | Заглушки `fee_market.rs` и `governance/scip.rs` созданы только в S1-P02/S1-P05 — расхождение с P02-артефактами | open |
+| BUG-S0-006 | A | M | P02 | Заглушки `fee_market.rs` и `governance/scip.rs` созданы только в S1-P02/S1-P05 — расхождение с P02-артефактами | fixed |
 | BUG-S0-007 | A | M | P01 | `.gitignore` содержит `*.lock` и `Cargo.lock` — противоречие с reproducible builds | open |
 | BUG-S0-008 | A | L | P01 | Мусор в корне репо: `test.md`, `ComputeGenesisHash/`, `run_3_wallets.ps1`, `.idea/` | open |
 | BUG-S0-009 | A | L | P03 | Один `println!` остался в `cli/mod.rs` — формальное нарушение КГ P03 | open |
@@ -287,6 +287,16 @@ git rev-list --count HEAD origin/master  # 163 / 163
 
 **Рекомендуемое исправление:**
 - В retro-stage0.md §4.7 обновить: «расхождение закрыто в S1-P02/S1-P05 — заглушка в новом пути `crates/strangecoin-core/src/`». Или принять как wontfix с пометкой о переносе.
+
+**Решение (2026-10-07):** Заглушки P02 существуют в core crate — принято как wontfix с пометкой о переносе (стронгер-паттерн ARCHITECT3 §9). Retro-stage0.md не изменяется.
+
+Доказательства:
+1. `crates/strangecoin-core/src/economics/fee_market.rs` — создана в S1-P02 (1 строка, TODO Stage 5)
+2. `crates/strangecoin-core/src/governance/scip.rs` — создана в S1-P05 (116 строк, SCIP-процесс)
+3. P02 КГ «артефакт в `src/`» формально не выполнен; заглушка не дублируется в корневом `src/` — целевая структура Stage 1+ делегирует логику в `strangecoin-core`.
+
+| Статус | fixed (2026-10-07) |
+|--------|-------------------|
 
 ---
 
