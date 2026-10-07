@@ -11,53 +11,67 @@
 
 ## 1. DoD Criteria — 15 items (ROADMAP3 Stage 1 / prompt-stage1 §4)
 
-| # | Criterion | Evidence | Status |
-|---|-----------|----------|--------|
-| 1 | strangecoin-core created; pure functions moved; 0 I/O | `crates/strangecoin-core/` modules: serialize, consensus, state, economics, governance, address, chain_selector, vm. `rg "std::fs\|std::net\|tokio\|leveldb" crates/strangecoin-core/src` → **0 matches** | ✅ |
-| 2 | Verkle Trie + `state.root_after == block.state_root` | `crates/strangecoin-core/src/state/verkle.rs`; tests: core `tests/state_root.rs` (7), e2e `tests/state_root.rs` (3) | ✅ |
-| 3 | Headers-first sync works | `tests/sync_headers.rs` (3 real-TCP tests: fresh sync 20 blocks, equal chain, longer fork) | ✅ |
-| 4 | Events bus works (3 subscribers) | `tests/events.rs::three_subscribers_each_receive_live_node_events` | ✅ |
-| 5 | Tie-breaking deterministic (proptest) | `tests/chain_selector_proptest.rs` (7 tests: work→timestamp→hash, permutation invariance, transitivity) | ✅ |
-| 6 | tokio introduced; new subsystems async | `Cargo.toml` tokio deps; `docs/ADR/0007-tokio-on-stage-1.md`; `tests/two_clients.rs::node_runs_on_tokio_and_shuts_down_cleanly` | ✅ |
-| 7 | network_id in HELLO; foreign peers rejected | `tests/network_id.rs::foreign_network_id_is_rejected_and_banned` | ✅ |
-| 8 | bech32 round-trip | `crates/strangecoin-core/src/address.rs::tests::test_round_trip`; HRP sc1/tsc1/rsc1; `tests/two_clients.rs::bech32_address_transfer` | ✅ |
-| 9 | Blockchain decomposed (4 + consensus_manager) | `src/blockchain/`: `chain_selector.rs`, `block_executor.rs`, `state_cache.rs`, `blockchain_facade.rs`, `consensus_manager.rs` | ✅ |
-| 10 | Sync engine breaks network↔blockchain cycle | `src/network/sync_engine.rs` (ADR-0010); rg audit: `adopt_candidate`/`apply_tx`/`save_state` only in `sync_engine.rs`; `tests/sync_engine.rs` | ✅ |
-| 11 | consensus_version + activation height | `crates/strangecoin-core/src/governance/scip.rs`; `tests/consensus_version.rs` (3); core scip activation tests (5) | ✅ |
-| 12 | All Stage 0 invariants still enforced | `docs/stage1/INVARIANTS_ENFORCED.md` (S1-P20); full workspace suite green | ✅ |
-| 13 | ADR-0006..0010 written | `docs/ADR/0006-verkle-trie-vs-smt.md`, `0007-tokio-on-stage-1.md`, `0008-rocksdb-plan.md`, `0009-events-bus.md`, `0010-sync-engine.md` | ✅ |
-| 14 | Changelog: «1.1.0 — core extracted + Verkle + headers-first» | `Changelog.md` section `## 1.1.0 — Stage 1` | ✅ (this commit) |
-| 15 | Tag `v1.1.0-stage1` | Annotated tag placed after this commit and green verification | ✅ (this commit) |
+| # | Criterion | Evidence | Status | Predecessor verified |
+|---|-----------|----------|--------|----------------------|
+| 1 | strangecoin-core created; pure functions moved; 0 I/O | `crates/strangecoin-core/` modules: serialize, consensus, state, economics, governance, address, chain_selector, vm. `rg "std::fs\|std::net\|tokio\|leveldb" crates/strangecoin-core/src` → **0 matches** | ✅ | да |
+| 2 | Verkle Trie + `state.root_after == block.state_root` | `crates/strangecoin-core/src/state/verkle.rs`; tests: core `tests/state_root.rs` (7), e2e `tests/state_root.rs` (3) | ✅ | да |
+| 3 | Headers-first sync works | `tests/sync_headers.rs` (3 real-TCP tests: fresh sync 20 blocks, equal chain, longer fork) | ✅ | да |
+| 4 | Events bus works (3 subscribers) | `tests/events.rs::three_subscribers_each_receive_live_node_events` | ✅ | да |
+| 5 | Tie-breaking deterministic (proptest) | `tests/chain_selector_proptest.rs` (7 tests: work→timestamp→hash, permutation invariance, transitivity) | ✅ | да |
+| 6 | tokio introduced; new subsystems async | `Cargo.toml` tokio deps; `docs/ADR/0007-tokio-on-stage-1.md`; `tests/two_clients.rs::node_runs_on_tokio_and_shuts_down_cleanly` | ✅ | да |
+| 7 | network_id in HELLO; foreign peers rejected | `tests/network_id.rs::foreign_network_id_is_rejected_and_banned` | ✅ | да |
+| 8 | bech32 round-trip | `crates/strangecoin-core/src/address.rs::tests::test_round_trip`; HRP sc1/tsc1/rsc1; `tests/two_clients.rs::bech32_address_transfer` | ✅ | да |
+| 9 | Blockchain decomposed (4 + consensus_manager) | `src/blockchain/`: `chain_selector.rs`, `block_executor.rs`, `state_cache.rs`, `blockchain_facade.rs`, `consensus_manager.rs` | ✅ | да |
+| 10 | Sync engine breaks network↔blockchain cycle | `src/network/sync_engine.rs` (ADR-0010); rg audit: `adopt_candidate`/`apply_tx`/`save_state` only in `sync_engine.rs`; `tests/sync_engine.rs` | ✅ | да |
+| 11 | consensus_version + activation height | `crates/strangecoin-core/src/governance/scip.rs`; `tests/consensus_version.rs` (3); core scip activation tests (5) | ✅ | да |
+| 12 | All Stage 0 invariants still enforced | `docs/stage1/INVARIANTS_ENFORCED.md` (S1-P20); full workspace suite green | ✅ | да |
+| 13 | ADR-0006..0010 written | `docs/ADR/0006-verkle-trie-vs-smt.md`, `0007-tokio-on-stage-1.md`, `0008-rocksdb-plan.md`, `0009-events-bus.md`, `0010-sync-engine.md` | ✅ | да |
+| 14 | Changelog: «1.1.0 — core extracted + Verkle + headers-first» | `Changelog.md` section `## 1.1.0 — Stage 1` | ✅ (this commit) | да |
+| 15 | Tag `v1.1.0-stage1` | Annotated tag placed after this commit and green verification | ✅ (this commit) | да (tag `68e358f`) |
 
 Plus security-track DoD: first fuzz target — `fuzz/fuzz_targets/canonical_decode.rs` (S1-P19).
+
+**Predecessor verification (BUG-S0-003, 2026-10-07):** Stage 0 was closed via debt prompts **before** the Stage 1 gate; the chain is traceable in git:
+
+| Debt | Prompt closed | Commits | Tag |
+|------|---------------|---------|-----|
+| D01 | P19 (integration tests) | `9dd8077`, `1929f2f` | — |
+| D02 | P22 (THREAT_MODEL + Changelog correction) | `d66829e` | — |
+| D03 | P26 (Stage 0 DoD + version sync) | `60e1840`, `3dd37ef` | `v1.0.0-stage0` @ `3dd37ef` |
+
+Gate Stage 1 satisfied: tag `v1.0.0-stage0` exists on the last D03 commit; all S1-PXX commits are descendants of it (`git merge-base --is-ancestor 3dd37ef 68e358f` → yes). All 21 delivery commits in §2 verified present in HEAD (BUG-S0-002 fixed — atomic history restored). Stage 0 did **not** complete all 26 original prompts inline: P19/P22/P26 were executed as D01–D03 on the debt track; this document and `AGENTS.md` carry that caveat explicitly.
 
 ---
 
 ## 2. What was delivered (S1-P01 → S1-P21)
 
-| Prompt | Commit | Summary |
-|--------|--------|---------|
-| S1-P01 | `cb0ac1a` | Grant blocks gated behind `allow_grant_blocks` (regtest-only); magic-strings removed from consensus path; `GrantBlocksDisabled` typed error; `tests/grant_flag.rs` |
-| S1-P02 | `d5d55af` | Cargo workspace + `strangecoin-core`; serialize moved; ADR-0008 RocksDB plan |
-| S1-P03 | `ec4749a` | consensus rules + economics into core; proptest moved |
-| S1-P04 | `458d126` | Pure `apply_block`/`unapply_block` in `core/state.rs`; round-trip property tests |
-| S1-P05 | `4c2a0ce` | SCIP skeleton + `consensus_version` + activation height; format_version bump; `docs/SCIP/` |
-| S1-P06 | `c3d609f` | Verkle Trie + `block.state_root`; ADR-0006 |
-| S1-P07 | `6d852a1` | StateWitness + stateless verification API |
-| S1-P08 | `d97e35d` | Merkle `tx_root` in block header |
-| S1-P09 | `af74952` | EventBus (crossbeam) + ADR-0009 |
-| S1-P10 | `463d0a3` | tokio runtime + ADR-0007; legacy threads intact |
-| S1-P11 | `7192776` | chain_selector + deterministic tie-breaking (work→timestamp→hash) |
-| S1-P12 | `9c35fe4` | block_executor + state_cache |
-| S1-P13 | `3b14946` | blockchain_facade + consensus_manager (5-component split) |
-| S1-P14 | `1522fb1` | network_id in genesis + HELLO handshake |
-| S1-P15 | `495cce3` | bech32 addresses (HRP sc1/tsc1/rsc1) |
-| S1-P16 | `945889e` | headers-first sync (GET_HEADERS/HEADERS/GET_BLOCKS/BLOCKS) |
-| S1-P17 | `f48766a` | Mempool RBF (feerate, find_replaceable, limits) |
-| S1-P18 | `4af82a3` | SyncEngine inbox (ADR-0010); network write-path eliminated |
-| S1-P19 | `3a7e15f` | Stage 1 integration matrix + first fuzz target + soak fallback |
-| S1-P20 | `a0f842d` | 22-invariant re-audit after strangler migration |
-| S1-P21 | `a3a6c43` | THREAT_MODEL v3.0 (V-34..V-42) + INCIDENT_RESPONSE v3.0 |
+| Prompt | Commit | Predecessor verified | Summary |
+|--------|--------|----------------------|---------|
+| S1-P01 | `cb0ac1a` | да (commit exists in HEAD) | Grant blocks gated behind `allow_grant_blocks` (regtest-only); magic-strings removed from consensus path; `GrantBlocksDisabled` typed error; `tests/grant_flag.rs` |
+| S1-P02 | `d5d55af` | да (commit exists in HEAD) | Cargo workspace + `strangecoin-core`; serialize moved; ADR-0008 RocksDB plan |
+| S1-P03 | `ec4749a` | да (commit exists in HEAD) | consensus rules + economics into core; proptest moved |
+| S1-P04 | `458d126` | да (commit exists in HEAD) | Pure `apply_block`/`unapply_block` in `core/state.rs`; round-trip property tests |
+| S1-P05 | `4c2a0ce` | да (commit exists in HEAD) | SCIP skeleton + `consensus_version` + activation height; format_version bump; `docs/SCIP/` |
+| S1-P06 | `c3d609f` | да (commit exists in HEAD) | Verkle Trie + `block.state_root`; ADR-0006 |
+| S1-P07 | `6d852a1` | да (commit exists in HEAD) | StateWitness + stateless verification API |
+| S1-P08 | `d97e35d` | да (commit exists in HEAD) | Merkle `tx_root` in block header |
+| S1-P09 | `af74952` | да (commit exists in HEAD) | EventBus (crossbeam) + ADR-0009 |
+| S1-P10 | `463d0a3` | да (commit exists in HEAD) | tokio runtime + ADR-0007; legacy threads intact |
+| S1-P11 | `7192776` | да (commit exists in HEAD) | chain_selector + deterministic tie-breaking (work→timestamp→hash) |
+| S1-P12 | `9c35fe4` | да (commit exists in HEAD) | block_executor + state_cache |
+| S1-P13 | `3b14946` | да (commit exists in HEAD) | blockchain_facade + consensus_manager (5-component split) |
+| S1-P14 | `1522fb1` | да (commit exists in HEAD) | network_id in genesis + HELLO handshake |
+| S1-P15 | `495cce3` | да (commit exists in HEAD) | bech32 addresses (HRP sc1/tsc1/rsc1) |
+| S1-P16 | `945889e` | да (commit exists in HEAD) | headers-first sync (GET_HEADERS/HEADERS/GET_BLOCKS/BLOCKS) |
+| S1-P17 | `f48766a` | да (commit exists in HEAD) | Mempool RBF (feerate, find_replaceable, limits) |
+| S1-P18 | `4af82a3` | да (commit exists in HEAD) | SyncEngine inbox (ADR-0010); network write-path eliminated |
+| S1-P19 | `3a7e15f` | да (commit exists in HEAD) | Stage 1 integration matrix + first fuzz target + soak fallback |
+| S1-P20 | `a0f842d` | да (commit exists in HEAD) | 22-invariant re-audit after strangler migration |
+| S1-P21 | `a3a6c43` | да (commit exists in HEAD) | THREAT_MODEL v3.0 (V-34..V-42) + INCIDENT_RESPONSE v3.0 |
+
+S1-P22 itself: `68e358f` — annotated tag `v1.1.0-stage1` placed on this commit (Gate Stage 1.5).
+
+**Predecessor chain (verified 2026-10-07):** all 21 delivery commits above are descendants of the Stage 0 gate tag `v1.0.0-stage0` @ `3dd37ef` (last D03 commit). Debt-track closure before the gate: D01 (P19) `9dd8077`/`1929f2f` → D02 (P22) `d66829e` → D03 (P26) `60e1840`/`3dd37ef`. Every row marked «да» was checked with `git log -1 <hash>` against HEAD; BUG-S0-002 (squashed history) is fixed — full atomic history restored.
 
 ---
 

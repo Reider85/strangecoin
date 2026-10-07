@@ -37,7 +37,7 @@
 |----|-----------|-------------|--------|-----------|--------|
 | BUG-S0-001 | A | C | D03 | Тег `v1.0.0-stage0` отсутствует — Gate Stage 1 пройден формально | fixed |
 | BUG-S0-002 | A | C | S1-P22 | Git-история сквошена в 1 коммит `68e358f`, нарушена атомарность «1 промпт = 1 коммит» | fixed |
-| BUG-S0-003 | A | H | P22 / D02 | Ложная запись в Changelog о выполненном P22 сохраняет риск введения в заблуждение | open |
+| BUG-S0-003 | A | H | P22 / D02 | Ложная запись в Changelog о выполненном P22 сохраняет риск введения в заблуждение | fixed |
 | BUG-S0-004 | A | H | P19 / D01 | Каталог `tests/` создан в Stage 1, но 6 тестов остались в `src/main.rs` параллельно | open |
 | BUG-S0-005 | A | H | P24 / D03 | Release pipeline ни разу не запускался на CI — нет evidence reproducible builds | open |
 | BUG-S0-006 | A | M | P02 | Заглушки `fee_market.rs` и `governance/scip.rs` созданы только в S1-P02/S1-P05 — расхождение с P02-артефактами | open |
@@ -69,7 +69,7 @@
 | BUG-S0-032 | E | M | S1-P22 | `STAGE1_SUMMARY §6.6` — «untracked artifacts on disk» (`test.md`, `ComputeGenesisHash/`) как residual — гигиена не закрыта | open |
 | BUG-S0-033 | E | M | P22 / D02 | `THREAT_MODEL.md` создан в D02, но 51%-риск на low-difficulty testnet не помечен как residual с явным сроком | open |
 | BUG-S0-034 | E | M | S1-P21 | THREAT_MODEL v3.0 — векторы V-34..V-42 добавлены, но «mapping вектор → тест» не ссылается на конкретные `tests/X.rs` | open |
-| BUG-S0-035 | E | L | AGENTS.md | `AGENTS.md` заявляет «Stage 1 complete» — обновлено до фактического статуса, но без оговорок о residual из STAGE1_SUMMARY §6 | open |
+| BUG-S0-035 | E | L | AGENTS.md | `AGENTS.md` заявляет «Stage 1 complete» — обновлено до фактического статуса, но без оговорок о residual из STAGE1_SUMMARY §6 | fixed |
 
 **Итог по серьёзности:** 6 Critical, 11 High, 11 Medium, 7 Low.
 
@@ -190,6 +190,7 @@ git rev-list --count HEAD origin/master  # 163 / 163
 | **Серьёзность** | H (High) |
 | **Промпт-источник** | P22 / D02 (ретроспектива §4.4) |
 | **Файлы** | `Changelog.md` строки 175–179 |
+| **Статус** | **fixed** (2026-10-07) |
 
 **Факт:** В `Changelog.md` сохранена структура:
 ```
@@ -204,6 +205,18 @@ git rev-list --count HEAD origin/master  # 163 / 163
 **Рекомендуемое исправление:**
 - В `STAGE1_SUMMARY.md §1` добавить колонку «Predecessor verified»: для каждого S1-PXX — да/нет. Для D03 predecessor = **да** (тег `v1.0.0-stage0` = `3dd37ef` существует); для остальных — зависит от факта выполнения промпта (BUG-S0-002 — история сквошена, полная трассировка невозможна).
 - В `AGENTS.md` «Stage 1 complete» можно оставить, но добавить ссылку на residual obligations из `STAGE1_SUMMARY.md §6` (BUG-S0-035).
+
+**Решение (2026-10-07):** Исправление внесено; BUG-S0-002 к моменту правки уже fixed — атомарная история восстановлена, полная трассировка predecessor стала возможной для **всех** промптов (в рекомендации предполагалась частичная верификация).
+
+Доказательства:
+1. Теги существуют: `v1.0.0-stage0` → `3dd37ef` (D03), `v1.1.0-stage1` → `68e358f` (S1-P22).
+2. Топология git: `git merge-base --is-ancestor 3dd37ef 68e358f` → **yes**; все 21 коммит S1-P01..S1-P21 + D01 (`9dd8077`,`1929f2f`), D02 (`d66829e`), D03 (`60e1840`,`3dd37ef`) проверены через `git log -1 <hash>` в HEAD.
+3. `Changelog.md` (строки 175–179) — P22-запись уже корректно зачёркнута в D02; правка не требовалась.
+4. `docs/stage1/STAGE1_SUMMARY.md` — §1: колонка «Predecessor verified» + таблица debt-track цепочки (D01/D02/D03 → тег → Gate); §2: колонка «Predecessor verified» для каждого S1-PXX («да» + проверенный коммит) + заметка о predecessor-цепочке.
+5. `AGENTS.md` строка 4 — «Stage 1 complete» сохранено; добавлено: Stage 0 закрыт через debt prompts D01–D03 (P19/P22/P26 не выполнялись inline) + ссылка на residual obligations `STAGE1_SUMMARY.md §6`. Эта же правка закрывает BUG-S0-035.
+
+| Статус | fixed (2026-10-07) |
+|--------|-------------------|
 
 ---
 
@@ -963,6 +976,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | **Серьёзность** | L (Low) |
 | **Промпт-источник** | S1-P22 |
 | **Файлы** | `AGENTS.md` |
+| **Статус** | **fixed** (2026-10-07) |
 
 **Факт:** AGENTS.md строка 4: «Stage 1 complete (tag `v1.1.0-stage1`, see `docs/stage1/STAGE1_SUMMARY.md`): pure core in `crates/strangecoin-core`, Verkle state root, headers-first sync, EventBus, bech32, tokio, 5-component blockchain split». Никакого упоминания residual из STAGE1_SUMMARY §6.
 
@@ -971,6 +985,11 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 **Рекомендуемое исправление:**
 1. В AGENTS.md строка 4 после «5-component blockchain split» добавить: «See `docs/stage1/STAGE1_SUMMARY.md §6` for open obligations (genesis key replacement, real Verkle Trie, cargo-fuzz on CI, release pipeline verification, state_root opt-out, repo hygiene)».
 2. ~~Зафиксировать, что тег `v1.0.0-stage0` (Gate Stage 1) — отсутствует (BUG-S0-001)~~ — тег существует (`3dd37ef`); BUG-S0-001 закрыт. Оговорка о gate не требуется.
+
+**Решение (2026-10-07):** Исправлено в рамках BUG-S0-003. AGENTS.md строка 4 дополнена: Stage 0 закрыт через debt prompts D01–D03 (P19/P22/P26 не выполнялись inline) + явная ссылка на residual obligations `docs/stage1/STAGE1_SUMMARY.md §6` (offline genesis key, cargo-fuzz Windows, TLA+ coverage, release pipeline, zero state_root opt-in, repo hygiene). «Stage 1 complete» сохранено как факт при верифицированном gate; оговорка о residual устраняет ложное впечатление готовности к Stage 2 без долгов.
+
+| Статус | fixed (2026-10-07) |
+|--------|-------------------|
 
 ---
 
@@ -998,7 +1017,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | BUG-S0-031 | INVARIANTS_ENFORCED.md битые ссылки | Студенты/контрибьюторы не смогут найти enforcement-точки |
 | BUG-S0-024 | INVARIANTS_ENFORCED.md путаница нумерации | То же |
 | BUG-S0-005 | Release pipeline не запускался | Reproducible builds без evidence — Stage 2 release невозможен |
-| BUG-S0-003 | Ложная запись в Changelog | Документация как источник недоверия — Stage 2 review будет тратить время на проверку утверждений |
+| ~~BUG-S0-003~~ | ~~Ложная запись в Changelog~~ | **fixed 2026-10-07**: predecessor-цепочка верифицирована в STAGE1_SUMMARY §1+§2 (теги + все коммиты D01–D03 / S1-PXX в HEAD); AGENTS.md получила оговорку о debt prompts и residual obligations |
 
 ### P2 — технический долг (можно параллельно с Stage 2+)
 
@@ -1018,7 +1037,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | BUG-S0-032 | Repo hygiene |
 | BUG-S0-033 | THREAT_MODEL testnet 51% срок |
 | BUG-S0-034 | THREAT_MODEL v3.0 — ссылки на тесты |
-| BUG-S0-035 | AGENTS.md без оговорок |
+| ~~BUG-S0-035~~ | ~~AGENTS.md без оговорок~~ (fixed 2026-10-07) |
 
 ### P3 — косметика (wontfix или minor)
 
@@ -1047,7 +1066,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | P10 | BUG-S0-015 (partially — seed строка) | — |
 | P18 | — | BUG-S0-025 (nonce proptest) |
 | P19 / D01 | BUG-S0-027, BUG-S0-028 | BUG-S0-004 (тесты в main.rs) |
-| P22 / D02 | BUG-S0-033, BUG-S0-034 | BUG-S0-026 (TLC-прогон) |
+| P22 / D02 | BUG-S0-003 (**fixed 2026-10-07**), BUG-S0-033, BUG-S0-034 | BUG-S0-026 (TLC-прогон) |
 | P23 / D02 | BUG-S0-026 | — |
 | P24 / D03 | BUG-S0-005 | — |
 | P26 / D03 | BUG-S0-001, BUG-S0-002 | — |
@@ -1060,7 +1079,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | S1-P19 | BUG-S0-023 | — |
 | S1-P20 | BUG-S0-024, BUG-S0-031 | — |
 | S1-P21 | BUG-S0-034 | — |
-| S1-P22 | BUG-S0-029, BUG-S0-030, BUG-S0-032, BUG-S0-035 | BUG-S0-001 (тег v1.0.0-stage0) — **fixed 2026-10-07**, BUG-S0-002 (атомарные коммиты) — **fixed 2026-10-07** |
+| S1-P22 | BUG-S0-029, BUG-S0-030, BUG-S0-032, BUG-S0-035 (**fixed 2026-10-07**) | BUG-S0-001 (тег v1.0.0-stage0) — **fixed 2026-10-07**, BUG-S0-002 (атомарные коммиты) — **fixed 2026-10-07** |
 
 **Главный вывод:** S1-P22 (DoD-верификация) должен был поймать большинство багов категорий A, D, E, но не сделал этого. S1-P06 (Verkle Trie) и S1-P07 (StateWitness) породили все криптографические баги категории B. P26 / D03 (DoD Stage 0) не были выполнены, что породило процессные баги категории A.
 
@@ -1109,13 +1128,13 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 
 ### S1.5-P05 — DoD-верификация Stage 1.5 с честной отметкой residual
 
-Закрывает: BUG-S0-029, BUG-S0-030, BUG-S0-031, BUG-S0-035.
+Закрывает: BUG-S0-029, BUG-S0-030, BUG-S0-031. ~~BUG-S0-035~~ — **fixed 2026-10-07** (в рамках BUG-S0-003; AGENTS.md уже содержит ссылку на §6).
 
 Задачи:
 1. В `STAGE1_SUMMARY.md §1` — добавить столбец «Residual», понижать ✅ → 🟡 при наличии §6 residual.
 2. В `INVARIANTS_ENFORCED.md` — исправить нумерацию (1:1 к ARCHITECT3 §5) и битые ссылки.
-3. В `AGENTS.md` — добавить ссылку на §6 open obligations.
-4. Поставить тег `v1.0.0-stage0` ретроспективно (если Stage 0 действительно закрыт), либо признать Stage 0 незакрытым и оформить Stage 0.5.
+3. ~~В `AGENTS.md` — добавить ссылку на §6 open obligations.~~ — **done 2026-10-07** (AGENTS.md строка 4).
+4. ~~Поставить тег `v1.0.0-stage0` ретроспективно~~ — тег существует (`3dd37ef`); BUG-S0-001 fixed 2026-10-07.
 
 ### S1.5-P06 — Release pipeline: первый прогон
 

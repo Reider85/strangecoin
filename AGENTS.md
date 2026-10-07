@@ -1,7 +1,7 @@
 # AGENTS.md — Strangecoin Developer Guide
 
 ## Project Overview
-Strangecoin is a Rust cryptocurrency (**v1.1.0**, edition 2021) — PoW blockchain with secp256k1 signatures, blake3 hashing, LevelDB storage. **Stage 1 complete** (tag `v1.1.0-stage1`, see `docs/stage1/STAGE1_SUMMARY.md`): pure core in `crates/strangecoin-core`, Verkle state root, headers-first sync, EventBus, bech32, tokio, 5-component blockchain split. Stage 0 closed with D03 (`docs/stage0/STAGE0_SUMMARY.md`).
+Strangecoin is a Rust cryptocurrency (**v1.1.0**, edition 2021) — PoW blockchain with secp256k1 signatures, blake3 hashing, LevelDB storage. **Stage 1 complete** (tag `v1.1.0-stage1`, see `docs/stage1/STAGE1_SUMMARY.md`): pure core in `crates/strangecoin-core`, Verkle state root, headers-first sync, EventBus, bech32, tokio, 5-component blockchain split. Stage 0 closed with D03 (`docs/stage0/STAGE0_SUMMARY.md`); Stage 0 was completed via **debt prompts D01–D03** (P19/P22/P26 were not executed inline). **Residual obligations remain** — see `docs/stage1/STAGE1_SUMMARY.md §6` (offline genesis key, cargo-fuzz on Windows, TLA+ coverage, release-pipeline CI run, zero `state_root` opt-in, repo hygiene).
 
 **Key docs**: `analytics/prompt-stage0.md`, `analytics/prompt-stage1.md`, `analytics/ARCHITECT3.md`, `analytics/ROADMAP3.md`, `docs/ADR/`, `docs/stage1/STAGE1_SUMMARY.md`, `docs/security/THREAT_MODEL.md`.
 
