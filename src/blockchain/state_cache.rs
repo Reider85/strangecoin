@@ -188,7 +188,7 @@ impl<'a> IntoIterator for &'a StateCache {
 /// Persisted state read from LevelDB on open.
 pub(crate) struct PersistedState {
     pub chain: Option<Vec<Block>>,
-    pub balances: Option<HashMap<String, u64>>,
+    pub balances: Option<HashMap<String, AccountState>>,
     pub difficulty: Option<u32>,
     pub mempool_txs: Vec<Transaction>,
 }
@@ -255,20 +255,7 @@ pub(crate) fn open_blockchain(port: u16) -> Blockchain {
     }
 
     if let Some(balances) = loaded.balances {
-        blockchain.balances = StateCache::from_accounts(
-            balances
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        k,
-                        AccountState {
-                            balance: v,
-                            nonce: 0,
-                        },
-                    )
-                })
-                .collect(),
-        );
+        blockchain.balances = StateCache::from_accounts(balances);
     }
     if let Some(difficulty) = loaded.difficulty {
         blockchain.difficulty = difficulty;
@@ -296,9 +283,28 @@ pub(crate) fn load_persisted_state(storage: &crate::storage::Storage) -> Persist
     let chain = db_guard
         .get(b"chain")
         .and_then(|v| serde_json::from_slice::<Vec<Block>>(&v).ok());
-    let balances = db_guard
-        .get(b"balances")
-        .and_then(|v| serde_json::from_slice::<HashMap<String, u64>>(&v).ok());
+    // `save_state` writes `HashMap<String, AccountState>`; Stage 0 DBs held
+    // plain `HashMap<String, u64>` — accept both so reloads never drop state.
+    let balances = db_guard.get(b"balances").and_then(|v| {
+        if let Ok(accounts) = serde_json::from_slice::<HashMap<String, AccountState>>(&v) {
+            Some(accounts)
+        } else {
+            serde_json::from_slice::<HashMap<String, u64>>(&v).ok().map(|legacy| {
+                legacy
+                    .into_iter()
+                    .map(|(address, balance)| {
+                        (
+                            address,
+                            AccountState {
+                                balance,
+                                nonce: 0,
+                            },
+                        )
+                    })
+                    .collect()
+            })
+        }
+    });
     let difficulty = db_guard
         .get(b"difficulty")
         .and_then(|v| serde_json::from_slice::<u32>(&v).ok());
@@ -339,7 +345,7 @@ impl Blockchain {
             if key == b"chain" {
                 debug!(value = ?serde_json::from_slice::<Vec<Block>>(&value), "Значение (chain)");
             } else if key == b"balances" {
-                debug!(value = ?serde_json::from_slice::<HashMap<String, u64>>(&value), "Значение (balances)");
+                debug!(value = ?serde_json::from_slice::<HashMap<String, AccountState>>(&value), "Значение (balances)");
             } else if key == b"difficulty" {
                 debug!(value = ?serde_json::from_slice::<u32>(&value), "Значение (difficulty)");
             } else {

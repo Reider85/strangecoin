@@ -51,7 +51,7 @@
 | BUG-S0-014 | B | C | S1-P06 | При числе аккаунтов >256 — `VerkleTrie::insert_at_depth` перезаписывает siblings → root теряет данные | fixed (2026-10-08): SMT depth 256 uses full 256-bit key — no collisions; sweep test 256→512 accounts |
 | BUG-S0-015 | B | C | P10 / D02 | Приватный генезисный ключ выводится из публичной строки `"strangecoin-genesis-seed-2026"` | fixed (2026-10-08): S1.5-P01 — `genesis_keypair()` + seed удалены из кода; `genesis.json` только `initial_holder_pubkey`; SCIP-0001 создан; тест `tests/genesis_key.rs`; residual = offline-ключ ops до mainnet freeze |
 | BUG-S0-016 | B | H | S1-P06 | `prove()` не использует параметр `account` — proof деградировал до «все siblings, кроме slot» | fixed (2026-10-08, re-opened 2026-10-08): SMT rewrite; `prove()` валидирует claimed account vs trie, мismatch → `CoreError::ProofAccountMismatch`; `build_witness` → `Result` |
-| BUG-S0-017 | B | H | S1-P15 / P05 | Легаси base64-адреса в БД требуют миграции — путь миграции реализован, но нет теста на исходную БД с base64 | open |
+| BUG-S0-017 | B | H | S1-P15 / P05 | Легаси base64-адреса в БД требуют миграции — путь миграции реализован, но нет теста на исходную БД с base64 | fixed (2026-10-08): `tests/address_migration.rs` — open-path coverage: balances base64→bech32, legacy-chain reset, reopen idempotency. Тест вскрыл production-дефект: `save_state` писал `HashMap<String, AccountState>`, а `load_persisted_state` читал только `HashMap<String, u64>` — балансы молча терялись при каждом reload БД; читатель теперь принимает оба формата (fallback на Stage 0 u64) |
 | BUG-S0-018 | C | H | S1-P13 | `blockchain_facade.rs` — 1578 строк, фактически стал новым монолитом внутри `src/blockchain/` | fixed (2026-10-08): S1.5-P04 — facade 362 строки; logic moved to block_executor/state_cache/chain_selector |
 | BUG-S0-019 | C | H | S1-P13 | `chain_selector.rs` в монолите — 2 строки re-export, не собственная реализация; КГ «5 компонентов» формален | fixed (2026-10-08): component owns try_adopt_candidate, chain_has_tx, headers/blocks helpers; pure algorithm stays in core (strangler) |
 | BUG-S0-020 | C | M | P02 / S1-P02 | Скелет модулей P02 в `src/` остался витриной — большинство модулей `src/{api,cli,gui,governance}/mod.rs` пустые | open |
@@ -1097,7 +1097,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 |----|----------|
 | ~~BUG-S0-004~~ | ~~6 тестов в main.rs~~ (**fixed 2026-10-07**: D01 `9dd8077`/`1929f2f` — main.rs 4 строки, 6 тестов в `tests/`) |
 | ~~BUG-S0-016~~ | ~~`prove()` не использует `account`~~ (**fixed 2026-10-08**: SMT prove consumes account) |
-| BUG-S0-017 | Нет теста миграции base64 → bech32 |
+| ~~BUG-S0-017~~ | ~~Нет теста миграции base64 → bech32~~ (**fixed 2026-10-08**: `tests/address_migration.rs` — open-path миграция + idempotency; заодно исправлен format-mismatch `save_state`/`load_persisted_state` — балансы терялись при reload) |
 | ~~BUG-S0-019~~ | ~~`chain_selector.rs` — 2 строки re-export~~ (**fixed 2026-10-08**: S1.5-P04 — adoption + wire helpers in component) |
 | BUG-S0-020 | Скелет P02 — заглушки api/gui |
 | BUG-S0-021 | Legacy-threads майнинга |

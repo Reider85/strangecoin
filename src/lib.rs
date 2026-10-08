@@ -1622,6 +1622,13 @@ pub mod test_support {
             .port()
     }
 
+    /// LevelDB path that `BlockchainFacade::new(port)` opens (open-path DB,
+    /// not the TestDir scheme). Exposed so tests can seed a legacy DB before
+    /// triggering the DB-open migrations (BUG-S0-017).
+    pub fn blockchain_db_path_for_port(port: u16) -> PathBuf {
+        crate::blockchain::state_cache::db_path_for_port(port)
+    }
+
     pub fn create_test_blockchain(db_path: &Path) -> BlockchainFacade {
         fs::create_dir_all(db_path).expect("Failed to create test DB directory");
         let storage = crate::storage::Storage::new(db_path).expect("Failed to open test DB");
