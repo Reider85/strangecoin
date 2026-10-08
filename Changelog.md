@@ -1,10 +1,10 @@
 # Changelog
 
-## 1.1.1 — Stage 1.5 debt track (BUG-S0-011 + S1.5-P04)
+## 1.1.1 — Stage 1.5 debt track (BUG-S0-011 + S1.5-P04 + S1.5-P01)
 
 **Status**: In progress  
 **Date**: 2026-10-08  
-**Prompts**: S1.5-P02 (BUG-S0-011/014/016), S1.5-P04 (BUG-S0-018/019)
+**Prompts**: S1.5-P02 (BUG-S0-011/014/016), S1.5-P04 (BUG-S0-018/019), S1.5-P01 (BUG-S0-015)
 
 ### BUG-S0-011: Sparse Merkle Tree replaces flat «Verkle»
 
@@ -26,11 +26,20 @@
   - `chain_selector.rs`: **real component** (BUG-S0-019) — `try_adopt_candidate`, `chain_has_tx`, `headers_from_height`, `blocks_by_hashes` + unit tests; pure fork-choice algorithm stays in core (strangler)
 - Public `BlockchainFacade` API unchanged (behavior preserved); all workspace tests green
 
+### S1.5-P01: genesis key removed from code + SCIP-0001 (BUG-S0-015)
+
+- **Closed:** `genesis_keypair()` and seed string `"strangecoin-genesis-seed-2026"` **deleted** from `src/consensus/mod.rs` — node code contains no genesis secret derivation path
+- `genesis.json`: field `initial_holder` → `initial_holder_pubkey` (value unchanged; testnet `EXPECTED_GENESIS_HASH` stable)
+- New **SCIP-0001** `docs/SCIP/scip-0001-genesis-key-replacement.md`: seed-derived key **BURNED**; offline-generated key mandatory before mainnet freeze/block 1; only pubkey may enter `genesis.json`
+- Test `tests/genesis_key.rs`: genesis validates to `EXPECTED_GENESIS_HASH` without any key in code; receiver derives from pubkey only; seed-string regression guard
+- THREAT_MODEL V-31: residual updated (code closed; ops obligation via SCIP-0001); Readme testnet-only warning
+- **Not in this change (ops gate):** generating the replacement offline key and updating `EXPECTED_GENESIS_HASH` — required before any public/mainnet launch
+
 ### Not in this change
 
 - BUG-S0-012 (`state_root == [0;32]` opt-out) — still open, S1.5-P03
 - BUG-S0-013 (`verify_block_stateless` post-root) — still open, S1.5-P03
-- BUG-S0-015 (genesis key) — still open, S1.5-P01
+- ~~BUG-S0-015 (genesis key)~~ — **fixed 2026-10-08** (S1.5-P01); ops residual tracked in SCIP-0001
 
 ## 1.1.0 — Stage 1 (core extracted + Verkle + headers-first)
 

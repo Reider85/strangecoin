@@ -603,11 +603,12 @@ Reproducible builds + cosign signatures для верификации бинар
 | **ID** | V-31 |
 | **Название** | Genesis Key Derived from Public String |
 | **STRIDE** | Elevation of Privilege / Information Disclosure |
-| **Описание** | Приватный ключ генезисного холдера 1 000 000 000 монет выводится хэшированием публичной строки `"strangecoin-genesis-seed-2026"` (функция `genesis_keypair()` в `src/consensus/mod.rs`). Любой, кто видит исходный код, может воспроизвести ключ и потратить генезисные средства. |
+| **Описание** | Приватный ключ генезисного холдера 1 000 000 000 монет выводился хэшированием публичной строки `"strangecoin-genesis-seed-2026"` (функция `genesis_keypair()` в `src/consensus/mod.rs`). Любой, кто видел исходный код/git history, воспроизводил ключ и мог потратить генезисные средства. |
 | **Stage 0 Mitigation** | Осознанный компромисс для Stage 0/testnet. Комментарий в коде: «Real offline key will be used before mainnet freeze». На testnet/regtest генезисные средства не имеют реальной ценности. |
-| **Stage** | Pre-mainnet (обязательно до mainnet freeze) |
-| **Residual Risk** | **Высокий** до mainnet. Если mainnet запущен с этим ключом, средства украдены мгновенно. **Обязательство:** сгенерировать offline-ключ и заменить genesis_keypair() до mainnet freeze. |
-| **Monitoring** | Нет ( ключ не используется в runtime, только при генезисе). Мониторинг genesis-транзакций в mainnet. |
+| **Mitigation (закрыто S1.5-P01 / BUG-S0-015)** | `genesis_keypair()` и seed-строка **удалены** из `src/consensus/mod.rs`; `genesis.json` содержит только `initial_holder_pubkey`. SCIP-0001 (`docs/SCIP/scip-0001-genesis-key-replacement.md`) фиксирует offline-ключ как обязательный gate до mainnet freeze. Тест `tests/genesis_key.rs`: genesis валидируется по `EXPECTED_GENESIS_HASH` без секрета в коде + regression-guard на seed-строку. |
+| **Stage** | Pre-mainnet (SCIP-0001) |
+| **Residual Risk** | **Высокий** для любой публичной цепочки, запущенной с текущим testnet-генезисом. Residual: genesis key derived from `"strangecoin-genesis-seed-2026"`; **BURNED** (pubkey остался в testnet `genesis.json`); replacement via **SCIP-0001 mandatory before block 1 of mainnet**. Код больше не хранит секрет; замена ключа — операционный шаг (offline key → новый pubkey → новый `EXPECTED_GENESIS_HASH`). |
+| **Monitoring** | Мониторинг genesis-транзакций в mainnet; alert на любой mainnet-запуск без SCIP-0001-подписи. |
 
 ---
 
@@ -884,7 +885,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | V-28 (Config leakage) | config (P15) | gap: нет теста на secrets в config | ⚠️ gap |
 | V-29 (Genesis manipulation) | consensus (hash) | `tests/common/mod.rs::genesis_validation`; panic-guard при mismatch | ✅ D01 |
 | V-30 (Nonce manipulation) | mempool (nonce) | `tests/double_spend.rs` | ✅ D01 |
-| V-31 (Genesis key) | consensus (genesis_keypair) | gap: нет теста на offline key | ⚠️ gap (→ pre-mainnet) |
+| V-31 (Genesis key) | consensus (load_genesis pubkey-only) + SCIP-0001 | `tests/genesis_key.rs` (hash без секрета в коде, pubkey-only genesis.json, seed regression-guard); offline key — pre-mainnet ops (SCIP-0001) | ✅ code (S1.5-P01); ⚠️ ops (→ mainnet freeze) |
 | V-32 (Grant blocks) | consensus (validate_chain) + Config flag | `tests/grant_flag.rs` (4 теста), `tests/emission.rs`, `tests/block_executor.rs::grant_block_needs_the_opt_in_flag` | ✅ S1-P01 |
 | V-33 (Release pipeline) | CI/CD (D03 fix) | gap: GitHub Actions run не верифицирован | ⚠️ gap (→ S1-P22 first tag) |
 | V-34 (Headers-first poisoning) | network/sync.rs + consensus | `tests/sync_headers.rs` (3 теста) | ✅ S1-P16 |
@@ -897,10 +898,10 @@ Reproducible builds + cosign signatures для верификации бинар
 | V-41 (SyncEngine flooding) | network/sync_engine | `tests/sync_engine.rs` (+ unit-тесты lanes), race-тесты `tests/network.rs` | ✅ S1-P18 |
 | V-42 (HRP confusion) | core address (bech32) | core address round-trip/checksum tests; `tests/two_clients.rs`, `tests/reorg.rs` (rsc1) | ✅ S1-P15 |
 
-**Итого gaps:** 7 векторов без полных тестов (V-03, V-15, V-16, V-17, V-28, V-31, V-22/V-33). Из них:
+**Итого gaps:** 6 векторов без полных тестов (V-03, V-15, V-16, V-17, V-28, V-22/V-33). Из них:
 - V-03, V-16, V-17, V-28 — требуют интеграционных/unit-тестов (не закрыты Stage 1)
 - V-15 — частично закрыт reject-тестами block_executor/sync; ban-after-N остаётся gap
-- V-31 — требует offline-ключа (pre-mainnet obligation)
+- ~~V-31~~ — **closed code-side** (S1.5-P01): тест genesis без секрета в коде; residual ops (offline key) — SCIP-0001 pre-mainnet
 - V-22/V-33 — GitHub Actions run подтверждается первым тегом (S1-P22)
 - Новые V-34..V-42 — все с тестами, gaps нет
 
@@ -930,7 +931,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | 51% attack (V-05) | Small network; low hash rate | Monitoring + alert |
 | Weak password (V-27) | User responsibility | PBKDF2 ≥210k iters |
 | Plaintext P2P (V-24) | Noise Protocol deferred to Stage 2 | Accept; mitigate with monitoring |
-| Genesis key from public string (V-31) | Testnet/regtest only; offline key before mainnet | **Obligation: offline key before mainnet freeze** |
+| Genesis key from public string (V-31) | Testnet/regtest only; secret removed from code (S1.5-P01); pubkey remains burned | **Obligation: offline key + SCIP-0001 before mainnet freeze** |
 | Grant blocks (V-32) | Flag-gated (S1-P01); must stay off on mainnet | Flag default false + tests |
 | Release pipeline (V-33) | Workflow fixed (D03); GitHub Actions run pending | **Obligation: first tag run evidence (S1-P22)** |
 | cargo-fuzz не запускается на dev-хосте (Windows, нет MSVC/ASan) | ASan unsupported on `x86_64-pc-windows-gnu`; no MSVC; libFuzzer needs clang/MSVC | Fallback soak runner (S1-P19) нашёл и закрыл OOB-баг; 10-min soak clean. **Obligation: cargo-fuzz на Linux CI до Stage 2** |

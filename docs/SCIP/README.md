@@ -36,4 +36,5 @@ created: <date>
 ## Directory Structure
 
 - `scip-0000-process.md` — This document (process skeleton)
+- `scip-0001-genesis-key-replacement.md` — Genesis key burned; offline key mandatory before mainnet freeze (BUG-S0-015 / S1.5-P01)
 - Future SCIPs: `scip-NNNN-<slug>.md`

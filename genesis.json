@@ -3,7 +3,7 @@
   "network_id": 1,
   "chain_id": 1,
   "timestamp": 0,
-  "initial_holder": "0x026f7d841405eb8af268dd422994e708a3c343396aa4c85f87aa9628e25248da87",
+  "initial_holder_pubkey": "0x026f7d841405eb8af268dd422994e708a3c343396aa4c85f87aa9628e25248da87",
   "initial_amount": 1000000000,
   "block_reward": 50,
   "tail_emission_rate": 0.006,

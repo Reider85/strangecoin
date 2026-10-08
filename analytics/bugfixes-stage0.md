@@ -49,7 +49,7 @@
 | BUG-S0-012 | B | C | S1-P06 / S1-P07 | `state_root == [0;32]` opt-out — инвариант №19 не enforced в общем случае | open |
 | BUG-S0-013 | B | C | S1-P07 | `verify_block_stateless` не пересчитывает post-state-root — stateless-верификация дефектна | open |
 | BUG-S0-014 | B | C | S1-P06 | При числе аккаунтов >256 — `VerkleTrie::insert_at_depth` перезаписывает siblings → root теряет данные | fixed (2026-10-08): SMT depth 256 uses full 256-bit key — no collisions; sweep test 256→512 accounts |
-| BUG-S0-015 | B | C | P10 / D02 | Приватный генезисный ключ выводится из публичной строки `"strangecoin-genesis-seed-2026"` | open |
+| BUG-S0-015 | B | C | P10 / D02 | Приватный генезисный ключ выводится из публичной строки `"strangecoin-genesis-seed-2026"` | fixed (2026-10-08): S1.5-P01 — `genesis_keypair()` + seed удалены из кода; `genesis.json` только `initial_holder_pubkey`; SCIP-0001 создан; тест `tests/genesis_key.rs`; residual = offline-ключ ops до mainnet freeze |
 | BUG-S0-016 | B | H | S1-P06 | `prove()` не использует параметр `account` — proof деградировал до «все siblings, кроме slot» | fixed (2026-10-08): `SparseMerkleTrie::prove(address, account)` builds leaf from account; pruned (0,0) proven via EMPTY_HASH |
 | BUG-S0-017 | B | H | S1-P15 / P05 | Легаси base64-адреса в БД требуют миграции — путь миграции реализован, но нет теста на исходную БД с base64 | open |
 | BUG-S0-018 | C | H | S1-P13 | `blockchain_facade.rs` — 1578 строк, фактически стал новым монолитом внутри `src/blockchain/` | fixed (2026-10-08): S1.5-P04 — facade 362 строки; logic moved to block_executor/state_cache/chain_selector |
@@ -590,12 +590,25 @@ pub fn verify_block_stateless(...) -> Result<(), CoreError> {
 
 ### BUG-S0-015 — Приватный генезисный ключ из публичной строки
 
+**Статус: fixed (2026-10-08) — S1.5-P01**
+
 | Поле | Значение |
 |------|----------|
 | **Серьёзность** | C (Critical) |
 | **Промпт-источник** | P10 / D02 / retro §4.3 |
 | **КГ нарушен** | D02 КГ: «генезисный ключ из публичной строки → Residual Risk + обязательство «offline key до mainnet freeze»» |
-| **Файлы** | код, генерирующий `genesis_keypair()` (см. retro §4.3) |
+| **Файлы** | `src/consensus/mod.rs`, `genesis.json`, `docs/SCIP/scip-0001-genesis-key-replacement.md`, `tests/genesis_key.rs` |
+
+**Факт (до fix):** retro §4.3: «`genesis_keypair()` получает секретный ключ холдера 1 000 000 000 монет хэшированием строки `"strangecoin-genesis-seed-2026"`». STAGE1_SUMMARY §6.1 фиксировал residual без конкретного gate.
+
+**Исправление (S1.5-P01, 2026-10-08):**
+1. `genesis_keypair()` + seed-строка **удалены** из `src/consensus/mod.rs` (derivation path отсутствует в коде/node binary).
+2. `genesis.json`: `initial_holder` → `initial_holder_pubkey` (только pubkey; hash генезиса не менялся).
+3. SCIP-0001 `docs/SCIP/scip-0001-genesis-key-replacement.md`: ключ **BURNED**; offline-ключ обязателен до mainnet freeze/block 1; activation_height = TBD mainnet freeze gate.
+4. Тест `tests/genesis_key.rs` (5 тестов): `EXPECTED_GENESIS_HASH` без секрета в коде; receiver из pubkey; regression-guard seed-строки.
+5. THREAT_MODEL V-31 + §7.2 + matrix; Readme testnet-only warning; STAGE1_SUMMARY §6.1 обновлён.
+
+**Residual (ops, не код):** генерация нового offline-ключа и обновление `EXPECTED_GENESIS_HASH` — обязательный gate до mainnet. Текущий testnet-ключ из публичной строки считается burned.
 
 **Факт:** retro §4.3: «`genesis_keypair()` получает секретный ключ холдера 1 000 000 000 монет хэшированием строки `"strangecoin-genesis-seed-2026"`. Комментарий честный («Real offline key will be used before mainnet freeze»), для Stage 0/testnet это осознанный компромисс». STAGE1_SUMMARY §6.1: «Offline genesis key — genesis private key is derived from the public seed string `"strangecoin-genesis-seed-2026"`. Residual risk until mainnet freeze; replacement key required before any public chain».
 
@@ -1062,7 +1075,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | BUG-S0-012 | `state_root == [0;32]` opt-out | Инвариант №19 не enforced; любой блок с zero root принимается без commitment |
 | BUG-S0-013 | `verify_block_stateless` не проверяет post-root | Stateless light-clients дефектны — Stage 1.5 обещал SPV-ready infrastructure |
 | ~~BUG-S0-014~~ | ~~VerkleTrie теряет данные при >256 аккаунтов~~ | **fixed 2026-10-08**: SMT full-key, sweep test |
-| BUG-S0-015 | Генезисный ключ из публичной строки | Любой может подписать транзакции от initial_holder; mainnet невозможен |
+| ~~BUG-S0-015~~ | ~~Генезисный ключ из публичной строки~~ | **fixed 2026-10-08**: S1.5-P01 — секрет удалён из кода; SCIP-0001 gate до mainnet freeze; тест genesis без ключа в коде |
 
 ### P1 — блокирует Stage 2 (must fix before network crate migration)
 
@@ -1122,7 +1135,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | P03 | BUG-S0-009 | — |
 | P05 | BUG-S0-017 | — |
 | P08 / P09 | BUG-S0-010 (wontfix) | — |
-| P10 | BUG-S0-015 (partially — seed строка) | — |
+| P10 | ~~BUG-S0-015 (partially — seed строка)~~ **fixed 2026-10-08** S1.5-P01 | — |
 | P18 | — | BUG-S0-025 (nonce proptest) |
 | P19 / D01 | BUG-S0-027, BUG-S0-028 | ~~BUG-S0-004 (тесты в main.rs)~~ — **fixed 2026-10-07** |
 | P22 / D02 | BUG-S0-003 (**fixed 2026-10-07**), BUG-S0-033, BUG-S0-034 | BUG-S0-026 (TLC-прогон) |
@@ -1150,11 +1163,13 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 
 Закрывает: BUG-S0-015.
 
+**Статус: executed 2026-10-08** — `genesis_keypair()` и seed-строка удалены из `src/consensus/mod.rs`; `genesis.json`: `initial_holder_pubkey` only; SCIP-0001 `docs/SCIP/scip-0001-genesis-key-replacement.md`; тест `tests/genesis_key.rs`; THREAT_MODEL V-31 residual = burned + SCIP-0001 ops gate; Readme testnet-only warning. **Не сделано (ops, не код):** генерация нового offline-ключа и пересчёт `EXPECTED_GENESIS_HASH` — обязательный gate до mainnet freeze/block 1.
+
 Задачи:
-1. Создать SCIP-0001 «Genesis key replacement»: `docs/SCIP/scip-0001.md` с activation height для замены ключа.
-2. В `genesis.json` — оставить только публичный ключ `initial_holder_pubkey`.
-3. Приватный ключ — генерировать offline, в коде не хранить.
-4. Тест: узел стартует без приватного ключа в коде, проверяет `EXPECTED_GENESIS_HASH`, но подпись initial_holder'a невозможна из кода.
+1. ~~Создать SCIP-0001 «Genesis key replacement»: `docs/SCIP/scip-0001.md` с activation height для замены ключа.~~ → **done**: `docs/SCIP/scip-0001-genesis-key-replacement.md` (status=Draft, activation_height=TBD — mainnet freeze gate)
+2. ~~В `genesis.json` — оставить только публичный ключ `initial_holder_pubkey`.~~ → **done**: поле переименовано, значение pubkey не менялось (hash генезиса стабилен)
+3. ~~Приватный ключ — генерировать offline, в коде не хранить.~~ → **done**: derivation path удалён; процедура offline-генерации в SCIP-0001 §4
+4. ~~Тест: узел стартует без приватного ключа в коде, проверяет `EXPECTED_GENESIS_HASH`, но подпись initial_holder'a невозможна из кода.~~ → **done**: `tests/genesis_key.rs` (5 тестов)
 
 ### S1.5-P02 — Настоящий Verkle Trie или Sparse Merkle Tree
 

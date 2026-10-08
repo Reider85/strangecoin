@@ -131,7 +131,7 @@ S1-P22 itself: `68e358f` — annotated tag `v1.1.0-stage1` placed on this commit
 
 ## 6. Open obligations (carried forward)
 
-1. **Offline genesis key** — genesis private key is derived from the public seed string `"strangecoin-genesis-seed-2026"` (retro §4.3). Residual risk until mainnet freeze; replacement key required before any public chain.
+1. **Offline genesis key** — **updated 2026-10-08 (BUG-S0-015 / S1.5-P01)**: seed-derived `genesis_keypair()` and the public seed string `"strangecoin-genesis-seed-2026"` **removed from code**; `genesis.json` carries only `initial_holder_pubkey`; SCIP-0001 created (`docs/SCIP/scip-0001-genesis-key-replacement.md`); test `tests/genesis_key.rs`. Residual is now **operational**: before mainnet freeze/block 1, generate an offline key, write only the pubkey, update `EXPECTED_GENESIS_HASH`. Current testnet genesis key is **burned**.
 2. **cargo-fuzz on Windows** — coverage-guided fuzzing not runnable on this host (no MSVC/ASan); fallback soak found and fixed OOB panic in `deserialize_block` (S1-P19). Run cargo-fuzz on a capable CI host.
 3. **TLA+ coverage** — `NoDoubleSpend`/`NoInflation`/`AllTxSigned`/`NonceMonotonic`/`PowValidity` not model-checked by TLC (state-space limits); structural properties hold by construction + Rust tests. Spec does not yet model the state commitment trie / reorg.
 4. **Release pipeline** — workflow fixed in D03; first `v*` tag run still pending GitHub Actions verification (residual in THREAT_MODEL V-33).

@@ -1,5 +1,13 @@
 # Strangecoin
 
+> **TESTNET-ONLY / BURNED GENESIS KEY (BUG-S0-015 / SCIP-0001)**
+> Strangecoin is currently testnet-only. The genesis allocation (1e9 SC) was
+> historically controlled by a key derived from a **public** seed string — that
+> key is **burned**. Anyone knowing the seed (or reading old git history)
+> controls the genesis allocation. **Do not send real value.** Mainnet is
+> impossible until SCIP-0001: replace the genesis key with an offline-generated
+> key (`docs/SCIP/scip-0001-genesis-key-replacement.md`).
+
 [![CI](https://github.com/Reider85/strangecoin/actions/workflows/ci.yml/badge.svg)](https://github.com/Reider85/strangecoin/actions/workflows/ci.yml)
 
 Описание реализации

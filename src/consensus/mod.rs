@@ -1,14 +1,12 @@
 pub use strangecoin_core::consensus::*;
 
-use sha2::Digest;
-
 #[derive(serde::Deserialize)]
 pub struct GenesisConfig {
     pub format_version: u8,
     pub network_id: u32,
     pub chain_id: u32,
     pub timestamp: u64,
-    pub initial_holder: String,
+    pub initial_holder_pubkey: String,
     pub initial_amount: u64,
     pub block_reward: u64,
     pub tail_emission_rate: f64,
@@ -18,16 +16,9 @@ pub struct GenesisConfig {
     pub genesis_hash: String,
 }
 
-pub fn genesis_keypair() -> (secp256k1::SecretKey, secp256k1::PublicKey) {
-    let seed = b"strangecoin-genesis-seed-2026";
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(seed);
-    let secret_bytes: [u8; 32] = hasher.finalize().into();
-    let secp = secp256k1::Secp256k1::new();
-    let secret_key = secp256k1::SecretKey::from_slice(&secret_bytes).expect("valid secret key");
-    let public_key = secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
-    (secret_key, public_key)
-}
+// BUG-S0-015 / SCIP-0001: no genesis private key in code.
+// The testnet seed-derived key is burned; mainnet must use an offline-generated
+// key (pubkey only in genesis.json). See docs/SCIP/scip-0001-genesis-key-replacement.md.
 
 pub fn load_genesis(path: &str) -> Result<crate::Block, crate::error::StrangecoinError> {
     let json = std::fs::read_to_string(path)?;
@@ -42,9 +33,9 @@ pub fn load_genesis(path: &str) -> Result<crate::Block, crate::error::Strangecoi
     }
 
     let pk_hex = genesis
-        .initial_holder
+        .initial_holder_pubkey
         .strip_prefix("0x")
-        .unwrap_or(&genesis.initial_holder);
+        .unwrap_or(&genesis.initial_holder_pubkey);
     let pk_bytes = hex::decode(pk_hex)?;
     let public_key = secp256k1::PublicKey::from_slice(&pk_bytes)?;
     let initial_holder_addr = crate::address::encode_address(&public_key, genesis.network_id)?;
