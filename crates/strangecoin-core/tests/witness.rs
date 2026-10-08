@@ -1,4 +1,4 @@
-use strangecoin_core::state::verkle::VerkleTrie;
+use strangecoin_core::state::sparse_merkle::SparseMerkleTrie;
 use strangecoin_core::state::witness::{build_witness, verify_block_stateless};
 use strangecoin_core::state::{apply_block, State};
 use strangecoin_core::types::{AccountState, Block, Transaction};
@@ -60,7 +60,7 @@ fn transfer_block(index: u64, txs: Vec<Transaction>, state: &State) -> Block {
         tx_root: [0u8; 32],
     };
     let post = apply_block(state, &block).unwrap();
-    block.state_root = VerkleTrie::compute_root(&post.balances);
+    block.state_root = SparseMerkleTrie::compute_root(&post.balances);
     block
 }
 
@@ -77,7 +77,7 @@ fn build_witness_then_verify() {
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
     let after_genesis = apply_block(&state, &genesis).unwrap();
-    let genesis_root = VerkleTrie::compute_root(&after_genesis.balances);
+    let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
     let mut genesis_block = genesis;
     genesis_block.state_root = genesis_root;
@@ -102,7 +102,7 @@ fn tampered_balance_rejected() {
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
     let after_genesis = apply_block(&state, &genesis).unwrap();
-    let genesis_root = VerkleTrie::compute_root(&after_genesis.balances);
+    let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
     let mut genesis_block = genesis;
     genesis_block.state_root = genesis_root;
@@ -138,7 +138,7 @@ fn witness_contains_only_touched_addresses() {
 
     let genesis = genesis_block(vec![coinbase("alice", 5000), coinbase("charlie", 3000)]);
     let after_genesis = apply_block(&state, &genesis).unwrap();
-    let genesis_root = VerkleTrie::compute_root(&after_genesis.balances);
+    let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
     let mut genesis_block = genesis;
     genesis_block.state_root = genesis_root;
@@ -159,7 +159,7 @@ fn coinbase_only_block_witness() {
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
     let after_genesis = apply_block(&state, &genesis).unwrap();
-    let genesis_root = VerkleTrie::compute_root(&after_genesis.balances);
+    let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
     let mut genesis_block = genesis;
     genesis_block.state_root = genesis_root;
@@ -187,7 +187,7 @@ fn wrong_parent_root_rejected() {
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
     let after_genesis = apply_block(&state, &genesis).unwrap();
-    let genesis_root = VerkleTrie::compute_root(&after_genesis.balances);
+    let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
     let mut genesis_block = genesis;
     genesis_block.state_root = genesis_root;
@@ -214,7 +214,7 @@ fn chain_of_blocks_witness() {
     let genesis = genesis_block(vec![coinbase("alice", 10000)]);
     let after_genesis = apply_block(&state, &genesis).unwrap();
     let mut genesis_block = genesis;
-    genesis_block.state_root = VerkleTrie::compute_root(&after_genesis.balances);
+    genesis_block.state_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
     let block1 = transfer_block(1, vec![transfer("alice", "bob", 500, 1)], &after_genesis);
     let witness1 = build_witness(&after_genesis, &block1);
@@ -241,7 +241,7 @@ proptest! {
         let genesis = genesis_block(vec![coinbase("alice", sender_bal)]);
         let after_genesis = apply_block(&state, &genesis).unwrap();
         let mut genesis_block = genesis;
-        genesis_block.state_root = VerkleTrie::compute_root(&after_genesis.balances);
+        genesis_block.state_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
         let block = transfer_block(1, vec![transfer("alice", "bob", amount, 1)], &after_genesis);
         let witness = build_witness(&after_genesis, &block);
@@ -264,7 +264,7 @@ proptest! {
         let genesis = genesis_block(vec![coinbase("alice", sender_bal)]);
         let after_genesis = apply_block(&state, &genesis).unwrap();
         let mut genesis_block = genesis;
-        genesis_block.state_root = VerkleTrie::compute_root(&after_genesis.balances);
+        genesis_block.state_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
         let block = transfer_block(1, vec![transfer("alice", "bob", amount, 1)], &after_genesis);
         let mut witness = build_witness(&after_genesis, &block);

@@ -44,16 +44,16 @@
 | BUG-S0-007 | A | M | P01 | `.gitignore` содержит `*.lock` и `Cargo.lock` — противоречие с reproducible builds | fixed |
 | BUG-S0-008 | A | L | P01 | Мусор в корне репо: `test.md`, `ComputeGenesisHash/`, `run_3_wallets.ps1`, `.idea/` | fixed |
 | BUG-S0-009 | A | L | P03 | Один `println!` остался в `cli/mod.rs` — формальное нарушение КГ P03 | fixed |
-| BUG-S0-010 | A | L | P09 / P08 | P09 выполнен раньше P08 — нарушение карты зависимостей §1 prompt-stage0 | wontfix |
-| BUG-S0-011 | B | C | S1-P06 | «Verkle Trie» — фактическая реализация flat 256-слотного Merkle, не Verkle | open |
+| BUG-S0-010 | A | L | P09 / P08 | P09 выполнен раньше P08 — нарушение карты зависимостей §1 prompt-stage0 | fixed (2026-10-07): wontfix — отступление P09→P08 уже зафиксировано в retro-stage0.md §2/§6 |
+| BUG-S0-011 | B | C | S1-P06 | «Verkle Trie» — фактическая реализация flat 256-слотного Merkle, не Verkle | fixed (2026-10-08): S1.5-P02 Variant C — binary Sparse Merkle Tree depth 256 (`state/sparse_merkle.rs`); ADR-0006 amended |
 | BUG-S0-012 | B | C | S1-P06 / S1-P07 | `state_root == [0;32]` opt-out — инвариант №19 не enforced в общем случае | open |
 | BUG-S0-013 | B | C | S1-P07 | `verify_block_stateless` не пересчитывает post-state-root — stateless-верификация дефектна | open |
-| BUG-S0-014 | B | C | S1-P06 | При числе аккаунтов >256 — `VerkleTrie::insert_at_depth` перезаписывает siblings → root теряет данные | open |
+| BUG-S0-014 | B | C | S1-P06 | При числе аккаунтов >256 — `VerkleTrie::insert_at_depth` перезаписывает siblings → root теряет данные | fixed (2026-10-08): SMT depth 256 uses full 256-bit key — no collisions; sweep test 256→512 accounts |
 | BUG-S0-015 | B | C | P10 / D02 | Приватный генезисный ключ выводится из публичной строки `"strangecoin-genesis-seed-2026"` | open |
-| BUG-S0-016 | B | H | S1-P06 | `prove()` не использует параметр `account` — proof деградировал до «все siblings, кроме slot» | open |
+| BUG-S0-016 | B | H | S1-P06 | `prove()` не использует параметр `account` — proof деградировал до «все siblings, кроме slot» | fixed (2026-10-08): `SparseMerkleTrie::prove(address, account)` builds leaf from account; pruned (0,0) proven via EMPTY_HASH |
 | BUG-S0-017 | B | H | S1-P15 / P05 | Легаси base64-адреса в БД требуют миграции — путь миграции реализован, но нет теста на исходную БД с base64 | open |
-| BUG-S0-018 | C | H | S1-P13 | `blockchain_facade.rs` — 1578 строк, фактически стал новым монолитом внутри `src/blockchain/` | open |
-| BUG-S0-019 | C | H | S1-P13 | `chain_selector.rs` в монолите — 2 строки re-export, не собственная реализация; КГ «5 компонентов» формален | open |
+| BUG-S0-018 | C | H | S1-P13 | `blockchain_facade.rs` — 1578 строк, фактически стал новым монолитом внутри `src/blockchain/` | fixed (2026-10-08): S1.5-P04 — facade 362 строки; logic moved to block_executor/state_cache/chain_selector |
+| BUG-S0-019 | C | H | S1-P13 | `chain_selector.rs` в монолите — 2 строки re-export, не собственная реализация; КГ «5 компонентов» формален | fixed (2026-10-08): component owns try_adopt_candidate, chain_has_tx, headers/blocks helpers; pure algorithm stays in core (strangler) |
 | BUG-S0-020 | C | M | P02 / S1-P02 | Скелет модулей P02 в `src/` остался витриной — большинство модулей `src/{api,cli,gui,governance}/mod.rs` пустые | open |
 | BUG-S0-021 | C | M | S1-P10 | Legacy-threads майнинга и сети не перенесены в async — tokio введён, но новые подсистемы не покрыты | open |
 | BUG-S0-022 | C | M | S1-P12 | Прямые мутации `balances` вне `state_cache` в части legacy-путей — `rg`-аудит не формализован как gate | open |
@@ -401,7 +401,7 @@ cargo run -- --print-genesis-hash   # → 0x… (64 hex)
 |------|----------|
 | **Серьёзность** | L (Low) |
 | **Промпт-источник** | prompt-stage0.md §1 (карта зависимостей) |
-| **Статус** | wontfix (исторический факт) |
+| **Статус** | closed (2026-10-07): wontfix — исторический факт, зафиксирован в retro-stage0.md (§2 таблица P09, §6 lessons, §7 закрытые вопросы) |
 
 **Факт:** retro §2: «P09 (MTP) сделан раньше P08 (difficulty) — единственное нарушение карты зависимостей». Последствий не имело.
 
@@ -419,6 +419,7 @@ cargo run -- --print-genesis-hash   # → 0x… (64 hex)
 | **Промпт-источник** | S1-P06 |
 | **КГ нарушен** | S1-P06 КГ: «ADR-0006 написан ДО кода, Alternatives заполнены», «Инвариант №19 enforce: tamper state_root → reject» |
 | **Файлы** | `crates/strangecoin-core/src/state/verkle.rs` (237 строк), `docs/ADR/0006-verkle-trie-vs-smt.md` |
+| **Статус** | **fixed (2026-10-08)** — S1.5-P02 Variant C: `state/sparse_merkle.rs`, binary SMT depth 256, ADR-0006 amended |
 
 **Факт:** `VerkleTrie` в коде:
 ```rust
@@ -435,24 +436,13 @@ fn insert_at_depth(&mut self, key: &[u8; 32], value: [u8; 32], depth: usize) {
 
 Это **не Verkle Trie**. Verkle Trie — это структура с KZG-commitments на каждой глубине (32 уровня по 256 children с эллиптическими кривыми BLS12-381), дающая сжатые proofs O(log n) или O(1) для multi-opening. Реализованная структура — **плоский массив из 256 слотов**, эквивалентный Merkle tree глубины 1 с 256 leaves.
 
-**Доказательство несоответствия:**
-1. `insert_at_depth` рекурсивно вызывает себя только на depth=0, фактически = `nodes[key[0] as usize] = value`. Нет ветвления по байтам ключа (что и есть Verkle).
-2. `prove()` возвращает `Vec<[u8; 32]>` длиной 255 — все siblings, кроме slot. Это классический Merkle proof для дерева глубины 1, размером 8 KB на аккаунт.
-3. KZG commitments, BLS12-381, multi-opening — отсутствуют в `Cargo.toml`.
-4. ADR-0006 — нужно прочитать (не в данном аудите), но если он выбранную структуру описывает как Verkle, это противоречие с кодом.
-
-**Ожидание (S1-P06 + ARCHITECT3 §3.3):** «Реализовать Verkle Trie (или взять готовый crate, например verkle-trie)» + ADR-0006 с Alternatives. Реализованная структура — не Verkle, готовый crate не взят, ADR — нужно проверить, корректно ли описывает Alternatives (SMT vs MPT vs Verkle) или самouncенно называет структуру Verkle.
-
-**Воспроизводимость:**
-```bash
-rg "KZG|BLS|bls12|verkle" crates/strangecoin-core/src/
-# Ожидается 0 совпадений (помимо имени файла)
-```
-
-**Рекомендуемое исправление:**
-1. **Вариант A (минимальный):** Переименовать `VerkleTrie` → `FlatAccountCommitment` / `Merkle256Trie` в коде и документах. Честно зафиксировать в ADR-0006, что настоящей Verkle-реализации нет, и Stage 2+ получит её через готовый crate. Это снимает ложное заявление, но оставляет инвариант №19 enforcement слабым.
-2. **Вариант B (правильный):** Реализовать настоящую Verkle Trie — 32 уровня × 256 children, с KZG commitments через `ark-bls12-381` или готовый crate `verkle-trie`. Это значительная работа (~1–2 недели) и должна быть оформлена как S1.5-PXX (или Stage 2).
-3. **Вариант C (промежуточный):** Реализовать как настоящее Sparse Merkle Tree (SHA-256/blake3 на каждой глубине, 32 уровня), с доказуемым O(log n) proof. Это технически правильнее, чем текущая flat-структура, и не требует KZG. ADR-0006 должен быть обновлён: «Verkle отложен до Stage 2, текущая структура — SMT с 32 уровнями».
+**Исправление (S1.5-P02, 2026-10-08):**
+- `verkle.rs` удалён; заменён `state/sparse_merkle.rs` — `SparseMerkleTrie`
+- Бинарный SMT: depth 256 (1 bit на уровень ключа `blake3(address)`, MSB-first); leaf = `blake3(key‖balance‖nonce)`; internal = `blake3(left‖right)`
+- ADR-0006 amended: честное решение SMT; настоящий Verkle/KZG отложен до Stage 3+ (нет зрелого I/O-free crate)
+- **Breaking:** исторические `state_root` невалидны — reset LevelDB / resync testnet
+- Смежные баги закрыты тем же коммитом: BUG-S0-014 (sweep 256→512 accounts), BUG-S0-016 (`prove` использует `account`)
+- Остаются открытыми: BUG-S0-012 (zero state_root opt-out), BUG-S0-013 (post-root в stateless verify) — S1.5-P03
 
 ---
 
@@ -1068,10 +1058,10 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 
 | ID | Заголовок | Почему блокирует |
 |----|----------|------------------|
-| BUG-S0-011 | Verkle Trie — фактическая flat-структура | Stage 1.5 (WASM VM) требует настоящего state commitment; без него смарт-контракты не имеют верифицируемого состояния |
+| ~~BUG-S0-011~~ | ~~Verkle Trie — фактическая flat-структура~~ | **fixed 2026-10-08**: SMT depth 256; KZG отложен Stage 3+ |
 | BUG-S0-012 | `state_root == [0;32]` opt-out | Инвариант №19 не enforced; любой блок с zero root принимается без commitment |
 | BUG-S0-013 | `verify_block_stateless` не проверяет post-root | Stateless light-clients дефектны — Stage 1.5 обещал SPV-ready infrastructure |
-| BUG-S0-014 | VerkleTrie теряет данные при >256 аккаунтов | Mainnet-блоки превысят 256 аккаунтов быстро — root станет не уникальным |
+| ~~BUG-S0-014~~ | ~~VerkleTrie теряет данные при >256 аккаунтов~~ | **fixed 2026-10-08**: SMT full-key, sweep test |
 | BUG-S0-015 | Генезисный ключ из публичной строки | Любой может подписать транзакции от initial_holder; mainnet невозможен |
 
 ### P1 — блокирует Stage 2 (must fix before network crate migration)
@@ -1080,7 +1070,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 |----|----------|------------------|
 | ~~BUG-S0-001~~ | ~~Тег `v1.0.0-stage0` отсутствует~~ | **fixed 2026-10-07**: тег существует (`3dd37ef`); Gate Stage 1 пройден |
 | ~~BUG-S0-002~~ | ~~Git-история сквошена~~ | **fixed 2026-10-07**: атомарная история 163 коммитов в HEAD и origin/master; hook `.githooks/commit-msg` добавлен |
-| BUG-S0-018 | `blockchain_facade.rs` 1578 строк | Stage 2 network migration требует чистого facade; монолит будет ломать async-переписывание |
+| ~~BUG-S0-018~~ | ~~`blockchain_facade.rs` 1578 строк~~ | **fixed 2026-10-08**: S1.5-P04 — facade 362 строки, logic in sibling components |
 | BUG-S0-029 | STAGE1_SUMMARY противоречие | Без честной верификации Stage 2 унаследует нерешённые долги |
 | BUG-S0-030 | STAGE1_SUMMARY residual не понижает DoD | То же |
 | BUG-S0-031 | INVARIANTS_ENFORCED.md битые ссылки | Студенты/контрибьюторы не смогут найти enforcement-точки |
@@ -1093,9 +1083,9 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | ID | Заголовок |
 |----|----------|
 | ~~BUG-S0-004~~ | ~~6 тестов в main.rs~~ (**fixed 2026-10-07**: D01 `9dd8077`/`1929f2f` — main.rs 4 строки, 6 тестов в `tests/`) |
-| BUG-S0-016 | `prove()` не использует `account` |
+| ~~BUG-S0-016~~ | ~~`prove()` не использует `account`~~ (**fixed 2026-10-08**: SMT prove consumes account) |
 | BUG-S0-017 | Нет теста миграции base64 → bech32 |
-| BUG-S0-019 | `chain_selector.rs` — 2 строки re-export |
+| ~~BUG-S0-019~~ | ~~`chain_selector.rs` — 2 строки re-export~~ (**fixed 2026-10-08**: S1.5-P04 — adoption + wire helpers in component) |
 | BUG-S0-020 | Скелет P02 — заглушки api/gui |
 | BUG-S0-021 | Legacy-threads майнинга |
 | BUG-S0-022 | Прямые мутации balances — нет gate |
@@ -1116,7 +1106,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | ~~BUG-S0-007~~ | ~~`.gitignore` `*.lock`~~ (**fixed 2026-10-07**: строки `*.lock`/`Cargo.lock` удалены ещё в D03 `60e1840`; `Cargo.lock` трекается; добавлен `data/` в `.gitignore` для LevelDB-артефактов) |
 | BUG-S0-008 | Мусор в корне |
 | ~~BUG-S0-009~~ | ~~Один `println!` в cli~~ (**fixed 2026-10-07**: `writeln!(stdout)` в `src/cli/mod.rs`; CONTRIBUTING: CLI stdout ≠ logging; КГ P03 выполняется буквально) |
-| BUG-S0-010 | P09 раньше P08 (исторический) |
+| ~~BUG-S0-010~~ | ~~P09 раньше P08 (исторический)~~ (**fixed 2026-10-07**: wontfix — retro-stage0.md уже фиксирует отступление карты зависимостей как единичное, без последствий) |
 | BUG-S0-028 | `tests/concurrency.rs` вне спеки (wontfix) |
 
 ---
@@ -1170,11 +1160,13 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 
 Закрывает: BUG-S0-011, BUG-S0-014, BUG-S0-016.
 
+**Статус: executed 2026-10-08 (Variant C)** — binary Sparse Merkle Tree depth 256 в `crates/strangecoin-core/src/state/sparse_merkle.rs`; ADR-0006 amended; `verkle.rs` удалён. Настоящий Verkle/KZG отложен до Stage 3+.
+
 Задачи:
-1. Решить: настоящая Verkle Trie (через KZG + BLS12-381) или Sparse Merkle Tree (32 уровня blake3).
-2. Переписать `crates/strangecoin-core/src/state/verkle.rs` или переименовать в `sparse_merkle.rs`.
-3. Proptest: 1000+ аккаунтов → root уникален; 256 → 512 аккаунтов → корректное поведение.
-4. Обновить ADR-0006 с честным выбором и обоснованием.
+1. ~~Решить: настоящая Verkle Trie (через KZG + BLS12-381) или Sparse Merkle Tree (32 уровня blake3).~~ → **решено: SMT** (Variant C; depth 256 binary — не depth 32, чтобы избежать коллизий класса BUG-S0-014; см. ADR-0006 «Why depth 256»)
+2. ~~Переписать `crates/strangecoin-core/src/state/verkle.rs` или переименовать в `sparse_merkle.rs`.~~ → **done**: `sparse_merkle.rs`, тип `SparseMerkleTrie`
+3. ~~Proptest: 1000+ аккаунтов → root уникален; 256 → 512 аккаунтов → корректное поведение.~~ → **done**: `proptest_thousand_accounts_unique_deterministic_root`, `sweep_256_to_512_accounts_unique_roots`
+4. ~~Обновить ADR-0006 с честным выбором и обоснованием.~~ → **done**: ADR-0006 Status=Amended
 
 ### S1.5-P03 — Enforce state_root без opt-out + post-state-root verification
 
@@ -1188,12 +1180,17 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 
 ### S1.5-P04 — Декомпозиция blockchain_facade
 
-Закрывает: BUG-S0-018.
+Закрывает: BUG-S0-018, BUG-S0-019.
+
+**Статус: executed 2026-10-08** — `blockchain_facade.rs` 1578 → **362 строки**; logic relocated to sibling components; `chain_selector.rs` is a real component (not a re-export).
 
 Задачи:
-1. Перенести логику из `blockchain_facade.rs` (1578 строк) в `block_executor.rs`, `state_cache.rs`, `consensus_manager.rs`, `chain_selector.rs`.
-2. Целевой размер: facade ≤ 400 строк.
-3. Тесты: поведение не меняется (D01 + S1-P19 матрица green).
+1. ~~Перенести логику из `blockchain_facade.rs` (1578 строк) в `block_executor.rs`, `state_cache.rs`, `consensus_manager.rs`, `chain_selector.rs`.~~ → **done**:
+   - `block_executor.rs`: mining, commit_block, genesis/grant construction
+   - `state_cache.rs`: open_blockchain (new), LevelDB load/save, migrations, add_transaction, validate_chain
+   - `chain_selector.rs`: try_adopt_candidate, chain_has_tx, headers_from_height, blocks_by_hashes (+ unit tests)
+2. ~~Целевой размер: facade ≤ 400 строк.~~ → **done**: 362 строки
+3. ~~Тесты: поведение не меняется (D01 + S1-P19 матрица green).~~ → **done**: `cargo test --workspace` green
 
 ### S1.5-P05 — DoD-верификация Stage 1.5 с честной отметкой residual
 

@@ -4,7 +4,7 @@ use crate::error::CoreError;
 use crate::types::{AccountState, Block};
 
 use super::inner::State;
-use super::verkle::VerkleTrie;
+use super::sparse_merkle::SparseMerkleTrie;
 
 #[derive(Clone, Debug)]
 pub struct AccountProof {
@@ -21,7 +21,7 @@ pub struct StateWitness {
 }
 
 pub fn build_witness(pre_state: &State, block: &Block) -> StateWitness {
-    let pre_state_root = VerkleTrie::compute_root(&pre_state.balances);
+    let pre_state_root = SparseMerkleTrie::compute_root(&pre_state.balances);
     let trie = build_trie(pre_state);
 
     let mut proofs = HashMap::new();
@@ -62,7 +62,7 @@ pub fn verify_block_stateless(
             balance: account_proof.balance,
             nonce: account_proof.nonce,
         };
-        if !VerkleTrie::verify_proof(parent_state_root, addr, &account, &account_proof.proof) {
+        if !SparseMerkleTrie::verify_proof(parent_state_root, addr, &account, &account_proof.proof) {
             return Err(CoreError::WitnessVerificationFailed);
         }
     }
@@ -88,8 +88,8 @@ pub fn verify_block_stateless(
     Ok(())
 }
 
-fn build_trie(state: &State) -> VerkleTrie {
-    let mut trie = VerkleTrie::new();
+fn build_trie(state: &State) -> SparseMerkleTrie {
+    let mut trie = SparseMerkleTrie::new();
     let mut sorted: Vec<(&String, &AccountState)> = state.balances.iter().collect();
     sorted.sort_by_key(|(addr, _)| *blake3::hash(addr.as_bytes()).as_bytes());
     for (addr, account) in sorted {

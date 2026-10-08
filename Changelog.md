@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.1.1 — Stage 1.5 debt track (BUG-S0-011 + S1.5-P04)
+
+**Status**: In progress  
+**Date**: 2026-10-08  
+**Prompts**: S1.5-P02 (BUG-S0-011/014/016), S1.5-P04 (BUG-S0-018/019)
+
+### BUG-S0-011: Sparse Merkle Tree replaces flat «Verkle»
+
+- **Breaking:** `state_root` computation changed. Historical roots from the flat 256-slot structure are invalid. Reset LevelDB or resync testnet nodes. Wire `FORMAT_VERSION` unchanged (4).
+- `crates/strangecoin-core/src/state/verkle.rs` **removed** → `sparse_merkle.rs`
+- `SparseMerkleTrie`: binary tree, depth 256 over `blake3(address)` (256-bit key, MSB-first); leaf = `blake3(key‖balance‖nonce)`; internal = `blake3(left‖right)`; empty subtree hashes precomputed
+- Closes **BUG-S0-011** (not a Verkle — now honestly an SMT), **BUG-S0-014** (no collisions for n ≤ 2^256; sweep 256→512 test), **BUG-S0-016** (`prove(address, account)` consumes `account`; pruned `(0,0)` proven by empty slot)
+- Proof: 256 sibling hashes (8 KiB), one per level; `verify_proof` walks leaf→root
+- ADR-0006 amended: honest SMT decision; true Verkle/KZG deferred to Stage 3+
+- API surface unchanged for callers: `compute_state_root`, `root_after`, `build_witness`, `verify_block_stateless`
+- Tests: unit + proptest (1000+ accounts unique root; 256→512 sweep; prove/verify round-trip; tamper rejection); full workspace green
+
+### S1.5-P04: blockchain facade decomposition (BUG-S0-018/019)
+
+- `src/blockchain/blockchain_facade.rs`: **1578 → 362 lines** (КГ ≤400 met)
+- Moved out of facade:
+  - `block_executor.rs`: mining (`mine_block`, `mine_block_inner`), `commit_block`, genesis/grant construction
+  - `state_cache.rs`: `open_blockchain` (DB open/load/migrate), LevelDB save, `add_transaction`, `validate_chain`, address migrations
+  - `chain_selector.rs`: **real component** (BUG-S0-019) — `try_adopt_candidate`, `chain_has_tx`, `headers_from_height`, `blocks_by_hashes` + unit tests; pure fork-choice algorithm stays in core (strangler)
+- Public `BlockchainFacade` API unchanged (behavior preserved); all workspace tests green
+
+### Not in this change
+
+- BUG-S0-012 (`state_root == [0;32]` opt-out) — still open, S1.5-P03
+- BUG-S0-013 (`verify_block_stateless` post-root) — still open, S1.5-P03
+- BUG-S0-015 (genesis key) — still open, S1.5-P01
+
 ## 1.1.0 — Stage 1 (core extracted + Verkle + headers-first)
 
 **Status**: Complete — verified by S1-P22; tag `v1.1.0-stage1`

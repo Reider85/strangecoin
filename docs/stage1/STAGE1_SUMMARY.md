@@ -14,7 +14,7 @@
 | # | Criterion | Evidence | Status | Predecessor verified |
 |---|-----------|----------|--------|----------------------|
 | 1 | strangecoin-core created; pure functions moved; 0 I/O | `crates/strangecoin-core/` modules: serialize, consensus, state, economics, governance, address, chain_selector, vm. `rg "std::fs\|std::net\|tokio\|leveldb" crates/strangecoin-core/src` → **0 matches** | ✅ | да |
-| 2 | Verkle Trie + `state.root_after == block.state_root` | `crates/strangecoin-core/src/state/verkle.rs`; tests: core `tests/state_root.rs` (7), e2e `tests/state_root.rs` (3) | ✅ | да |
+| 2 | State commitment + `state.root_after == block.state_root` | `crates/strangecoin-core/src/state/sparse_merkle.rs` (binary SMT depth 256; S1-P06 claimed Verkle — **amended 2026-10-08**, BUG-S0-011); tests: core `tests/state_root.rs` (7), e2e `tests/state_root.rs` (3) | 🟡 residual §6.7 (SMT not Verkle) | да |
 | 3 | Headers-first sync works | `tests/sync_headers.rs` (3 real-TCP tests: fresh sync 20 blocks, equal chain, longer fork) | ✅ | да |
 | 4 | Events bus works (3 subscribers) | `tests/events.rs::three_subscribers_each_receive_live_node_events` | ✅ | да |
 | 5 | Tie-breaking deterministic (proptest) | `tests/chain_selector_proptest.rs` (7 tests: work→timestamp→hash, permutation invariance, transitivity) | ✅ | да |
@@ -133,10 +133,11 @@ S1-P22 itself: `68e358f` — annotated tag `v1.1.0-stage1` placed on this commit
 
 1. **Offline genesis key** — genesis private key is derived from the public seed string `"strangecoin-genesis-seed-2026"` (retro §4.3). Residual risk until mainnet freeze; replacement key required before any public chain.
 2. **cargo-fuzz on Windows** — coverage-guided fuzzing not runnable on this host (no MSVC/ASan); fallback soak found and fixed OOB panic in `deserialize_block` (S1-P19). Run cargo-fuzz on a capable CI host.
-3. **TLA+ coverage** — `NoDoubleSpend`/`NoInflation`/`AllTxSigned`/`NonceMonotonic`/`PowValidity` not model-checked by TLC (state-space limits); structural properties hold by construction + Rust tests. Spec does not yet model Verkle/reorg.
+3. **TLA+ coverage** — `NoDoubleSpend`/`NoInflation`/`AllTxSigned`/`NonceMonotonic`/`PowValidity` not model-checked by TLC (state-space limits); structural properties hold by construction + Rust tests. Spec does not yet model the state commitment trie / reorg.
 4. **Release pipeline** — workflow fixed in D03; first `v*` tag run still pending GitHub Actions verification (residual in THREAT_MODEL V-33).
-5. **Zero `state_root` opt-in** — blocks with zero state_root still adopt (documented residual; enforcement tightening — later SCIP).
+5. **Zero `state_root` opt-in** — blocks with zero state_root still adopt (documented residual; enforcement tightening — later SCIP; S1.5-P03).
 6. **Repo hygiene** — **closed 2026-10-07** (BUG-S0-008 / BUG-S0-032): removed `test.md`, `ComputeGenesisHash/`, `compute_genesis_hash.rs`, `compute_genesis_hash_toml` from the working tree; moved `run_3_wallets.ps1` → `scripts/dev/run_3_wallets.ps1`; `.idea/`/`.codebuddy/` confirmed untracked (gitignored). No untracked repo-root artifacts remain in the git index.
+7. **True Verkle / KZG commitments** — **updated 2026-10-08** (BUG-S0-011 / S1.5-P02): the S1-P06 «Verkle Trie» was a flat 256-slot Merkle (not a trie; collisions >256 accounts). Replaced by a binary Sparse Merkle Tree (depth 256 over `blake3(address)`, ADR-0006 amended). True Verkle (KZG + BLS12-381) remains deferred to Stage 3+ pending a mature I/O-free crate. **Breaking:** historical `state_root` values are invalid under the SMT — reset LevelDB / resync testnet nodes. DoD §1 criterion 2 evidence updated: implementation is SMT, not Verkle.
 
 ---
 
