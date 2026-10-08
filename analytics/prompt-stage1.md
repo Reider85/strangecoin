@@ -666,7 +666,7 @@ S1-P12..S1-P18 ──▶ S1-P19 (интеграционные тесты Stage 1
 **КГ (чек-лист):**
 - [ ] block_executor не знает про tip selection; state_cache — единственный читатель балансов
 - [ ] Тест: rebuild-from-chain исправляет расхождение кэша (инвариант №1)
-- [ ] Прямых мутаций balances вне state_cache нет (rg-контроль)
+- [ ] Прямых мутаций balances вне state_cache нет (rg-контроль; gate: `tests/balances_gate.rs` + CI job `source-gates` — `rg '\.balances\.(insert|remove|get_mut)' src/ --glob '!state_cache.rs' --glob '!block_executor.rs'` и `rg '\.balances\s*=[^=]' src/ --glob '!state_cache.rs' --glob '!chain_selector.rs'` → 0; formalized 2026-10-09, BUG-S0-022)
 - [ ] `cargo test --workspace` green; коммит `[S1-P12] blockchain: block_executor + state_cache`
 
 ---

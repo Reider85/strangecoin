@@ -56,7 +56,7 @@
 | BUG-S0-019 | C | H | S1-P13 | `chain_selector.rs` в монолите — 2 строки re-export, не собственная реализация; КГ «5 компонентов» формален | fixed (2026-10-08): component owns try_adopt_candidate, chain_has_tx, headers/blocks helpers; pure algorithm stays in core (strangler) |
 | BUG-S0-020 | C | M | P02 / S1-P02 | Скелет модулей P02 в `src/` остался витриной — большинство модулей `src/{api,cli,gui,governance}/mod.rs` пустые | fixed (2026-10-08): GUI (~440 строк egui + `WalletApp` + `run()`) перенесён из `lib.rs` в `src/gui/mod.rs`; `api` — документированный деферр Stage 4 (ARCHITECT3 §3.10/§10.6); `cli` — рабочий `--print-genesis-hash` + doc-comment; `governance` — re-export core SCIP (не заглушка) |
 | BUG-S0-021 | C | M | S1-P10 | Legacy-threads майнинга и сети не перенесены в async — tokio введён, но новые подсистемы не покрыты | fixed (2026-10-08): ADR-0011 — mining worker → tokio task (`spawn_blocking` для PoW), accept/per-connection → `tokio::net`, `sync_headers_first`/`sync_blockchain` → async, `sync_tx` → tokio mpsc; гибридная модель ADR-0007 закрыта |
-| BUG-S0-022 | C | M | S1-P12 | Прямые мутации `balances` вне `state_cache` в части legacy-путей — `rg`-аудит не формализован как gate | open |
+| BUG-S0-022 | C | M | S1-P12 | Прямые мутации `balances` вне `state_cache` в части legacy-путей — `rg`-аудит не формализован как gate | fixed (2026-10-09): аудит чист (0 прямых мутаций); gate = `tests/balances_gate.rs` (cargo test, кроссплатформенный) + CI job `source-gates` (rg-шаг); КГ S1-P12 формализована |
 | BUG-S0-023 | D | H | S1-P19 | Fuzz-target `canonical_decode` — прогон 10 секунд вместо 10 минут; cargo-fuzz не запущен | open |
 | BUG-S0-024 | D | H | S1-P20 | `INVARIANTS_ENFORCED.md` — нумерация инвариантов не совпадает с ARCHITECT3 §5 (№4 описан как №19) | open |
 | BUG-S0-025 | D | M | P18 / S1-P20 | Property-тесты на `apply/unapply round-trip` добавлены, но `nonce` monotonic proptest отсутствует как отдельный | open |
@@ -805,6 +805,12 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 1. Запустить `rg "\.balances\.insert\(" src/` и `rg "\.balances\.remove\(" src/` — проверить, что все вызовы в `state_cache.rs` или `block_executor.rs` (через core::state).
 2. Добавить в S1-P12 КГ: `rg "balances\.(insert|remove|get_mut)" src/ | grep -v state_cache.rs | grep -v block_executor.rs` → 0 совпадений.
 
+**Исправление (2026-10-09):**
+- Аудит выполнен: `\.balances\.(insert|remove|get_mut)` и `\.balances =` (whole-field replacement) в `src/` → **0 нарушений** за пределами whitelists. Единственные мутации: StateCache write API внутри `state_cache.rs`; `credit` в `block_executor.rs::install_fresh_genesis` (legacy genesis path, через API `StateCache`); `current.balances = rebuilt` в `chain_selector.rs::try_adopt_candidate` (reorg-adoption пересобранного кэша).
+- Gate формализован в двух формах: **`tests/balances_gate.rs`** (рекурсивный обход `src/**/*.rs`, запускается в `cargo test --workspace` на любой ОС — важно, т.к. на Windows-dev-хосте `rg` отсутствует) + **CI job `source-gates`** в `.github/workflows/ci.yml` (rg-шаг на ubuntu-runner, fail-fast без Rust-сборки).
+- Паттерны расширены сверх рекомендации: дополнительно ловится whole-field присвоение `\.balances =` (whitelist: `state_cache.rs`, `chain_selector.rs`).
+- КГ S1-P12 в `analytics/prompt-stage1.md` дополнена формальной командой и ссылкой на gate; `docs/stage1/STAGE1_SUMMARY.md §3` — balances-аудит добавлен в rg audits.
+
 ---
 
 ## 5. Категория D — Тестовые баги
@@ -1117,7 +1123,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | ~~BUG-S0-019~~ | ~~`chain_selector.rs` — 2 строки re-export~~ (**fixed 2026-10-08**: S1.5-P04 — adoption + wire helpers in component) |
 | ~~BUG-S0-020~~ | ~~Скелет P02 — заглушки api/gui~~ (**fixed 2026-10-08**: GUI перенесён из lib.rs в `src/gui/mod.rs` (490 строк, feature-gated, `gui::run`); api = задокументированный деферр Stage 4; cli/governance — не заглушки) |
 | BUG-S0-021 | Legacy-threads майнинга |
-| BUG-S0-022 | Прямые мутации balances — нет gate |
+| ~~BUG-S0-022~~ | ~~Прямые мутации balances — нет gate~~ (**fixed 2026-10-09**: аудит чист — 0 нарушений; gate `tests/balances_gate.rs` + CI job `source-gates`; КГ S1-P12 формализована) |
 | BUG-S0-023 | Fuzz — 10 сек вместо 10 мин |
 | BUG-S0-025 | nonce proptest — проверить наличие |
 | BUG-S0-026 | TLA+ TLC-прогон |

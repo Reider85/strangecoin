@@ -88,6 +88,7 @@ S1-P22 itself: `68e358f` — annotated tag `v1.1.0-stage1` placed on this commit
 **rg audits**:
 - `crates/strangecoin-core/src`: no `std::fs` / `std::net` / `tokio` / `leveldb` → 0 I/O confirmed.
 - `src/network/`: `adopt_candidate` / `apply_tx` / `save_state` only in `sync_engine.rs` (+ doc refs) → cycle broken.
+- `src/`: no `\.balances\.(insert|remove|get_mut)` outside `state_cache.rs`/`block_executor.rs` and no `\.balances =` replacement outside `state_cache.rs`/`chain_selector.rs` → 0 matches (BUG-S0-022, 2026-10-09; gate: `tests/balances_gate.rs` + CI job `source-gates`).
 
 ---
 

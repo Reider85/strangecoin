@@ -10,6 +10,29 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  source-gates:
+    name: Source gates (rg audits)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # BUG-S0-022 / S1-P12: executable form of the balances-mutation audit.
+      # Mirrors tests/balances_gate.rs (which runs on every platform via
+      # `cargo test --workspace`); this step fails fast without a Rust build.
+      - name: "Gate: no direct balances mutations (BUG-S0-022)"
+        run: |
+          set -euo pipefail
+          raw=$(rg -n '\.balances\.(insert|remove|get_mut)' src/ \
+            --glob '!state_cache.rs' --glob '!block_executor.rs' || true)
+          assign=$(rg -n '\.balances\s*=[^=]' src/ \
+            --glob '!state_cache.rs' --glob '!chain_selector.rs' || true)
+          if [ -n "$raw$assign" ]; then
+            echo "Direct balances mutation outside whitelisted files (BUG-S0-022 / S1-P12):"
+            printf '%s\n' "$raw" "$assign"
+            exit 1
+          fi
+          echo "OK: 0 direct balances mutations outside state_cache/block_executor/chain_selector"
+
   test:
     name: Test (${{ matrix.os }}, ${{ matrix.rust }})
     strategy:
