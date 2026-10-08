@@ -8,21 +8,27 @@
 //! * owns adoption against live [`Blockchain`] state
 //!   ([`try_adopt_candidate`]);
 //! * chain query helpers used by the facade wire path
-//!   ([`chain_has_tx`], [`headers_from_height`], [`blocks_by_hashes`]).
+//!   ([`chain_has_tx`], [`headers_from_height`], [`blocks_by_hashes`]);
+//! * wire snapshot shape + serde for `Blockchain`
+//!   ([`BlockchainDeserialize`], moved from the facade in S1.5-P04 residual).
 //!
 //! BUG-S0-019: this file is no longer a 2-line re-export — adoption and wire
 //! queries are first-class component responsibilities. The *algorithm* staying
 //! in core is intentional (strangler pattern; ARCHITECT3 §3.2).
+//!
+//! BUG-S0-018 residual: serde/wire lives here so the facade stays ≤400 lines.
 
 pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Deserializer, Serialize};
 use strangecoin_core::types::{Block, BlockHeader, Transaction};
 use tracing::warn;
 
 use super::block_executor;
 use super::blockchain_facade::Blockchain;
+use super::consensus_manager::ConsensusManager;
 use super::state_cache::StateCache;
 use crate::error::StrangecoinError;
 use crate::AccountState;
@@ -62,6 +68,78 @@ pub(crate) fn blocks_by_hashes(chain: &[Block], hashes: &[[u8; 32]], max: usize)
         .take(max)
         .map(|b| (*b).clone())
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Wire snapshot shape + serde for Blockchain (S1.5-P04 residual, BUG-S0-018)
+// ---------------------------------------------------------------------------
+
+/// Wire shape of a chain snapshot: what peers send and what `sync_rx` carries.
+#[derive(Deserialize, Serialize)]
+pub struct BlockchainDeserialize {
+    pub chain: Vec<Block>,
+    pub balances: HashMap<String, AccountState>,
+    pub difficulty: u32,
+    #[serde(default)]
+    pub pending_transactions: Vec<Transaction>,
+    #[serde(default)]
+    pub mempool_txs: Vec<Transaction>,
+    #[serde(default)]
+    pub total_work: strangecoin_core::consensus::U256,
+}
+
+impl Serialize for Blockchain {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("Blockchain", 5)?;
+        state.serialize_field("chain", &self.chain)?;
+        state.serialize_field("balances", &self.balances)?;
+        state.serialize_field("difficulty", &self.difficulty)?;
+        state.serialize_field("mempool_txs", &self.mempool.transactions())?;
+        state.serialize_field("total_work", &self.total_work)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Blockchain {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let BlockchainDeserialize {
+            chain,
+            balances,
+            difficulty,
+            pending_transactions,
+            mempool_txs,
+            total_work,
+        } = BlockchainDeserialize::deserialize(deserializer)?;
+
+        let db_path = super::state_cache::db_path_from_env();
+        let mut mempool = crate::mempool::Mempool::new();
+        for tx in pending_transactions.into_iter().chain(mempool_txs) {
+            let account = AccountState {
+                balance: 0,
+                nonce: 0,
+            };
+            let _ = mempool.insert(tx, &account);
+        }
+        let storage = crate::storage::Storage::new(&db_path).map_err(serde::de::Error::custom)?;
+
+        Ok(Blockchain {
+            chain,
+            balances: StateCache::from_accounts(balances),
+            difficulty,
+            mempool,
+            storage,
+            allow_grant_blocks: false,
+            total_work,
+            rules: ConsensusManager::new(),
+        })
+    }
 }
 
 /// Fork-choice adoption: install `candidate_chain` iff it beats the current

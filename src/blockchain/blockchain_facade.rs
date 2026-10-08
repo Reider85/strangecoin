@@ -7,7 +7,8 @@
 //!   state only through [`BlockchainFacade`]. Heavy logic lives in sibling
 //!   components (S1.5-P04): mining/genesis/grant in `block_executor`,
 //!   migrations/storage in `state_cache`, fork-choice adoption in
-//!   `chain_selector`.
+//!   `chain_selector`, wire snapshot + serde in `chain_selector`
+//!   ([`BlockchainDeserialize`]).
 //! * [`BlockchainFacade`] — sole public entry point. Wraps
 //!   `Arc<RwLock<Blockchain>>`, takes the lock per call.
 //!
@@ -19,8 +20,6 @@
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc, RwLock};
 
-use serde::{Deserialize, Deserializer, Serialize};
-
 use super::block_executor::{self, BlockView};
 use super::chain_selector::ChainSelector;
 use super::consensus_manager::ConsensusManager;
@@ -28,20 +27,6 @@ use super::state_cache::StateCache;
 use crate::error::StrangecoinError;
 use crate::AccountState;
 use strangecoin_core::types::{Block, BlockHeader, ChainSnapshot, Transaction};
-
-/// Wire shape of a chain snapshot: what peers send and what `sync_rx` carries.
-#[derive(Deserialize, Serialize)]
-pub struct BlockchainDeserialize {
-    pub chain: Vec<Block>,
-    pub balances: HashMap<String, AccountState>,
-    pub difficulty: u32,
-    #[serde(default)]
-    pub pending_transactions: Vec<Transaction>,
-    #[serde(default)]
-    pub mempool_txs: Vec<Transaction>,
-    #[serde(default)]
-    pub total_work: strangecoin_core::consensus::U256,
-}
 
 /// Chain data. Not part of the public API — use [`BlockchainFacade`].
 #[derive(Clone)]
@@ -54,60 +39,6 @@ pub struct Blockchain {
     pub(crate) allow_grant_blocks: bool,
     pub(crate) total_work: strangecoin_core::consensus::U256,
     pub(crate) rules: ConsensusManager,
-}
-
-impl Serialize for Blockchain {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("Blockchain", 5)?;
-        state.serialize_field("chain", &self.chain)?;
-        state.serialize_field("balances", &self.balances)?;
-        state.serialize_field("difficulty", &self.difficulty)?;
-        state.serialize_field("mempool_txs", &self.mempool.transactions())?;
-        state.serialize_field("total_work", &self.total_work)?;
-        state.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for Blockchain {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let BlockchainDeserialize {
-            chain,
-            balances,
-            difficulty,
-            pending_transactions,
-            mempool_txs,
-            total_work,
-        } = BlockchainDeserialize::deserialize(deserializer)?;
-
-        let db_path = super::state_cache::db_path_from_env();
-        let mut mempool = crate::mempool::Mempool::new();
-        for tx in pending_transactions.into_iter().chain(mempool_txs) {
-            let account = AccountState {
-                balance: 0,
-                nonce: 0,
-            };
-            let _ = mempool.insert(tx, &account);
-        }
-        let storage = crate::storage::Storage::new(&db_path).map_err(serde::de::Error::custom)?;
-
-        Ok(Blockchain {
-            chain,
-            balances: StateCache::from_accounts(balances),
-            difficulty,
-            mempool,
-            storage,
-            allow_grant_blocks: false,
-            total_work,
-            rules: ConsensusManager::new(),
-        })
-    }
 }
 
 impl Blockchain {

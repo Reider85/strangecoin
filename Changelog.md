@@ -20,11 +20,12 @@
 
 ### S1.5-P04: blockchain facade decomposition (BUG-S0-018/019)
 
-- `src/blockchain/blockchain_facade.rs`: **1578 → 362 lines** (КГ ≤400 met)
+- `src/blockchain/blockchain_facade.rs`: **1578 → 361 lines** (КГ ≤400 met; residual-trim: serde/wire moved out)
 - Moved out of facade:
   - `block_executor.rs`: mining (`mine_block`, `mine_block_inner`), `commit_block`, genesis/grant construction
   - `state_cache.rs`: `open_blockchain` (DB open/load/migrate), LevelDB save, `add_transaction`, `validate_chain`, address migrations
-  - `chain_selector.rs`: **real component** (BUG-S0-019) — `try_adopt_candidate`, `chain_has_tx`, `headers_from_height`, `blocks_by_hashes` + unit tests; pure fork-choice algorithm stays in core (strangler)
+  - `chain_selector.rs`: **real component** (BUG-S0-019) — `try_adopt_candidate`, `chain_has_tx`, `headers_from_height`, `blocks_by_hashes` + unit tests; **wire snapshot + serde** (`BlockchainDeserialize`, `Serialize`/`Deserialize` для `Blockchain`) — residual-trim 2026-10-08; pure fork-choice algorithm stays in core (strangler)
+- Line-count evidence (`wc -l src/blockchain/*.rs`): facade 361, block_executor 571, state_cache 586, chain_selector 285, consensus_manager 132
 - Public `BlockchainFacade` API unchanged (behavior preserved); all workspace tests green
 
 ### S1.5-P01: genesis key removed from code + SCIP-0001 (BUG-S0-015)

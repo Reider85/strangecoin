@@ -21,7 +21,7 @@
 | 6 | tokio introduced; new subsystems async | `Cargo.toml` tokio deps; `docs/ADR/0007-tokio-on-stage-1.md`; `tests/two_clients.rs::node_runs_on_tokio_and_shuts_down_cleanly` | ✅ | да |
 | 7 | network_id in HELLO; foreign peers rejected | `tests/network_id.rs::foreign_network_id_is_rejected_and_banned` | ✅ | да |
 | 8 | bech32 round-trip | `crates/strangecoin-core/src/address.rs::tests::test_round_trip`; HRP sc1/tsc1/rsc1; `tests/two_clients.rs::bech32_address_transfer` | ✅ | да |
-| 9 | Blockchain decomposed (4 + consensus_manager) | `src/blockchain/`: `chain_selector.rs`, `block_executor.rs`, `state_cache.rs`, `blockchain_facade.rs`, `consensus_manager.rs` | ✅ | да |
+| 9 | Blockchain decomposed (4 + consensus_manager) | `src/blockchain/`: `chain_selector.rs`, `block_executor.rs`, `state_cache.rs`, `blockchain_facade.rs`, `consensus_manager.rs`. Line-count (2026-10-08 residual-trim): facade 361, block_executor 571, state_cache 586, chain_selector 285 (serde/wire snapshot included), consensus_manager 132 | ✅ | да |
 | 10 | Sync engine breaks network↔blockchain cycle | `src/network/sync_engine.rs` (ADR-0010); rg audit: `adopt_candidate`/`apply_tx`/`save_state` only in `sync_engine.rs`; `tests/sync_engine.rs` | ✅ | да |
 | 11 | consensus_version + activation height | `crates/strangecoin-core/src/governance/scip.rs`; `tests/consensus_version.rs` (3); core scip activation tests (5) | ✅ | да |
 | 12 | All Stage 0 invariants still enforced | `docs/stage1/INVARIANTS_ENFORCED.md` (S1-P20); full workspace suite green | ✅ | да |

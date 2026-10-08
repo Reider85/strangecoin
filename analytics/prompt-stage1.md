@@ -695,6 +695,7 @@ S1-P12..S1-P18 ──▶ S1-P19 (интеграционные тесты Stage 1
 - [ ] 5 компонентов в src/blockchain/ (4 + consensus_manager), mod.rs их связывает
 - [ ] rg: ни один внешний модуль не трогает внутренности blockchain мимо facade
 - [ ] consensus_manager — единственный источник правил для executor
+- [ ] `wc -l src/blockchain/*.rs` — facade ≤ 400 строк; остальные компоненты 200–600 (consensus_manager — тонкая обёртка правил, допустимо <200)
 - [ ] DoD Этап 1 «декомпозиция на 5 компонентов» — выполнен
 - [ ] `cargo test --workspace` green; коммит `[S1-P13] blockchain: facade + consensus_manager (5-component split done)`
 

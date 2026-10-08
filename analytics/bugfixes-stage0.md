@@ -52,7 +52,7 @@
 | BUG-S0-015 | B | C | P10 / D02 | Приватный генезисный ключ выводится из публичной строки `"strangecoin-genesis-seed-2026"` | fixed (2026-10-08): S1.5-P01 — `genesis_keypair()` + seed удалены из кода; `genesis.json` только `initial_holder_pubkey`; SCIP-0001 создан; тест `tests/genesis_key.rs`; residual = offline-ключ ops до mainnet freeze |
 | BUG-S0-016 | B | H | S1-P06 | `prove()` не использует параметр `account` — proof деградировал до «все siblings, кроме slot» | fixed (2026-10-08, re-opened 2026-10-08): SMT rewrite; `prove()` валидирует claimed account vs trie, мismatch → `CoreError::ProofAccountMismatch`; `build_witness` → `Result` |
 | BUG-S0-017 | B | H | S1-P15 / P05 | Легаси base64-адреса в БД требуют миграции — путь миграции реализован, но нет теста на исходную БД с base64 | fixed (2026-10-08): `tests/address_migration.rs` — open-path coverage: balances base64→bech32, legacy-chain reset, reopen idempotency. Тест вскрыл production-дефект: `save_state` писал `HashMap<String, AccountState>`, а `load_persisted_state` читал только `HashMap<String, u64>` — балансы молча терялись при каждом reload БД; читатель теперь принимает оба формата (fallback на Stage 0 u64) |
-| BUG-S0-018 | C | H | S1-P13 | `blockchain_facade.rs` — 1578 строк, фактически стал новым монолитом внутри `src/blockchain/` | fixed (2026-10-08): S1.5-P04 — facade 362 строки; logic moved to block_executor/state_cache/chain_selector |
+| BUG-S0-018 | C | H | S1-P13 | `blockchain_facade.rs` — 1578 строк, фактически стал новым монолитом внутри `src/blockchain/` | fixed (2026-10-08): S1.5-P04 — facade **361 строка** (serde/wire в `chain_selector.rs`); logic moved to block_executor/state_cache/chain_selector |
 | BUG-S0-019 | C | H | S1-P13 | `chain_selector.rs` в монолите — 2 строки re-export, не собственная реализация; КГ «5 компонентов» формален | fixed (2026-10-08): component owns try_adopt_candidate, chain_has_tx, headers/blocks helpers; pure algorithm stays in core (strangler) |
 | BUG-S0-020 | C | M | P02 / S1-P02 | Скелет модулей P02 в `src/` остался витриной — большинство модулей `src/{api,cli,gui,governance}/mod.rs` пустые | open |
 | BUG-S0-021 | C | M | S1-P10 | Legacy-threads майнинга и сети не перенесены в async — tokio введён, но новые подсистемы не покрыты | open |
@@ -1083,7 +1083,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 |----|----------|------------------|
 | ~~BUG-S0-001~~ | ~~Тег `v1.0.0-stage0` отсутствует~~ | **fixed 2026-10-07**: тег существует (`3dd37ef`); Gate Stage 1 пройден |
 | ~~BUG-S0-002~~ | ~~Git-история сквошена~~ | **fixed 2026-10-07**: атомарная история 163 коммитов в HEAD и origin/master; hook `.githooks/commit-msg` добавлен |
-| ~~BUG-S0-018~~ | ~~`blockchain_facade.rs` 1578 строк~~ | **fixed 2026-10-08**: S1.5-P04 — facade 362 строки, logic in sibling components |
+| ~~BUG-S0-018~~ | ~~`blockchain_facade.rs` 1578 строк~~ | **fixed 2026-10-08**: S1.5-P04 — facade **361 строка** (≤400 met), logic in sibling components; serde/wire в `chain_selector.rs` |
 | BUG-S0-029 | STAGE1_SUMMARY противоречие | Без честной верификации Stage 2 унаследует нерешённые долги |
 | BUG-S0-030 | STAGE1_SUMMARY residual не понижает DoD | То же |
 | BUG-S0-031 | INVARIANTS_ENFORCED.md битые ссылки | Студенты/контрибьюторы не смогут найти enforcement-точки |
@@ -1197,14 +1197,14 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 
 Закрывает: BUG-S0-018, BUG-S0-019.
 
-**Статус: executed 2026-10-08** — `blockchain_facade.rs` 1578 → **362 строки**; logic relocated to sibling components; `chain_selector.rs` is a real component (not a re-export).
+**Статус: executed 2026-10-08** — `blockchain_facade.rs` 1578 → **361 строка**; logic relocated to sibling components; `chain_selector.rs` is a real component (not a re-export); serde/wire snapshot (`BlockchainDeserialize` + `Serialize`/`Deserialize` для `Blockchain`) перенесены в `chain_selector.rs` (residual-trim: цель ≤400 мет).
 
 Задачи:
 1. ~~Перенести логику из `blockchain_facade.rs` (1578 строк) в `block_executor.rs`, `state_cache.rs`, `consensus_manager.rs`, `chain_selector.rs`.~~ → **done**:
    - `block_executor.rs`: mining, commit_block, genesis/grant construction
    - `state_cache.rs`: open_blockchain (new), LevelDB load/save, migrations, add_transaction, validate_chain
-   - `chain_selector.rs`: try_adopt_candidate, chain_has_tx, headers_from_height, blocks_by_hashes (+ unit tests)
-2. ~~Целевой размер: facade ≤ 400 строк.~~ → **done**: 362 строки
+   - `chain_selector.rs`: try_adopt_candidate, chain_has_tx, headers_from_height, blocks_by_hashes (+ unit tests); **serde/wire snapshot** (`BlockchainDeserialize`, `Serialize`/`Deserialize` для `Blockchain`) — residual-trim 2026-10-08
+2. ~~Целевой размер: facade ≤ 400 строк.~~ → **done**: **361 строка** (после переноса serde/wire)
 3. ~~Тесты: поведение не меняется (D01 + S1-P19 матрица green).~~ → **done**: `cargo test --workspace` green
 
 ### S1.5-P05 — DoD-верификация Stage 1.5 с честной отметкой residual
