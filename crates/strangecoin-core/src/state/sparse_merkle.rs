@@ -11,15 +11,19 @@
 //! * internal node = `blake3(left ‖ right)`
 //! * proof = 256 sibling hashes (8 KiB), one per level
 //!
-//! `prove(address, account)` consumes `account` (BUG-S0-016): a pruned account
-//! (`balance == 0 && nonce == 0`) is proven by the empty slot. True Verkle/KZG
-//! remains deferred to Stage 3+ per ADR-0006.
+//! `prove(address, account)` consumes `account` (BUG-S0-016): the claimed
+//! account is validated against the trie state; a pruned account
+//! (`balance == 0 && nonce == 0`) is proven by the empty slot (`EMPTY_HASH`).
+//! A mismatch between the claimed account and the trie returns
+//! `CoreError::ProofAccountMismatch`. True Verkle/KZG remains deferred to
+//! Stage 3+ per ADR-0006.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use blake3::Hasher;
 
+use crate::error::CoreError;
 use crate::types::AccountState;
 
 const DEPTH: usize = 256;
@@ -183,21 +187,36 @@ impl SparseMerkleTrie {
     /// Sibling proof for `account` (or its absence) against `self.root()`.
     ///
     /// Returns `DEPTH` (256) sibling hashes, level 0 (near root) first.
-    pub fn prove(&self, address: &str, account: &AccountState) -> Vec<[u8; 32]> {
+    ///
+    /// Validates that the claimed `account` matches the trie state
+    /// (BUG-S0-016): a non-empty account must be present with the matching
+    /// leaf hash; a pruned account (`balance == 0 && nonce == 0`) must be
+    /// absent. Mismatch → [`CoreError::ProofAccountMismatch`].
+    pub fn prove(
+        &self,
+        address: &str,
+        account: &AccountState,
+    ) -> Result<Vec<[u8; 32]>, CoreError> {
         let key = account_key_hash(address);
-        let leaf = if account.balance == 0 && account.nonce == 0 {
+        let is_pruned = account.balance == 0 && account.nonce == 0;
+        let expected_leaf = if is_pruned {
             EMPTY_HASH
         } else {
             account_leaf_hash(&key, account)
         };
-        let _ = leaf;
+
+        match self.leaves.get(&key) {
+            None if is_pruned => {}
+            Some(leaf) if !is_pruned && *leaf == expected_leaf => {}
+            _ => return Err(CoreError::ProofAccountMismatch),
+        }
 
         let mut sorted: Vec<(&[u8; 32], &[u8; 32])> = self.leaves.iter().collect();
         sorted.sort_by_key(|(k, _)| **k);
 
         let mut proof = Vec::with_capacity(DEPTH);
         collect_siblings(&sorted, &key, 0, 0, sorted.len(), &mut proof);
-        proof
+        Ok(proof)
     }
 
     /// Verify `account` (or its absence) against `root` using `proof`.
@@ -361,7 +380,7 @@ mod tests {
         assert_eq!(trie.root(), root);
 
         for (addr, account) in &accounts {
-            let proof = trie.prove(addr, account);
+            let proof = trie.prove(addr, account).unwrap();
             assert_eq!(proof.len(), DEPTH);
             assert!(
                 SparseMerkleTrie::verify_proof(&root, addr, account, &proof),
@@ -380,7 +399,7 @@ mod tests {
         }
 
         let absent = make_account(0, 0);
-        let proof = trie.prove("nobody", &absent);
+        let proof = trie.prove("nobody", &absent).unwrap();
         assert_eq!(proof.len(), DEPTH);
         assert!(SparseMerkleTrie::verify_proof(&root, "nobody", &absent, &proof));
     }
@@ -395,7 +414,7 @@ mod tests {
         }
 
         let account = make_account(1000, 0);
-        let mut proof = trie.prove("alice", &account);
+        let mut proof = trie.prove("alice", &account).unwrap();
         proof[10][0] ^= 0xff;
         assert!(!SparseMerkleTrie::verify_proof(&root, "alice", &account, &proof));
     }
@@ -411,7 +430,7 @@ mod tests {
 
         let real = make_account(1000, 0);
         let fake = make_account(999, 0);
-        let proof = trie.prove("alice", &real);
+        let proof = trie.prove("alice", &real).unwrap();
         assert!(!SparseMerkleTrie::verify_proof(&root, "alice", &fake, &proof));
     }
 
@@ -422,6 +441,62 @@ mod tests {
         let account = make_account(1000, 0);
         assert!(!SparseMerkleTrie::verify_proof(&root, "alice", &account, &[]));
         assert!(!SparseMerkleTrie::verify_proof(&root, "alice", &account, &[[0u8; 32]; 10]));
+    }
+
+    /// BUG-S0-016: prove() validates the claimed account against the trie.
+    #[test]
+    fn prove_wrong_balance_returns_err() {
+        let mut trie = SparseMerkleTrie::new();
+        trie.insert("alice", &make_account(1000, 0));
+        let wrong = make_account(999, 0);
+        assert!(matches!(
+            trie.prove("alice", &wrong),
+            Err(CoreError::ProofAccountMismatch)
+        ));
+    }
+
+    /// BUG-S0-016: prove() validates the claimed account against the trie.
+    #[test]
+    fn prove_wrong_nonce_returns_err() {
+        let mut trie = SparseMerkleTrie::new();
+        trie.insert("alice", &make_account(1000, 0));
+        let wrong = make_account(1000, 1);
+        assert!(matches!(
+            trie.prove("alice", &wrong),
+            Err(CoreError::ProofAccountMismatch)
+        ));
+    }
+
+    /// BUG-S0-016: a pruned (0,0) account must be absent from the trie.
+    #[test]
+    fn prove_pruned_when_present_returns_err() {
+        let mut trie = SparseMerkleTrie::new();
+        trie.insert("alice", &make_account(1000, 0));
+        let pruned = make_account(0, 0);
+        assert!(matches!(
+            trie.prove("alice", &pruned),
+            Err(CoreError::ProofAccountMismatch)
+        ));
+    }
+
+    /// BUG-S0-016: a non-empty account must be present in the trie.
+    #[test]
+    fn prove_nonempty_when_absent_returns_err() {
+        let trie = SparseMerkleTrie::new();
+        let claimed = make_account(100, 0);
+        assert!(matches!(
+            trie.prove("nobody", &claimed),
+            Err(CoreError::ProofAccountMismatch)
+        ));
+    }
+
+    /// BUG-S0-016: a pruned account for an absent address is valid.
+    #[test]
+    fn prove_absent_account_ok() {
+        let mut trie = SparseMerkleTrie::new();
+        trie.insert("alice", &make_account(1000, 0));
+        let absent = make_account(0, 0);
+        assert!(trie.prove("nobody", &absent).is_ok());
     }
 
     #[test]
@@ -468,11 +543,11 @@ mod tests {
             prop_assert_eq!(trie.root(), root);
 
             let alice = make_account(balance, nonce);
-            let proof = trie.prove("alice", &alice);
+            let proof = trie.prove("alice", &alice).unwrap();
             prop_assert!(SparseMerkleTrie::verify_proof(&root, "alice", &alice, &proof));
 
             let bob = make_account(balance / 2 + 1, 1);
-            let proof_bob = trie.prove("bob", &bob);
+            let proof_bob = trie.prove("bob", &bob).unwrap();
             prop_assert!(SparseMerkleTrie::verify_proof(&root, "bob", &bob, &proof_bob));
         }
     }

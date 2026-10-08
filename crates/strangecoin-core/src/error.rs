@@ -36,6 +36,8 @@ pub enum CoreError {
     TxRootMismatch { expected: [u8; 32], got: [u8; 32] },
     #[error("witness verification failed")]
     WitnessVerificationFailed,
+    #[error("proof account mismatch: claimed account not found in trie state")]
+    ProofAccountMismatch,
     #[error("invalid address checksum")]
     InvalidAddressChecksum,
     #[error("invalid address format: {reason}")]

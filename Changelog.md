@@ -11,8 +11,9 @@
 - **Breaking:** `state_root` computation changed. Historical roots from the flat 256-slot structure are invalid. Reset LevelDB or resync testnet nodes. Wire `FORMAT_VERSION` unchanged (4).
 - `crates/strangecoin-core/src/state/verkle.rs` **removed** → `sparse_merkle.rs`
 - `SparseMerkleTrie`: binary tree, depth 256 over `blake3(address)` (256-bit key, MSB-first); leaf = `blake3(key‖balance‖nonce)`; internal = `blake3(left‖right)`; empty subtree hashes precomputed
-- Closes **BUG-S0-011** (not a Verkle — now honestly an SMT), **BUG-S0-014** (no collisions for n ≤ 2^256; sweep 256→512 test), **BUG-S0-016** (`prove(address, account)` consumes `account`; pruned `(0,0)` proven by empty slot)
+- Closes **BUG-S0-011** (not a Verkle — now honestly an SMT), **BUG-S0-014** (no collisions for n ≤ 2^256; sweep 256→512 test), **BUG-S0-016** (`prove(address, account)` validates the claimed account against the trie; mismatch → `CoreError::ProofAccountMismatch`; pruned `(0,0)` proven by empty slot)
 - Proof: 256 sibling hashes (8 KiB), one per level; `verify_proof` walks leaf→root
+- **Breaking API (BUG-S0-016):** `SparseMerkleTrie::prove` → `Result<Vec<[u8; 32]>, CoreError>`; `build_witness` → `Result<StateWitness, CoreError>`
 - ADR-0006 amended: honest SMT decision; true Verkle/KZG deferred to Stage 3+
 - API surface unchanged for callers: `compute_state_root`, `root_after`, `build_witness`, `verify_block_stateless`
 - Tests: unit + proptest (1000+ accounts unique root; 256→512 sweep; prove/verify round-trip; tamper rejection); full workspace green

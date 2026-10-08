@@ -83,7 +83,7 @@ fn build_witness_then_verify() {
     genesis_block.state_root = genesis_root;
 
     let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)], &after_genesis);
-    let witness = build_witness(&after_genesis, &block);
+    let witness = build_witness(&after_genesis, &block).unwrap();
 
     let result = verify_block_stateless(&genesis_root, &block, &witness);
     assert!(result.is_ok());
@@ -108,7 +108,7 @@ fn tampered_balance_rejected() {
     genesis_block.state_root = genesis_root;
 
     let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)], &after_genesis);
-    let mut witness = build_witness(&after_genesis, &block);
+    let mut witness = build_witness(&after_genesis, &block).unwrap();
 
     if let Some(alice_proof) = witness.proofs.get_mut("alice") {
         alice_proof.balance = 999999;
@@ -144,7 +144,7 @@ fn witness_contains_only_touched_addresses() {
     genesis_block.state_root = genesis_root;
 
     let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)], &after_genesis);
-    let witness = build_witness(&after_genesis, &block);
+    let witness = build_witness(&after_genesis, &block).unwrap();
 
     assert!(witness.proofs.contains_key("alice"));
     assert!(witness.proofs.contains_key("bob"));
@@ -165,7 +165,7 @@ fn coinbase_only_block_witness() {
     genesis_block.state_root = genesis_root;
 
     let block = transfer_block(1, vec![], &after_genesis);
-    let witness = build_witness(&after_genesis, &block);
+    let witness = build_witness(&after_genesis, &block).unwrap();
 
     assert!(witness.proofs.contains_key("miner"));
     assert_eq!(witness.proofs.len(), 1);
@@ -193,7 +193,7 @@ fn wrong_parent_root_rejected() {
     genesis_block.state_root = genesis_root;
 
     let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)], &after_genesis);
-    let witness = build_witness(&after_genesis, &block);
+    let witness = build_witness(&after_genesis, &block).unwrap();
 
     let wrong_root = [0xff; 32];
     let result = verify_block_stateless(&wrong_root, &block, &witness);
@@ -217,12 +217,12 @@ fn chain_of_blocks_witness() {
     genesis_block.state_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
     let block1 = transfer_block(1, vec![transfer("alice", "bob", 500, 1)], &after_genesis);
-    let witness1 = build_witness(&after_genesis, &block1);
+    let witness1 = build_witness(&after_genesis, &block1).unwrap();
     verify_block_stateless(&genesis_block.state_root, &block1, &witness1).unwrap();
 
     let after_block1 = apply_block(&after_genesis, &block1).unwrap();
     let block2 = transfer_block(2, vec![transfer("bob", "charlie", 200, 1)], &after_block1);
-    let witness2 = build_witness(&after_block1, &block2);
+    let witness2 = build_witness(&after_block1, &block2).unwrap();
     verify_block_stateless(&block1.state_root, &block2, &witness2).unwrap();
 }
 
@@ -244,7 +244,7 @@ proptest! {
         genesis_block.state_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
         let block = transfer_block(1, vec![transfer("alice", "bob", amount, 1)], &after_genesis);
-        let witness = build_witness(&after_genesis, &block);
+        let witness = build_witness(&after_genesis, &block).unwrap();
 
         let result = verify_block_stateless(&genesis_block.state_root, &block, &witness);
         prop_assert!(result.is_ok(), "witness verification failed: {:?}", result.err());
@@ -267,7 +267,7 @@ proptest! {
         genesis_block.state_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
         let block = transfer_block(1, vec![transfer("alice", "bob", amount, 1)], &after_genesis);
-        let mut witness = build_witness(&after_genesis, &block);
+        let mut witness = build_witness(&after_genesis, &block).unwrap();
 
         if let Some(proof) = witness.proofs.get_mut("alice") {
             proof.balance ^= 1;

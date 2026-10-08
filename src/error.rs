@@ -119,6 +119,11 @@ impl From<strangecoin_core::CoreError> for StrangecoinError {
             strangecoin_core::CoreError::WitnessVerificationFailed => {
                 StrangecoinError::ConfigError("witness verification failed".to_string())
             }
+            strangecoin_core::CoreError::ProofAccountMismatch => {
+                StrangecoinError::ConfigError(
+                    "proof account mismatch: claimed account not found in trie state".to_string(),
+                )
+            }
             strangecoin_core::CoreError::InvalidAddressChecksum => {
                 StrangecoinError::ConfigError("invalid address checksum".to_string())
             }

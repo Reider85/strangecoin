@@ -20,7 +20,7 @@ pub struct StateWitness {
     pub proofs: HashMap<String, AccountProof>,
 }
 
-pub fn build_witness(pre_state: &State, block: &Block) -> StateWitness {
+pub fn build_witness(pre_state: &State, block: &Block) -> Result<StateWitness, CoreError> {
     let pre_state_root = SparseMerkleTrie::compute_root(&pre_state.balances);
     let trie = build_trie(pre_state);
 
@@ -30,7 +30,7 @@ pub fn build_witness(pre_state: &State, block: &Block) -> StateWitness {
     for addr in &touched {
         let account = pre_state.balances.get(addr).cloned().unwrap_or_default();
         let key_hash = *blake3::hash(addr.as_bytes()).as_bytes();
-        let proof = trie.prove(addr, &account);
+        let proof = trie.prove(addr, &account)?;
         proofs.insert(
             addr.clone(),
             AccountProof {
@@ -42,10 +42,10 @@ pub fn build_witness(pre_state: &State, block: &Block) -> StateWitness {
         );
     }
 
-    StateWitness {
+    Ok(StateWitness {
         pre_state_root,
         proofs,
-    }
+    })
 }
 
 pub fn verify_block_stateless(

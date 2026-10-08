@@ -56,7 +56,7 @@ Depth-256 binary branching uses every bit of the key:
 
 - No collisions for any n ≤ 2^256 (BUG-S0-014 closed).
 - Proof size 256 × 32 B = 8 KiB — same order as the old 255-hash depth-1 proofs, not a regression.
-- `prove(address, account)` consumes `account` (BUG-S0-016 closed): the leaf hash is derived from the claimed balance/nonce; a pruned account (`balance == 0 && nonce == 0`) is proven by `EMPTY_HASH`.
+- `prove(address, account)` consumes `account` (BUG-S0-016 closed): the claimed account is validated against the trie; a pruned account (`balance == 0 && nonce == 0`) is proven by `EMPTY_HASH`; mismatch returns `CoreError::ProofAccountMismatch`.
 
 True Verkle (KZG polynomial commitments over BLS12-381, multi-opening) remains **deferred to Stage 3+**: no mature I/O-free Rust crate exists (see Alternatives), and the heavy `ark-*` stack is out of scope for the 0-I/O core at Stage 1.5.
 
@@ -94,7 +94,7 @@ True Verkle (KZG polynomial commitments over BLS12-381, multi-opening) remains *
 - `root_after(state, block)` stays a pure function — 0 I/O, proptest-friendly
 - Deterministic: same state → same root regardless of insertion order (sorted leaves)
 - Collision-free for any realistic account count (full 256-bit key)
-- `prove`/`verify_proof` actually verify the account (BUG-S0-016)
+- `prove`/`verify_proof` actually verify the account (BUG-S0-016): `prove` validates the claimed account against the trie and returns `Result`
 - Foundation for S1-P07 StateWitness; interface unchanged (`compute_state_root`)
 
 ### Negative
@@ -116,5 +116,5 @@ True Verkle (KZG polynomial commitments over BLS12-381, multi-opening) remains *
 - Empty subtree hashes: precomputed table `empty_subtree[depth]` for depth 0..=256
 - Root computation: sort leaves by key, recursive partition on each bit, O(n · 256) with precomputed empty hashes
 - `compute_root(accounts: &HashMap<String, AccountState>) -> [u8; 32]`
-- Accounts with `balance == 0 && nonce == 0` are pruned (not inserted); `prove` for such an account emits `EMPTY_HASH` as the leaf
+- Accounts with `balance == 0 && nonce == 0` are pruned (not inserted); `prove` for such an account emits `EMPTY_HASH` as the leaf and validates absence; a claimed account that does not match the trie returns `CoreError::ProofAccountMismatch`
 - Tests: proptest 1000+ accounts → unique deterministic roots; 256→512 account sweep → no collision; prove/verify round-trip; tampered proof rejected
