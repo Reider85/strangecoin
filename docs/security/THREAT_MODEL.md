@@ -676,7 +676,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | **Stage** | S1-P06 (ADR-0006), enforced в S1-P12 block_executor |
 | **Residual Risk** | Низкий при enforced commitments. Средний для узлов, работающих с zero root (light/SPV-режимы Stage 2+) — они не защищены от подделки state. Verkle witness-доказательства для stateless validation ещё не в сетевом протоколе (S1-P07 — только API ядра). |
 | **Monitoring** | Мониторинг StateRootMismatch reject rate; alert при всплеске (potential attack или desync). |
-| **Код** | `crates/strangecoin-core/src/state/verkle.rs`, `state.rs` (root_after), `src/blockchain/block_executor.rs` |
+| **Код** | `crates/strangecoin-core/src/state/sparse_merkle.rs`, `state/mod.rs` (root_after), `src/blockchain/block_executor.rs` |
 | **Тест** | `tests/state_root.rs::tampered_state_root_is_rejected_by_the_second_node`, `::committed_state_root_chain_passes_on_a_second_node`; core `tests/state_root.rs::tamper_state_root_rejected`, `::proptest_root_consistent`; `tests/block_executor.rs::rejects_state_root_that_does_not_match_the_applied_state` |
 
 ---
@@ -888,7 +888,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | V-32 (Grant blocks) | consensus (validate_chain) + Config flag | `tests/grant_flag.rs` (4 теста), `tests/emission.rs`, `tests/block_executor.rs::grant_block_needs_the_opt_in_flag` | ✅ S1-P01 |
 | V-33 (Release pipeline) | CI/CD (D03 fix) | gap: GitHub Actions run не верифицирован | ⚠️ gap (→ S1-P22 first tag) |
 | V-34 (Headers-first poisoning) | network/sync.rs + consensus | `tests/sync_headers.rs` (3 теста) | ✅ S1-P16 |
-| V-35 (state_root manipulation) | core state/verkle + block_executor | `tests/state_root.rs` (3), core `tests/state_root.rs` (incl. tamper, proptest) | ✅ S1-P06/P12/P19 |
+| V-35 (state_root manipulation) | core state/sparse_merkle + block_executor | `tests/state_root.rs` (3), core `tests/state_root.rs` (incl. tamper, proptest) | ✅ S1-P06/P12/P19 |
 | V-36 (Witness spoofing) | core state/witness | core `tests/witness.rs` (tamper, proptest, minimality) | ✅ S1-P07 |
 | V-37 (tx_root manipulation) | core serialize + block_executor | core `tests/merkle.rs`, `tests/block_executor.rs::rejects_wrong_tx_root` | ✅ S1-P08/P12 |
 | V-38 (consensus_version downgrade) | governance/scip + consensus_manager | `tests/consensus_version.rs` (3), `tests/block_executor.rs::rejects_stale_consensus_version` | ✅ S1-P05/P12 |

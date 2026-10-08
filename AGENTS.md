@@ -39,7 +39,7 @@ crates/strangecoin-core/src/     # pure core, 0 I/O
 ├── types.rs          # Block, BlockHeader, Transaction, AccountState
 ├── serialize.rs      # canonical binary (blake3), FORMAT_VERSION, merkle_root
 ├── consensus.rs      # chain_id, U256, retarget, MTP, CURRENT_CONSENSUS_VERSION
-├── state/            # inner (apply/unapply), verkle.rs, witness.rs
+├── state/            # inner (apply/unapply), sparse_merkle.rs, witness.rs
 ├── economics/        # emission.rs, fee_market.rs (Stage 5 stub)
 ├── governance/       # scip.rs (SCIP + activation height)
 ├── chain_selector.rs # fork choice: work → timestamp → hash
