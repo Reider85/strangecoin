@@ -4,7 +4,7 @@
 
 **Status**: In progress  
 **Date**: 2026-10-08  
-**Prompts**: S1.5-P02 (BUG-S0-011/014/016), S1.5-P04 (BUG-S0-018/019), S1.5-P01 (BUG-S0-015)
+**Prompts**: S1.5-P02 (BUG-S0-011/014/016), S1.5-P04 (BUG-S0-018/019), S1.5-P01 (BUG-S0-015), BUG-S0-020
 
 ### BUG-S0-011: Sparse Merkle Tree replaces flat «Verkle»
 
@@ -37,11 +37,19 @@
 - THREAT_MODEL V-31: residual updated (code closed; ops obligation via SCIP-0001); Readme testnet-only warning
 - **Not in this change (ops gate):** generating the replacement offline key and updating `EXPECTED_GENESIS_HASH` — required before any public/mainnet launch
 
+### BUG-S0-020: P02 skeletons actualized — GUI moved out of lib.rs
+
+- **gui:** `WalletApp` + `impl eframe::App` (~440 lines of egui UI) **moved** from `lib.rs` into feature-gated `src/gui/mod.rs` (490 lines); new `gui::run(app)` owns `spawn_blocking` + `eframe::run_native` (ADR-0007). `lib.rs` has zero eframe/WalletApp references; gui feature compiles (`cargo check/clippy --features gui` — first compile-check of this feature in repo CI history)
+- **api:** stale `// TODO: P15+ наполнит` replaced with documented Stage 4 deferral (ROADMAP3 Dev-experience; ARCHITECT3 §3.10/§10.6 `crates/strangecoin-api`)
+- **cli / governance:** not stubs — `--print-genesis-hash` works (BUG-S0-009); governance is a re-export of core SCIP (S1-P05); both got clarifying doc comments
+- Closes **BUG-S0-020**; retro-stage0.md untouched per BUG-S0-006 precedent (decisions live in the bugfix catalog)
+
 ### Not in this change
 
 - BUG-S0-012 (`state_root == [0;32]` opt-out) — still open, S1.5-P03
 - BUG-S0-013 (`verify_block_stateless` post-root) — still open, S1.5-P03
 - ~~BUG-S0-015 (genesis key)~~ — **fixed 2026-10-08** (S1.5-P01); ops residual tracked in SCIP-0001
+- ~~BUG-S0-020 (P02 skeletons)~~ — **fixed 2026-10-08**; Stage 4 will still move api/gui into dedicated crates (ARCHITECT3 §10.6)
 
 ## 1.1.0 — Stage 1 (core extracted + Verkle + headers-first)
 

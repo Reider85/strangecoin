@@ -1,3 +1,8 @@
+//! CLI-команды P02. Сегодня поддерживается `--print-genesis-hash`
+//! (BUG-S0-009: машинно-читаемый stdout). Полный CLI-спек ARCHITECT3 §3.10
+//! (`--balance`, `--send --sign`, `sc block`, `sc node start`, faucet, …)
+//! деферрен вместе с api-слоем до Stage 4 (BUG-S0-020).
+
 use crate::consensus;
 use std::io::Write;
 use std::path::Path;

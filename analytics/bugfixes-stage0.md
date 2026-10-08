@@ -54,7 +54,7 @@
 | BUG-S0-017 | B | H | S1-P15 / P05 | Легаси base64-адреса в БД требуют миграции — путь миграции реализован, но нет теста на исходную БД с base64 | fixed (2026-10-08): `tests/address_migration.rs` — open-path coverage: balances base64→bech32, legacy-chain reset, reopen idempotency. Тест вскрыл production-дефект: `save_state` писал `HashMap<String, AccountState>`, а `load_persisted_state` читал только `HashMap<String, u64>` — балансы молча терялись при каждом reload БД; читатель теперь принимает оба формата (fallback на Stage 0 u64) |
 | BUG-S0-018 | C | H | S1-P13 | `blockchain_facade.rs` — 1578 строк, фактически стал новым монолитом внутри `src/blockchain/` | fixed (2026-10-08): S1.5-P04 — facade **361 строка** (serde/wire в `chain_selector.rs`); logic moved to block_executor/state_cache/chain_selector |
 | BUG-S0-019 | C | H | S1-P13 | `chain_selector.rs` в монолите — 2 строки re-export, не собственная реализация; КГ «5 компонентов» формален | fixed (2026-10-08): component owns try_adopt_candidate, chain_has_tx, headers/blocks helpers; pure algorithm stays in core (strangler) |
-| BUG-S0-020 | C | M | P02 / S1-P02 | Скелет модулей P02 в `src/` остался витриной — большинство модулей `src/{api,cli,gui,governance}/mod.rs` пустые | open |
+| BUG-S0-020 | C | M | P02 / S1-P02 | Скелет модулей P02 в `src/` остался витриной — большинство модулей `src/{api,cli,gui,governance}/mod.rs` пустые | fixed (2026-10-08): GUI (~440 строк egui + `WalletApp` + `run()`) перенесён из `lib.rs` в `src/gui/mod.rs`; `api` — документированный деферр Stage 4 (ARCHITECT3 §3.10/§10.6); `cli` — рабочий `--print-genesis-hash` + doc-comment; `governance` — re-export core SCIP (не заглушка) |
 | BUG-S0-021 | C | M | S1-P10 | Legacy-threads майнинга и сети не перенесены в async — tokio введён, но новые подсистемы не покрыты | open |
 | BUG-S0-022 | C | M | S1-P12 | Прямые мутации `balances` вне `state_cache` в части legacy-путей — `rg`-аудит не формализован как gate | open |
 | BUG-S0-023 | D | H | S1-P19 | Fuzz-target `canonical_decode` — прогон 10 секунд вместо 10 минут; cargo-fuzz не запущен | open |
@@ -755,6 +755,14 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 2. Реализовать `src/api/mod.rs` в Stage 2 (JSON-RPC eth_*-совместимый слой — Stage 4 по ROADMAP).
 3. Зафиксировать в retro §4.1 обновление: «скелет P02 актуализирован в Stage 1 для consensus/serialize/economics/governance; api/gui остаются заглушками до Stage 2/4».
 
+**Исправление (2026-10-08):**
+- **gui**: реальный egui-клиент (`WalletApp` + `impl eframe::App` ~440 строк) **перенесён** из `lib.rs` в feature-gated `src/gui/mod.rs` (файл-заглушка заменена); добавлен `gui::run(app)` — `spawn_blocking` + `eframe::run_native` (ADR-0007) вынесены из `run_async`. В `lib.rs` не осталось ссылок на eframe/WalletApp. Доказательство: `src/gui/mod.rs` **490 строк**; `lib.rs` 1844 → **~1380 строк**.
+- **api**: устаревший TODO (`// TODO: P15+ наполнит`; P15 был Config, не API) заменён документированным деферром в Stage 4 (ROADMAP3 Dev-experience; ARCHITECT3 §3.10/§10.6 `crates/strangecoin-api`). Рекомендация бага «Stage 2» исправлена — eth_* там Stage 4.
+- **cli**: не заглушка с Stage 0 — рабочий `print_genesis_hash()` (BUG-S0-009); добавлен doc-comment о деферре полного CLI-спека (ARCHITECT3 §3.10) до Stage 4.
+- **governance**: не заглушка — re-export `strangecoin_core::governance::*` (SCIP, S1-P05, BUG-S0-006); добавлен doc-comment.
+- **Retro §4.1 не изменяется** — прецедент BUG-S0-006: решения фиксируются в каталоге, retro остаётся frozen snapshot.
+- Верификация: `cargo check` / `cargo check --features gui` (первый compile-check gui-фичи в CI-истории репо), `cargo clippy --all-targets -- -D warnings` ± gui, `cargo test --workspace` (все зелёные), `cargo run -- --print-genesis-hash` → `0xcf3440b9…`.
+
 ---
 
 ### BUG-S0-021 — Legacy-threads майнинга и сети не перенесены в async
@@ -1099,7 +1107,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | ~~BUG-S0-016~~ | ~~`prove()` не использует `account`~~ (**fixed 2026-10-08**: SMT prove consumes account) |
 | ~~BUG-S0-017~~ | ~~Нет теста миграции base64 → bech32~~ (**fixed 2026-10-08**: `tests/address_migration.rs` — open-path миграция + idempotency; заодно исправлен format-mismatch `save_state`/`load_persisted_state` — балансы терялись при reload) |
 | ~~BUG-S0-019~~ | ~~`chain_selector.rs` — 2 строки re-export~~ (**fixed 2026-10-08**: S1.5-P04 — adoption + wire helpers in component) |
-| BUG-S0-020 | Скелет P02 — заглушки api/gui |
+| ~~BUG-S0-020~~ | ~~Скелет P02 — заглушки api/gui~~ (**fixed 2026-10-08**: GUI перенесён из lib.rs в `src/gui/mod.rs` (490 строк, feature-gated, `gui::run`); api = задокументированный деферр Stage 4; cli/governance — не заглушки) |
 | BUG-S0-021 | Legacy-threads майнинга |
 | BUG-S0-022 | Прямые мутации balances — нет gate |
 | BUG-S0-023 | Fuzz — 10 сек вместо 10 мин |
