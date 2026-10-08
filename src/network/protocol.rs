@@ -4,6 +4,7 @@ use strangecoin_core::serialize::{
     deserialize_block, deserialize_header, serialize_block, serialize_header, HEADER_WIRE_LEN,
 };
 use strangecoin_core::types::{Block, BlockHeader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub const MAX_MESSAGE_SIZE: usize = 32 * 1024 * 1024;
 pub const MAX_BLOCK_SIZE: usize = 4 * 1024 * 1024;
@@ -280,6 +281,47 @@ pub fn write_length_prefixed<W: std::io::Write>(
     data.extend_from_slice(payload);
     writer.write_all(&data)?;
     writer.flush()?;
+    Ok(())
+}
+
+/// Async variant of [`read_length_prefixed`] over tokio I/O (ADR-0011).
+/// Same wire format: 4-byte BE length prefix + payload, `MAX_MESSAGE_SIZE` cap.
+pub async fn read_length_prefixed_async<R: AsyncReadExt + Unpin>(
+    reader: &mut R,
+) -> Result<Vec<u8>, StrangecoinError> {
+    let mut len_buf = [0u8; 4];
+    reader.read_exact(&mut len_buf).await.map_err(|_| {
+        StrangecoinError::IoError(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "length prefix",
+        ))
+    })?;
+    let len = u32::from_be_bytes(len_buf) as usize;
+    if len > MAX_MESSAGE_SIZE {
+        return Err(StrangecoinError::SizeLimitExceeded("message"));
+    }
+    let mut buf = vec![0u8; len];
+    reader.read_exact(&mut buf).await.map_err(|_| {
+        StrangecoinError::IoError(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "message body",
+        ))
+    })?;
+    Ok(buf)
+}
+
+/// Async variant of [`write_length_prefixed`] over tokio I/O (ADR-0011).
+pub async fn write_length_prefixed_async<W: AsyncWriteExt + Unpin>(
+    writer: &mut W,
+    payload: &[u8],
+) -> Result<(), StrangecoinError> {
+    if payload.len() > MAX_MESSAGE_SIZE {
+        return Err(StrangecoinError::SizeLimitExceeded("message"));
+    }
+    let mut data = (payload.len() as u32).to_be_bytes().to_vec();
+    data.extend_from_slice(payload);
+    writer.write_all(&data).await?;
+    writer.flush().await?;
     Ok(())
 }
 

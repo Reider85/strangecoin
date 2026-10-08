@@ -121,7 +121,7 @@ S1-P22 itself: `68e358f` — annotated tag `v1.1.0-stage1` placed on this commit
 |------|-------|--------------|
 | WASM VM / wasmi / gas / precompiles | 1.5 | `VmExecutor` trait only (`core/src/vm/traits.rs`) |
 | Noise Protocol, Erlay, gossip opts | 2 | — |
-| Network crate migration; mining threads → async | 2 | ADR-0007 notes legacy threads stay |
+| Network crate migration (`strangecoin-net`) | 2 | ARCHITECT3 §10.4; async migration of mining/P2P done earlier — ADR-0011 (2026-10-08, BUG-S0-021) |
 | RocksDB migration | 3 | ADR-0008 plan |
 | EncryptedMempool, EIP-1559, AA, MEV | 5 | fee_market.rs stub |
 | PoS / Casper / BLS12-381 | 7 | consensus_manager enum readiness |

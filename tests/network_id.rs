@@ -21,16 +21,21 @@ fn connect(port: u16) -> TcpStream {
     TcpStream::connect(to_addr(port)).expect("server must accept connections")
 }
 
-#[test]
-fn foreign_network_id_is_rejected_and_banned() {
+// ADR-0011: the server accepts on the test runtime; multi_thread keeps it
+// live while the test thread drives blocking raw-TcpStream clients.
+// The NETWORK_TEST_LOCK std Mutex is held for the whole test by design
+// (cross-binary serialization); nothing on this runtime contends for it.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test(flavor = "multi_thread")]
+async fn foreign_network_id_is_rejected_and_banned() {
     let _net_lock = NETWORK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let port = random_port();
-    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<ChainSnapshot>();
+    let (sync_tx, _sync_rx) = tokio::sync::mpsc::unbounded_channel::<ChainSnapshot>();
 
     let dir = TestDir::new("netid_server");
     let bc = Arc::new(create_test_blockchain(dir.path()));
     let (mut node, _peers) = create_node_for_test(&bc, port);
-    node.start_server(port, sync_tx);
+    node.start_server(port, sync_tx).await;
 
     // 1. Foreign network: the server bans the peer and closes the connection
     //    without answering anything else.

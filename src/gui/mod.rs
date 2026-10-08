@@ -25,7 +25,7 @@ pub struct WalletApp {
     pub mining_progress: Arc<Mutex<Option<String>>>,
     pub progress_rx: Option<mpsc::Receiver<String>>,
     pub status_rx: Option<mpsc::Receiver<String>>,
-    pub mining_tx: mpsc::Sender<MiningTask>,
+    pub mining_tx: tokio::sync::mpsc::UnboundedSender<MiningTask>,
     pub last_repaint: f64,
     pub new_wallet_password: String,
     pub data_dir: PathBuf,
@@ -373,6 +373,7 @@ if let Some(ref progress_rx) = self.progress_rx {
                             return;
                         }
                         info!("Попытка отправки задачи майнинга");
+                        // UnboundedSender::send is synchronous (ADR-0011).
                         if let Err(e) = self.mining_tx.send(MiningTask {
                             blockchain,
                             transaction,

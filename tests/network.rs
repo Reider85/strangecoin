@@ -62,8 +62,13 @@ fn three_instances_receive_transfer() {
     assert_balances(&instances, &addrs, &expected);
 }
 
-#[test]
-fn real_network_three_nodes() {
+// ADR-0011: the servers accept on the test runtime — multi_thread keeps them
+// live while the test thread drives sync rounds and mining.
+// The NETWORK_TEST_LOCK std Mutex is held for the whole test by design
+// (cross-binary serialization); nothing on this runtime contends for it.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_network_three_nodes() {
     let _net_lock = NETWORK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ports = [random_port(), random_port(), random_port()];
     let exe_dir = std::env::current_exe()
@@ -78,7 +83,7 @@ fn real_network_three_nodes() {
         ports[0], ports[1], ports[2]
     );
     std::fs::write(&net_path, net_content).unwrap();
-    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<ChainSnapshot>();
+    let (sync_tx, _sync_rx) = tokio::sync::mpsc::unbounded_channel::<ChainSnapshot>();
     let dirs: Vec<TestDir> = (0..3)
         .map(|i| TestDir::new(&format!("net_{}", i)))
         .collect();
@@ -86,7 +91,7 @@ fn real_network_three_nodes() {
     for (i, p) in ports.iter().enumerate() {
         let bc = Arc::new(create_test_blockchain(dirs[i].path()));
         let (mut node, _peers) = create_node_for_test(&bc, *p);
-        node.start_server(*p, sync_tx.clone());
+        node.start_server(*p, sync_tx.clone()).await;
         nodes.push((node, bc));
     }
 
@@ -113,9 +118,9 @@ fn real_network_three_nodes() {
                 &node.rate_limiter,
                 node.inbox.clone(),
             );
-            sync_node.sync_blockchain();
+            sync_node.sync_blockchain().await;
         }
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     }
 
     for i in 1..3 {
@@ -142,9 +147,9 @@ fn real_network_three_nodes() {
                 &node.rate_limiter,
                 node.inbox.clone(),
             );
-            sync_node.sync_blockchain();
+            sync_node.sync_blockchain().await;
         }
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 
     let expected = [10000u64 - 1000, 1000, 0];
@@ -161,8 +166,9 @@ fn real_network_three_nodes() {
     }
 }
 
-#[test]
-fn real_network_fast_registration_race() {
+#[allow(clippy::await_holding_lock)]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_network_fast_registration_race() {
     let _net_lock = NETWORK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ports = [random_port(), random_port(), random_port()];
     let exe_dir = std::env::current_exe()
@@ -177,7 +183,7 @@ fn real_network_fast_registration_race() {
         ports[0], ports[1], ports[2]
     );
     std::fs::write(&net_path, net_content).unwrap();
-    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<ChainSnapshot>();
+    let (sync_tx, _sync_rx) = tokio::sync::mpsc::unbounded_channel::<ChainSnapshot>();
     let dirs: Vec<TestDir> = (0..3)
         .map(|i| TestDir::new(&format!("fast_{}", i)))
         .collect();
@@ -185,7 +191,7 @@ fn real_network_fast_registration_race() {
     for (i, p) in ports.iter().enumerate() {
         let bc = Arc::new(create_test_blockchain(dirs[i].path()));
         let (mut node, peers) = create_node_for_test(&bc, *p);
-        node.start_server(*p, sync_tx.clone());
+        node.start_server(*p, sync_tx.clone()).await;
         nodes.push((node, bc, peers));
     }
 
@@ -217,9 +223,9 @@ fn real_network_fast_registration_race() {
                 &node.rate_limiter,
                 node.inbox.clone(),
             );
-            sync_node.sync_blockchain();
+            sync_node.sync_blockchain().await;
         }
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
 
     // ChainSelector (work → timestamp → hash) converged all nodes onto one
@@ -249,9 +255,9 @@ fn real_network_fast_registration_race() {
                 &node.rate_limiter,
                 node.inbox.clone(),
             );
-            sync_node.sync_blockchain();
+            sync_node.sync_blockchain().await;
         }
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
 
     for i in 0..3 {

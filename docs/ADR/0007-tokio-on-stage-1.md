@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted — **частично superseded ADR-0011** (2026-10-08): гибридная модель закрыта, mining worker и P2P-стек перенесены на tokio (BUG-S0-021). Остаются в силе: точка входа `#[tokio::main]`, `spawn_blocking` для GUI/mining, EventBus-мост, ctrlc-fallback.
 
 ## Context
 

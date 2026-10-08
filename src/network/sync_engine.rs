@@ -1,21 +1,20 @@
 //! SyncEngine (ADR-0010): the single consumer of incoming data.
 //!
-//! Network handler threads and the sync loop never touch blockchain write
+//! Network handlers and the sync loop never touch blockchain write
 //! paths — they parse, dedupe and `try_send` into the bounded inbox channels
 //! ([`Inbox`]); this task drains those channels strictly sequentially and
 //! performs the whole validate → apply → announce pipeline against
 //! [`BlockchainFacade`]. Read-serving (`GET_HEADERS` / `GET_BLOCKS` /
 //! `GET_BLOCKCHAIN`) stays on read-only facade calls and does not pass
-//! through here.
+//! through here. (ADR-0011: handlers are tokio tasks, not threads.)
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::sync::mpsc::{error::TrySendError, Receiver, Sender};
+use tokio::sync::mpsc::{error::TrySendError, Receiver, Sender, UnboundedSender};
 use tracing::{debug, info, warn};
 
 use crate::blockchain::BlockchainFacade;
@@ -207,7 +206,7 @@ pub struct SyncEngine {
     blocks_rx: Receiver<Incoming>,
     facade: Arc<BlockchainFacade>,
     bus: Arc<EventBus>,
-    sync_tx: std_mpsc::Sender<ChainSnapshot>,
+    sync_tx: UnboundedSender<ChainSnapshot>,
     shutdown: Arc<AtomicBool>,
 }
 
@@ -264,7 +263,7 @@ impl SyncEngine {
 pub fn spawn(
     facade: Arc<BlockchainFacade>,
     bus: Arc<EventBus>,
-    sync_tx: std_mpsc::Sender<ChainSnapshot>,
+    sync_tx: UnboundedSender<ChainSnapshot>,
     shutdown: Arc<AtomicBool>,
     rate_limiter: Arc<RateLimiter>,
 ) -> Inbox {
@@ -309,7 +308,7 @@ pub fn spawn(
 fn process(
     facade: &BlockchainFacade,
     bus: &EventBus,
-    sync_tx: &std_mpsc::Sender<ChainSnapshot>,
+    sync_tx: &UnboundedSender<ChainSnapshot>,
     msg: Incoming,
 ) {
     match msg {
@@ -391,7 +390,7 @@ fn process(
 fn announce(
     facade: &BlockchainFacade,
     bus: &EventBus,
-    sync_tx: &std_mpsc::Sender<ChainSnapshot>,
+    sync_tx: &UnboundedSender<ChainSnapshot>,
     old_tip: String,
 ) {
     let height = facade.chain_len() as u64 - 1;

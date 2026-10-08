@@ -5,23 +5,27 @@
 mod common;
 
 use common::*;
-use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use strangecoin::events::NodeEvent;
 use strangecoin::network::sync_engine::Incoming;
 use strangecoin::{ChainSnapshot, Transaction};
 
-#[test]
-fn three_subscribers_each_receive_live_node_events() {
+// ADR-0011: the server and the SyncEngine now run on the test runtime —
+// multi_thread keeps them live while the test thread blocks on crossbeam.
+// The NETWORK_TEST_LOCK std Mutex is held for the whole test by design
+// (cross-binary serialization); nothing on this runtime contends for it.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test(flavor = "multi_thread")]
+async fn three_subscribers_each_receive_live_node_events() {
     let _net_lock = NETWORK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let port = random_port();
-    let (sync_tx, _sync_rx) = mpsc::channel::<ChainSnapshot>();
+    let (sync_tx, _sync_rx) = tokio::sync::mpsc::unbounded_channel::<ChainSnapshot>();
 
     let dir = TestDir::new("events_live");
     let bc = Arc::new(create_test_blockchain(dir.path()));
     let (mut node, _peers) = create_node_for_test(&bc, port);
-    node.start_server(port, sync_tx);
+    node.start_server(port, sync_tx).await;
 
     // Three independent subscribers on the node's live bus.
     let bus = node.event_bus.clone();

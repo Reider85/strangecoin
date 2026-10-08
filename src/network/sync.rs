@@ -1,4 +1,4 @@
-//! Headers-first sync (S1-P16).
+//! Headers-first sync (S1-P16; ADR-0011: network loop is async).
 //!
 //! Three layers, deliberately separable so the logic is testable without TCP:
 //!
@@ -16,17 +16,18 @@
 //!    path over the bodies. Headers lay out the route; they never weaken it.
 
 use std::collections::{HashMap, HashSet};
-use std::io::{BufReader, BufWriter, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::io::AsyncWriteExt;
+use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
-use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 use crate::error::StrangecoinError;
 use crate::network::protocol::{self, MAX_BLOCKS_BATCH, MAX_HEADERS_BATCH};
+use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 use strangecoin_core::consensus::{cumulative_work_headers, validate_header_pow};
 use strangecoin_core::serialize::block_hash;
 use strangecoin_core::types::{Block, BlockHeader};
@@ -261,7 +262,7 @@ pub struct SyncOutcome {
     pub peer_tip_height: u64,
 }
 
-/// One headers-first sync round against a single peer.
+/// One headers-first sync round against a single peer (ADR-0011: async).
 ///
 /// Errors mean "this peer could not serve headers-first" — the caller falls
 /// back to the legacy `GET_BLOCKCHAIN` path (pre-P16 peers never answer a
@@ -269,21 +270,21 @@ pub struct SyncOutcome {
 ///
 /// The loop is pure download + plan: it never touches the local chain beyond
 /// reading `local_chain`, so handing the returned candidate to the engine is
-/// the caller's job.
-pub fn sync_headers_first(
+/// the caller's job. Every socket operation is bounded by
+/// [`SYNC_IO_TIMEOUT`]; the shutdown flag is polled between phases.
+pub async fn sync_headers_first(
     addr: SocketAddr,
     network_id: u32,
     local_chain: &[Block],
     shutdown: &Arc<AtomicBool>,
 ) -> Result<SyncOutcome, StrangecoinError> {
-    let stream = TcpStream::connect_timeout(&addr, SYNC_CONNECT_TIMEOUT)?;
-    stream.set_read_timeout(Some(SYNC_IO_TIMEOUT))?;
-    stream.set_write_timeout(Some(SYNC_IO_TIMEOUT))?;
-    let mut writer = BufWriter::new(stream.try_clone()?);
-    let mut reader = BufReader::new(stream);
-
-    writer.write_all(&protocol::encode_hello(network_id))?;
-    writer.flush()?;
+    // tokio has no TcpStream::connect_timeout — bound the connect itself.
+    let mut stream = timeout(SYNC_CONNECT_TIMEOUT, tokio::net::TcpStream::connect(&addr))
+        .await
+        .map_err(|_| timeout_error())??;
+    timeout(SYNC_IO_TIMEOUT, stream.write_all(&protocol::encode_hello(network_id)))
+        .await
+        .map_err(|_| timeout_error())??;
 
     // Local view taken once: this round plans against one consistent snapshot.
     let local_hashes: HashSet<String> = local_chain.iter().map(|b| b.hash.clone()).collect();
@@ -295,8 +296,12 @@ pub fn sync_headers_first(
         if shutdown.load(Ordering::Relaxed) {
             return Err(shutdown_error());
         }
-        protocol::write_length_prefixed(&mut writer, &protocol::encode_get_headers(from_height))?;
-        let payload = protocol::read_length_prefixed(&mut reader)?;
+        with_io_timeout(protocol::write_length_prefixed_async(
+            &mut stream,
+            &protocol::encode_get_headers(from_height),
+        ))
+        .await?;
+        let payload = with_io_timeout(protocol::read_length_prefixed_async(&mut stream)).await?;
         let headers = protocol::parse_headers(&payload)?;
         if headers.is_empty() {
             break;
@@ -350,8 +355,12 @@ pub fn sync_headers_first(
             })?;
             requested.push(arr);
         }
-        protocol::write_length_prefixed(&mut writer, &protocol::encode_get_blocks(&requested)?)?;
-        let payload = protocol::read_length_prefixed(&mut reader)?;
+        with_io_timeout(protocol::write_length_prefixed_async(
+            &mut stream,
+            &protocol::encode_get_blocks(&requested)?,
+        ))
+        .await?;
+        let payload = with_io_timeout(protocol::read_length_prefixed_async(&mut stream)).await?;
         let batch = protocol::parse_blocks(&payload)?;
         let expected: HashSet<String> = chunk.iter().map(|h| h.hash.clone()).collect();
         let mut seen: HashSet<String> = HashSet::new();
@@ -400,6 +409,23 @@ pub fn sync_headers_first(
         blocks_downloaded,
         peer_tip_height,
     })
+}
+
+/// Bound one framing operation by [`SYNC_IO_TIMEOUT`] (ADR-0011: replaces
+/// the per-stream `set_read_timeout`/`set_write_timeout` pair).
+async fn with_io_timeout<T>(
+    fut: impl std::future::Future<Output = Result<T, StrangecoinError>>,
+) -> Result<T, StrangecoinError> {
+    timeout(SYNC_IO_TIMEOUT, fut)
+        .await
+        .map_err(|_| timeout_error())?
+}
+
+fn timeout_error() -> StrangecoinError {
+    StrangecoinError::IoError(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        "sync I/O timeout",
+    ))
 }
 
 fn shutdown_error() -> StrangecoinError {

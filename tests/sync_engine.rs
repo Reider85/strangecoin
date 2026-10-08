@@ -3,7 +3,6 @@ mod common;
 use common::*;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -63,7 +62,7 @@ fn concurrent_candidates_race_through_one_engine() {
     }
     assert_eq!(fork_c.chain_len(), 5);
 
-    let (sync_tx, _sync_rx) = mpsc::channel::<ChainSnapshot>();
+    let (sync_tx, _sync_rx) = tokio::sync::mpsc::unbounded_channel::<ChainSnapshot>();
     let shutdown = Arc::new(AtomicBool::new(false));
     // Subscribe before spawning the engine so no event can be missed.
     let events = main.event_bus().subscribe();

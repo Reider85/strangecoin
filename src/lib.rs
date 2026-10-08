@@ -1,17 +1,17 @@
 use std::fs;
-use std::io::Write;
-use std::io::{BufReader, BufWriter};
 use std::net::SocketAddr;
-use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc, Arc, Mutex,
 };
-use std::thread;
 use std::time::{Duration, Instant, SystemTime};
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpListener;
+use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, error, info, warn};
 
+use crate::network::sync::SYNC_IO_TIMEOUT;
 use crate::network::sync_engine::{Inbox, Incoming};
 
 pub mod address;
@@ -65,11 +65,13 @@ pub struct Node {
     pub blockchain: Arc<BlockchainFacade>,
     pub peers: Arc<Mutex<Vec<String>>>,
     pub address: String,
-    pub sync_rx: mpsc::Receiver<ChainSnapshot>,
+    pub sync_rx: tokio::sync::mpsc::UnboundedReceiver<ChainSnapshot>,
     pub rate_limiter: Arc<crate::network::RateLimiter>,
     pub shutdown: Arc<AtomicBool>,
-    pub listener: Arc<Mutex<Option<TcpListener>>>,
-    pub sync_thread_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// Accept-loop task handle; aborted on Drop (ADR-0011).
+    pub accept_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// Sync-polling task handle; aborted on Drop.
+    pub sync_task_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pub event_bus: Arc<events::EventBus>,
     pub network_id: u32,
     /// SyncEngine inbox, spawned by `start_server` (ADR-0010). `None` until
@@ -88,7 +90,7 @@ pub enum MiningStatus {
 impl Node {
     fn new(
         address: String,
-        mining_rx: mpsc::Receiver<MiningTask>,
+        mining_rx: tokio::sync::mpsc::UnboundedReceiver<MiningTask>,
         port: u16,
         event_bus: Arc<events::EventBus>,
         network_id: u32,
@@ -104,179 +106,32 @@ impl Node {
             blockchain: blockchain.clone(),
             peers: peers.clone(),
             address: address.clone(),
-            sync_rx: mpsc::channel().1,
+            sync_rx: tokio::sync::mpsc::unbounded_channel().1,
             rate_limiter: rate_limiter.clone(),
             shutdown: shutdown.clone(),
-            listener: Arc::new(Mutex::new(None)),
-            sync_thread_handle: Arc::new(Mutex::new(None)),
+            accept_task: Arc::new(Mutex::new(None)),
+            sync_task_handle: Arc::new(Mutex::new(None)),
             event_bus: event_bus.clone(),
             network_id,
             // Spawned by `start_server`.
             inbox: None,
         };
-        thread::spawn(move || {
-            info!("Фоновый поток майнинга запущен");
-            let mut mining_count = 0;
-            let mut total_duration = 0.0;
-            let mut successful_mining = 0;
-            while let Ok(task) = mining_rx.recv() {
-                mining_count += 1;
-                info!(mining_count, "Получена задача майнинга");
-                task.event_bus.publish(events::NodeEvent::MiningStarted);
-                let progress_tx_clone = task.progress_tx.clone();
-                let status_tx_clone = task.status_tx.clone();
-                let start_time = SystemTime::now();
-                let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    debug!(mining_count, ?task.transaction, "Проверка транзакции");
-                    match task.blockchain.apply_tx(task.transaction.clone()) {
-                        Ok(_) => {
-                            info!(
-                                mining_count,
-                                "Транзакция успешно добавлена, начало майнинга"
-                            );
-                            task.event_bus.publish(events::NodeEvent::TxAccepted {
-                                txid: hex::encode(strangecoin_core::serialize::txid(
-                                    &task.transaction,
-                                )),
-                            });
-                            task.blockchain
-                                .mine_block(progress_tx_clone, &task.shutdown)
-                        }
-                        Err(e) => {
-                            warn!(mining_count, error = %e, "Транзакция отклонена, попытка майнить существующие транзакции");
-                            task.event_bus.publish(events::NodeEvent::TxRejected {
-                                txid: hex::encode(strangecoin_core::serialize::txid(
-                                    &task.transaction,
-                                )),
-                                reason: format!("{}", e),
-                            });
-                            if !task.blockchain.mempool_is_empty() {
-                                task.blockchain
-                                    .mine_block(progress_tx_clone, &task.shutdown)
-                            } else {
-                                let _ = task.progress_tx.send(format!(
-                                    "Ошибка: Нет транзакций для майнинга в задаче {}",
-                                    mining_count
-                                ));
-                                warn!(mining_count, "Нет транзакций для майнинга");
-                                None
-                            }
-                        }
-                    }
-                })) {
-                    Ok(result) => result,
-                    Err(panic) => {
-                        let err_msg = match panic.downcast_ref::<&str>() {
-                            Some(s) => s.to_string(),
-                            None => format!("Неизвестная паника: {:?}", panic),
-                        };
-                        error!(mining_count, error = %err_msg, "Паника в потоке майнинга");
-                        let _ = task.progress_tx.send(format!(
-                            "Паника в потоке майнинга {}: {}",
-                            mining_count, err_msg
-                        ));
-                        None
-                    }
-                };
-                let duration = SystemTime::now()
-                    .duration_since(start_time)
-                    .unwrap()
-                    .as_secs_f64();
-                total_duration += duration;
-                info!(mining_count, duration_secs = duration, result = ?result, "Майнинг завершен");
-                task.event_bus.publish(events::NodeEvent::MiningFinished);
-                let mut attempts = 0;
-                let max_attempts = 5;
-                let mut status_updated = false;
-                while attempts < max_attempts {
-                    if let Ok(mut mining_status) = task.mining_status.try_lock() {
-                        *mining_status = match result {
-                            Some(block) => {
-                                successful_mining += 1;
-                                info!(mining_count, ?block, "Майнинг успешен, блок добавлен");
-                                let _ = status_tx_clone.send(format!(
-                                    "Транзакция отправлена, блок добавлен: {:?}",
-                                    block
-                                ));
-                                let mut node_temp = Node {
-                                    blockchain: task.blockchain.clone(),
-                                    peers: peers.clone(),
-                                    address: address.clone(),
-                                    sync_rx: mpsc::channel().1,
-                                    rate_limiter: task.rate_limiter.clone(),
-                                    shutdown: Arc::new(AtomicBool::new(false)),
-                                    listener: Arc::new(Mutex::new(None)),
-                                    sync_thread_handle: Arc::new(Mutex::new(None)),
-                                    event_bus: task.event_bus.clone(),
-                                    network_id: crate::consensus::CHAIN_ID_REGTEST,
-                                    inbox: task.inbox.clone(),
-                                };
-                                node_temp.sync_blockchain();
-                                task.event_bus.publish(events::NodeEvent::BlockApplied {
-                                    height: block.index,
-                                    hash: block.hash.clone(),
-                                });
-                                MiningStatus::Completed(Some(block))
-                            }
-                            None => {
-                                warn!(mining_count, "Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут");
-                                let _ = status_tx_clone.send("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут".to_string());
-                                MiningStatus::Failed("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут".to_string())
-                            }
-                        };
-                        status_updated = true;
-                        debug!(mining_count, ?mining_status, "Статус майнинга обновлён");
-                        break;
-                    } else {
-                        attempts += 1;
-                        debug!(
-                            attempts,
-                            mining_count, "Попытка обновить статус майнинга не удалась"
-                        );
-                        std::thread::sleep(Duration::from_millis(500));
-                    }
-                }
-                if !status_updated {
-                    warn!(
-                        mining_count,
-                        max_attempts, "Не удалось обновить статус майнинга после попыток"
-                    );
-                    let _ = task.progress_tx.send(format!(
-                        "Ошибка: Не удалось обновить статус майнинга {} после {} попыток",
-                        mining_count, max_attempts
-                    ));
-                    let _ = status_tx_clone.send(format!(
-                        "Ошибка: Не удалось обновить статус майнинга после {} попыток",
-                        max_attempts
-                    ));
-                }
-                if mining_count > 0 {
-                    let avg_duration = total_duration / mining_count as f64;
-                    debug!(
-                        mining_count,
-                        avg_duration_secs = avg_duration,
-                        "Среднее время майнинга"
-                    );
-                    debug!(
-                        mining_count,
-                        successful = successful_mining,
-                        failed = mining_count - successful_mining,
-                        "Статистика майнинга"
-                    );
-                }
-            }
-            info!("Фоновый поток майнинга завершен");
-        });
+        // ADR-0011: the mining worker is a tokio task. It is spawned with the
+        // same dual-mode rule as `sync_engine::spawn`: on a runtime it becomes
+        // a task; without one (plain `#[test]` threads) it runs on a dedicated
+        // thread with its own current-thread runtime.
+        spawn_mining_worker(
+            mining_rx,
+            peers.clone(),
+            address.clone(),
+            network_id,
+        );
         node
     }
 
     pub fn discover_peers(&mut self) {
         let start_time = SystemTime::now();
-        let mut peers = self
-            .peers
-            .lock()
-            .expect("Не удалось захватить Mutex для peers");
-        peers.clear();
+        // ADR-0011: file I/O deliberately outside the peers lock.
         let exe_path =
             std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
         let exe_dir = exe_path
@@ -296,20 +151,28 @@ impl Node {
             .parse::<u16>()
             .unwrap_or(0);
         let empty_peers: Vec<serde_json::Value> = vec![];
-        let peer_list = network_config["peers"].as_array().unwrap_or(&empty_peers);
-        for peer in peer_list {
-            if let Some(peer_str) = peer.as_str() {
-                let peer_port = peer_str
+        let discovered: Vec<String> = network_config["peers"]
+            .as_array()
+            .unwrap_or(&empty_peers)
+            .iter()
+            .filter_map(|peer| peer.as_str())
+            .filter(|peer_str| {
+                peer_str
                     .split(':')
                     .next_back()
                     .unwrap_or("0")
                     .parse::<u16>()
-                    .unwrap_or(0);
-                if peer_port != own_port {
-                    peers.push(peer_str.to_string());
-                }
-            }
-        }
+                    .unwrap_or(0)
+                    != own_port
+            })
+            .map(|peer_str| peer_str.to_string())
+            .collect();
+        let mut peers = self
+            .peers
+            .lock()
+            .expect("Не удалось захватить Mutex для peers");
+        peers.clear();
+        peers.extend(discovered);
         let duration = SystemTime::now()
             .duration_since(start_time)
             .unwrap()
@@ -319,19 +182,16 @@ impl Node {
 
     pub fn add_peer(&mut self, address: String) -> bool {
         let start_time = SystemTime::now();
-        let mut peers = self
+        if self
             .peers
             .lock()
-            .expect("Не удалось захватить Mutex для peers");
-        if peers.contains(&address) {
-            let duration = SystemTime::now()
-                .duration_since(start_time)
-                .unwrap()
-                .as_secs_f64();
-            debug!(peer = %address, duration_secs = duration, "Пир уже существует, добавление не требуется");
+            .expect("Не удалось захватить Mutex для peers")
+            .contains(&address)
+        {
+            debug!(peer = %address, "Пир уже существует, добавление не требуется");
             return false;
         }
-        peers.push(address.clone());
+        // ADR-0011: file I/O deliberately outside the peers lock.
         let exe_path =
             std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
         let exe_dir = exe_path
@@ -353,6 +213,14 @@ impl Node {
                 .expect("Ошибка сериализации network.json");
             fs::write(&network_path, network_content).expect("Ошибка записи в network.json");
         }
+        let mut peers = self
+            .peers
+            .lock()
+            .expect("Не удалось захватить Mutex для peers");
+        if peers.contains(&address) {
+            return false;
+        }
+        peers.push(address.clone());
         let duration = SystemTime::now()
             .duration_since(start_time)
             .unwrap()
@@ -373,7 +241,13 @@ impl Node {
         None
     }
 
-    pub fn start_server(&mut self, port: u16, sync_tx: mpsc::Sender<ChainSnapshot>) {
+    /// Start the P2P server (ADR-0011: async accept loop + per-connection
+    /// tokio tasks; replaces the legacy thread-per-connection model).
+    pub async fn start_server(
+        &mut self,
+        port: u16,
+        sync_tx: UnboundedSender<ChainSnapshot>,
+    ) {
         let start_time = SystemTime::now();
         // ADR-0010: the engine spawned here is the only adopter of incoming
         // data; the handlers below only enqueue into its inbox.
@@ -395,211 +269,60 @@ impl Node {
         let shutdown = Arc::clone(&self.shutdown);
         let network_id = self.network_id;
         let address = format!("0.0.0.0:{}", port);
-        let listener = TcpListener::bind(&address).expect("Не удалось запустить сервер");
-        // Store listener for graceful shutdown
-        *self.listener.lock().unwrap() =
-            Some(listener.try_clone().expect("Failed to clone listener"));
-        thread::spawn(move || {
-            for stream in listener.incoming() {
+        let listener = TcpListener::bind(&address)
+            .await
+            .expect("Не удалось запустить сервер");
+        let accept_task = tokio::spawn(async move {
+            loop {
                 if shutdown.load(Ordering::Relaxed) {
                     info!("Shutdown signal received, stopping server");
                     break;
                 }
-                match stream {
-                    Ok(stream) => {
+                // Accept with a tick-bounded timeout so the shutdown flag is
+                // observed even when no connection arrives (the legacy
+                // listener.incoming() only woke on a connection).
+                let accepted =
+                    match tokio::time::timeout(SYNC_TICK, listener.accept()).await {
+                        Ok(result) => result,
+                        Err(_) => continue,
+                    };
+                match accepted {
+                    Ok((stream, peer_addr)) => {
                         let blockchain = Arc::clone(&blockchain);
                         let inbox = inbox.clone();
                         let rate_limiter = Arc::clone(&rate_limiter);
-                        let peer_addr = stream.peer_addr().ok();
-                        let rate_limiter_clone = Arc::clone(&rate_limiter);
                         let shutdown = Arc::clone(&shutdown);
-                        let _ = stream.set_read_timeout(Some(
-                            crate::network::sync::SYNC_IO_TIMEOUT,
+                        tokio::spawn(handle_connection(
+                            stream,
+                            peer_addr,
+                            blockchain,
+                            inbox,
+                            rate_limiter,
+                            shutdown,
+                            network_id,
                         ));
-                        
-                        thread::spawn(move || {
-                            if let Some(addr) = peer_addr {
-                                if let Err(e) = rate_limiter_clone.check(addr) {
-                                    warn!(peer = %addr, error = %e, "Rate limit exceeded, closing connection");
-                                    return;
-                                }
-                            }
-                            let mut reader = BufReader::new(stream.try_clone().unwrap());
-                            let mut writer = BufWriter::new(stream);
-                            
-                            // First message must be HELLO handshake
-                            let hello_bytes =
-                                match crate::network::protocol::read_length_prefixed(&mut reader) {
-                                    Ok(bytes) => bytes,
-                                    Err(e) => {
-                                        warn!(error = %e, "Failed to read HELLO handshake");
-                                        return;
-                                    }
-                                };
-                            let peer_network_id = match crate::network::protocol::parse_hello(&hello_bytes) {
-                                Ok(id) => id,
-                                Err(e) => {
-                                    warn!(error = %e, "Invalid HELLO message from peer");
-                                    return;
-                                }
-                            };
-                            
-                            if peer_network_id != network_id {
-                                warn!(
-                                    peer = %peer_addr.map_or_else(|| "unknown".to_string(), |addr| addr.to_string()),
-                                    expected = network_id,
-                                    got = peer_network_id,
-                                    "Peer rejected: foreign network_id"
-                                );
-                                if let Some(addr) = peer_addr {
-                                    rate_limiter_clone.ban(addr);
-                                }
-                                return;
-                            }
-                            
-                            debug!(peer_network_id, "HELLO handshake successful");
-
-                            let blockchain = Arc::clone(&blockchain);
-                            use crate::network::protocol as proto;
-
-                            // S1-P16: one connection serves many requests —
-                            // a headers-first client iterates GET_HEADERS /
-                            // GET_BLOCKS on a single session. The read
-                            // timeout bounds idle handler threads; a client
-                            // that just closes surfaces as EOF here.
-                            loop {
-                                if shutdown.load(Ordering::Relaxed) {
-                                    break;
-                                }
-                                let request_bytes =
-                                    match proto::read_length_prefixed(&mut reader) {
-                                        Ok(bytes) => bytes,
-                                        Err(e) => {
-                                            debug!(error = %e, "Соединение закрыто после HELLO");
-                                            break;
-                                        }
-                                    };
-
-                                // Binary requests (S1-P16) — checked before
-                                // the UTF-8 text path; text messages start
-                                // with ASCII letters, tags with 0x01..=0x04.
-                                match request_bytes.first() {
-                                    Some(&proto::MSG_GET_HEADERS) => {
-                                        let payload = match proto::parse_get_headers(&request_bytes)
-                                        {
-                                            Ok(from_height) => {
-                                                let headers = blockchain.headers_from_height(
-                                                    from_height,
-                                                    proto::MAX_HEADERS_BATCH,
-                                                );
-                                                proto::encode_headers(&headers).map_err(|e| {
-                                                    warn!(error = %e, "Не удалось закодировать заголовки");
-                                                })
-                                            }
-                                            Err(e) => {
-                                                warn!(error = %e, "Некорректный GET_HEADERS");
-                                                Err(())
-                                            }
-                                        };
-                                        match payload {
-                                            Ok(payload) => {
-                                                if let Err(e) =
-                                                    proto::write_length_prefixed(&mut writer, &payload)
-                                                {
-                                                    debug!(error = %e, "Не удалось отправить заголовки");
-                                                    break;
-                                                }
-                                            }
-                                            Err(()) => break,
-                                        }
-                                        continue;
-                                    }
-                                    Some(&proto::MSG_GET_BLOCKS) => {
-                                        let payload = match proto::parse_get_blocks(&request_bytes)
-                                        {
-                                            Ok(hashes) => {
-                                                let blocks = blockchain.blocks_by_hashes(
-                                                    &hashes,
-                                                    proto::MAX_BLOCKS_BATCH,
-                                                );
-                                                proto::encode_blocks(&blocks).map_err(|e| {
-                                                    warn!(error = %e, "Не удалось закодировать блоки");
-                                                })
-                                            }
-                                            Err(e) => {
-                                                warn!(error = %e, "Некорректный GET_BLOCKS");
-                                                Err(())
-                                            }
-                                        };
-                                        match payload {
-                                            Ok(payload) => {
-                                                if let Err(e) =
-                                                    proto::write_length_prefixed(&mut writer, &payload)
-                                                {
-                                                    debug!(error = %e, "Не удалось отправить блоки");
-                                                    break;
-                                                }
-                                            }
-                                            Err(()) => break,
-                                        }
-                                        continue;
-                                    }
-                                    _ => {}
-                                }
-
-                                let request = String::from_utf8_lossy(&request_bytes).to_string();
-                                debug!(request = %request, "Получен запрос");
-
-                                if request == "GET_BLOCKCHAIN" {
-                                    let response = blockchain.to_wire_json();
-                                    let length = response.len() as u32;
-                                    let mut data = length.to_be_bytes().to_vec();
-                                    data.extend_from_slice(response.as_bytes());
-                                    if writer.write_all(&data).is_ok() {
-                                        writer.flush().ok();
-                                        info!("Отправлен блокчейн клиенту");
-                                    }
-                                } else if request.starts_with("UPDATE_BLOCKCHAIN:") {
-                                    let blockchain_data =
-                                        request.strip_prefix("UPDATE_BLOCKCHAIN:").unwrap_or("");
-                                    let temp_blockchain: BlockchainDeserialize =
-                                        match serde_json::from_str(blockchain_data) {
-                                            Ok(data) => data,
-                                            Err(e) => {
-                                                error!(error = %e, "Ошибка десериализации данных блокчейна");
-                                                return;
-                                            }
-                                        };
-                                    // ADR-0010: parse and enqueue only — the
-                                    // SyncEngine validates and adopts.
-                                    inbox.push_inbound(Incoming::CandidateChain {
-                                        chain: temp_blockchain.chain,
-                                        balances: Some(temp_blockchain.balances),
-                                        mempool_txs: temp_blockchain.mempool_txs,
-                                        pending_transactions: temp_blockchain
-                                            .pending_transactions,
-                                        difficulty: temp_blockchain.difficulty,
-                                        from: peer_addr,
-                                    });
-                                }
-                            }
-                        });
                     }
                     Err(e) => error!(error = %e, "Ошибка обработки входящего соединения"),
                 }
             }
         });
+        *self.accept_task.lock().unwrap() = Some(accept_task);
         let duration = SystemTime::now()
             .duration_since(start_time)
             .unwrap()
             .as_secs_f64();
         info!(port, duration_secs = duration, "Сервер запущен");
     }
-    pub fn sync_blockchain(&mut self) {
+    /// One outgoing sync round against all known peers (ADR-0011: async —
+    /// gossip push, headers-first and the legacy fallback all await instead
+    /// of blocking a thread or runtime worker).
+    pub async fn sync_blockchain(&mut self) {
         let start_time = SystemTime::now();
         let rate_limiter = Arc::clone(&self.rate_limiter);
         let shutdown = Arc::clone(&self.shutdown);
         let inbox = self.inbox.clone();
+        let network_id = self.network_id;
+        let blockchain = Arc::clone(&self.blockchain);
         self.discover_peers();
         let peers: Vec<String> = self
             .peers
@@ -626,31 +349,31 @@ impl Node {
                 warn!(peer = %peer, error = %e, "Rate limit exceeded for outgoing request, skipping peer");
                 continue;
             }
-            let current_chain_length = self.blockchain.chain_len();
+            let current_chain_length = blockchain.chain_len();
             debug!(current_chain_length, "Текущая длина chain");
             if current_chain_length <= 1 {
                 info!("Новый узел, только получение данных, отправка цепочки запрещена");
             } else {
                 // Отправка UPDATE_BLOCKCHAIN with HELLO handshake
-                if let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
-                    let mut writer = BufWriter::new(stream.try_clone().unwrap());
-
+                let gossip = tokio::time::timeout(
+                    Duration::from_secs(1),
+                    tokio::net::TcpStream::connect(&addr),
+                )
+                .await;
+                if let Ok(Ok(mut stream)) = gossip {
                     // Send HELLO handshake first
-                    let hello_data = crate::network::protocol::encode_hello(self.network_id);
-                    if writer.write_all(&hello_data).is_err() {
+                    let hello_data = crate::network::protocol::encode_hello(network_id);
+                    if stream.write_all(&hello_data).await.is_err() {
                         warn!(peer = %peer, "Failed to send HELLO handshake");
                         continue;
                     }
-                    writer.flush().ok();
 
                     // Send UPDATE_BLOCKCHAIN
-                    let response = self.blockchain.to_wire_json();
+                    let response = blockchain.to_wire_json();
                     let message = format!("UPDATE_BLOCKCHAIN:{}", response);
-                    let length = message.len() as u32;
-                    let mut data = length.to_be_bytes().to_vec();
+                    let mut data = (message.len() as u32).to_be_bytes().to_vec();
                     data.extend_from_slice(message.as_bytes());
-                    if writer.write_all(&data).is_ok() {
-                        writer.flush().ok();
+                    if stream.write_all(&data).await.is_ok() {
                         info!(peer = %peer, message_len = data.len(), "Блокчейн отправлен узлу");
                     }
                 }
@@ -662,13 +385,15 @@ impl Node {
             // skips the fallback; "nothing better" does not (mempool gossip
             // lives there). ADR-0010: the candidate is adopted by the engine.
             let mut candidate_via_headers = false;
-            let local_chain = self.blockchain.chain_snapshot();
+            let local_chain = blockchain.chain_snapshot();
             match crate::network::sync::sync_headers_first(
                 addr,
-                self.network_id,
+                network_id,
                 &local_chain,
                 &shutdown,
-            ) {
+            )
+            .await
+            {
                 Ok(outcome) => {
                     if let Some(candidate) = outcome.candidate {
                         candidate_via_headers = true;
@@ -685,7 +410,7 @@ impl Node {
                                     balances: None,
                                     mempool_txs: Vec::new(),
                                     pending_transactions: Vec::new(),
-                                    difficulty: self.blockchain.difficulty(),
+                                    difficulty: blockchain.difficulty(),
                                     from: Some(addr),
                                 });
                             }
@@ -715,31 +440,38 @@ impl Node {
             }
 
             // Запрос GET_BLOCKCHAIN with HELLO handshake
-            if let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut writer = BufWriter::new(stream);
-
+            let legacy = tokio::time::timeout(
+                Duration::from_secs(1),
+                tokio::net::TcpStream::connect(&addr),
+            )
+            .await;
+            if let Ok(Ok(mut stream)) = legacy {
                 // Send HELLO handshake first
-                let hello_data = crate::network::protocol::encode_hello(self.network_id);
-                if writer.write_all(&hello_data).is_err() {
+                let hello_data = crate::network::protocol::encode_hello(network_id);
+                if stream.write_all(&hello_data).await.is_err() {
                     warn!(peer = %peer, "Failed to send HELLO handshake");
                     continue;
                 }
-                writer.flush().ok();
 
                 let message = "GET_BLOCKCHAIN";
-                let length = message.len() as u32;
-                let mut data = length.to_be_bytes().to_vec();
+                let mut data = (message.len() as u32).to_be_bytes().to_vec();
                 data.extend_from_slice(message.as_bytes());
-                if writer.write_all(&data).is_ok() {
-                    writer.flush().ok();
-
-                    let response_bytes = match crate::network::protocol::read_length_prefixed(
-                        &mut reader,
-                    ) {
-                        Ok(bytes) => bytes,
-                        Err(e) => {
+                if stream.write_all(&data).await.is_ok() {
+                    // The legacy path had no read timeout at all; ADR-0011
+                    // bounds it with the same SYNC_IO_TIMEOUT as headers-first.
+                    let response_bytes = match tokio::time::timeout(
+                        SYNC_IO_TIMEOUT,
+                        crate::network::protocol::read_length_prefixed_async(&mut stream),
+                    )
+                    .await
+                    {
+                        Ok(Ok(bytes)) => bytes,
+                        Ok(Err(e)) => {
                             warn!(peer = %peer, error = %e, "Failed to read length-prefixed response");
+                            continue;
+                        }
+                        Err(_) => {
+                            warn!(peer = %peer, "Timeout reading GET_BLOCKCHAIN response");
                             continue;
                         }
                     };
@@ -798,16 +530,17 @@ impl Drop for Node {
         // Signal shutdown
         self.shutdown.store(true, Ordering::Relaxed);
 
-        // Close listener
-        if let Ok(mut listener) = self.listener.lock() {
-            if let Some(l) = listener.take() {
-                drop(l);
-                info!("TCP listener closed");
+        // Abort the accept-loop task (ADR-0011: replaces the stored-listener
+        // close; the loop also polls the flag every SYNC_TICK).
+        if let Ok(mut handle) = self.accept_task.lock() {
+            if let Some(h) = handle.take() {
+                h.abort();
+                info!("Accept task aborted");
             }
         }
 
         // Cancel the sync task (tokio cancellation is abort-based, not blocking)
-        if let Ok(mut handle) = self.sync_thread_handle.lock() {
+        if let Ok(mut handle) = self.sync_task_handle.lock() {
             if let Some(h) = handle.take() {
                 h.abort();
                 info!("Sync task aborted");
@@ -816,6 +549,433 @@ impl Drop for Node {
 
         info!("Network node shutdown complete");
     }
+}
+
+// ---------------------------------------------------- connection handling
+
+/// Serve one inbound peer connection (ADR-0011: runs as a tokio task; the
+/// legacy version was a dedicated `std::thread` per TCP stream).
+///
+/// Read-serving only: headers/blocks/json requests touch the facade through
+/// read-only calls; `UPDATE_BLOCKCHAIN:` is parsed and enqueued into the
+/// SyncEngine inbox (ADR-0010) — adoption happens in the engine.
+async fn handle_connection(
+    mut stream: tokio::net::TcpStream,
+    peer_addr: SocketAddr,
+    blockchain: Arc<BlockchainFacade>,
+    inbox: Inbox,
+    rate_limiter: Arc<crate::network::RateLimiter>,
+    shutdown: Arc<AtomicBool>,
+    network_id: u32,
+) {
+    if let Err(e) = rate_limiter.check(peer_addr) {
+        warn!(peer = %peer_addr, error = %e, "Rate limit exceeded, closing connection");
+        return;
+    }
+
+    // First message must be HELLO handshake (bounded by SYNC_IO_TIMEOUT).
+    let hello_bytes = match tokio::time::timeout(
+        SYNC_IO_TIMEOUT,
+        crate::network::protocol::read_length_prefixed_async(&mut stream),
+    )
+    .await
+    {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(e)) => {
+            warn!(error = %e, "Failed to read HELLO handshake");
+            return;
+        }
+        Err(_) => {
+            warn!(peer = %peer_addr, "Timeout reading HELLO handshake");
+            return;
+        }
+    };
+    let peer_network_id = match crate::network::protocol::parse_hello(&hello_bytes) {
+        Ok(id) => id,
+        Err(e) => {
+            warn!(error = %e, "Invalid HELLO message from peer");
+            return;
+        }
+    };
+
+    if peer_network_id != network_id {
+        warn!(
+            peer = %peer_addr,
+            expected = network_id,
+            got = peer_network_id,
+            "Peer rejected: foreign network_id"
+        );
+        rate_limiter.ban(peer_addr);
+        return;
+    }
+
+    debug!(peer_network_id, "HELLO handshake successful");
+
+    use crate::network::protocol as proto;
+
+    // S1-P16: one connection serves many requests — a headers-first client
+    // iterates GET_HEADERS / GET_BLOCKS on a single session. The read
+    // timeout bounds idle handlers; a client that just closes surfaces as
+    // EOF here.
+    loop {
+        if shutdown.load(Ordering::Relaxed) {
+            break;
+        }
+        let request_bytes = match tokio::time::timeout(
+            SYNC_IO_TIMEOUT,
+            proto::read_length_prefixed_async(&mut stream),
+        )
+        .await
+        {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(e)) => {
+                debug!(error = %e, "Соединение закрыто после HELLO");
+                break;
+            }
+            Err(_) => {
+                debug!(peer = %peer_addr, "Timeout ожидания запроса после HELLO");
+                break;
+            }
+        };
+
+        // Binary requests (S1-P16) — checked before the UTF-8 text path;
+        // text messages start with ASCII letters, tags with 0x01..=0x04.
+        match request_bytes.first() {
+            Some(&proto::MSG_GET_HEADERS) => {
+                let payload = match proto::parse_get_headers(&request_bytes) {
+                    Ok(from_height) => {
+                        let headers =
+                            blockchain.headers_from_height(from_height, proto::MAX_HEADERS_BATCH);
+                        proto::encode_headers(&headers).map_err(|e| {
+                            warn!(error = %e, "Не удалось закодировать заголовки");
+                        })
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Некорректный GET_HEADERS");
+                        Err(())
+                    }
+                };
+                match payload {
+                    Ok(payload) => {
+                        if let Err(e) =
+                            proto::write_length_prefixed_async(&mut stream, &payload).await
+                        {
+                            debug!(error = %e, "Не удалось отправить заголовки");
+                            break;
+                        }
+                    }
+                    Err(()) => break,
+                }
+                continue;
+            }
+            Some(&proto::MSG_GET_BLOCKS) => {
+                let payload = match proto::parse_get_blocks(&request_bytes) {
+                    Ok(hashes) => {
+                        let blocks =
+                            blockchain.blocks_by_hashes(&hashes, proto::MAX_BLOCKS_BATCH);
+                        proto::encode_blocks(&blocks).map_err(|e| {
+                            warn!(error = %e, "Не удалось закодировать блоки");
+                        })
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Некорректный GET_BLOCKS");
+                        Err(())
+                    }
+                };
+                match payload {
+                    Ok(payload) => {
+                        if let Err(e) =
+                            proto::write_length_prefixed_async(&mut stream, &payload).await
+                        {
+                            debug!(error = %e, "Не удалось отправить блоки");
+                            break;
+                        }
+                    }
+                    Err(()) => break,
+                }
+                continue;
+            }
+            _ => {}
+        }
+
+        let request = String::from_utf8_lossy(&request_bytes).to_string();
+        debug!(request = %request, "Получен запрос");
+
+        if request == "GET_BLOCKCHAIN" {
+            let response = blockchain.to_wire_json();
+            let mut data = (response.len() as u32).to_be_bytes().to_vec();
+            data.extend_from_slice(response.as_bytes());
+            if stream.write_all(&data).await.is_ok() {
+                info!("Отправлен блокчейн клиенту");
+            }
+        } else if request.starts_with("UPDATE_BLOCKCHAIN:") {
+            let blockchain_data = request.strip_prefix("UPDATE_BLOCKCHAIN:").unwrap_or("");
+            let temp_blockchain: BlockchainDeserialize = match serde_json::from_str(blockchain_data)
+            {
+                Ok(data) => data,
+                Err(e) => {
+                    error!(error = %e, "Ошибка десериализации данных блокчейна");
+                    return;
+                }
+            };
+            // ADR-0010: parse and enqueue only — the SyncEngine validates
+            // and adopts.
+            inbox.push_inbound(Incoming::CandidateChain {
+                chain: temp_blockchain.chain,
+                balances: Some(temp_blockchain.balances),
+                mempool_txs: temp_blockchain.mempool_txs,
+                pending_transactions: temp_blockchain.pending_transactions,
+                difficulty: temp_blockchain.difficulty,
+                from: Some(peer_addr),
+            });
+        }
+    }
+}
+
+// ---------------------------------------------------------- mining worker
+
+/// Spawn the mining worker with the same dual-mode rule as
+/// `sync_engine::spawn` (ADR-0011): on a tokio runtime the worker is a task;
+/// without one (plain `#[test]` threads) it runs on a dedicated thread with
+/// its own current-thread runtime.
+fn spawn_mining_worker(
+    mining_rx: tokio::sync::mpsc::UnboundedReceiver<MiningTask>,
+    peers: Arc<Mutex<Vec<String>>>,
+    address: String,
+    network_id: u32,
+) {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn(mining_worker_loop(mining_rx, peers, address, network_id));
+        }
+        Err(_) => {
+            std::thread::Builder::new()
+                .name("mining-worker".into())
+                .spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("mining worker runtime");
+                    rt.block_on(mining_worker_loop(mining_rx, peers, address, network_id));
+                })
+                .expect("mining worker thread");
+        }
+    }
+}
+
+/// The mining worker loop (ADR-0011). CPU-bound `apply_tx` + `mine_block`
+/// (which holds the facade write lock for the whole PoW search) run inside
+/// `spawn_blocking` so runtime workers are never blocked; status updates and
+/// the post-mine gossip round await between tasks.
+async fn mining_worker_loop(
+    mut mining_rx: tokio::sync::mpsc::UnboundedReceiver<MiningTask>,
+    peers: Arc<Mutex<Vec<String>>>,
+    address: String,
+    network_id: u32,
+) {
+    info!("Фоновый воркер майнинга запущен (ADR-0011)");
+    let mut mining_count = 0u64;
+    let mut total_duration = 0.0;
+    let mut successful_mining = 0u64;
+    while let Some(task) = mining_rx.recv().await {
+        mining_count += 1;
+        info!(mining_count, "Получена задача майнинга");
+        task.event_bus.publish(events::NodeEvent::MiningStarted);
+        let progress_tx_clone = task.progress_tx.clone();
+        let start_time = SystemTime::now();
+
+        let MiningTask {
+            blockchain,
+            transaction,
+            mining_status,
+            progress_tx,
+            status_tx,
+            rate_limiter,
+            shutdown,
+            event_bus,
+            inbox,
+        } = task;
+
+        // apply_tx + mine_block are lock- and CPU-bound: isolate them on the
+        // blocking pool (ADR-0011). catch_unwind preserves the legacy
+        // panic-isolation semantics of the mining thread.
+        let blockchain_bc = blockchain.clone();
+        let transaction_bc = transaction.clone();
+        let shutdown_bc = shutdown.clone();
+        let event_bus_bc = event_bus.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                debug!(mining_count, ?transaction_bc, "Проверка транзакции");
+                match blockchain_bc.apply_tx(transaction_bc.clone()) {
+                    Ok(_) => {
+                        info!(
+                            mining_count,
+                            "Транзакция успешно добавлена, начало майнинга"
+                        );
+                        event_bus_bc.publish(events::NodeEvent::TxAccepted {
+                            txid: hex::encode(strangecoin_core::serialize::txid(
+                                &transaction_bc,
+                            )),
+                        });
+                        blockchain_bc.mine_block(progress_tx_clone, &shutdown_bc)
+                    }
+                    Err(e) => {
+                        warn!(mining_count, error = %e, "Транзакция отклонена, попытка майнить существующие транзакции");
+                        event_bus_bc.publish(events::NodeEvent::TxRejected {
+                            txid: hex::encode(strangecoin_core::serialize::txid(
+                                &transaction_bc,
+                            )),
+                            reason: format!("{}", e),
+                        });
+                        if !blockchain_bc.mempool_is_empty() {
+                            blockchain_bc.mine_block(progress_tx_clone, &shutdown_bc)
+                        } else {
+                            let _ = progress_tx_clone.send(format!(
+                                "Ошибка: Нет транзакций для майнинга в задаче {}",
+                                mining_count
+                            ));
+                            warn!(mining_count, "Нет транзакций для майнинга");
+                            None
+                        }
+                    }
+                }
+            }))
+        })
+        .await;
+        let result = match result {
+            Ok(caught) => match caught {
+                Ok(result) => result,
+                Err(panic) => {
+                    let err_msg = match panic.downcast_ref::<&str>() {
+                        Some(s) => s.to_string(),
+                        None => format!("Неизвестная паника: {:?}", panic),
+                    };
+                    error!(mining_count, error = %err_msg, "Паника в воркере майнинга");
+                    let _ = progress_tx.send(format!(
+                        "Паника в воркере майнинга {}: {}",
+                        mining_count, err_msg
+                    ));
+                    None
+                }
+            },
+            Err(join_err) => {
+                error!(mining_count, error = %join_err, "spawn_blocking воркера майнинга завершился ошибкой");
+                None
+            }
+        };
+
+        let duration = SystemTime::now()
+            .duration_since(start_time)
+            .unwrap()
+            .as_secs_f64();
+        total_duration += duration;
+        info!(mining_count, duration_secs = duration, result = ?result, "Майнинг завершен");
+        event_bus.publish(events::NodeEvent::MiningFinished);
+
+        // Post-mine side effects, lock-free (ADR-0011): gossip round with the
+        // node's own network_id — the legacy temp Node hard-coded
+        // CHAIN_ID_REGTEST, which sent gossip with the wrong network_id on
+        // non-regtest networks (BUG-S0-021). The temp Node carries a fresh
+        // shutdown flag so its Drop cannot trip the real node's shutdown.
+        if let Some(block) = &result {
+            successful_mining += 1;
+            info!(mining_count, ?block, "Майнинг успешен, блок добавлен");
+            let _ = status_tx.send(format!(
+                "Транзакция отправлена, блок добавлен: {:?}",
+                block
+            ));
+            let mut sync_node = Node {
+                blockchain: blockchain.clone(),
+                peers: peers.clone(),
+                address: address.clone(),
+                sync_rx: tokio::sync::mpsc::unbounded_channel().1,
+                rate_limiter: rate_limiter.clone(),
+                shutdown: Arc::new(AtomicBool::new(false)),
+                accept_task: Arc::new(Mutex::new(None)),
+                sync_task_handle: Arc::new(Mutex::new(None)),
+                event_bus: event_bus.clone(),
+                network_id,
+                inbox: inbox.clone(),
+            };
+            sync_node.sync_blockchain().await;
+            event_bus.publish(events::NodeEvent::BlockApplied {
+                height: block.index,
+                hash: block.hash.clone(),
+            });
+        }
+
+        // Update the mining status (short critical section; the GUI polls it
+        // via try_lock). Retry with an async sleep — the guard (including
+        // the one TryLockError::Poisoned may carry) is dropped before the
+        // await so the future stays Send.
+        enum StatusUpdate {
+            Updated,
+            Busy,
+        }
+        let mut attempts = 0;
+        let max_attempts = 5;
+        let mut status_updated = false;
+        while attempts < max_attempts {
+            let outcome = match mining_status.try_lock() {
+                Ok(mut mining_status_guard) => {
+                    *mining_status_guard = match &result {
+                        Some(block) => MiningStatus::Completed(Some(block.clone())),
+                        None => {
+                            warn!(mining_count, "Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут");
+                            let _ = status_tx.send("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут".to_string());
+                            MiningStatus::Failed("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут".to_string())
+                        }
+                    };
+                    debug!(mining_count, ?mining_status_guard, "Статус майнинга обновлён");
+                    StatusUpdate::Updated
+                }
+                Err(_) => StatusUpdate::Busy,
+            };
+            match outcome {
+                StatusUpdate::Updated => {
+                    status_updated = true;
+                    break;
+                }
+                StatusUpdate::Busy => {
+                    attempts += 1;
+                    debug!(
+                        attempts,
+                        mining_count, "Попытка обновить статус майнинга не удалась"
+                    );
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            }
+        }
+        if !status_updated {
+            warn!(
+                mining_count,
+                max_attempts, "Не удалось обновить статус майнинга после попыток"
+            );
+            let _ = progress_tx.send(format!(
+                "Ошибка: Не удалось обновить статус майнинга {} после {} попыток",
+                mining_count, max_attempts
+            ));
+            let _ = status_tx.send(format!(
+                "Ошибка: Не удалось обновить статус майнинга после {} попыток",
+                max_attempts
+            ));
+        }
+        if mining_count > 0 {
+            let avg_duration = total_duration / mining_count as f64;
+            debug!(
+                mining_count,
+                avg_duration_secs = avg_duration,
+                "Среднее время майнинга"
+            );
+            debug!(
+                mining_count,
+                successful = successful_mining,
+                failed = mining_count - successful_mining,
+                "Статистика майнинга"
+            );
+        }
+    }
+    info!("Фоновый воркер майнинга завершен");
 }
 
 /// Sync-точка входа: собственный runtime, блокирует до завершения `run_async()`.
@@ -933,8 +1093,8 @@ pub async fn run_async() {
         fs::write(&network_path, network_content).expect("Ошибка записи в network.json");
     }
 
-    let (mining_tx, mining_rx) = mpsc::channel();
-    let (sync_tx, sync_rx) = mpsc::channel();
+    let (mining_tx, mining_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (sync_tx, sync_rx) = tokio::sync::mpsc::unbounded_channel();
     let event_bus = Arc::new(events::EventBus::new());
     info!("Каналы майнинга и синхронизации созданы");
 
@@ -954,7 +1114,7 @@ pub async fn run_async() {
     );
     node.blockchain
         .set_allow_grant_blocks(config.allow_grant_blocks);
-    node.start_server(port, sync_tx.clone());
+    node.start_server(port, sync_tx.clone()).await;
     node.discover_peers();
 
     // Spawn sync task on the tokio runtime (ADR-0007: polling loop migrated to async)
@@ -974,18 +1134,17 @@ pub async fn run_async() {
             blockchain: node_blockchain,
             peers: node_peers,
             address: node_address,
-            sync_rx: mpsc::channel().1,
+            sync_rx: tokio::sync::mpsc::unbounded_channel().1,
             rate_limiter: node_rate_limiter,
             shutdown: shutdown_sync_node,
-            listener: Arc::new(Mutex::new(None)),
-            sync_thread_handle: Arc::new(Mutex::new(None)),
+            accept_task: Arc::new(Mutex::new(None)),
+            sync_task_handle: Arc::new(Mutex::new(None)),
             event_bus: node_event_bus,
             network_id: config.network_id,
             inbox: node_inbox,
         };
         // Tick at SYNC_TICK for prompt shutdown checks, but only sync every
-        // SYNC_TICKS_PER_SYNC ticks to preserve the original ~1s sync period
-        // (sync_blockchain performs blocking TCP I/O with a 1s connect timeout).
+        // SYNC_TICKS_PER_SYNC ticks to preserve the original ~1s sync period.
         let mut ticker = tokio::time::interval(SYNC_TICK);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut ticks: u32 = 0;
@@ -997,14 +1156,14 @@ pub async fn run_async() {
             ticks += 1;
             if ticks >= SYNC_TICKS_PER_SYNC {
                 ticks = 0;
-                sync_node.sync_blockchain();
+                sync_node.sync_blockchain().await;
             }
         }
         info!("Sync task stopped");
     });
 
     // Store sync task handle in node for graceful shutdown
-    *node.sync_thread_handle.lock().unwrap() = Some(sync_task_handle);
+    *node.sync_task_handle.lock().unwrap() = Some(sync_task_handle);
 
     #[cfg(feature = "gui")]
     let app = gui::WalletApp {
@@ -1015,8 +1174,8 @@ pub async fn run_async() {
             sync_rx,
             rate_limiter: node.rate_limiter.clone(),
             shutdown: Arc::clone(&shutdown),
-            listener: Arc::new(Mutex::new(None)),
-            sync_thread_handle: Arc::new(Mutex::new(None)),
+            accept_task: Arc::new(Mutex::new(None)),
+            sync_task_handle: Arc::new(Mutex::new(None)),
             event_bus: Arc::clone(&node.event_bus),
             network_id: config.network_id,
             inbox: node.inbox.clone(),
@@ -1038,14 +1197,15 @@ pub async fn run_async() {
         new_wallet_password: String::new(),
         data_dir: config.data_dir.clone(),
     };
-    // Headless: keep the mining sender alive (mining thread idles on recv) and
+    // Headless: keep the mining sender alive (the mining worker idles on recv) and
     // retain the sync receiver so adoption events can be drained below.
     #[cfg(not(feature = "gui"))]
-    let (_headless_mining_tx, sync_rx) = (mining_tx, sync_rx);
+    let (_headless_mining_tx, mut sync_rx) = (mining_tx, sync_rx);
 
     // Graceful shutdown — async primary handler (ADR-0007).
-    // The AtomicBool is the single shutdown signal shared with the legacy threads;
-    // they keep polling it exactly as before, so P17 behaviour is unchanged.
+    // The AtomicBool is the single shutdown signal shared with the async tasks
+    // and blocking-pool work; they keep polling it exactly as before, so P17
+    // behaviour is unchanged.
     let shutdown_signal = Arc::clone(&shutdown);
     tokio::spawn(async move {
         if let Err(e) = tokio::signal::ctrl_c().await {
@@ -1279,11 +1439,11 @@ pub mod test_support {
             blockchain: Arc::clone(bc),
             peers: Arc::clone(&peers),
             address: format!("127.0.0.1:{}", port),
-            sync_rx: mpsc::channel().1,
+            sync_rx: tokio::sync::mpsc::unbounded_channel().1,
             rate_limiter: Arc::new(crate::network::RateLimiter::new(10, 100)),
             shutdown: Arc::new(AtomicBool::new(false)),
-            listener: Arc::new(Mutex::new(None)),
-            sync_thread_handle: Arc::new(Mutex::new(None)),
+            accept_task: Arc::new(Mutex::new(None)),
+            sync_task_handle: Arc::new(Mutex::new(None)),
             // Один bus на node и facade — как в проде: RBF-замена публикует
             // TxRejected из facade, а майнинг-задача — из node.
             event_bus: bc.event_bus(),
@@ -1305,11 +1465,11 @@ pub mod test_support {
             blockchain: Arc::clone(bc),
             peers: Arc::clone(peers),
             address: address.to_string(),
-            sync_rx: mpsc::channel().1,
+            sync_rx: tokio::sync::mpsc::unbounded_channel().1,
             rate_limiter: Arc::clone(rate_limiter),
             shutdown: Arc::new(AtomicBool::new(false)),
-            listener: Arc::new(Mutex::new(None)),
-            sync_thread_handle: Arc::new(Mutex::new(None)),
+            accept_task: Arc::new(Mutex::new(None)),
+            sync_task_handle: Arc::new(Mutex::new(None)),
             event_bus: bc.event_bus(),
             network_id: crate::consensus::CHAIN_ID_REGTEST,
             inbox,

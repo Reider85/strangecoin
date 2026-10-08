@@ -17,11 +17,16 @@ fn shutdown_flag() -> Arc<AtomicBool> {
     Arc::new(AtomicBool::new(false))
 }
 
-#[test]
-fn new_node_syncs_20_blocks_via_headers_first() {
+// ADR-0011: the server accepts on the test runtime; multi_thread keeps it
+// live while the test thread drives the (now async) headers-first client.
+// The NETWORK_TEST_LOCK std Mutex is held for the whole test by design
+// (cross-binary serialization); nothing on this runtime contends for it.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test(flavor = "multi_thread")]
+async fn new_node_syncs_20_blocks_via_headers_first() {
     let _net_lock = NETWORK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let port = random_port();
-    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<ChainSnapshot>();
+    let (sync_tx, _sync_rx) = tokio::sync::mpsc::unbounded_channel::<ChainSnapshot>();
 
     let server_dir = TestDir::new("hf_server");
     let client_dir = TestDir::new("hf_client");
@@ -41,7 +46,7 @@ fn new_node_syncs_20_blocks_via_headers_first() {
     assert_eq!(server_bc.chain_len(), 21, "server must hold 21 blocks");
 
     let (mut node, _peers) = create_node_for_test(&server_bc, port);
-    node.start_server(port, sync_tx.clone());
+    node.start_server(port, sync_tx.clone()).await;
 
     let shutdown = shutdown_flag();
     let local = client_bc.chain_snapshot();
@@ -51,6 +56,7 @@ fn new_node_syncs_20_blocks_via_headers_first() {
         &local,
         &shutdown,
     )
+    .await
     .expect("headers-first sync must succeed against a P16 peer");
 
     let candidate = outcome
@@ -77,11 +83,12 @@ fn new_node_syncs_20_blocks_via_headers_first() {
     );
 }
 
-#[test]
-fn equal_chain_reports_nothing_better() {
+#[allow(clippy::await_holding_lock)]
+#[tokio::test(flavor = "multi_thread")]
+async fn equal_chain_reports_nothing_better() {
     let _net_lock = NETWORK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let port = random_port();
-    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<ChainSnapshot>();
+    let (sync_tx, _sync_rx) = tokio::sync::mpsc::unbounded_channel::<ChainSnapshot>();
 
     let server_dir = TestDir::new("hf_eq_server");
     let client_dir = TestDir::new("hf_eq_client");
@@ -101,7 +108,7 @@ fn equal_chain_reports_nothing_better() {
     assert!(adopt_from(&client_bc, &server_bc));
 
     let (mut node, _peers) = create_node_for_test(&server_bc, port);
-    node.start_server(port, sync_tx.clone());
+    node.start_server(port, sync_tx.clone()).await;
 
     let shutdown = shutdown_flag();
     let local = client_bc.chain_snapshot();
@@ -111,6 +118,7 @@ fn equal_chain_reports_nothing_better() {
         &local,
         &shutdown,
     )
+    .await
     .expect("headers-first exchange must succeed");
 
     assert!(
@@ -122,11 +130,12 @@ fn equal_chain_reports_nothing_better() {
     assert_eq!(client_bc.chain_len(), 4);
 }
 
-#[test]
-fn longer_fork_resolved_via_headers_first() {
+#[allow(clippy::await_holding_lock)]
+#[tokio::test(flavor = "multi_thread")]
+async fn longer_fork_resolved_via_headers_first() {
     let _net_lock = NETWORK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let port = random_port();
-    let (sync_tx, _sync_rx) = std::sync::mpsc::channel::<ChainSnapshot>();
+    let (sync_tx, _sync_rx) = tokio::sync::mpsc::unbounded_channel::<ChainSnapshot>();
 
     let server_dir = TestDir::new("hf_fork_server");
     let client_dir = TestDir::new("hf_fork_client");
@@ -155,7 +164,7 @@ fn longer_fork_resolved_via_headers_first() {
     assert_eq!(client_bc.chain_len(), 4);
 
     let (mut node, _peers) = create_node_for_test(&server_bc, port);
-    node.start_server(port, sync_tx.clone());
+    node.start_server(port, sync_tx.clone()).await;
 
     let shutdown = shutdown_flag();
     let local = client_bc.chain_snapshot();
@@ -165,6 +174,7 @@ fn longer_fork_resolved_via_headers_first() {
         &local,
         &shutdown,
     )
+    .await
     .expect("headers-first sync must succeed");
 
     let candidate = outcome
