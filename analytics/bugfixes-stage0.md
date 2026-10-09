@@ -58,14 +58,14 @@
 | BUG-S0-021 | C | M | S1-P10 | Legacy-threads майнинга и сети не перенесены в async — tokio введён, но новые подсистемы не покрыты | fixed (2026-10-08): ADR-0011 — mining worker → tokio task (`spawn_blocking` для PoW), accept/per-connection → `tokio::net`, `sync_headers_first`/`sync_blockchain` → async, `sync_tx` → tokio mpsc; гибридная модель ADR-0007 закрыта |
 | BUG-S0-022 | C | M | S1-P12 | Прямые мутации `balances` вне `state_cache` в части legacy-путей — `rg`-аудит не формализован как gate | fixed (2026-10-09): аудит чист (0 прямых мутаций); gate = `tests/balances_gate.rs` (cargo test, кроссплатформенный) + CI job `source-gates` (rg-шаг); КГ S1-P12 формализована |
 | BUG-S0-023 | D | H | S1-P19 | Fuzz-target `canonical_decode` — прогон 10 секунд вместо 10 минут; cargo-fuzz не запущен | fixed (2026-10-09): CI job `fuzz-canonical-decode` (cargo-fuzz 0.13.2, 600s, ubuntu-latest, push/PR, crash-artifacts upload) + измеренный локальный 10-min soak 25,947,107 inputs / 0 panics; README/STAGE1_SUMMARY/THREAT_MODEL обновлены |
-| BUG-S0-024 | D | H | S1-P20 | `INVARIANTS_ENFORCED.md` — нумерация инвариантов не совпадает с ARCHITECT3 §5 (№4 описан как №19) | open |
+| BUG-S0-024 | D | H | S1-P20 | `INVARIANTS_ENFORCED.md` — нумерация инвариантов не совпадает с ARCHITECT3 §5 (№4 описан как №19) | fixed (2026-10-09): таблица переписана — нумерация 1:1 ARCHITECT3 §5, столбцы Stage 0 / Stage 1 / Test / Status; #19 = 🟡 residual (BUG-S0-012/013), #22 = 🟡 residual (BUG-S0-005); битые ссылки устранены (BUG-S0-031) |
 | BUG-S0-025 | D | M | P18 / S1-P20 | Property-тесты на `apply/unapply round-trip` добавлены, но `nonce` monotonic proptest отсутствует как отдельный | open |
 | BUG-S0-026 | D | M | P23 / D02 | TLA+ `consensus.tla` — TLC-прогон не выполнен, в `docs/spec/README.md` нет результата | open |
 | BUG-S0-027 | D | M | P19 / D01 | Интеграционный тест `emission.rs` майнит блоки, но не сверяет `block_reward_at_height(h, total_supply_before)` на чейн-агнезисе | open |
 | BUG-S0-028 | D | L | S1-P19 | `tests/concurrency.rs` создан вне спеки P19 — допустимое расширение, но не отражено в КГ | wontfix |
 | BUG-S0-029 | E | H | S1-P22 | `STAGE1_SUMMARY.md §1` помечает критерий №2 (Verkle + state.root_after) ✅, а §6 — residual «zero state_root opt-in» → внутреннее противоречие | open |
 | BUG-S0-030 | E | H | S1-P22 | `STAGE1_SUMMARY §6` фиксирует residual, но не понижает соответствующие DoD-критерии в таблице §1 | open |
-| BUG-S0-031 | E | H | S1-P22 | `INVARIANTS_ENFORCED.md` ссылается на несуществующий файл `src/blockchain/blockchain.rs` (инвариант №5) | open |
+| BUG-S0-031 | E | H | S1-P22 | `INVARIANTS_ENFORCED.md` ссылается на несуществующий файл `src/blockchain/blockchain.rs` (инвариант №5) | fixed (2026-10-09): переписывание таблицы (BUG-S0-024) — все enforce-ссылки указывают на существующие файлы (`block_executor.rs`, `blockchain_facade.rs`, `state_cache.rs`, `consensus_manager.rs`, core-модули) |
 | BUG-S0-032 | E | M | S1-P22 | `STAGE1_SUMMARY §6.6` — «untracked artifacts on disk» (`test.md`, `ComputeGenesisHash/`) как residual — гигиена не закрыта | fixed |
 | BUG-S0-033 | E | M | P22 / D02 | `THREAT_MODEL.md` создан в D02, но 51%-риск на low-difficulty testnet не помечен как residual с явным сроком | open |
 | BUG-S0-034 | E | M | S1-P21 | THREAT_MODEL v3.0 — векторы V-34..V-42 добавлены, но «mapping вектор → тест» не ссылается на конкретные `tests/X.rs` | open |
@@ -864,6 +864,11 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 2. Для каждого инварианта — столбцы: «Stage 0 enforce location» / «Stage 1 enforce location» / «Test» / «Status».
 3. Инвариант №19 (State Root) — статус `🟡 residual` (см. BUG-S0-012, BUG-S0-013), не `✅ NEW`.
 
+**Решение (2026-10-09):** `docs/stage1/INVARIANTS_ENFORCED.md` переписан. Нумерация 1:1 с ARCHITECT3 §5 (эталон — строки 484-507). Столбцы: Invariant / Stage 0 location / Stage 1 location / Test / Status. №19 = 🟡 residual (BUG-S0-012/013, fix path S1.5-P03); №22 = 🟡 residual (BUG-S0-005); №15/18 = Deferred Stage 1.5; №20 = Deferred Stage 5; остальные 17 — ✅. Битые ссылки на `src/blockchain/blockchain.rs` устранены (BUG-S0-031 закрыт тем же переписыванием). Секции Residual Coupling / Audit Results сохранены как evidence S1-P20.
+
+| Статус | fixed (2026-10-09) |
+|--------|-------------------|
+
 ---
 
 ### BUG-S0-025 — Property-тест на nonce monotonic отсутствует как отдельный
@@ -1012,6 +1017,11 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 1. Заменить все ссылки `src/blockchain/blockchain.rs` → `src/blockchain/blockchain_facade.rs` (или `block_executor.rs`, в зависимости от реальной enforcement-локации).
 2. Переписать таблицу с фактическими путями.
 
+**Решение (2026-10-09):** закрыт в рамках переписывания таблицы (BUG-S0-024). Все 22 строки ссылаются на существующие файлы: `block_executor.rs`, `blockchain_facade.rs`, `state_cache.rs`, `consensus_manager.rs`, `rate_limiter.rs`, `protocol.rs`, `mempool/mod.rs`, `wallet.rs`, `events`/`lib.rs` (Drop), core-модули (`consensus.rs`, `serialize.rs`, `state/inner.rs`, `state/mod.rs`, `governance/scip.rs`, `economics/*`), `.github/workflows/release.yml`. Ссылка `src/blockchain/blockchain.rs` отсутствует.
+
+| Статус | fixed (2026-10-09) |
+|--------|-------------------|
+
 ---
 
 ### BUG-S0-032 — STAGE1_SUMMARY §6.6 — гигиена не закрыта
@@ -1115,8 +1125,8 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | ~~BUG-S0-018~~ | ~~`blockchain_facade.rs` 1578 строк~~ | **fixed 2026-10-08**: S1.5-P04 — facade **361 строка** (≤400 met), logic in sibling components; serde/wire в `chain_selector.rs` |
 | BUG-S0-029 | STAGE1_SUMMARY противоречие | Без честной верификации Stage 2 унаследует нерешённые долги |
 | BUG-S0-030 | STAGE1_SUMMARY residual не понижает DoD | То же |
-| BUG-S0-031 | INVARIANTS_ENFORCED.md битые ссылки | Студенты/контрибьюторы не смогут найти enforcement-точки |
-| BUG-S0-024 | INVARIANTS_ENFORCED.md путаница нумерации | То же |
+| ~~BUG-S0-031~~ | ~~INVARIANTS_ENFORCED.md битые ссылки~~ | **fixed 2026-10-09**: переписывание таблицы (BUG-S0-024) — все пути существуют |
+| ~~BUG-S0-024~~ | ~~INVARIANTS_ENFORCED.md путаница нумерации~~ | **fixed 2026-10-09**: нумерация 1:1 ARCHITECT3 §5, #19/#22 — 🟡 residual |
 | BUG-S0-005 | Release pipeline не запускался | Reproducible builds без evidence — Stage 2 release невозможен |
 | ~~BUG-S0-003~~ | ~~Ложная запись в Changelog~~ | **fixed 2026-10-07**: predecessor-цепочка верифицирована в STAGE1_SUMMARY §1+§2 (теги + все коммиты D01–D03 / S1-PXX в HEAD); AGENTS.md получила оговорку о debt prompts и residual obligations |
 
@@ -1178,7 +1188,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | S1-P12 | BUG-S0-022 | — |
 | S1-P15 | BUG-S0-017 | — |
 | S1-P19 | BUG-S0-023 | — |
-| S1-P20 | BUG-S0-024, BUG-S0-031 | — |
+| S1-P20 | ~~BUG-S0-024, BUG-S0-031~~ **fixed 2026-10-09** (rev. INVARIANTS_ENFORCED.md) | — |
 | S1-P21 | BUG-S0-034 | — |
 | S1-P22 | BUG-S0-029, BUG-S0-030, BUG-S0-032, BUG-S0-035 (**fixed 2026-10-07**) | BUG-S0-001 (тег v1.0.0-stage0) — **fixed 2026-10-07**, BUG-S0-002 (атомарные коммиты) — **fixed 2026-10-07** |
 
@@ -1238,11 +1248,11 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 
 ### S1.5-P05 — DoD-верификация Stage 1.5 с честной отметкой residual
 
-Закрывает: BUG-S0-029, BUG-S0-030, BUG-S0-031. ~~BUG-S0-035~~ — **fixed 2026-10-07** (в рамках BUG-S0-003; AGENTS.md уже содержит ссылку на §6).
+Закрывает: BUG-S0-029, BUG-S0-030. ~~BUG-S0-031~~ — **fixed 2026-10-09** (в рамках BUG-S0-024). ~~BUG-S0-035~~ — **fixed 2026-10-07** (в рамках BUG-S0-003; AGENTS.md уже содержит ссылку на §6).
 
 Задачи:
 1. В `STAGE1_SUMMARY.md §1` — добавить столбец «Residual», понижать ✅ → 🟡 при наличии §6 residual.
-2. В `INVARIANTS_ENFORCED.md` — исправить нумерацию (1:1 к ARCHITECT3 §5) и битые ссылки.
+2. ~~В `INVARIANTS_ENFORCED.md` — исправить нумерацию (1:1 к ARCHITECT3 §5) и битые ссылки.~~ → **done 2026-10-09** (BUG-S0-024 + BUG-S0-031).
 3. ~~В `AGENTS.md` — добавить ссылку на §6 open obligations.~~ — **done 2026-10-07** (AGENTS.md строка 4).
 4. ~~Поставить тег `v1.0.0-stage0` ретроспективно~~ — тег существует (`3dd37ef`); BUG-S0-001 fixed 2026-10-07.
 
