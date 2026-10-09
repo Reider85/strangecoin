@@ -64,7 +64,7 @@
 | BUG-S0-027 | D | M | P19 / D01 | Интеграционный тест `emission.rs` майнит блоки, но не сверяет `block_reward_at_height(h, total_supply_before)` на чейн-агнезисе | fixed (2026-10-09) |
 | BUG-S0-028 | D | L | S1-P19 | `tests/concurrency.rs` создан вне спеки P19 — допустимое расширение, но не отражено в КГ | fixed (2026-10-09): wontfix — расширение спеки принято; КГ D01 в prompt-stage1.md:194 дополнена явным упоминанием `concurrency.rs` |
 | BUG-S0-029 | E | H | S1-P22 | `STAGE1_SUMMARY.md §1` помечает критерий №2 (Verkle + state.root_after) ✅, а §6 — residual «zero state_root opt-in» → внутреннее противоречие | fixed (2026-10-09): §1 №2 — 🟡 residual §6.5 (zero state_root, BUG-S0-012/013) + §6.7 (SMT); §1 №1 — ✅ с caveat BUG-S0-013; §6.5 — back-reference; код не менялся |
-| BUG-S0-030 | E | H | S1-P22 | `STAGE1_SUMMARY §6` фиксирует residual, но не понижает соответствующие DoD-критерии в таблице §1 | open |
+| BUG-S0-030 | E | H | S1-P22 | `STAGE1_SUMMARY §6` фиксирует residual, но не понижает соответствующие DoD-критерии в таблице §1 | fixed (2026-10-09): §1 — полный Residual-столбец (15 критериев + security-track, легенда); №2 дополнен §6.1; №11/№12/№13/№15 + security-track → 🟡 (§6.3 / §6.4+§6.5 / §6.4 / §6.2 / §6.2); §6.1/6.2/6.3/6.4/6.7 — back-references; S1-P22 КГ дополнена правилом понижения; код не менялся |
 | BUG-S0-031 | E | H | S1-P22 | `INVARIANTS_ENFORCED.md` ссылается на несуществующий файл `src/blockchain/blockchain.rs` (инвариант №5) | fixed (2026-10-09): переписывание таблицы (BUG-S0-024) — все enforce-ссылки указывают на существующие файлы (`block_executor.rs`, `blockchain_facade.rs`, `state_cache.rs`, `consensus_manager.rs`, core-модули) |
 | BUG-S0-032 | E | M | S1-P22 | `STAGE1_SUMMARY §6.6` — «untracked artifacts on disk» (`test.md`, `ComputeGenesisHash/`) как residual — гигиена не закрыта | fixed |
 | BUG-S0-033 | E | M | P22 / D02 | `THREAT_MODEL.md` создан в D02, но 51%-риск на low-difficulty testnet не помечен как residual с явным сроком | open |
@@ -1035,7 +1035,7 @@ Rust-код не менялся. КГ D02 выполнена буквально:
 1. **Критерий №2** — статус уточнён до `🟡 residual §6.5 + §6.7`. К моменту исправления критерий уже был 🟡, но только по причине «SMT not Verkle» (§6.7, BUG-S0-011, 2026-10-08); residual §6.5 (zero `state_root` opt-in — инвариант №19 не enforced в общем случае, BUG-S0-012/013) в §1 не отражался — противоречие с §6 п.5 сохранялось. Evidence дополнен ссылками: `src/blockchain/block_executor.rs` (compare с computed root) + `INVARIANTS_ENFORCED.md` №19 (уже 🟡 residual с 2026-10-09, BUG-S0-024).
 2. **Критерий №1** — остался ✅ (rg-аудит «0 I/O» истинен и не оспаривается), добавлен caveat: `verify_block_stateless` не пересчитывает post-state-root (BUG-S0-013) — tracked under criterion #2 / §6.5.
 3. **§6.5** — обратная ссылка: «Reflected in §1 criterion #2 status (🟡 residual §6.5)».
-Вариант 2 рекомендации (SCIP-0002 «enforce state_root без opt-out») отложен в **S1.5-P03** — он закрывает BUG-S0-012/013 кодом; после его выполнения критерий №2 сможет вернуть ✅. BUG-S0-030 (полный Residual-столбец для всех 15 критериев) остаётся open.
+Вариант 2 рекомендации (SCIP-0002 «enforce state_root без opt-out») отложен в **S1.5-P03** — он закрывает BUG-S0-012/013 кодом; после его выполнения критерий №2 сможет вернуть ✅. BUG-S0-030 (полный Residual-столбец для всех 15 критериев) остаётся open — закрыт тем же днём 2026-10-09 (см. раздел BUG-S0-030).
 
 | Статус | fixed (2026-10-09) |
 |--------|-------------------|
@@ -1073,6 +1073,17 @@ Rust-код не менялся. КГ D02 выполнена буквально:
 1. В §1 добавить столбец «Residual»: для каждого критерия — да/нет + ссылка на §6.
 2. Если residual есть — статус в §1 — 🟡, не ✅.
 3. В S1-P22 КГ добавить: «Если §6 residual затрагивает DoD-критерий — статус понижается с ✅ на 🟡».
+
+**Решение (2026-10-09):** Документ-only fix (код и тесты не менялись). В `docs/stage1/STAGE1_SUMMARY.md`:
+1. **§1 — столбец «Residual»** добавлен для всех 15 критериев + security-track DoD; легенда под таблицей (🟡 = verified with open §6 residual; Residual-ячейка = да/нет + §-ссылка).
+2. **Понижены до 🟡**: №11 (residual §6.3 — TLA+ bounded PASS, unbounded/reorg/state-commitment не смоделированы), №12 (residual §6.4+§6.5 — INVARIANTS_ENFORCED.md №19/№22 = 🟡; исходный маппинг бага «§6.6 → №12» устарел — §6.6 закрыт BUG-S0-032, понижение обосновано residual-ами самих инвариантов), №13 (residual §6.4 — ADRs написаны, release-pipeline verification pending), №15 (residual §6.2 — tag поставлен, fuzz CI first run pending), security-track DoD (§6.2).
+3. **№2** — дополнен residual §6.1 (offline genesis key, ops gate SCIP-0001); статус 🟡 сохранён (§6.5+§6.7 — BUG-S0-029).
+4. **№1** — ✅, Residual = нет (caveat BUG-S0-013 tracked under #2/§6.5 — прецедент BUG-S0-029 сохранён).
+5. **§6.1/6.2/6.3/6.4/6.7** — back-references «Reflected in §1 criterion #N» (паттерн §6.5 из BUG-S0-029).
+6. **`analytics/prompt-stage1.md` S1-P22 КГ** — дополнена: «Если §6 residual затрагивает DoD-критерий — статус в §1 понижается с ✅ на 🟡 (Residual-столбец; BUG-S0-030)».
+
+| Статус | fixed (2026-10-09) |
+|--------|-------------------|
 
 ---
 
@@ -1202,7 +1213,7 @@ Rust-код не менялся. КГ D02 выполнена буквально:
 | ~~BUG-S0-002~~ | ~~Git-история сквошена~~ | **fixed 2026-10-07**: атомарная история 163 коммитов в HEAD и origin/master; hook `.githooks/commit-msg` добавлен |
 | ~~BUG-S0-018~~ | ~~`blockchain_facade.rs` 1578 строк~~ | **fixed 2026-10-08**: S1.5-P04 — facade **361 строка** (≤400 met), logic in sibling components; serde/wire в `chain_selector.rs` |
 | ~~BUG-S0-029~~ | ~~STAGE1_SUMMARY противоречие~~ | **fixed 2026-10-09**: §1 №2 — 🟡 residual §6.5+§6.7; №1 — caveat BUG-S0-013 |
-| BUG-S0-030 | STAGE1_SUMMARY residual не понижает DoD | То же |
+| ~~BUG-S0-030~~ | ~~STAGE1_SUMMARY residual не понижает DoD~~ | **fixed 2026-10-09**: §1 — полный Residual-столбец (15 критериев + security-track); №2 дополнен §6.1; №11/№12/№13/№15 → 🟡; правило понижения в КГ S1-P22 |
 | ~~BUG-S0-031~~ | ~~INVARIANTS_ENFORCED.md битые ссылки~~ | **fixed 2026-10-09**: переписывание таблицы (BUG-S0-024) — все пути существуют |
 | ~~BUG-S0-024~~ | ~~INVARIANTS_ENFORCED.md путаница нумерации~~ | **fixed 2026-10-09**: нумерация 1:1 ARCHITECT3 §5, #19/#22 — 🟡 residual |
 | BUG-S0-005 | Release pipeline не запускался | Reproducible builds без evidence — Stage 2 release невозможен |
@@ -1268,7 +1279,7 @@ Rust-код не менялся. КГ D02 выполнена буквально:
 | S1-P19 | BUG-S0-023 | — |
 | S1-P20 | ~~BUG-S0-024, BUG-S0-031~~ **fixed 2026-10-09** (rev. INVARIANTS_ENFORCED.md) | — |
 | S1-P21 | BUG-S0-034 | — |
-| S1-P22 | ~~BUG-S0-029~~ — **fixed 2026-10-09**, BUG-S0-030, BUG-S0-032, BUG-S0-035 (**fixed 2026-10-07**) | BUG-S0-001 (тег v1.0.0-stage0) — **fixed 2026-10-07**, BUG-S0-002 (атомарные коммиты) — **fixed 2026-10-07** |
+| S1-P22 | ~~BUG-S0-029~~ — **fixed 2026-10-09**, ~~BUG-S0-030~~ — **fixed 2026-10-09**, BUG-S0-032, BUG-S0-035 (**fixed 2026-10-07**) | BUG-S0-001 (тег v1.0.0-stage0) — **fixed 2026-10-07**, BUG-S0-002 (атомарные коммиты) — **fixed 2026-10-07** |
 
 **Главный вывод:** S1-P22 (DoD-верификация) должен был поймать большинство багов категорий A, D, E, но не сделал этого. S1-P06 (Verkle Trie) и S1-P07 (StateWitness) породили все криптографические баги категории B. P26 / D03 (DoD Stage 0) не были выполнены, что породило процессные баги категории A.
 
@@ -1326,10 +1337,10 @@ Rust-код не менялся. КГ D02 выполнена буквально:
 
 ### S1.5-P05 — DoD-верификация Stage 1.5 с честной отметкой residual
 
-Закрывает: ~~BUG-S0-029~~ — **fixed 2026-10-09** (§1 №2 — 🟡 residual §6.5+§6.7; №1 — caveat BUG-S0-013), BUG-S0-030. ~~BUG-S0-031~~ — **fixed 2026-10-09** (в рамках BUG-S0-024). ~~BUG-S0-035~~ — **fixed 2026-10-07** (в рамках BUG-S0-003; AGENTS.md уже содержит ссылку на §6).
+Закрывает: ~~BUG-S0-029~~ — **fixed 2026-10-09** (§1 №2 — 🟡 residual §6.5+§6.7; №1 — caveat BUG-S0-013), ~~BUG-S0-030~~ — **fixed 2026-10-09** (§1 — полный Residual-столбец; №11/№12/№13/№15 + security-track → 🟡; правило понижения в КГ S1-P22). ~~BUG-S0-031~~ — **fixed 2026-10-09** (в рамках BUG-S0-024). ~~BUG-S0-035~~ — **fixed 2026-10-07** (в рамках BUG-S0-003; AGENTS.md уже содержит ссылку на §6).
 
 Задачи:
-1. В `STAGE1_SUMMARY.md §1` — добавить столбец «Residual», понижать ✅ → 🟡 при наличии §6 residual. (Частично done 2026-10-09 / BUG-S0-029: №2 понижен до 🟡 residual §6.5+§6.7, №1 — caveat; полный Residual-столбец для всех 15 критериев — BUG-S0-030, остаётся open.)
+1. В `STAGE1_SUMMARY.md §1` — добавить столбец «Residual», понижать ✅ → 🟡 при наличии §6 residual. → **done 2026-10-09** (BUG-S0-029: №2 — 🟡 §6.5+§6.7, №1 — caveat; BUG-S0-030: полный столбец для всех 15 критериев + security-track — №2 дополнен §6.1, №11/№12/№13/№15 → 🟡, легенда, правило понижения в КГ S1-P22).
 2. ~~В `INVARIANTS_ENFORCED.md` — исправить нумерацию (1:1 к ARCHITECT3 §5) и битые ссылки.~~ → **done 2026-10-09** (BUG-S0-024 + BUG-S0-031).
 3. ~~В `AGENTS.md` — добавить ссылку на §6 open obligations.~~ — **done 2026-10-07** (AGENTS.md строка 4).
 4. ~~Поставить тег `v1.0.0-stage0` ретроспективно~~ — тег существует (`3dd37ef`); BUG-S0-001 fixed 2026-10-07.
