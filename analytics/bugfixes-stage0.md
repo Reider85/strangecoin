@@ -68,7 +68,7 @@
 | BUG-S0-031 | E | H | S1-P22 | `INVARIANTS_ENFORCED.md` ссылается на несуществующий файл `src/blockchain/blockchain.rs` (инвариант №5) | fixed (2026-10-09): переписывание таблицы (BUG-S0-024) — все enforce-ссылки указывают на существующие файлы (`block_executor.rs`, `blockchain_facade.rs`, `state_cache.rs`, `consensus_manager.rs`, core-модули) |
 | BUG-S0-032 | E | M | S1-P22 | `STAGE1_SUMMARY §6.6` — «untracked artifacts on disk» (`test.md`, `ComputeGenesisHash/`) как residual — гигиена не закрыта | fixed |
 | BUG-S0-033 | E | M | P22 / D02 | `THREAT_MODEL.md` создан в D02, но 51%-риск на low-difficulty testnet не помечен как residual с явным сроком | fixed (2026-10-10): V-26 Residual Risk дополнен явной obligation (retarget hardening — SCIP, activation post-mainnet-freeze; Stage 6 audit; testnet residual accepted); добавлена строка V-26 в §7.2 Risks Accepted |
-| BUG-S0-034 | E | M | S1-P21 | THREAT_MODEL v3.0 — векторы V-34..V-42 добавлены, но «mapping вектор → тест» не ссылается на конкретные `tests/X.rs` | open |
+| BUG-S0-034 | E | M | S1-P21 | THREAT_MODEL v3.0 — векторы V-34..V-42 добавлены, но «mapping вектор → тест» не ссылается на конкретные `tests/X.rs` | fixed (2026-10-10): все V-34..V-42 (строки «Тест» + §6.4) ссылаются на конкретные `tests/X.rs::test_Y`; неточная ссылка `tests/reorg.rs` (rsc1) у V-42 заменена на `tests/two_clients.rs::bech32_address_transfer` + `tests/address_migration.rs::legacy_base64_balances_migrate_to_bech32_on_open`; все ссылки верифицированы по факту существования тестов |
 | BUG-S0-035 | E | L | AGENTS.md | `AGENTS.md` заявляет «Stage 1 complete» — обновлено до фактического статуса, но без оговорок о residual из STAGE1_SUMMARY §6 | fixed |
 
 **Итог по серьёзности:** 6 Critical, 11 High, 11 Medium, 7 Low.
@@ -1176,6 +1176,18 @@ Rust-код не менялся. КГ D02 выполнена буквально:
 2. Для каждого V-34..V-42 — добавить столбец «Test»: `tests/sync_headers.rs::headers_first_poisoning_rejected` (например).
 3. Если теста нет — пометить «gap, closes S2-PXX».
 
+**Решение (2026-10-10):** Документ-only fix. Баг подтверждён частично: per-vector строки «Тест» уже существовали (S1-P21 `a3a6c43`), но содержали неточности — описания вместо имён (V-37 merkle «(пустой/1/2/3/7 tx)», V-41 «4 engine unit-тесты: inbox dedupe…», V-42 «core address tests»), shorthand без пути (V-39 proptest, V-41 `fast_registration_race`), file-level ссылки в §6.4 и **несуществующую привязку `tests/reorg.rs` к rsc1 у V-42** (в reorg.rs нет ни одного bech32/rsc1-упоминания). Исправление в `docs/security/THREAT_MODEL.md`:
+1. V-37: merkle → конкретные `empty_txids_returns_zero`, `single_txid_duplicated`, `two_txids_pair_hash`, `three_txids_odd_duplication`, `seven_txids_multi_level`, `proptest_deterministic_root`.
+2. V-39: proptest → полный путь `crates/strangecoin-core/tests/consensus_proptest.rs::chain_id_validation`.
+3. V-41: unit-тесты → имена `src/network/sync_engine.rs::duplicate_candidate_is_dropped_at_the_inbox`, `::full_pull_lane_drops_without_ban`, `::full_inbound_lane_bans_the_producer`, `::headers_lane_is_separate_from_blocks`; race-тест → `tests/network.rs::real_network_fast_registration_race`.
+4. V-42: core-тесты → `src/address.rs::test_round_trip`, `::test_checksum_error`, `::test_hrp_validation`, `::test_network_id_hrp_mapping`; интеграционный → `tests/two_clients.rs::bech32_address_transfer`; неточная ссылка `tests/reorg.rs` (rsc1) удалена, добавлен точный тест миграции `tests/address_migration.rs::legacy_base64_balances_migrate_to_bech32_on_open` (соответствует mitigation «миграция legacy-DB»).
+5. §6.4 (Mitigations → Test Coverage Map): строки V-34..V-42 переведены с file-level («3 теста», «+ unit-тесты lanes») на конкретные `tests/X.rs::test_Y`.
+
+Все ссылки верифицированы по факту существования тестов. Gaps в духе «gap, closes S2-PXX» нет — у всех 9 векторов есть реальные тесты.
+
+| Статус | fixed (2026-10-10) |
+|--------|-------------------|
+
 ---
 
 ### BUG-S0-035 — AGENTS.md: «Stage 1 complete» без оговорок
@@ -1245,7 +1257,7 @@ Rust-код не менялся. КГ D02 выполнена буквально:
 | ~~BUG-S0-027~~ | ~~emission.rs — сверка с total_supply~~ (**fixed 2026-10-09**: mining-loop дополнен assert supply_before; добавлены `mainnet_tail_phase_reward_matches_total_supply` (tail-фаза, зависимость от total_supply) и `tail_phase_transition_at_fifth_halving` (граница base→tail на 5-м halving); regtest-loop оставлен как буквальная КГ D01) |
 | BUG-S0-032 | Repo hygiene |
 | ~~BUG-S0-033~~ | ~~THREAT_MODEL testnet 51% срок~~ (**fixed 2026-10-10**: V-26 Residual Risk + obligation (SCIP post-mainnet-freeze, Stage 6 audit); строка V-26 в §7.2) |
-| BUG-S0-034 | THREAT_MODEL v3.0 — ссылки на тесты |
+| ~~BUG-S0-034~~ | ~~THREAT_MODEL v3.0 — ссылки на тесты~~ (**fixed 2026-10-10**: V-34..V-42 — concrete `tests/X.rs::test_Y` в строках «Тест» и §6.4; неточная `reorg.rs`-ссылка у V-42 заменена на `two_clients.rs::bech32_address_transfer` + `address_migration.rs`) |
 | ~~BUG-S0-035~~ | ~~AGENTS.md без оговорок~~ (fixed 2026-10-07) |
 
 ### P3 — косметика (wontfix или minor)
@@ -1287,7 +1299,7 @@ Rust-код не менялся. КГ D02 выполнена буквально:
 | S1-P15 | BUG-S0-017 | — |
 | S1-P19 | BUG-S0-023 | — |
 | S1-P20 | ~~BUG-S0-024, BUG-S0-031~~ **fixed 2026-10-09** (rev. INVARIANTS_ENFORCED.md) | — |
-| S1-P21 | BUG-S0-034 | — |
+| S1-P21 | ~~BUG-S0-034~~ **fixed 2026-10-10** | — |
 | S1-P22 | ~~BUG-S0-029~~ — **fixed 2026-10-09**, ~~BUG-S0-030~~ — **fixed 2026-10-09**, BUG-S0-032, BUG-S0-035 (**fixed 2026-10-07**) | BUG-S0-001 (тег v1.0.0-stage0) — **fixed 2026-10-07**, BUG-S0-002 (атомарные коммиты) — **fixed 2026-10-07** |
 
 **Главный вывод:** S1-P22 (DoD-верификация) должен был поймать большинство багов категорий A, D, E, но не сделал этого. S1-P06 (Verkle Trie) и S1-P07 (StateWitness) породили все криптографические баги категории B. P26 / D03 (DoD Stage 0) не были выполнены, что породило процессные баги категории A.

@@ -712,7 +712,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | **Residual Risk** | Низкий. Коммитмент обязателен в заголовке (format_version bump, mainnet не запущен — миграция бесплатна). Residual связан с SPV-клиентами Stage 2+ (не проверяют PoW достаточно глубоко). |
 | **Monitoring** | Мониторинг TxRootMismatch reject rate; alert при аномалиях. |
 | **Код** | `crates/strangecoin-core/src/serialize.rs` (merkle_root, compute_tx_root), `src/blockchain/block_executor.rs` (проверка) |
-| **Тест** | `crates/strangecoin-core/tests/merkle.rs` (пустой/1/2/3/7 tx, proptest_deterministic_root); `tests/block_executor.rs::rejects_wrong_tx_root` |
+| **Тест** | `crates/strangecoin-core/tests/merkle.rs::empty_txids_returns_zero`, `::single_txid_duplicated`, `::two_txids_pair_hash`, `::three_txids_odd_duplication`, `::seven_txids_multi_level`, `::proptest_deterministic_root`; `tests/block_executor.rs::rejects_wrong_tx_root` |
 
 ---
 
@@ -746,7 +746,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | **Residual Risk** | Низкий. Изоляция протокольная и на уровне генезиса. Residual: plaintext TCP (Stage 2 Noise) — MITM может подменить DNS/список seeds (V-16), но не network_id валидного HELLO без компромета endpoints. |
 | **Monitoring** | Мониторинг HELLO network_id mismatch rate; alert при всплеске (recon или misconfiguration). |
 | **Код** | `genesis.json` (network_id), `src/network/protocol.rs` (HELLO + проверка), `crates/strangecoin-core/src/consensus.rs` (CHAIN_ID-константы) |
-| **Тест** | `tests/network_id.rs::foreign_network_id_is_rejected_and_banned`; связность chain_id/network_id — proptest `consensus_proptest.rs::chain_id_validation` |
+| **Тест** | `tests/network_id.rs::foreign_network_id_is_rejected_and_banned`; связность chain_id/network_id — proptest `crates/strangecoin-core/tests/consensus_proptest.rs::chain_id_validation` |
 
 ---
 
@@ -780,7 +780,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | **Residual Risk** | Низкий/средний. Bounded + ban ограничивают флуд; при недобросовестных пирах с высоким rate legit-блоки могут задерживаться до rate-limit окна. Gossip-оптимизации (Erlay) — Stage 2. |
 | **Monitoring** | Мониторинг inbox full / dropped events; alert при частых переполнениях; ban rate per peer. |
 | **Код** | `src/network/sync_engine.rs`, `src/network/mod.rs` (только inbox), `src/network/sync.rs` |
-| **Тест** | `tests/sync_engine.rs::concurrent_candidates_race_through_one_engine` (+ 4 engine unit-тесты: inbox dedupe, full pull lane drops, full inbound bans, lane separation); `tests/network.rs` race-тесты (fast_registration_race) |
+| **Тест** | `tests/sync_engine.rs::concurrent_candidates_race_through_one_engine`; unit-тесты `src/network/sync_engine.rs::duplicate_candidate_is_dropped_at_the_inbox`, `::full_pull_lane_drops_without_ban`, `::full_inbound_lane_bans_the_producer`, `::headers_lane_is_separate_from_blocks`; `tests/network.rs::real_network_fast_registration_race` |
 
 ---
 
@@ -797,7 +797,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | **Residual Risk** | Низкий. Checksum + HRP закрывают случайные ошибки. Residual: пользователь может намеренно/ошибочно ввести валидный HRP другой сети — UI должен визуально отличать префиксы (требование к GUI Stage 2+). |
 | **Monitoring** | Мониторинг reject из-за HRP/checksum mismatch; alert при систематических ошибках (potential UX issue или адрес-спуфинг). |
 | **Код** | `crates/strangecoin-core/src/address.rs` (encode_address/decode_address, bech32::Hrp), `src/address.rs` (re-export) |
-| **Тест** | Round-trip encode/decode + checksum/HRP reject (core address tests); интеграционный bech32-transfer на `rsc1` — `tests/two_clients.rs`, `tests/reorg.rs` |
+| **Тест** | `crates/strangecoin-core/src/address.rs::test_round_trip`, `::test_checksum_error`, `::test_hrp_validation`, `::test_network_id_hrp_mapping`; интеграционный bech32-transfer на `rsc1` — `tests/two_clients.rs::bech32_address_transfer`; миграция legacy-DB (base64→bech32) — `tests/address_migration.rs::legacy_base64_balances_migrate_to_bech32_on_open` |
 
 ---
 
@@ -888,15 +888,15 @@ Reproducible builds + cosign signatures для верификации бинар
 | V-31 (Genesis key) | consensus (load_genesis pubkey-only) + SCIP-0001 | `tests/genesis_key.rs` (hash без секрета в коде, pubkey-only genesis.json, seed regression-guard); offline key — pre-mainnet ops (SCIP-0001) | ✅ code (S1.5-P01); ⚠️ ops (→ mainnet freeze) |
 | V-32 (Grant blocks) | consensus (validate_chain) + Config flag | `tests/grant_flag.rs` (4 теста), `tests/emission.rs`, `tests/block_executor.rs::grant_block_needs_the_opt_in_flag` | ✅ S1-P01 |
 | V-33 (Release pipeline) | CI/CD (D03 fix) | gap: GitHub Actions run не верифицирован | ⚠️ gap (→ S1-P22 first tag) |
-| V-34 (Headers-first poisoning) | network/sync.rs + consensus | `tests/sync_headers.rs` (3 теста) | ✅ S1-P16 |
-| V-35 (state_root manipulation) | core state/sparse_merkle + block_executor | `tests/state_root.rs` (3), core `tests/state_root.rs` (incl. tamper, proptest) | ✅ S1-P06/P12/P19 |
-| V-36 (Witness spoofing) | core state/witness | core `tests/witness.rs` (tamper, proptest, minimality) | ✅ S1-P07 |
-| V-37 (tx_root manipulation) | core serialize + block_executor | core `tests/merkle.rs`, `tests/block_executor.rs::rejects_wrong_tx_root` | ✅ S1-P08/P12 |
-| V-38 (consensus_version downgrade) | governance/scip + consensus_manager | `tests/consensus_version.rs` (3), `tests/block_executor.rs::rejects_stale_consensus_version` | ✅ S1-P05/P12 |
-| V-39 (Network confusion) | protocol HELLO + genesis | `tests/network_id.rs::foreign_network_id_is_rejected_and_banned` | ✅ S1-P14/P19 |
-| V-40 (RBF fee-war DoS) | mempool RBF | `tests/rbf.rs` (5 тестов), `tests/double_spend.rs` (регрессия) | ✅ S1-P17 |
-| V-41 (SyncEngine flooding) | network/sync_engine | `tests/sync_engine.rs` (+ unit-тесты lanes), race-тесты `tests/network.rs` | ✅ S1-P18 |
-| V-42 (HRP confusion) | core address (bech32) | core address round-trip/checksum tests; `tests/two_clients.rs`, `tests/reorg.rs` (rsc1) | ✅ S1-P15 |
+| V-34 (Headers-first poisoning) | network/sync.rs + consensus | `tests/sync_headers.rs::new_node_syncs_20_blocks_via_headers_first`, `::equal_chain_reports_nothing_better`, `::longer_fork_resolved_via_headers_first` | ✅ S1-P16 |
+| V-35 (state_root manipulation) | core state/sparse_merkle + block_executor | `tests/state_root.rs::tampered_state_root_is_rejected_by_the_second_node`, `::committed_state_root_chain_passes_on_a_second_node`, `::zero_state_root_is_tolerated_as_no_commitment`; core `tests/state_root.rs::tamper_state_root_rejected`, `::proptest_root_consistent`; `tests/block_executor.rs::rejects_state_root_that_does_not_match_the_applied_state` | ✅ S1-P06/P12/P19 |
+| V-36 (Witness spoofing) | core state/witness | core `tests/witness.rs::tampered_balance_rejected`, `::proptest_tamper_detected`, `::wrong_parent_root_rejected`, `::witness_contains_only_touched_addresses` | ✅ S1-P07 |
+| V-37 (tx_root manipulation) | core serialize + block_executor | core `tests/merkle.rs::empty_txids_returns_zero`, `::two_txids_pair_hash`, `::three_txids_odd_duplication`, `::proptest_deterministic_root`; `tests/block_executor.rs::rejects_wrong_tx_root` | ✅ S1-P08/P12 |
+| V-38 (consensus_version downgrade) | governance/scip + consensus_manager | `tests/consensus_version.rs::stale_consensus_version_rejected`, `::future_consensus_version_rejected`, `::correct_consensus_version_accepted`; `tests/block_executor.rs::rejects_stale_consensus_version` | ✅ S1-P05/P12 |
+| V-39 (Network confusion) | protocol HELLO + genesis | `tests/network_id.rs::foreign_network_id_is_rejected_and_banned`; proptest `crates/strangecoin-core/tests/consensus_proptest.rs::chain_id_validation` | ✅ S1-P14/P19 |
+| V-40 (RBF fee-war DoS) | mempool RBF | `tests/rbf.rs::rbf_replacement_emits_tx_rejected`, `::rbf_replacement_with_lower_feerate_rejected`, `::rbf_replacement_chain_is_limited`, `::rbf_replacement_evicts_dependencies`, `::rbf_replacement_is_what_gets_mined`; `tests/double_spend.rs` (регрессия) | ✅ S1-P17 |
+| V-41 (SyncEngine flooding) | network/sync_engine | `tests/sync_engine.rs::concurrent_candidates_race_through_one_engine`; unit-тесты `src/network/sync_engine.rs::duplicate_candidate_is_dropped_at_the_inbox`, `::full_pull_lane_drops_without_ban`, `::full_inbound_lane_bans_the_producer`, `::headers_lane_is_separate_from_blocks`; `tests/network.rs::real_network_fast_registration_race` | ✅ S1-P18 |
+| V-42 (HRP confusion) | core address (bech32) | core `src/address.rs::test_round_trip`, `::test_checksum_error`, `::test_hrp_validation`, `::test_network_id_hrp_mapping`; `tests/two_clients.rs::bech32_address_transfer`; `tests/address_migration.rs::legacy_base64_balances_migrate_to_bech32_on_open` | ✅ S1-P15 |
 
 **Итого gaps:** 6 векторов без полных тестов (V-03, V-15, V-16, V-17, V-28, V-22/V-33). Из них:
 - V-03, V-16, V-17, V-28 — требуют интеграционных/unit-тестов (не закрыты Stage 1)
