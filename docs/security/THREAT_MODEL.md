@@ -531,7 +531,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | **Описание** | Testnet использует низкий difficulty для быстрого блока. Атакующий может легко получить >50% хешрейта на testnet и: (1) переписать историю, (2) double-spend testnet funds, (3) потенциально отправить скомпрометированные блоки в mainnet (если chain_id не проверяется). |
 | **Stage 0 Mitigation** | chain_id separation (P05: testnet=2, mainnet=1); nodes reject blocks с wrong chain_id; testnet faucet для distribution. |
 | **Stage** | P05 |
-| **Residual Risk** | Низкий. chain_id isolation adequately mitigates cross-network contamination. |
+| **Residual Risk** | Средний (testnet-only). chain_id isolation защищает mainnet от cross-network contamination, но low testnet difficulty позволяет >50% rewrite истории testnet (double-spend testnet funds). **Obligation: testnet difficulty retarget hardening — фиксируется SCIP, activation height post-mainnet-freeze; mainnet — Stage 6 external audit; testnet residual accepted до retarget fix** (закрывает BUG-S0-033). |
 | **Monitoring** | Мониторинг chain_id в rejected blocks; alert при аномалиях. |
 
 ---
@@ -929,6 +929,7 @@ Reproducible builds + cosign signatures для верификации бинар
 |------|--------|------------|
 | Selfish mining (V-03) | PoW inherent risk; no finality gadget | Monitoring + alert |
 | 51% attack (V-05) | Small network; low hash rate | Monitoring + alert |
+| Testnet 51% (V-26) | Low testnet difficulty by design (fast blocks); chain_id protects mainnet | **Obligation: retarget hardening via SCIP post-mainnet-freeze + Stage 6 audit; testnet residual accepted** |
 | Weak password (V-27) | User responsibility | PBKDF2 ≥210k iters |
 | Plaintext P2P (V-24) | Noise Protocol deferred to Stage 2 | Accept; mitigate with monitoring |
 | Genesis key from public string (V-31) | Testnet/regtest only; secret removed from code (S1.5-P01); pubkey remains burned | **Obligation: offline key + SCIP-0001 before mainnet freeze** |

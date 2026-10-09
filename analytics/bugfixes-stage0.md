@@ -67,7 +67,7 @@
 | BUG-S0-030 | E | H | S1-P22 | `STAGE1_SUMMARY §6` фиксирует residual, но не понижает соответствующие DoD-критерии в таблице §1 | fixed (2026-10-09): §1 — полный Residual-столбец (15 критериев + security-track, легенда); №2 дополнен §6.1; №11/№12/№13/№15 + security-track → 🟡 (§6.3 / §6.4+§6.5 / §6.4 / §6.2 / §6.2); §6.1/6.2/6.3/6.4/6.7 — back-references; S1-P22 КГ дополнена правилом понижения; код не менялся |
 | BUG-S0-031 | E | H | S1-P22 | `INVARIANTS_ENFORCED.md` ссылается на несуществующий файл `src/blockchain/blockchain.rs` (инвариант №5) | fixed (2026-10-09): переписывание таблицы (BUG-S0-024) — все enforce-ссылки указывают на существующие файлы (`block_executor.rs`, `blockchain_facade.rs`, `state_cache.rs`, `consensus_manager.rs`, core-модули) |
 | BUG-S0-032 | E | M | S1-P22 | `STAGE1_SUMMARY §6.6` — «untracked artifacts on disk» (`test.md`, `ComputeGenesisHash/`) как residual — гигиена не закрыта | fixed |
-| BUG-S0-033 | E | M | P22 / D02 | `THREAT_MODEL.md` создан в D02, но 51%-риск на low-difficulty testnet не помечен как residual с явным сроком | open |
+| BUG-S0-033 | E | M | P22 / D02 | `THREAT_MODEL.md` создан в D02, но 51%-риск на low-difficulty testnet не помечен как residual с явным сроком | fixed (2026-10-10): V-26 Residual Risk дополнен явной obligation (retarget hardening — SCIP, activation post-mainnet-freeze; Stage 6 audit; testnet residual accepted); добавлена строка V-26 в §7.2 Risks Accepted |
 | BUG-S0-034 | E | M | S1-P21 | THREAT_MODEL v3.0 — векторы V-34..V-42 добавлены, но «mapping вектор → тест» не ссылается на конкретные `tests/X.rs` | open |
 | BUG-S0-035 | E | L | AGENTS.md | `AGENTS.md` заявляет «Stage 1 complete» — обновлено до фактического статуса, но без оговорок о residual из STAGE1_SUMMARY §6 | fixed |
 
@@ -1149,6 +1149,15 @@ Rust-код не менялся. КГ D02 выполнена буквально:
 2. Уточнить Residual Risk с конкретным обязательством: «Mitigated on mainnet via Stage 2 difficulty retarget + Stage 6 audit; testnet residual accepted».
 3. Если такого обязательства нет — добавить.
 
+**Решение (2026-10-10):** Документ-only fix. Баг подтверждён: V-26 в `THREAT_MODEL.md` существовал, но Residual Risk был «Низкий. chain_id isolation adequately mitigates cross-network contamination» — obligation/срок отсутствовали. Исправление:
+1. V-26 Residual Risk переписан: «Средний (testnet-only)» + явная **Obligation**: testnet difficulty retarget hardening — фиксируется SCIP, activation height post-mainnet-freeze; mainnet — Stage 6 external audit; testnet residual accepted до retarget fix.
+2. §7.2 Risks Accepted — добавлена строка «Testnet 51% (V-26)» с obligation (паттерн V-31/V-33).
+
+**Отклонения от рекомендации:** SCIP-0002 уже занят (state_root enforcement, S1.5-P03) — retarget hardening привязан к «SCIP» без номера; Stage 2 в ROADMAP3 — сетевая зрелость (Noise/Erlay/gossip), не difficulty retarget — вместо «Stage 2 difficulty retarget» использована roadmap-точная формулировка «SCIP, activation height post-mainnet-freeze + Stage 6 audit».
+
+| Статус | fixed (2026-10-10) |
+|--------|-------------------|
+
 ---
 
 ### BUG-S0-034 — THREAT_MODEL v3.0 — нет ссылок на конкретные тесты
@@ -1235,7 +1244,7 @@ Rust-код не менялся. КГ D02 выполнена буквально:
 | ~~BUG-S0-026~~ | ~~TLA+ TLC-прогон~~ (**fixed 2026-10-09**: S1.5-P08 — bounded-модель с полным safety-набором; TLC 2.19 PASS 35,207 состояний, 9 инвариантов + Liveness; claimed 2026-09-28 superseded; `SPECIFICATION Spec` вместо INIT/NEXT — fairness реально применяется) |
 | ~~BUG-S0-027~~ | ~~emission.rs — сверка с total_supply~~ (**fixed 2026-10-09**: mining-loop дополнен assert supply_before; добавлены `mainnet_tail_phase_reward_matches_total_supply` (tail-фаза, зависимость от total_supply) и `tail_phase_transition_at_fifth_halving` (граница base→tail на 5-м halving); regtest-loop оставлен как буквальная КГ D01) |
 | BUG-S0-032 | Repo hygiene |
-| BUG-S0-033 | THREAT_MODEL testnet 51% срок |
+| ~~BUG-S0-033~~ | ~~THREAT_MODEL testnet 51% срок~~ (**fixed 2026-10-10**: V-26 Residual Risk + obligation (SCIP post-mainnet-freeze, Stage 6 audit); строка V-26 в §7.2) |
 | BUG-S0-034 | THREAT_MODEL v3.0 — ссылки на тесты |
 | ~~BUG-S0-035~~ | ~~AGENTS.md без оговорок~~ (fixed 2026-10-07) |
 
@@ -1266,7 +1275,7 @@ Rust-код не менялся. КГ D02 выполнена буквально:
 | P10 | ~~BUG-S0-015 (partially — seed строка)~~ **fixed 2026-10-08** S1.5-P01 | — |
 | P18 | — | ~~BUG-S0-025 (nonce proptest)~~ **fixed 2026-10-09** |
 | P19 / D01 | ~~BUG-S0-027, BUG-S0-028~~ — **fixed 2026-10-09** | ~~BUG-S0-004 (тесты в main.rs)~~ — **fixed 2026-10-07** |
-| P22 / D02 | BUG-S0-003 (**fixed 2026-10-07**), BUG-S0-033, BUG-S0-034 | ~~BUG-S0-026 (TLC-прогон)~~ — **fixed 2026-10-09** |
+| P22 / D02 | BUG-S0-003 (**fixed 2026-10-07**), ~~BUG-S0-033~~ — **fixed 2026-10-10**, BUG-S0-034 | ~~BUG-S0-026 (TLC-прогон)~~ — **fixed 2026-10-09** |
 | P23 / D02 | ~~BUG-S0-026~~ — **fixed 2026-10-09** (S1.5-P08) | — |
 | P24 / D03 | BUG-S0-005 | — |
 | P26 / D03 | BUG-S0-001, BUG-S0-002 | — |
