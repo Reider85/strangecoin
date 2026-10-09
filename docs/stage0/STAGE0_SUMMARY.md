@@ -43,7 +43,7 @@ Stage 0 (Sanitized Prototype) is complete. 22/26 original prompts (P01–P25) we
 - CI matrix (P20): 3 OS × 2 toolchain, fmt, clippy -D warnings, tarpaulin coverage
 - Reproducible builds (P24): release.yml with LTO, cosign, SLSA Level 3
 - Bug bounty + security docs (P25): BOUNTY.md, SECURITY.md, ADR-0003
-- TLA+ skeleton (P23): consensus.tla with safety properties, TLC verified (D02)
+- TLA+ skeleton (P23): consensus.tla with safety properties — ~~TLC verified (D02)~~ **correction (2026-10-09, BUG-S0-026):** the D02-era TLC claim was not reproducible (no tla2tools v1.8.0; the checked skeleton had only 3 structural invariants, `NoDoubleSpend` vacuous). A real measured TLC PASS on a bounded full-property model exists as of 2026-10-09 — see `docs/spec/README.md` § TLC verification results.
 
 ### Testing (D01)
 - 8 integration test files in `tests/`: two_clients, network, reorg, double_spend, pow, emission, time, concurrency

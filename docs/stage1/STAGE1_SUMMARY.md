@@ -108,7 +108,7 @@ S1-P22 itself: `68e358f` — annotated tag `v1.1.0-stage1` placed on this commit
 | Tie-breaking: work → earliest timestamp → lowest hash | ✅ | proptest + fork_choice.md |
 | Mempool RBF policy implemented | ✅ | S1-P17 + `tests/rbf.rs` |
 | Governance: SCIP + activation height | ✅ | S1-P05 + `docs/SCIP/` |
-| Security: TLA+ + fuzzing targets | ✅ | `docs/spec/README.md` TLC results (D02); fuzz target S1-P19 |
+| Security: TLA+ + fuzzing targets | ✅ | `docs/spec/README.md` TLC PASS 2026-10-09 (BUG-S0-026); fuzz target S1-P19 |
 | Strangler pattern: subsystem → crate | ✅ | strangecoin-core |
 | Tests: unit + proptest + integration | ✅ | workspace suite |
 | Documentation: ADR для архитектурных решений | ✅ | ADR-0006..0010 |
@@ -127,7 +127,7 @@ S1-P22 itself: `68e358f` — annotated tag `v1.1.0-stage1` placed on this commit
 | RocksDB migration | 3 | ADR-0008 plan |
 | EncryptedMempool, EIP-1559, AA, MEV | 5 | fee_market.rs stub |
 | PoS / Casper / BLS12-381 | 7 | consensus_manager enum readiness |
-| Full TLA+ formal verification | 6 | skeleton + TLC partial (D02) |
+| Full TLA+ formal verification | 6 | bounded full-property model + TLC PASS (BUG-S0-026, 2026-10-09); unbounded/reorg/state-commitment — Stage 6 |
 
 ---
 
@@ -135,7 +135,7 @@ S1-P22 itself: `68e358f` — annotated tag `v1.1.0-stage1` placed on this commit
 
 1. **Offline genesis key** — **updated 2026-10-08 (BUG-S0-015 / S1.5-P01)**: seed-derived `genesis_keypair()` and the public seed string `"strangecoin-genesis-seed-2026"` **removed from code**; `genesis.json` carries only `initial_holder_pubkey`; SCIP-0001 created (`docs/SCIP/scip-0001-genesis-key-replacement.md`); test `tests/genesis_key.rs`. Residual is now **operational**: before mainnet freeze/block 1, generate an offline key, write only the pubkey, update `EXPECTED_GENESIS_HASH`. Current testnet genesis key is **burned**.
 2. **cargo-fuzz on Windows** — **updated 2026-10-09 (BUG-S0-023 / S1.5-P07)**: coverage-guided fuzzing still not runnable on this Windows host (no MSVC/ASan), but the capable-host requirement is now delegated to CI — job `fuzz-canonical-decode` in `.github/workflows/ci.yml` runs cargo-fuzz 0.13.2 for 600s on ubuntu-latest on every push/PR (crash → job fail + `fuzz/artifacts/` upload). Fallback soak: measured 10-minute local run 2026-10-09 clean (§3). Residual: first CI run pending until the workflow executes on GitHub Actions; record its outcome in `fuzz/README.md`.
-3. **TLA+ coverage** — `NoDoubleSpend`/`NoInflation`/`AllTxSigned`/`NonceMonotonic`/`PowValidity` not model-checked by TLC (state-space limits); structural properties hold by construction + Rust tests. Spec does not yet model the state commitment trie / reorg.
+3. **TLA+ coverage** — **updated 2026-10-09 (BUG-S0-026 / S1.5-P08)**: bounded model (2 addresses, ≤3 blocks) with the **full safety set** — `NoDoubleSpend`/`NoInflation`/`AllTxSigned`/`NonceMonotonic`/`PowValidity`/`ChainContinuity`/`ChainIdConsistency`/`SupplyConsistency`/`TypeInvariant` + `Liveness` (WF mining) — **model-checked by TLC 2.19: PASS**, 35,207 states, complete state graph (`docs/spec/README.md`). Residual: **unbounded** model (n accounts / m blocks) not checked; spec does not model the state-commitment trie / reorg / real crypto (abstract signature, scaled emission constants — tail branch live in-model). Rust tests remain the coverage for the production implementation.
 4. **Release pipeline** — workflow fixed in D03; first `v*` tag run still pending GitHub Actions verification (residual in THREAT_MODEL V-33).
 5. **Zero `state_root` opt-in** — blocks with zero state_root still adopt (documented residual; enforcement tightening — later SCIP; S1.5-P03).
 6. **Repo hygiene** — **closed 2026-10-07** (BUG-S0-008 / BUG-S0-032): removed `test.md`, `ComputeGenesisHash/`, `compute_genesis_hash.rs`, `compute_genesis_hash_toml` from the working tree; moved `run_3_wallets.ps1` → `scripts/dev/run_3_wallets.ps1`; `.idea/`/`.codebuddy/` confirmed untracked (gitignored). No untracked repo-root artifacts remain in the git index.

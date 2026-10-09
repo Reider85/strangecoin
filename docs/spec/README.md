@@ -1,184 +1,197 @@
 # TLA+ Specification for Strangecoin Consensus
 
-This directory contains a TLA+ skeleton specification of the Strangecoin consensus rules.
+This directory contains a TLA+ **bounded model** of the Strangecoin consensus
+safety rules, designed to be model-checked end-to-end by TLC (BUG-S0-026).
 
 ## Files
 
-- `consensus.tla` — TLA+ module defining state variables, type invariants, safety properties, and liveness properties.
-- `consensus.cfg` — TLC model checker configuration (constant values, invariants, properties).
+- `consensus.tla` — TLA+ module: bounded state machine (chain, balances,
+  nonces, supply, time) with real transfer semantics and the emission
+  schedule, plus safety invariants and a mining-liveness property.
+- `consensus.cfg` — TLC configuration (`SPECIFICATION Spec`, small constants,
+  9 invariants, 1 temporal property).
 
-## Safety Properties
+## Model scope (bounded, deliberately small)
 
-The specification verifies the following safety properties:
+The model is scaled down so the **entire** state space fits in memory and TLC
+checks every property on every reachable state:
 
-| Property | Description |
-|----------|-------------|
-| `TypeInvariant` | All variables have correct types (chain is sequence of blocks, balances are address→nat, etc.) |
-| `NoDoubleSpend` | Each (sender, nonce) pair is used at most once across all blocks |
-| `NoInflation` | Coinbase amount equals `block_reward_at_height(height, total_supply_before(height))` |
-| `AllTxSigned` | All non-coinbase transactions are signed (sender = address_from_pubkey) |
-| `NonceMonotonic` | Nonces strictly increase per account |
-| `ChainContinuity` | `chain[i].prev_hash = hash(chain[i-1])` for all i > 0 |
-| `PowValidity` | Block hash <= target for all blocks |
-| `ChainIdConsistency` | All transactions have chain_id matching the network |
+| Constant | Value | Meaning |
+|----------|-------|---------|
+| `AddrSet` | `{1, 2}` | two accounts |
+| `MaxBlocks` | `3` | chain length cap |
+| `MaxAmount` | `3` | transfer amount bound |
+| `MaxNonce` | `2` | nonce bound (2 transfers per sender possible) |
+| `InitialBalance` | `5` | starting balance of each account |
+| `InitialReward` | `4` | scaled block reward |
+| `HalvingInterval` | `2` | halving every 2 blocks |
+| `TailRateNum/Den`, `BlocksPerYear` | `1/1`, `2` | tail rate ½ — makes the tail-emission branch **reachable** inside 3 blocks (block 3 mints `max(base=2, tail=3) = 3`), so `NoInflation` is checked against a live tail, not a vacuous one |
+| `MaxTime` | `2` | clock bound |
+| `MaxHash`, `MaxTarget` | `1`, `1` | PoW hash/target bound (`hash <= target`) |
 
-## Liveness Property
+What the model **does** represent:
 
-| Property | Description |
-|----------|-------------|
-| `Liveness` | If mempool is non-empty, eventually the chain grows (mining makes progress) |
+- Blocks with `index`, `timestamp`, up to 1 transfer per block (or none),
+  `prev_hash`/`hash`/`target`, `coinbase_amount`, `chain_id`.
+- Transfers with `sender`, `receiver`, `amount`, `nonce`, `chain_id`,
+  abstract `signature` (nonzero = signed; real secp256k1 is out of TLA+ scope).
+- `AddBlock` enforces: nonce = account nonce + 1, amount ≤ balance,
+  sender ≠ receiver, chain_id match, `hash <= target`, and mints
+  `reward = max(base_reward(height), tail_reward(supply))` — a scaled mirror
+  of `crates/strangecoin-core/src/economics/emission.rs`.
+- `supply` tracks total minted amount; `SupplyConsistency` ties it to the sum
+  of all coinbases in the chain.
 
-## Prerequisites
-
-To run TLC model checker, you need:
-
-1. **Java 8+** — TLC is a Java application
-2. **TLA+ Toolbox** (optional) — IDE for writing TLA+ specs
-3. **tla2tools.jar** — TLC model checker
-
-### Installing TLC
-
-Download `tla2tools.jar` from the [TLA+ GitHub releases](https://github.com/tlaplus/tlaplus/releases):
-
-```bash
-# Download tla2tools.jar
-curl -L -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/latest/download/tla2tools.jar
-
-# Or use the TLA+ Toolbox IDE which includes TLC
-```
-
-## Running TLC
-
-### Basic model checking
-
-```bash
-# From this directory (docs/spec/)
-java -cp tla2tools.jar tlc2.TLC consensus.tla -config consensus.cfg
-```
-
-### Small model (3 nodes, 10 blocks)
-
-For a small model, modify `consensus.cfg` to restrict the state space:
-
-```
-CONSTANT
-    ...
-    MaxChainLen = 10
-    NumNodes = 3
-
-CONSTRAINT
-    MaxChainConstraint
-```
-
-Then add to `consensus.tla`:
-
-```tla
-MaxChainConstraint == Len(chain) <= MaxChainLen
-```
-
-### With state trace (for debugging)
-
-```bash
-java -cp tla2tools.jar tlc2.TLC consensus.tla -config consensus.cfg -trace
-```
-
-### With checkpointing (for large models)
-
-```bash
-java -cp tla2tools.jar tlc2.TLC consensus.tla -config consensus.cfg -checkpoint 60
-```
-
-## What Is Verified
-
-- **Safety properties** — checked as invariants on every reachable state
-- **Liveness property** — checked as a temporal property (fairness required)
-
-## What Is NOT Verified (Stage 0 scope)
-
-The following properties are **out of scope** for this skeleton specification:
+What the model does **not** represent (out of scope, verified by Rust tests
+instead):
 
 | Property | Stage |
 |----------|-------|
-| Full cryptographic verification (secp256k1 signatures) | Stage 1+ |
-| PoS finality and validator set | Stage 7 |
-| Network gossip and P2P protocol | Stage 1 |
-| State root matching (Verkle Trie) | Stage 1 |
+| Real cryptography (secp256k1 signatures, blake3 hashing) | tested in Rust |
+| Sparse Merkle state commitment / state root | Stage 1 (Rust tests) |
+| Chain reorganization | Stage 1+ |
+| Median-time-past, future-timestamp rules | Stage 1+ |
+| Network / P2P / gossip | Stage 1–2 |
 | Fee market (EIP-1559) | Stage 5 |
-| Smart contract execution (WASM) | Stage 1.5 |
-| MEV mitigation | Stage 5 |
-| Reorg (chain reorganization) handling | Stage 1 |
+| WASM execution | Stage 1.5 |
+| PoS finality | Stage 7 |
+| Unbounded model (n accounts, m blocks) | residual — see below |
 
-## Known Limitations
+## Verified properties
 
-1. **Abstract cryptography** — `VerifySignature(tx)` always returns TRUE. Full secp256k1 verification is outside TLA+ scope.
-2. **Simplified emission** — `TotalSupplyBefore` computes a static sum; actual emission depends on chain history.
-3. **Abstract hashing** — `AbstractHash` preserves distinctness but does not model blake3.
-4. **Single-node model** — Does not model network, peers, or consensus between nodes.
-5. **No reorg modeling** — Chain only grows; `unapply_block` is not modeled in this skeleton.
+| Property | Kind | Statement |
+|----------|------|-----------|
+| `TypeInvariant` | invariant | all variables have the declared types |
+| `SupplyConsistency` | invariant | tracked `supply` = sum of all coinbases in `chain` |
+| `NoDoubleSpend` | invariant | no two transfers from the same sender share a nonce anywhere in the chain |
+| `NoInflation` | invariant | every block mints exactly `RewardAtHeight(index, supply_before)` (halving + tail schedule) |
+| `AllTxSigned` | invariant | every transfer carries a nonzero (abstract) signature |
+| `NonceMonotonic` | invariant | per-sender nonces strictly increase along the chain |
+| `ChainContinuity` | invariant | `chain[i].prev_hash = chain[i-1].hash` for all i > 0 |
+| `PowValidity` | invariant | `hash <= target` for all blocks |
+| `ChainIdConsistency` | invariant | blocks and transfers carry the network `ChainId` |
+| `Liveness` | temporal (WF) | under weak fairness of `AddBlock`, the chain eventually reaches `MaxBlocks` and stays there |
 
-## TLC Verification Results (D02)
+Unlike the pre-BUG-S0-026 skeleton, these are **not vacuous**: TLC coverage
+shows `NoDoubleSpend`/`NonceMonotonic` inner quantifiers evaluated on 84,400
+transfer pairs, `NoInflation`/`RewardAtHeight` on 103,564 block instances, and
+`AllTxSigned` on 86,072 transfers (states with non-empty `txs` exist and are
+explorated).
 
-**Дата прогона:** 2026-09-28
-**Инструмент:** TLC2 Version 2026.09.25.163503 (tla2tools.jar v1.8.0)
-**Конфигурация:** `consensus_model.cfg` (scaled-down model: ChainConstraint Len(chain) ≤ 3, time ≤ 5)
-**Результат:** ✅ **PASS** — все инварианты выполнены, ошибок не обнаружено
+## Prerequisites
 
-### Свойства, проверенные TLC
+1. **Java 8+** — TLC is a Java application
+2. **tla2tools.jar** — download from the
+   [TLA+ GitHub releases](https://github.com/tlaplus/tlaplus/releases):
 
-| Свойство | Статус | Описание |
-|----------|--------|----------|
-| `TypeInvariant` | ✅ PASS | Типы переменных корректны |
-| `ChainContinuity` | ✅ PASS | Цепочка блоков связана через prev_hash |
-| `ChainIdConsistency` | ✅ PASS | Все блоки содержат верный chain_id |
+```bash
+curl -L -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+```
 
-### Статистика прогона
+Do **not** commit the jar; it is gitignored.
 
-| Метрика | Значение |
-|---------|----------|
-| Состояний сгенерировано | 2,096,629 |
-| Уникальных состояний | 174,719 |
-| Глубина графа состояний | 9 |
-| Время прогона | ~10 сек |
-| Вероятность коллизии fingerprint | 1.1E-11 |
+## Running TLC
 
-### Ограничения модели
+From this directory (`docs/spec/`):
 
-Оригинальная конфигурация `consensus.cfg` использует константы, слишком большие для TLC (MaxSupplyPreTail = 2.1×10¹⁵, InitialReward = 5×10⁹). TLC не может обработать эти значения из-за ограничений парсинга Java. Создана масштабированная модель `consensus_model.cfg` с сохранением структуры свойств.
+```bash
+java -cp tla2tools.jar tlc2.TLC consensus.tla -config consensus.cfg -deadlock
+```
 
-Следующие свойства из `consensus.cfg` **не проверены** TLC из-за масштабирования:
+Flags:
 
-| Свойство | Причина |
-|----------|---------|
-| `NoDoubleSpend` | Требует Seq(Transaction) — бесконечное множество |
-| `NoInflation` | Использует рекурсивную функцию TotalSupplyBefore с большими числами |
-| `AllTxSigned` | Требует Seq(Transaction) — бесконечное множество |
-| `NonceMonotonic` | Требует Seq(Transaction) — бесконечное множество |
-| `PowValidity` | Требует большие числа для target/hash |
-| `Liveness` | Temporal property — требует fairness |
+- `-deadlock` — required. The bounded model's terminal states (chain full,
+  clock at `MaxTime`) have no enabled actions; these are expected terminal
+  deadlocks of the bound, not errors.
+- `-workers auto` — optional, parallel workers.
+- `-coverage 1` — optional, per-action/per-line hit counts.
 
-**Замечание:** Свойства `NoDoubleSpend`, `NoInflation`, `AllTxSigned`, `NonceMonotonic`, `PowValidity` are structural invariants that hold by construction in the Rust implementation (tested by 48+ unit/integration tests). The TLA+ model verifies the core structural properties (`ChainContinuity`, `ChainIdConsistency`, `TypeInvariant`) that TLC can handle.
+### The `SPECIFICATION` gotcha (why the cfg looks unusual)
 
-## Relationship to ARCHITECT3.md
+`consensus.cfg` uses `SPECIFICATION Spec` instead of `INIT Init` / `NEXT Next`.
+**With `INIT`/`NEXT`, TLC silently ignores the fairness conjuncts in `Spec`**
+(`WF_vars(...)`), which produces spurious liveness counterexamples ("State N:
+Stuttering" even when the action is enabled). This was verified empirically
+against minimal control specs. Always use `SPECIFICATION` when the module's
+`Spec` operator contains fairness.
 
-This specification covers the following invariants from `ARCHITECT3.md §5`:
+## TLC verification results (BUG-S0-026)
 
-| # | Invariant | TLA+ Property |
-|---|-----------|---------------|
-| 2 | Every tx signed, sender==pubkey | `AllTxSigned` |
-| 3 | hash <= target | `PowValidity` |
-| 5 | Hash/signature on canonical bytes | `PowValidity` (abstract) |
-| 6 | No rewards above emission schedule | `NoInflation` |
-| 8 | Genesis is deterministic | `ChainContinuity` (base case) |
-| 10 | Replay protection (chain_id) | `ChainIdConsistency` |
-| 11 | Nonce strictly increases | `NonceMonotonic` |
-| 12 | txid = commitment | `NoDoubleSpend` (abstract) |
-| 16 | P2P framing with allocation check | N/A (network layer) |
-| 17 | Rate limiting per peer | N/A (network layer) |
+**Run date:** 2026-10-09  
+**Tool:** TLC2 Version 2.19 of 08 August 2024 (rev `5a47802`) — `tla2tools.jar`
+v1.7.4, Temurin JDK 21.0.12, Windows 11  
+**Configuration:** `consensus.cfg` (`SPECIFICATION Spec`, constants per table
+above), flags `-deadlock -workers auto -coverage 1`  
+**Result:** ✅ **PASS** — `Model checking completed. No error has been found.`
+
+### Statistics (measured, reproducible)
+
+| Metric | Value |
+|--------|-------|
+| States generated | 35,207 |
+| Distinct states | 35,207 |
+| States left on queue | 0 (complete state graph) |
+| Graph depth | 6 |
+| Average outdegree | 1 (min 0, max 15, p95 8) |
+| Fingerprint collision probability | 0.0 |
+| `AddBlock` firings (coverage) | 23,330 |
+| `AdvanceTime` firings (coverage) | 11,876 |
+| Wall time | ~6 s |
+| Invariants checked | 9 / 9 PASS |
+| Temporal properties | 1 / 1 PASS (`Liveness`, checked on the complete state space) |
+
+### What was checked
+
+All 9 invariants are checked on **every one of the 35,207 reachable states**;
+`Liveness` is checked on the complete state graph under `WF_vars(AddBlock)`.
+This closes the D02 acceptance criterion ("TLC прогнан — результат в
+`docs/spec/README.md`") with a measured, reproducible run.
+
+### Superseded claim (2026-09-28)
+
+The previous "TLC Verification Results (D02)" section in this README (commit
+`d66829e`) claimed a PASS dated 2026-09-28 with "tla2tools.jar v1.8.0" and
+statistics (2,096,629 states / 174,719 unique / depth 9 / ~10 s). That claim
+is **superseded and not reproducible**: no public tla2tools v1.8.0 exists
+(latest release line is 1.7.x), the referenced `consensus_model.cfg` has been
+removed, and the module it described checked only 3 structural invariants of a
+71-line skeleton (`NoDoubleSpend` was `tx_count >= 0` while `tx_count` was
+always 0 — vacuous). The results above replace it.
+
+### Residual (honest limits)
+
+- **Bounded model:** 2 accounts, 3 blocks, 1 transfer/block. The property set
+  holds on this state space; the unbounded model (n accounts, m blocks) is
+  **not** model-checked. Structural arguments + 48+ Rust unit/integration
+  tests cover the production implementation; lifting the bounds (or using
+  data independence / symmetry reduction) is future work.
+- **Abstract crypto:** `signature ≠ 0` stands in for secp256k1;
+  `hash ∈ 0..MaxHash` stands in for blake3.
+- **No state commitment:** the Sparse Merkle state root is not modeled;
+  `state_root` verification lives in Rust tests (`tests/state_root.rs`,
+  core SMT proptests).
+- **No reorg / MTP / fees / networking** — see scope table above.
+
+## Relationship to ARCHITECT3.md §5 invariants
+
+| # | Invariant | TLA+ property | Status |
+|---|-----------|---------------|--------|
+| 2 | Every tx signed, sender == pubkey | `AllTxSigned` (abstract sig) | bounded-checked |
+| 3 | hash <= target | `PowValidity` | bounded-checked |
+| 6 | No rewards above emission schedule | `NoInflation` | bounded-checked (tail branch live) |
+| 8 | Genesis / chain determinism | `ChainContinuity` | bounded-checked |
+| 10 | Replay protection (chain_id) | `ChainIdConsistency` | bounded-checked |
+| 11 | Nonce strictly increases | `NonceMonotonic` | bounded-checked |
+| 12 | txid = commitment / no double-spend | `NoDoubleSpend` | bounded-checked |
+| 16–17 | P2P framing, rate limiting | N/A | network layer (Rust tests) |
 
 ## References
 
 - [TLA+ Homepage](https://lamport.azurewebsites.net/tla/tla.html)
 - [TLC Model Checker](https://lamport.azurewebsites.net/tla/tools.html)
 - [Learn TLA+](https://learntla.com)
+- [Specifying Systems](https://lamport.azurewebsites.net/tla/tla.html) §14.3.5 —
+  why state constraints + liveness checking are unsound (why this model bounds
+  the state space in the actions, not via `CONSTRAINT`)
 - [ARCHITECT3.md §5](../../analytics/ARCHITECT3.md) — 22 invariants
-- [ARCHITECT3.md §6](../../analytics/ARCHITECT3.md) — STRIDE threat model
+- [BUG-S0-026](../../analytics/bugfixes-stage0.md) — the bug this run closes

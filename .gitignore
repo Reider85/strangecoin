@@ -30,3 +30,7 @@ config.json
 
 # cargo-fuzz build dir (BUG-S0-023)
 fuzz/target/
+
+# TLA+ TLC artifacts (BUG-S0-026)
+*.jar
+states/

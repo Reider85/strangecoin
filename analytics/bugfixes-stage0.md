@@ -60,7 +60,7 @@
 | BUG-S0-023 | D | H | S1-P19 | Fuzz-target `canonical_decode` — прогон 10 секунд вместо 10 минут; cargo-fuzz не запущен | fixed (2026-10-09): CI job `fuzz-canonical-decode` (cargo-fuzz 0.13.2, 600s, ubuntu-latest, push/PR, crash-artifacts upload) + измеренный локальный 10-min soak 25,947,107 inputs / 0 panics; README/STAGE1_SUMMARY/THREAT_MODEL обновлены |
 | BUG-S0-024 | D | H | S1-P20 | `INVARIANTS_ENFORCED.md` — нумерация инвариантов не совпадает с ARCHITECT3 §5 (№4 описан как №19) | fixed (2026-10-09): таблица переписана — нумерация 1:1 ARCHITECT3 §5, столбцы Stage 0 / Stage 1 / Test / Status; #19 = 🟡 residual (BUG-S0-012/013), #22 = 🟡 residual (BUG-S0-005); битые ссылки устранены (BUG-S0-031) |
 | BUG-S0-025 | D | M | P18 / S1-P20 | Property-тесты на `apply/unapply round-trip` добавлены, но `nonce` monotonic proptest отсутствует как отдельный | fixed (2026-10-09) |
-| BUG-S0-026 | D | M | P23 / D02 | TLA+ `consensus.tla` — TLC-прогон не выполнен, в `docs/spec/README.md` нет результата | open |
+| BUG-S0-026 | D | M | P23 / D02 | TLA+ `consensus.tla` — TLC-прогон не выполнен, в `docs/spec/README.md` нет результата | fixed (2026-10-09): bounded-модель с полным safety-набором (2 адреса, 3 блока, реальные txs, эмиссия с живой tail-веткой); TLC 2.19 (tla2tools v1.7.4) — PASS: 35,207 состояний, 9 инвариантов + Liveness под WF_vars(AddBlock); claimed-прогон 2026-09-28 superseded (v1.8.0 не существует); `consensus_model.cfg` удалён; cfg использует `SPECIFICATION Spec` (INIT/NEXT молча игнорирует fairness — задокументировано) |
 | BUG-S0-027 | D | M | P19 / D01 | Интеграционный тест `emission.rs` майнит блоки, но не сверяет `block_reward_at_height(h, total_supply_before)` на чейн-агнезисе | open |
 | BUG-S0-028 | D | L | S1-P19 | `tests/concurrency.rs` создан вне спеки P19 — допустимое расширение, но не отражено в КГ | wontfix |
 | BUG-S0-029 | E | H | S1-P22 | `STAGE1_SUMMARY.md §1` помечает критерий №2 (Verkle + state.root_after) ✅, а §6 — residual «zero state_root opt-in» → внутреннее противоречие | open |
@@ -904,6 +904,7 @@ Nonce-rejection остаётся mempool-уровневым (инвариант 
 | **Промпт-источник** | P23 / D02 |
 | **КГ нарушен** | D02 КГ: «TLC прогнан (или невозможность зафиксирована с причиной) — результат в `docs/spec/README.md`» |
 | **Файлы** | `docs/spec/consensus.tla`, `docs/spec/consensus.cfg`, `docs/spec/README.md` |
+| **Статус** | **fixed 2026-10-09** (S1.5-P08) |
 
 **Факт:** retro §5.4: «TLC не запускался (опционально по промпту, но и не сделано)». D02 требует фиксации результата. STAGE1_SUMMARY §6.3: «TLA+ coverage — `NoDoubleSpend`/`NoInflation`/`AllTxSigned`/`NonceMonotonic`/`PowValidity` not model-checked by TLC (state-space limits); structural properties hold by construction + Rust tests. Spec does not yet model Verkle/reorg».
 
@@ -913,6 +914,56 @@ Nonce-rejection остаётся mempool-уровневым (инвариант 
 1. Установить `tla2tools.jar`, прогнать TLC на маленькой модели (3 узла, 10 блоков) — зафиксировать PASS/FAIL с output.
 2. В `docs/spec/README.md` — добавить секцию «TLC Results» с выходом прогона.
 3. Если state-space слишком велик — уменьшить константы в `consensus.cfg` (MaxSupply=100 вместо 21M) и зафиксировать, какие свойства проверены на маленькой модели.
+
+**Исправление (S1.5-P08, executed 2026-10-09):**
+
+Проверка `docs/spec/README.md` вскрыла, что секция «TLC Verification Results
+(D02)» существовала, но была **невоспроизводима**: claimed-прогон 2026-09-28
+ссылался на «tla2tools.jar v1.8.0» (публично не существует; latest — 1.7.4) и
+`consensus_model.cfg`, а сам `consensus.tla` был скелетом 71 строки, где
+`NoDoubleSpend == tx_count >= 0` вакуумен (`tx_count ≡ 0`), а
+`NoInflation`/`AllTxSigned`/`NonceMonotonic`/`PowValidity`/`Liveness` из
+`consensus.cfg` **не были определены** в модуле — базовая команда из README
+падала с «unknown operator».
+
+Что сделано:
+
+1. **`docs/spec/consensus.tla` переписан** (71 → ~210 строк): bounded-модель с
+   реальными транзакциями — 2 адреса, ≤3 блоков, ≤1 transfer/блок, balances/
+   nonces/supply как переменные состояния; `AddBlock` применяет транзакции
+   (nonce = account_nonce+1, amount ≤ balance) и чеканит
+   `reward = max(base, tail)` по формуле из
+   `crates/strangecoin-core/src/economics/emission.rs` (scaled-константы,
+   tail-ветка **жива** на блоке 3: base=2 < tail=3). 9 инвариантов
+   (TypeInvariant, SupplyConsistency, NoDoubleSpend, NoInflation, AllTxSigned,
+   NonceMonotonic, ChainContinuity, PowValidity, ChainIdConsistency) +
+   `Liveness == <>[](Len(chain) = MaxBlocks)` под `WF_vars(AddBlock)`.
+2. **`docs/spec/consensus.cfg` переписан**: `SPECIFICATION Spec` (не
+   `INIT`/`NEXT` — с ними TLC **молча игнорирует fairness** из Spec, что даёт
+   ложные liveness-counterexamples; проверено на контрольных мини-модулях и
+   задокументировано в README), малые константы (MaxBlocks=3, MaxAmount=3,
+   MaxNonce=2, InitialReward=4, HalvingInterval=2, tail rate ½, MaxTime=2,
+   MaxHash=MaxTarget=1). `consensus_model.cfg` **удалён** как дубликат.
+3. **Реальный TLC-прогон** (2026-10-09): tla2tools.jar **v1.7.4**
+   (TLC2 2.19 rev `5a47802`), Temurin JDK 21.0.12, команда
+   `java -cp tla2tools.jar tlc2.TLC consensus.tla -config consensus.cfg
+   -deadlock -workers auto -coverage 1`. **Результат: PASS** —
+   `Model checking completed. No error has been found.`; 35,207 states
+   generated = 35,207 distinct (полный граф, fingerprint collision 0.0),
+   depth 6, ~6 s; coverage: AddBlock 23,330 / AdvanceTime 11,876; внутренние
+   кванторы NoDoubleSpend/NonceMonotonic выполнены на 84,400 парах tx,
+   NoInflation на 103,564 block-instances — свойства **нетривиальны**.
+   `-deadlock` обязателен: терминальные состояния bounded-модели (цепь полна,
+   clock в MaxTime) — ожидаемые deadlock'и границы, не ошибки.
+4. **`docs/spec/README.md` переписан**: таблица констант модели, список
+   checked/not-checked свойств, измеренный output прогона, явный supersede
+   claimed-результата 2026-09-28 (причина невоспроизводимости), residual
+   (bounded model / abstract crypto / нет state commitment и reorg),
+   задокументирован `SPECIFICATION`-gotcha.
+5. `.gitignore`: `*.jar`, `states/` (TLC-артефакты).
+
+Rust-код не менялся. КГ D02 выполнена буквально: TLC прогнан, результат с
+измеренной статистикой зафиксирован в `docs/spec/README.md`.
 
 ---
 
@@ -1151,7 +1202,7 @@ Nonce-rejection остаётся mempool-уровневым (инвариант 
 | ~~BUG-S0-022~~ | ~~Прямые мутации balances — нет gate~~ (**fixed 2026-10-09**: аудит чист — 0 нарушений; gate `tests/balances_gate.rs` + CI job `source-gates`; КГ S1-P12 формализована) |
 | ~~BUG-S0-023~~ | ~~Fuzz — 10 сек вместо 10 мин~~ (**fixed 2026-10-09**: CI job `fuzz-canonical-decode` — cargo-fuzz 0.13.2, 600s, ubuntu-latest, push/PR, crash-artifacts upload; измеренный локальный 10-min soak 25,947,107 inputs / 0 panics; README/STAGE1_SUMMARY §3+§6.2/THREAT_MODEL/Changelog обновлены; superseded unverified «28.7M» claim) |
 | ~~BUG-S0-025~~ | ~~nonce proptest — проверить наличие~~ (**fixed 2026-10-09**: `nonce_validation` был таутологичен; добавлены core `validate_nonce` + proptest `nonce_reject`; mempool переведён на core-функцию) |
-| BUG-S0-026 | TLA+ TLC-прогон |
+| ~~BUG-S0-026~~ | ~~TLA+ TLC-прогон~~ (**fixed 2026-10-09**: S1.5-P08 — bounded-модель с полным safety-набором; TLC 2.19 PASS 35,207 состояний, 9 инвариантов + Liveness; claimed 2026-09-28 superseded; `SPECIFICATION Spec` вместо INIT/NEXT — fairness реально применяется) |
 | BUG-S0-027 | emission.rs — сверка с total_supply |
 | BUG-S0-032 | Repo hygiene |
 | BUG-S0-033 | THREAT_MODEL testnet 51% срок |
@@ -1185,8 +1236,8 @@ Nonce-rejection остаётся mempool-уровневым (инвариант 
 | P10 | ~~BUG-S0-015 (partially — seed строка)~~ **fixed 2026-10-08** S1.5-P01 | — |
 | P18 | — | ~~BUG-S0-025 (nonce proptest)~~ **fixed 2026-10-09** |
 | P19 / D01 | BUG-S0-027, BUG-S0-028 | ~~BUG-S0-004 (тесты в main.rs)~~ — **fixed 2026-10-07** |
-| P22 / D02 | BUG-S0-003 (**fixed 2026-10-07**), BUG-S0-033, BUG-S0-034 | BUG-S0-026 (TLC-прогон) |
-| P23 / D02 | BUG-S0-026 | — |
+| P22 / D02 | BUG-S0-003 (**fixed 2026-10-07**), BUG-S0-033, BUG-S0-034 | ~~BUG-S0-026 (TLC-прогон)~~ — **fixed 2026-10-09** |
+| P23 / D02 | ~~BUG-S0-026~~ — **fixed 2026-10-09** (S1.5-P08) | — |
 | P24 / D03 | BUG-S0-005 | — |
 | P26 / D03 | BUG-S0-001, BUG-S0-002 | — |
 | S1-P06 | BUG-S0-011, BUG-S0-012, BUG-S0-014, BUG-S0-016 | — |
@@ -1286,10 +1337,20 @@ Nonce-rejection остаётся mempool-уровневым (инвариант 
 
 Закрывает: BUG-S0-026.
 
+**Статус: executed 2026-10-09** — `consensus.tla` переписан как bounded-модель
+с реальными транзакциями (2 адреса, ≤3 блоков, эмиссия по формуле из
+`emission.rs` с живой tail-веткой); `consensus.cfg` — `SPECIFICATION Spec` +
+малые константы (`consensus_model.cfg` удалён); TLC 2.19 (tla2tools v1.7.4)
+**PASS**: 35,207 состояний (полный граф, collision 0.0), 9 инвариантов +
+Liveness под WF_vars(AddBlock), ~6 s; coverage подтверждает нетривиальность
+(84,400 пар tx в NoDoubleSpend). Claimed-прогон D02 от 2026-09-28
+superseded (v1.8.0 не существует публично). Подробности и измеренный output —
+`docs/spec/README.md` § TLC verification results.
+
 Задачи:
-1. Скачать `tla2tools.jar`, прогнать TLC на `docs/spec/consensus.tla` с `docs/spec/consensus.cfg`.
-2. Зафиксировать output в `docs/spec/README.md`.
-3. Если state-space слишком велик — уменьшить константы (MaxSupply=100) и зафиксировать, какие свойства проверены.
+1. ~~Скачать `tla2tools.jar`, прогнать TLC на `docs/spec/consensus.tla` с `docs/spec/consensus.cfg`.~~ → **done**: v1.7.4, PASS (см. выше)
+2. ~~Зафиксировать output в `docs/spec/README.md`.~~ → **done**: секция «TLC verification results (BUG-S0-026)» с полной статистикой
+3. ~~Если state-space слишком велик — уменьшить константы (MaxSupply=100) и зафиксировать, какие свойства проверены.~~ → **done**: константы малы с самого начала (MaxBlocks=3, InitialReward=4 и т.д.); проверены все 9 инвариантов + Liveness
 
 ---
 
