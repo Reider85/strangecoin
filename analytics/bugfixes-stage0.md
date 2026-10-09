@@ -62,7 +62,7 @@
 | BUG-S0-025 | D | M | P18 / S1-P20 | Property-тесты на `apply/unapply round-trip` добавлены, но `nonce` monotonic proptest отсутствует как отдельный | fixed (2026-10-09) |
 | BUG-S0-026 | D | M | P23 / D02 | TLA+ `consensus.tla` — TLC-прогон не выполнен, в `docs/spec/README.md` нет результата | fixed (2026-10-09): bounded-модель с полным safety-набором (2 адреса, 3 блока, реальные txs, эмиссия с живой tail-веткой); TLC 2.19 (tla2tools v1.7.4) — PASS: 35,207 состояний, 9 инвариантов + Liveness под WF_vars(AddBlock); claimed-прогон 2026-09-28 superseded (v1.8.0 не существует); `consensus_model.cfg` удалён; cfg использует `SPECIFICATION Spec` (INIT/NEXT молча игнорирует fairness — задокументировано) |
 | BUG-S0-027 | D | M | P19 / D01 | Интеграционный тест `emission.rs` майнит блоки, но не сверяет `block_reward_at_height(h, total_supply_before)` на чейн-агнезисе | fixed (2026-10-09) |
-| BUG-S0-028 | D | L | S1-P19 | `tests/concurrency.rs` создан вне спеки P19 — допустимое расширение, но не отражено в КГ | wontfix |
+| BUG-S0-028 | D | L | S1-P19 | `tests/concurrency.rs` создан вне спеки P19 — допустимое расширение, но не отражено в КГ | fixed (2026-10-09): wontfix — расширение спеки принято; КГ D01 в prompt-stage1.md:194 дополнена явным упоминанием `concurrency.rs` |
 | BUG-S0-029 | E | H | S1-P22 | `STAGE1_SUMMARY.md §1` помечает критерий №2 (Verkle + state.root_after) ✅, а §6 — residual «zero state_root opt-in» → внутреннее противоречие | open |
 | BUG-S0-030 | E | H | S1-P22 | `STAGE1_SUMMARY §6` фиксирует residual, но не понижает соответствующие DoD-критерии в таблице §1 | open |
 | BUG-S0-031 | E | H | S1-P22 | `INVARIANTS_ENFORCED.md` ссылается на несуществующий файл `src/blockchain/blockchain.rs` (инвариант №5) | fixed (2026-10-09): переписывание таблицы (BUG-S0-024) — все enforce-ссылки указывают на существующие файлы (`block_executor.rs`, `blockchain_facade.rs`, `state_cache.rs`, `consensus_manager.rs`, core-модули) |
@@ -999,11 +999,13 @@ Rust-код не менялся. КГ D02 выполнена буквально:
 |------|----------|
 | **Серьёзность** | L (Low) |
 | **Промпт-источник** | D01 (расширение спеки P19) |
-| **Статус** | wontfix (допустимое расширение) |
+| **Статус** | closed (2026-10-09): wontfix — расширение спеки принято; КГ D01 дополнена |
 
 **Факт:** D01 в `prompt-stage1.md` строка 178: «`deadlock_test_blockchain_wallet_lock_order` → `tests/concurrency.rs` (сверх спеки P19 — допустимо)». Это расширение спеки, но КГ D01 не отражает его наличие явно.
 
 **Рекомендуемое исправление:** wontfix. Зафиксировать в D01 КГ: «8 файлов в `tests/` (включая `concurrency.rs` как расширение спеки P19)».
+
+**Решение (2026-10-09):** Код и тесты не менялись. КГ D01 (`prompt-stage1.md:194`) дополнена: «Все 8 файлов в `tests/` (включая `concurrency.rs` как расширение спеки P19) существуют и проходят». Само расширение спеки P19 (8-й файл сверх 7 сценариев) принято как допустимое — `concurrency.rs` покрывает перенесённый `deadlock_test_blockchain_wallet_lock_order` из main.rs.
 
 ---
 
@@ -1226,7 +1228,7 @@ Rust-код не менялся. КГ D02 выполнена буквально:
 | BUG-S0-008 | Мусор в корне |
 | ~~BUG-S0-009~~ | ~~Один `println!` в cli~~ (**fixed 2026-10-07**: `writeln!(stdout)` в `src/cli/mod.rs`; CONTRIBUTING: CLI stdout ≠ logging; КГ P03 выполняется буквально) |
 | ~~BUG-S0-010~~ | ~~P09 раньше P08 (исторический)~~ (**fixed 2026-10-07**: wontfix — retro-stage0.md уже фиксирует отступление карты зависимостей как единичное, без последствий) |
-| BUG-S0-028 | `tests/concurrency.rs` вне спеки (wontfix) |
+| ~~BUG-S0-028~~ | ~~`tests/concurrency.rs` вне спеки~~ (**fixed 2026-10-09**: wontfix — расширение принято; КГ D01 дополнена явным упоминанием `concurrency.rs`) |
 
 ---
 
@@ -1243,7 +1245,7 @@ Rust-код не менялся. КГ D02 выполнена буквально:
 | P08 / P09 | BUG-S0-010 (wontfix) | — |
 | P10 | ~~BUG-S0-015 (partially — seed строка)~~ **fixed 2026-10-08** S1.5-P01 | — |
 | P18 | — | ~~BUG-S0-025 (nonce proptest)~~ **fixed 2026-10-09** |
-| P19 / D01 | ~~BUG-S0-027~~ — **fixed 2026-10-09**, BUG-S0-028 | ~~BUG-S0-004 (тесты в main.rs)~~ — **fixed 2026-10-07** |
+| P19 / D01 | ~~BUG-S0-027, BUG-S0-028~~ — **fixed 2026-10-09** | ~~BUG-S0-004 (тесты в main.rs)~~ — **fixed 2026-10-07** |
 | P22 / D02 | BUG-S0-003 (**fixed 2026-10-07**), BUG-S0-033, BUG-S0-034 | ~~BUG-S0-026 (TLC-прогон)~~ — **fixed 2026-10-09** |
 | P23 / D02 | ~~BUG-S0-026~~ — **fixed 2026-10-09** (S1.5-P08) | — |
 | P24 / D03 | BUG-S0-005 | — |
