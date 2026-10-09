@@ -27,7 +27,7 @@
 | 3 | `hash <= target` для каждого блока при его difficulty | `validate_difficulty` in `src/consensus/` (U256) | core `consensus::validate_difficulty:234` + `block_executor.rs::validate_target` (высота > 0) | `tests/pow.rs`, `tests/block_executor.rs::rejects_proof_of_work_above_target`, `tests/sync_headers.rs` (PoW-остров) | ✅ |
 | 4 | `apply_block`/`unapply_block` — обратные чистые функции | Implicit in `validate_chain` reconstruction | core `state/inner.rs::apply_block:54` / `unapply_block:136` (чистые, `State → State`) | core `tests/state_roundtrip.rs` (4 proptest: single/multi/chain/nonce) | ✅ |
 | 5 | Хэш/подпись — на канонических байтах (`serialize`), не JSON | `src/serialize.rs` — canonical binary, blake3; 19 golden-vector tests | core `serialize.rs` (canonical encode/decode, FORMAT_VERSION) | core `tests/serialize_golden.rs`, proptest `serialize_deserialize_roundtrip` | ✅ |
-| 6 | Блок не содержит непроверимых транзакций/наград сверх эмиссии | `validate_chain`: coinbase ≤ `block_reward_at_height` | core `state/inner.rs:75-87` — coinbase.amount ≤ `block_reward_at_height(index, total_supply)`; grant-gate `allow_grant_blocks` (`S1-P01`) | `tests/emission.rs`, `tests/grant_flag.rs`, `tests/block_executor.rs::rejects_coinbase_above_the_block_reward` (gap теста: BUG-S0-027) | ✅ |
+| 6 | Блок не содержит непроверимых транзакций/наград сверх эмиссии | `validate_chain`: coinbase ≤ `block_reward_at_height` | core `state/inner.rs:75-87` — coinbase.amount ≤ `block_reward_at_height(index, total_supply)`; grant-gate `allow_grant_blocks` (`S1-P01`) | `tests/emission.rs` (3: mining-loop supply_before + `mainnet_tail_phase_reward_matches_total_supply` + `tail_phase_transition_at_fifth_halving`), `tests/grant_flag.rs`, `tests/block_executor.rs::rejects_coinbase_above_the_block_reward` | ✅ |
 | 7 | Размеры сообщений/блоков всегда ограничены до аллокации | `MAX_MESSAGE_SIZE`, `MAX_BLOCK_SIZE`, `MAX_TX_SIZE` в `validate_chain` + `network/protocol.rs` | `src/network/protocol.rs:9-10` (`MAX_MESSAGE_SIZE`=32MiB, `MAX_BLOCK_SIZE`=4MiB); `state_cache.rs:394`; core serialize length-checks | `src/network/protocol.rs` framing tests (10); `tests/network.rs` | ✅ |
 | 8 | Генезис детерминирован и совпадает у всех узлов | `genesis.json` ↔ `EXPECTED_GENESIS_HASH`; panic on mismatch | core `consensus.rs:309 EXPECTED_GENESIS_HASH`; `blockchain_facade` open-path + `block_executor::validate_position` (genesis на пустой цепи) | `tests/genesis_key.rs` (5), `tests/block_executor.rs::genesis_is_applied_to_an_empty_chain` | ✅ |
 | 9 | Секреты не пишутся на диск и не логируются | `config.toml` без секретов; keystore AES-256-GCM + PBKDF2 | `src/wallet.rs` (PBKDF2+AES-GCM, Drop-flush); `src/config.rs` — нет секретов; genesis seed удалён (BUG-S0-015 / SCIP-0001) | `tests/genesis_key.rs::consensus_source_has_no_genesis_seed`; code audit | ✅ |
@@ -77,7 +77,6 @@
 |---|----------|-----|----------|
 | 19 | Zero `state_root` opt-in + stateless verify без post-root | BUG-S0-012, BUG-S0-013 | S1.5-P03 (SCIP: enforce без opt-out) |
 | 22 | Release pipeline не прогонялся на GitHub Actions | BUG-S0-005 | S1.5-P06 (тег `v0.0.0-rc1`) |
-| 6 | `tests/emission.rs` не сверяет reward с `total_supply_before` | BUG-S0-027 | дополнить тест |
 
 ## Historical Context
 

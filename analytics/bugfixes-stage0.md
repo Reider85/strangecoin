@@ -61,7 +61,7 @@
 | BUG-S0-024 | D | H | S1-P20 | `INVARIANTS_ENFORCED.md` — нумерация инвариантов не совпадает с ARCHITECT3 §5 (№4 описан как №19) | fixed (2026-10-09): таблица переписана — нумерация 1:1 ARCHITECT3 §5, столбцы Stage 0 / Stage 1 / Test / Status; #19 = 🟡 residual (BUG-S0-012/013), #22 = 🟡 residual (BUG-S0-005); битые ссылки устранены (BUG-S0-031) |
 | BUG-S0-025 | D | M | P18 / S1-P20 | Property-тесты на `apply/unapply round-trip` добавлены, но `nonce` monotonic proptest отсутствует как отдельный | fixed (2026-10-09) |
 | BUG-S0-026 | D | M | P23 / D02 | TLA+ `consensus.tla` — TLC-прогон не выполнен, в `docs/spec/README.md` нет результата | fixed (2026-10-09): bounded-модель с полным safety-набором (2 адреса, 3 блока, реальные txs, эмиссия с живой tail-веткой); TLC 2.19 (tla2tools v1.7.4) — PASS: 35,207 состояний, 9 инвариантов + Liveness под WF_vars(AddBlock); claimed-прогон 2026-09-28 superseded (v1.8.0 не существует); `consensus_model.cfg` удалён; cfg использует `SPECIFICATION Spec` (INIT/NEXT молча игнорирует fairness — задокументировано) |
-| BUG-S0-027 | D | M | P19 / D01 | Интеграционный тест `emission.rs` майнит блоки, но не сверяет `block_reward_at_height(h, total_supply_before)` на чейн-агнезисе | open |
+| BUG-S0-027 | D | M | P19 / D01 | Интеграционный тест `emission.rs` майнит блоки, но не сверяет `block_reward_at_height(h, total_supply_before)` на чейн-агнезисе | fixed (2026-10-09) |
 | BUG-S0-028 | D | L | S1-P19 | `tests/concurrency.rs` создан вне спеки P19 — допустимое расширение, но не отражено в КГ | wontfix |
 | BUG-S0-029 | E | H | S1-P22 | `STAGE1_SUMMARY.md §1` помечает критерий №2 (Verkle + state.root_after) ✅, а §6 — residual «zero state_root opt-in» → внутреннее противоречие | open |
 | BUG-S0-030 | E | H | S1-P22 | `STAGE1_SUMMARY §6` фиксирует residual, но не понижает соответствующие DoD-критерии в таблице §1 | open |
@@ -983,6 +983,14 @@ Rust-код не менялся. КГ D02 выполнена буквально:
 2. Если сверка с `total_supply_before` отсутствует — дополнить тест: для каждого блока считать `total_supply_after_block_i-1` и сверять с `block_reward_at_height(i, total_supply_after_block_i-1)`.
 3. Покрыть переход в tail phase — большой height, где `base_reward` уже 0, но `tail_reward > 0`.
 
+**Решение (2026-10-09):** Баг подтверждён: mining-loop в `tests/emission.rs` формально отслеживал running `total_supply` и сверял coinbase с `block_reward_at_height(height, total_supply)`, но тесты идут на regtest (`current_chain_id()` = `CHAIN_ID_REGTEST`), где награда константно `REGTEST_REWARD = 0` — майнер (`block_executor.rs:403-406`) и ожидание оба давали 0, итерации были вакуумными (`0 == 0`). Halving-расписание, tail-эмиссия и зависимость от `total_supply` не проверялись вовсе. Исправление (только тесты, production-код не менялся):
+1. `tests/emission.rs` — mining-loop дополнен `assert_eq!(before_mine, total_supply)` — явная привязка награды к supply-before (буквальная КГ D01).
+2. Новый тест `mainnet_tail_phase_reward_matches_total_supply`: height = `64 * HALVING_INTERVAL` (base = 0), два разных supply (MAX и MAX/2) → reward == `(supply * TAIL_RATE_NUMERATOR) / (TAIL_RATE_DENOMINATOR * BLOCKS_PER_YEAR)`, > 0, и reward'ы различаются — прямое доказательство зависимости от `total_supply`.
+3. Новый тест `tail_phase_transition_at_fifth_halving`: на max-supply граница перехода зафиксирована — epoch 4 (height = `4 * HALVING_INTERVAL`): base 312.5M > tail ≈239.7M → reward = base; epoch 5 (height = `5 * HALVING_INTERVAL`): base 156.25M < tail → reward = tail.
+4. `docs/stage1/INVARIANTS_ENFORCED.md` — инвариант №6: gap-пометка BUG-S0-027 снята, новые тесты добавлены в evidence; residual-строка удалена.
+
+Осознанный предел: end-to-end майнинг на mainnet-расписании невозможен (`current_chain_id()` — константа), поэтому tail-покрытие сделано на уровне чистой публичной функции `block_reward_at_height_for_chain`.
+
 ---
 
 ### BUG-S0-028 — `tests/concurrency.rs` создан вне спеки P19
@@ -1203,7 +1211,7 @@ Rust-код не менялся. КГ D02 выполнена буквально:
 | ~~BUG-S0-023~~ | ~~Fuzz — 10 сек вместо 10 мин~~ (**fixed 2026-10-09**: CI job `fuzz-canonical-decode` — cargo-fuzz 0.13.2, 600s, ubuntu-latest, push/PR, crash-artifacts upload; измеренный локальный 10-min soak 25,947,107 inputs / 0 panics; README/STAGE1_SUMMARY §3+§6.2/THREAT_MODEL/Changelog обновлены; superseded unverified «28.7M» claim) |
 | ~~BUG-S0-025~~ | ~~nonce proptest — проверить наличие~~ (**fixed 2026-10-09**: `nonce_validation` был таутологичен; добавлены core `validate_nonce` + proptest `nonce_reject`; mempool переведён на core-функцию) |
 | ~~BUG-S0-026~~ | ~~TLA+ TLC-прогон~~ (**fixed 2026-10-09**: S1.5-P08 — bounded-модель с полным safety-набором; TLC 2.19 PASS 35,207 состояний, 9 инвариантов + Liveness; claimed 2026-09-28 superseded; `SPECIFICATION Spec` вместо INIT/NEXT — fairness реально применяется) |
-| BUG-S0-027 | emission.rs — сверка с total_supply |
+| ~~BUG-S0-027~~ | ~~emission.rs — сверка с total_supply~~ (**fixed 2026-10-09**: mining-loop дополнен assert supply_before; добавлены `mainnet_tail_phase_reward_matches_total_supply` (tail-фаза, зависимость от total_supply) и `tail_phase_transition_at_fifth_halving` (граница base→tail на 5-м halving); regtest-loop оставлен как буквальная КГ D01) |
 | BUG-S0-032 | Repo hygiene |
 | BUG-S0-033 | THREAT_MODEL testnet 51% срок |
 | BUG-S0-034 | THREAT_MODEL v3.0 — ссылки на тесты |
@@ -1235,7 +1243,7 @@ Rust-код не менялся. КГ D02 выполнена буквально:
 | P08 / P09 | BUG-S0-010 (wontfix) | — |
 | P10 | ~~BUG-S0-015 (partially — seed строка)~~ **fixed 2026-10-08** S1.5-P01 | — |
 | P18 | — | ~~BUG-S0-025 (nonce proptest)~~ **fixed 2026-10-09** |
-| P19 / D01 | BUG-S0-027, BUG-S0-028 | ~~BUG-S0-004 (тесты в main.rs)~~ — **fixed 2026-10-07** |
+| P19 / D01 | ~~BUG-S0-027~~ — **fixed 2026-10-09**, BUG-S0-028 | ~~BUG-S0-004 (тесты в main.rs)~~ — **fixed 2026-10-07** |
 | P22 / D02 | BUG-S0-003 (**fixed 2026-10-07**), BUG-S0-033, BUG-S0-034 | ~~BUG-S0-026 (TLC-прогон)~~ — **fixed 2026-10-09** |
 | P23 / D02 | ~~BUG-S0-026~~ — **fixed 2026-10-09** (S1.5-P08) | — |
 | P24 / D03 | BUG-S0-005 | — |
