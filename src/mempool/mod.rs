@@ -155,13 +155,12 @@ impl Mempool {
                     .count() as u64
             })
             .unwrap_or(0);
-        let expected_nonce = account_state.nonce + 1 + pending_count;
-        if tx.nonce != expected_nonce {
-            return Err(StrangecoinError::InvalidNonce {
-                expected: expected_nonce,
-                got: tx.nonce,
-            });
-        }
+        // expected = account.nonce + 1 + pending_count; правило — core
+        // validate_nonce (BUG-S0-025), маппинг ошибки через From<CoreError>.
+        strangecoin_core::consensus::validate_nonce(
+            tx.nonce,
+            account_state.nonce.saturating_add(pending_count),
+        )?;
 
         let pending_spent: u64 = sender_map
             .map(|m| {

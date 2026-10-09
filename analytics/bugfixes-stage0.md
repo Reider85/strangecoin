@@ -59,7 +59,7 @@
 | BUG-S0-022 | C | M | S1-P12 | Прямые мутации `balances` вне `state_cache` в части legacy-путей — `rg`-аудит не формализован как gate | fixed (2026-10-09): аудит чист (0 прямых мутаций); gate = `tests/balances_gate.rs` (cargo test, кроссплатформенный) + CI job `source-gates` (rg-шаг); КГ S1-P12 формализована |
 | BUG-S0-023 | D | H | S1-P19 | Fuzz-target `canonical_decode` — прогон 10 секунд вместо 10 минут; cargo-fuzz не запущен | fixed (2026-10-09): CI job `fuzz-canonical-decode` (cargo-fuzz 0.13.2, 600s, ubuntu-latest, push/PR, crash-artifacts upload) + измеренный локальный 10-min soak 25,947,107 inputs / 0 panics; README/STAGE1_SUMMARY/THREAT_MODEL обновлены |
 | BUG-S0-024 | D | H | S1-P20 | `INVARIANTS_ENFORCED.md` — нумерация инвариантов не совпадает с ARCHITECT3 §5 (№4 описан как №19) | fixed (2026-10-09): таблица переписана — нумерация 1:1 ARCHITECT3 §5, столбцы Stage 0 / Stage 1 / Test / Status; #19 = 🟡 residual (BUG-S0-012/013), #22 = 🟡 residual (BUG-S0-005); битые ссылки устранены (BUG-S0-031) |
-| BUG-S0-025 | D | M | P18 / S1-P20 | Property-тесты на `apply/unapply round-trip` добавлены, но `nonce` monotonic proptest отсутствует как отдельный | open |
+| BUG-S0-025 | D | M | P18 / S1-P20 | Property-тесты на `apply/unapply round-trip` добавлены, но `nonce` monotonic proptest отсутствует как отдельный | fixed (2026-10-09) |
 | BUG-S0-026 | D | M | P23 / D02 | TLA+ `consensus.tla` — TLC-прогон не выполнен, в `docs/spec/README.md` нет результата | open |
 | BUG-S0-027 | D | M | P19 / D01 | Интеграционный тест `emission.rs` майнит блоки, но не сверяет `block_reward_at_height(h, total_supply_before)` на чейн-агнезисе | open |
 | BUG-S0-028 | D | L | S1-P19 | `tests/concurrency.rs` создан вне спеки P19 — допустимое расширение, но не отражено в КГ | wontfix |
@@ -886,6 +886,14 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 1. Прочитать `crates/strangecoin-core/tests/consensus_proptest.rs` и сверить покрытие с КГ P18.
 2. Если `nonce_reject` есть — закрыть. Если нет — добавить: `proptest! { fn nonce_reject(tx_nonce, account_nonce) { ... } }`.
 
+**Решение (2026-10-09):** Баг подтверждён: proptest `nonce_validation` существовал, но был таутологичным (`prop_assert_eq!(is_valid, tx_nonce == account_nonce + 1)` — `x == x`, без вызова реального кода). Функция `validate_nonce(tx_nonce, account_nonce)` из спеки P18 в core отсутствовала; `CoreError::InvalidNonce` объявлен, но нигде не конструировался в core. Исправление:
+1. `crates/strangecoin-core/src/consensus.rs` — добавлена чистая `pub fn validate_nonce(tx_nonce, account_nonce) -> Result<(), CoreError>` (`checked_add` + `InvalidNonce { expected, got }`).
+2. `crates/strangecoin-core/tests/consensus_proptest.rs` — таутологичный `nonce_validation` заменён на `nonce_reject`: вызывает `validate_nonce`, проверяет корреляцию `is_ok() == (tx_nonce == account_nonce + 1)` и поля `expected`/`got` при ошибке.
+3. `src/mempool/mod.rs` — ручная nonce-проверка заменена на `core::consensus::validate_nonce(tx.nonce, account.nonce + pending_count)` (эквивалентно прежнему `expected = account.nonce + 1 + pending_count`; маппинг через `From<CoreError>`) — функция получила реального потребителя, правило стало единым.
+4. `docs/stage1/INVARIANTS_ENFORCED.md` — инвариант #11: test-ячейка обновлена (`nonce_reject`), residual-строка BUG-S0-025 снята.
+
+Nonce-rejection остаётся mempool-уровневым (инвариант #11 честно так фиксирует): `apply_block` в core nonce не валидирует — это сознательно вне scope (валидация в state transition сломает grant-block path и требует SCIP).
+
 ---
 
 ### BUG-S0-026 — TLA+ TLC-прогон не выполнен
@@ -1142,7 +1150,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | BUG-S0-021 | Legacy-threads майнинга |
 | ~~BUG-S0-022~~ | ~~Прямые мутации balances — нет gate~~ (**fixed 2026-10-09**: аудит чист — 0 нарушений; gate `tests/balances_gate.rs` + CI job `source-gates`; КГ S1-P12 формализована) |
 | ~~BUG-S0-023~~ | ~~Fuzz — 10 сек вместо 10 мин~~ (**fixed 2026-10-09**: CI job `fuzz-canonical-decode` — cargo-fuzz 0.13.2, 600s, ubuntu-latest, push/PR, crash-artifacts upload; измеренный локальный 10-min soak 25,947,107 inputs / 0 panics; README/STAGE1_SUMMARY §3+§6.2/THREAT_MODEL/Changelog обновлены; superseded unverified «28.7M» claim) |
-| BUG-S0-025 | nonce proptest — проверить наличие |
+| ~~BUG-S0-025~~ | ~~nonce proptest — проверить наличие~~ (**fixed 2026-10-09**: `nonce_validation` был таутологичен; добавлены core `validate_nonce` + proptest `nonce_reject`; mempool переведён на core-функцию) |
 | BUG-S0-026 | TLA+ TLC-прогон |
 | BUG-S0-027 | emission.rs — сверка с total_supply |
 | BUG-S0-032 | Repo hygiene |
@@ -1175,7 +1183,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | P05 | BUG-S0-017 | — |
 | P08 / P09 | BUG-S0-010 (wontfix) | — |
 | P10 | ~~BUG-S0-015 (partially — seed строка)~~ **fixed 2026-10-08** S1.5-P01 | — |
-| P18 | — | BUG-S0-025 (nonce proptest) |
+| P18 | — | ~~BUG-S0-025 (nonce proptest)~~ **fixed 2026-10-09** |
 | P19 / D01 | BUG-S0-027, BUG-S0-028 | ~~BUG-S0-004 (тесты в main.rs)~~ — **fixed 2026-10-07** |
 | P22 / D02 | BUG-S0-003 (**fixed 2026-10-07**), BUG-S0-033, BUG-S0-034 | BUG-S0-026 (TLC-прогон) |
 | P23 / D02 | BUG-S0-026 | — |

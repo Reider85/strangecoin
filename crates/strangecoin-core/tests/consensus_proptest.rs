@@ -3,8 +3,9 @@ use proptest::prelude::*;
 use secp256k1::{ecdsa::RecoverableSignature, PublicKey, Secp256k1, SecretKey};
 use strangecoin_core::consensus::{
     current_chain_id, u256_div, u256_from_bytes, u256_from_u64, u256_gt, u256_le, u256_max, u256_min,
-    u256_mul, MAX_TARGET_CHANGE_FACTOR, RETARGET_INTERVAL, TARGET_BLOCK_TIME,
+    u256_mul, validate_nonce, MAX_TARGET_CHANGE_FACTOR, RETARGET_INTERVAL, TARGET_BLOCK_TIME,
 };
+use strangecoin_core::error::CoreError;
 use strangecoin_core::economics::emission::{
     block_reward_at_height_for_chain, HALVING_INTERVAL, INITIAL_REWARD, MAX_SUPPLY_PRE_TAIL,
 };
@@ -162,10 +163,17 @@ proptest! {
     }
 
     #[test]
-    fn nonce_validation(tx_nonce in 0u64..1_000_000u64, account_nonce in 0u64..1_000_000u64) {
-        let expected = account_nonce + 1;
-        let is_valid = tx_nonce == expected;
-        prop_assert_eq!(is_valid, tx_nonce == account_nonce + 1);
+    fn nonce_reject(tx_nonce in 0u64..1_000_000u64, account_nonce in 0u64..1_000_000u64) {
+        let result = validate_nonce(tx_nonce, account_nonce);
+        prop_assert_eq!(result.is_ok(), tx_nonce == account_nonce + 1);
+        match result {
+            Err(CoreError::InvalidNonce { expected, got }) => {
+                prop_assert_eq!(expected, account_nonce + 1);
+                prop_assert_eq!(got, tx_nonce);
+            }
+            Err(e) => prop_assert!(false, "unexpected error variant: {:?}", e),
+            Ok(()) => prop_assert_eq!(tx_nonce, account_nonce + 1),
+        }
     }
 
     #[test]

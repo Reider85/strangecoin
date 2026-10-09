@@ -294,6 +294,22 @@ pub fn recover_pubkey_from_sig(
     Ok(recovered_pk)
 }
 
+/// Nonce-инвариант (ARCHITECT3 §5 №11): транзакция отправителя должна иметь
+/// `nonce == account.nonce + 1`. Чистая функция — единственное определение
+/// правила для mempool и будущих state-transition проверок (BUG-S0-025).
+pub fn validate_nonce(tx_nonce: u64, account_nonce: u64) -> Result<(), CoreError> {
+    let expected = account_nonce
+        .checked_add(1)
+        .ok_or(CoreError::StateOverflow)?;
+    if tx_nonce != expected {
+        return Err(CoreError::InvalidNonce {
+            expected,
+            got: tx_nonce,
+        });
+    }
+    Ok(())
+}
+
 pub fn verify_transaction(tx: &Transaction) -> Result<(), CoreError> {
     if tx.is_coinbase {
         return Ok(());

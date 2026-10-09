@@ -1,9 +1,9 @@
-# Stage 1 Invariants Enforced (S1-P20, rev. BUG-S0-024)
+# Stage 1 Invariants Enforced (S1-P20, rev. BUG-S0-024 / BUG-S0-025)
 
 **Document**: `docs/stage1/INVARIANTS_ENFORCED.md`  
 **Status**: Complete ✅  
 **Original audit**: 2026-10-04 (S1-P20)  
-**Revision**: 2026-10-09 — BUG-S0-024/BUG-S0-031: нумерация 1:1 к `ARCHITECT3.md §5`, честные residual-статусы, битые ссылки устранены  
+**Revision**: 2026-10-09 — BUG-S0-024/BUG-S0-031: нумерация 1:1 к `ARCHITECT3.md §5`, честные residual-статусы, битые ссылки устранены; BUG-S0-025: nonce-reject proptest закрыт  
 **Prompt**: S1-P20 — Regression audit of 22 Stage 0 invariants after strangler migration  
 
 **Нумерация**: 1:1 с `analytics/ARCHITECT3.md` §5 (22 инварианта; эталон — строки 484-507).  
@@ -32,7 +32,7 @@
 | 8 | Генезис детерминирован и совпадает у всех узлов | `genesis.json` ↔ `EXPECTED_GENESIS_HASH`; panic on mismatch | core `consensus.rs:309 EXPECTED_GENESIS_HASH`; `blockchain_facade` open-path + `block_executor::validate_position` (genesis на пустой цепи) | `tests/genesis_key.rs` (5), `tests/block_executor.rs::genesis_is_applied_to_an_empty_chain` | ✅ |
 | 9 | Секреты не пишутся на диск и не логируются | `config.toml` без секретов; keystore AES-256-GCM + PBKDF2 | `src/wallet.rs` (PBKDF2+AES-GCM, Drop-flush); `src/config.rs` — нет секретов; genesis seed удалён (BUG-S0-015 / SCIP-0001) | `tests/genesis_key.rs::consensus_source_has_no_genesis_seed`; code audit | ✅ |
 | 10 | **Replay protection:** каждая tx содержит `chain_id`; mainnet/testnet/regtest несовместимы | `chain_id` в `verify_transaction` + `validate_chain`; mainnet=1, testnet=2, regtest=3 | core `verify_transaction` + `mempool/mod.rs:92` (insert); HELLO `network_id` (`S1-P14`) | `tests/network_id.rs::foreign_network_id_is_rejected_and_banned`; proptest | ✅ |
-| 11 | **Nonce:** `account.nonce` строго инкрементируется; tx с `nonce <= account.nonce` отвергается | `validate_chain` nonce check; `add_transaction` mempool | core `state/inner.rs` (apply инкремент); `mempool/mod.rs:158` (expected_nonce с RBF-цепочками) | proptest `nonce_validation`; `tests/double_spend.rs`; `tests/two_clients.rs` (gap отдельного proptest: BUG-S0-025) | ✅ |
+| 11 | **Nonce:** `account.nonce` строго инкрементируется; tx с `nonce <= account.nonce` отвергается | `validate_chain` nonce check; `add_transaction` mempool | core `consensus::validate_nonce` (BUG-S0-025, единое правило); `state/inner.rs` (apply инкремент); `mempool/mod.rs` (expected_nonce с RBF-цепочками через core validate_nonce) | proptest `nonce_reject` (core); `tests/double_spend.rs`; `tests/two_clients.rs` | ✅ |
 | 12 | **Transaction hash = commitment:** `txid` из канонических байт всей tx (включая подпись) | `txid` from signed canonical bytes in `src/serialize.rs` | core `serialize.rs::txid:26` | core golden-vector tests; proptest roundtrip | ✅ |
 | 13 | **Mempool basic rules:** на `insert` — подпись, dup, nonce, chain_id, balance | `mempool/insert()` validation; `MAX_PENDING_TXS` | `src/mempool/mod.rs::insert:80` — verify_transaction, chain_id, nonce-цепочка, balance, RBF limits (`S1-P17`) | `tests/rbf.rs` (5), `tests/two_clients.rs` | ✅ |
 | 14 | **Graceful shutdown:** `Drop` для storage/wallet/network; нет «ручного удаления LOCK» | `Drop` for `Node`, `Blockchain`, `Wallet`; ctrlc; `AtomicBool` mining loop | `Drop` for `Node` (`src/lib.rs:526`), `Wallet` (`src/wallet.rs:245`), `Storage` (`src/storage/mod.rs:28`); tokio graceful (`S1-P10`/ADR-0011) | `tests/concurrency.rs::deadlock_test_blockchain_wallet_lock_order`; `tests/two_clients.rs::node_runs_on_tokio_and_shuts_down_cleanly` | ✅ |
@@ -78,7 +78,6 @@
 | 19 | Zero `state_root` opt-in + stateless verify без post-root | BUG-S0-012, BUG-S0-013 | S1.5-P03 (SCIP: enforce без opt-out) |
 | 22 | Release pipeline не прогонялся на GitHub Actions | BUG-S0-005 | S1.5-P06 (тег `v0.0.0-rc1`) |
 | 6 | `tests/emission.rs` не сверяет reward с `total_supply_before` | BUG-S0-027 | дополнить тест |
-| 11 | Отдельный nonce-reject proptest отсутствует | BUG-S0-025 | добавить proptest |
 
 ## Historical Context
 
