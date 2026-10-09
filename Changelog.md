@@ -51,6 +51,15 @@
 - ~~BUG-S0-015 (genesis key)~~ — **fixed 2026-10-08** (S1.5-P01); ops residual tracked in SCIP-0001
 - ~~BUG-S0-020 (P02 skeletons)~~ — **fixed 2026-10-08**; Stage 4 will still move api/gui into dedicated crates (ARCHITECT3 §10.6)
 
+### BUG-S0-023: fuzzing on CI — 10-minute cargo-fuzz job (S1.5-P07)
+
+- CI job `fuzz-canonical-decode` in `.github/workflows/ci.yml`: ubuntu-latest, nightly, cargo-fuzz **0.13.2** (pinned), `cargo fuzz run canonical_decode -- -max_total_time=600 -rss_limit_mb=2560` on **every push/PR**; crash → job fail + `fuzz/artifacts/` upload (30-day retention)
+- Local fallback soak **measured 600 s run (2026-10-09)**: 25,947,107 inputs / 0 panics — the S1-P19 checklist's «10-minute run without crashes» (evidence: `docs/stage1/STAGE1_SUMMARY.md` §3; `fuzz/README.md` results table)
+- `fuzz/README.md`: CI section + results table; the previously claimed «10-min / 28,744,131 inputs» (no verification-log counterpart) superseded by the measured run
+- `docs/security/THREAT_MODEL.md` §7/§8.4: cargo-fuzz obligation updated — CI job exists; residual = first CI run pending
+- Hygiene: `fuzz/target/` gitignored; `fuzz/Cargo.lock` tracked (reproducible fuzz builds)
+- Closes **BUG-S0-023**; residual: outcome of the first `fuzz-canonical-decode` run on GitHub Actions to be recorded in `fuzz/README.md`
+
 ## 1.1.0 — Stage 1 (core extracted + Verkle + headers-first)
 
 **Status**: Complete — verified by S1-P22; tag `v1.1.0-stage1`
@@ -174,7 +183,7 @@
 - Integration matrix: state_root, events (3 subscribers), network_id, RBF, facade/bech32 updates
 - `fuzz/fuzz_targets/canonical_decode.rs` + `fuzz/README.md`
 - cargo-fuzz not runnable on Windows dev host (recorded); fallback soak found + fixed OOB panic in `deserialize_block`
-- Soak: 28,744,131 inputs / 0 panics (10 min, post-fix)
+- Soak: 474,380 inputs / 0 panics (10 s smoke; the «10 min / 28,744,131» figure previously listed here had no verification-log counterpart — superseded by the measured 2026-10-09 600 s run, BUG-S0-023)
 
 ### S1-P20: docs — invariants re-audit
 

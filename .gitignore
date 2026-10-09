@@ -27,3 +27,6 @@ config.json
 
 # CodeBuddy
 .codebuddy/
+
+# cargo-fuzz build dir (BUG-S0-023)
+fuzz/target/

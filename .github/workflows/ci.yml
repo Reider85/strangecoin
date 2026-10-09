@@ -85,3 +85,37 @@ jobs:
           name: coverage-report
           path: coverage/tarpaulin-report.html
           retention-days: 30
+
+  fuzz-canonical-decode:
+    name: Fuzz canonical_decode (10 min)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            fuzz
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version 0.13.2
+
+      # BUG-S0-023 / S1.5-P07: coverage-guided 10-minute run — the S1-P19
+      # checklist item that could not execute on the Windows dev host
+      # (no MSVC/ASan, see fuzz/README.md). A crash fails the job;
+      # repro artifacts are uploaded below.
+      - name: Run canonical_decode fuzz (600s)
+        run: cargo fuzz run canonical_decode -- -max_total_time=600 -rss_limit_mb=2560
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-canonical-decode-artifacts
+          path: fuzz/artifacts/
+          retention-days: 30
+          if-no-files-found: ignore

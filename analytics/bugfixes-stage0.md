@@ -57,7 +57,7 @@
 | BUG-S0-020 | C | M | P02 / S1-P02 | Скелет модулей P02 в `src/` остался витриной — большинство модулей `src/{api,cli,gui,governance}/mod.rs` пустые | fixed (2026-10-08): GUI (~440 строк egui + `WalletApp` + `run()`) перенесён из `lib.rs` в `src/gui/mod.rs`; `api` — документированный деферр Stage 4 (ARCHITECT3 §3.10/§10.6); `cli` — рабочий `--print-genesis-hash` + doc-comment; `governance` — re-export core SCIP (не заглушка) |
 | BUG-S0-021 | C | M | S1-P10 | Legacy-threads майнинга и сети не перенесены в async — tokio введён, но новые подсистемы не покрыты | fixed (2026-10-08): ADR-0011 — mining worker → tokio task (`spawn_blocking` для PoW), accept/per-connection → `tokio::net`, `sync_headers_first`/`sync_blockchain` → async, `sync_tx` → tokio mpsc; гибридная модель ADR-0007 закрыта |
 | BUG-S0-022 | C | M | S1-P12 | Прямые мутации `balances` вне `state_cache` в части legacy-путей — `rg`-аудит не формализован как gate | fixed (2026-10-09): аудит чист (0 прямых мутаций); gate = `tests/balances_gate.rs` (cargo test, кроссплатформенный) + CI job `source-gates` (rg-шаг); КГ S1-P12 формализована |
-| BUG-S0-023 | D | H | S1-P19 | Fuzz-target `canonical_decode` — прогон 10 секунд вместо 10 минут; cargo-fuzz не запущен | open |
+| BUG-S0-023 | D | H | S1-P19 | Fuzz-target `canonical_decode` — прогон 10 секунд вместо 10 минут; cargo-fuzz не запущен | fixed (2026-10-09): CI job `fuzz-canonical-decode` (cargo-fuzz 0.13.2, 600s, ubuntu-latest, push/PR, crash-artifacts upload) + измеренный локальный 10-min soak 25,947,107 inputs / 0 panics; README/STAGE1_SUMMARY/THREAT_MODEL обновлены |
 | BUG-S0-024 | D | H | S1-P20 | `INVARIANTS_ENFORCED.md` — нумерация инвариантов не совпадает с ARCHITECT3 §5 (№4 описан как №19) | open |
 | BUG-S0-025 | D | M | P18 / S1-P20 | Property-тесты на `apply/unapply round-trip` добавлены, но `nonce` monotonic proptest отсутствует как отдельный | open |
 | BUG-S0-026 | D | M | P23 / D02 | TLA+ `consensus.tla` — TLC-прогон не выполнен, в `docs/spec/README.md` нет результата | open |
@@ -833,6 +833,13 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 2. В `fuzz/README.md` — зафиксировать результат прогона (crashes count, coverage).
 3. Минимум — 10 минут / 100M inputs. Цель — 24 часа на CI раз в неделю (Stage 6: full fuzzing harnesses).
 
+**Исправление (2026-10-09):**
+- CI job **`fuzz-canonical-decode`** добавлен в `.github/workflows/ci.yml`: ubuntu-latest, Rust nightly, cargo-fuzz **0.13.2** (pinned), `cargo fuzz run canonical_decode -- -max_total_time=600 -rss_limit_mb=2560` на **каждый push/PR** (S1.5-P07); crash → job fail + upload `fuzz/artifacts/` (30-day retention); rust-cache на root + fuzz workspaces; `timeout-minutes: 25`.
+- Измеренный **локальный 10-минутный fallback-soak** (тот же хост, debug, `SOAK_SECONDS=600`): **25,947,107 inputs, 0 panics** — КГ «10-минутный прогон без crashes» выполнен буквально; evidence в `docs/stage1/STAGE1_SUMMARY.md §3`.
+- Честность записей: заявление в `fuzz/README.md`/`Changelog.md`/`THREAT_MODEL.md` о «10-min run: 28,744,131 inputs» из коммита `3a7e15f` не имело counterpart в S1-P22 verification log (§3 фиксировала только 10s smoke) — заменено измеренным прогоном 2026-10-09 (прецедент BUG-S0-003: никаких silent-записей).
+- Документация: `fuzz/README.md` (секция CI + results table + supersession-note); `STAGE1_SUMMARY.md §3` (новая строка evidence) и **§6.2** (obligation сужена: Windows-хост по-прежнему не может, capable-host делегирован CI; residual = первый CI-прогон pending); `THREAT_MODEL.md §7/§8.4` (obligation закрыта, ongoing monitoring = каждый push/PR); `AGENTS.md` (gotcha обновлён); `Changelog.md` 1.1.1 (секция + correction historical-строки).
+- Гигиена: `fuzz/target/` добавлен в `.gitignore`; `fuzz/Cargo.lock` закоммичен (reproducible fuzz-сборки).
+
 ---
 
 ### BUG-S0-024 — `INVARIANTS_ENFORCED.md` — нумерация инвариантов не совпадает с ARCHITECT3 §5
@@ -1124,7 +1131,7 @@ pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 | ~~BUG-S0-020~~ | ~~Скелет P02 — заглушки api/gui~~ (**fixed 2026-10-08**: GUI перенесён из lib.rs в `src/gui/mod.rs` (490 строк, feature-gated, `gui::run`); api = задокументированный деферр Stage 4; cli/governance — не заглушки) |
 | BUG-S0-021 | Legacy-threads майнинга |
 | ~~BUG-S0-022~~ | ~~Прямые мутации balances — нет gate~~ (**fixed 2026-10-09**: аудит чист — 0 нарушений; gate `tests/balances_gate.rs` + CI job `source-gates`; КГ S1-P12 формализована) |
-| BUG-S0-023 | Fuzz — 10 сек вместо 10 мин |
+| ~~BUG-S0-023~~ | ~~Fuzz — 10 сек вместо 10 мин~~ (**fixed 2026-10-09**: CI job `fuzz-canonical-decode` — cargo-fuzz 0.13.2, 600s, ubuntu-latest, push/PR, crash-artifacts upload; измеренный локальный 10-min soak 25,947,107 inputs / 0 panics; README/STAGE1_SUMMARY §3+§6.2/THREAT_MODEL/Changelog обновлены; superseded unverified «28.7M» claim) |
 | BUG-S0-025 | nonce proptest — проверить наличие |
 | BUG-S0-026 | TLA+ TLC-прогон |
 | BUG-S0-027 | emission.rs — сверка с total_supply |

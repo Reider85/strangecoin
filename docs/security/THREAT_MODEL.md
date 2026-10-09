@@ -934,7 +934,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | Genesis key from public string (V-31) | Testnet/regtest only; secret removed from code (S1.5-P01); pubkey remains burned | **Obligation: offline key + SCIP-0001 before mainnet freeze** |
 | Grant blocks (V-32) | Flag-gated (S1-P01); must stay off on mainnet | Flag default false + tests |
 | Release pipeline (V-33) | Workflow fixed (D03); GitHub Actions run pending | **Obligation: first tag run evidence (S1-P22)** |
-| cargo-fuzz не запускается на dev-хосте (Windows, нет MSVC/ASan) | ASan unsupported on `x86_64-pc-windows-gnu`; no MSVC; libFuzzer needs clang/MSVC | Fallback soak runner (S1-P19) нашёл и закрыл OOB-баг; 10-min soak clean. **Obligation: cargo-fuzz на Linux CI до Stage 2** |
+| cargo-fuzz не запускается на dev-хосте (Windows, нет MSVC/ASan) | ASan unsupported on `x86_64-pc-windows-gnu`; no MSVC; libFuzzer needs clang/MSVC | Fallback soak runner (S1-P19) нашёл и закрыл OOB-баг; измеренный 10-min soak clean (2026-10-09). **Obligation закрыта (BUG-S0-023, 2026-10-09): job `fuzz-canonical-decode` — cargo-fuzz 600s на Linux CI, каждый push/PR**; residual — результат первого CI-прогона |
 | Zero state_root tolerated (opt-in no commitment) | Явное поведение для совместимости | Узлы с enforced commitments отклоняют zero root; документировано |
 | RBF при fee=0 (feerate = proxy по размеру) | Fee market — Stage 5 | RBF_MIN_DELTA + MAX_RBF_REPLACEMENTS + rate limiter |
 | DNS poisoning (V-16) | Stage 0 residual | Hard-coded seeds; DNSSEC — Stage 2 |
@@ -992,8 +992,9 @@ Reproducible builds + cosign signatures для верификации бинар
 | **Contract** | Каждый вход декодируется или возвращает typed error; panic = crash |
 | **cargo-fuzz (libFuzzer+ASan)** | **Не запускается на dev-хосте** (Windows): ASan unsupported на `x86_64-pc-windows-gnu`; MSVC отсутствует; libFuzzer C++ runtime требует clang/MSVC. Детали: `fuzz/README.md` |
 | **Fallback** | `cargo run --example canonical_decode_soak` — детерминированный xorshift (garbage + mutated real blocks) |
-| **Результат 2026-10-04** | Fallback **нашёл реальный баг за секунды**: OOB panic в `deserialize_block` (bounds в `read_u32_be`/`read_u64_be`, truncated tx-slice при `sig_len`). Исправлено в `crates/strangecoin-core/src/serialize.rs` (bounds-checked readers, `?` propagation, live length check). Post-fix: 15 s smoke clean; **10-min run: 28,744,131 inputs, 0 panics, exit 0** |
-| **Ongoing monitoring** | Прогон soak после каждого изменения `serialize.rs`; при доступе к Linux CI+ASan — `cargo fuzz run canonical_decode -- -max_total_time=600` и обновление этого раздела |
+| **Результат 2026-10-04** | Fallback **нашёл реальный баг за секунды**: OOB panic в `deserialize_block` (bounds в `read_u32_be`/`read_u64_be`, truncated tx-slice при `sig_len`). Исправлено в `crates/strangecoin-core/src/serialize.rs` (bounds-checked readers, `?` propagation, live length check). Post-fix: 15 s smoke clean; 10 s smoke 474,380 inputs / 0 panics (ранее заявленный «10-min / 28,744,131» без записи в verification log — superseded измеренным прогоном ниже) |
+| **Результат 2026-10-09 (BUG-S0-023)** | Измеренный **10-минутный** fallback-soak: 25,947,107 inputs / **0 panics** (STAGE1_SUMMARY §3). Coverage-guided 10-минутный прогон теперь на CI: job `fuzz-canonical-decode` (cargo-fuzz 0.13.2, ubuntu-latest, каждый push/PR; crash → fail + upload `fuzz/artifacts/`) |
+| **Ongoing monitoring** | Прогон soak после каждого изменения `serialize.rs`; job `fuzz-canonical-decode` на каждый push/PR; результат первого CI-прогона зафиксировать в `fuzz/README.md` и обновить эту секцию |
 
 ---
 

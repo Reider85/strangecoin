@@ -84,6 +84,7 @@ S1-P22 itself: `68e358f` — annotated tag `v1.1.0-stage1` placed on this commit
 | `cargo test --workspace` | **GREEN** — strangecoin lib 34 + 20 integration targets; strangecoin-core lib 47 + 7 test targets; all suites passed |
 | `cargo clippy --all-targets -- -D warnings` | **GREEN** — exit 0 (clippy debt fixed in this prompt: unused vars/mut, dead code in verkle scaffolding, needless_range_loop, map_or→is_some_and, derivable Default, unused test imports) |
 | `cargo run --example canonical_decode_soak` | **GREEN** — 474,380 inputs in 10s, 0 panics (fuzz smoke; cargo-fuzz not runnable on this Windows host — see `fuzz/README.md`) |
+| `SOAK_SECONDS=600 cargo run --example canonical_decode_soak` (2026-10-09, BUG-S0-023) | **GREEN** — 25,947,107 inputs in 600s, 0 panics; coverage-guided 10-min run delegated to CI job `fuzz-canonical-decode` (cargo-fuzz 0.13.2, ubuntu-latest, push/PR) |
 
 **rg audits**:
 - `crates/strangecoin-core/src`: no `std::fs` / `std::net` / `tokio` / `leveldb` → 0 I/O confirmed.
@@ -133,7 +134,7 @@ S1-P22 itself: `68e358f` — annotated tag `v1.1.0-stage1` placed on this commit
 ## 6. Open obligations (carried forward)
 
 1. **Offline genesis key** — **updated 2026-10-08 (BUG-S0-015 / S1.5-P01)**: seed-derived `genesis_keypair()` and the public seed string `"strangecoin-genesis-seed-2026"` **removed from code**; `genesis.json` carries only `initial_holder_pubkey`; SCIP-0001 created (`docs/SCIP/scip-0001-genesis-key-replacement.md`); test `tests/genesis_key.rs`. Residual is now **operational**: before mainnet freeze/block 1, generate an offline key, write only the pubkey, update `EXPECTED_GENESIS_HASH`. Current testnet genesis key is **burned**.
-2. **cargo-fuzz on Windows** — coverage-guided fuzzing not runnable on this host (no MSVC/ASan); fallback soak found and fixed OOB panic in `deserialize_block` (S1-P19). Run cargo-fuzz on a capable CI host.
+2. **cargo-fuzz on Windows** — **updated 2026-10-09 (BUG-S0-023 / S1.5-P07)**: coverage-guided fuzzing still not runnable on this Windows host (no MSVC/ASan), but the capable-host requirement is now delegated to CI — job `fuzz-canonical-decode` in `.github/workflows/ci.yml` runs cargo-fuzz 0.13.2 for 600s on ubuntu-latest on every push/PR (crash → job fail + `fuzz/artifacts/` upload). Fallback soak: measured 10-minute local run 2026-10-09 clean (§3). Residual: first CI run pending until the workflow executes on GitHub Actions; record its outcome in `fuzz/README.md`.
 3. **TLA+ coverage** — `NoDoubleSpend`/`NoInflation`/`AllTxSigned`/`NonceMonotonic`/`PowValidity` not model-checked by TLC (state-space limits); structural properties hold by construction + Rust tests. Spec does not yet model the state commitment trie / reorg.
 4. **Release pipeline** — workflow fixed in D03; first `v*` tag run still pending GitHub Actions verification (residual in THREAT_MODEL V-33).
 5. **Zero `state_root` opt-in** — blocks with zero state_root still adopt (documented residual; enforcement tightening — later SCIP; S1.5-P03).

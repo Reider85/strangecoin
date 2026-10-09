@@ -12,7 +12,7 @@ cargo test --workspace           # all tests (workspace)
 cargo clippy --all-targets -- -D warnings
 cargo build
 cargo build --release
-cargo run --example canonical_decode_soak   # fuzz smoke (fallback; cargo-fuzz needs Linux/MSVC)
+cargo run --example canonical_decode_soak   # fuzz smoke (fallback; cargo-fuzz via CI job fuzz-canonical-decode)
 ```
 
 ## Running the Node
@@ -106,7 +106,7 @@ Never acquire wallet lock while holding blockchain write lock from a different c
 - **Windows paths**: Use `C:\projects\strangecoin` not `/c/projects/strangecoin`
 - **PowerShell**: Use `;` not `&&` for command chaining
 - **GUI**: feature `gui` is defined; default build is headless
-- **cargo-fuzz**: not runnable on this Windows host — use `cargo run --example canonical_decode_soak`
+- **cargo-fuzz**: not runnable on this Windows host — use `cargo run --example canonical_decode_soak`; coverage-guided 10-min runs live in CI job `fuzz-canonical-decode` (push/PR)
 - **tracing** only (no println!)
 - **Network test isolation**: `NETWORK_TEST_LOCK` + `network.json` next to test exe
 
