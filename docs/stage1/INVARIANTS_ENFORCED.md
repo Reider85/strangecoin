@@ -43,7 +43,7 @@
 | 19 | **State root match:** `state.root_after(block) == block.state_root`; иначе reject | — (deferred Stage 1, S1-P06) | core `state/mod.rs::root_after` (SMT depth 256, ADR-0006 amended); `block_executor.rs:136` — compare с computed root. **Residual (BUG-S0-012/013):** opt-out `state_root == [0u8;32]` — блоки с нулевым корнем принимаются без commitment; `verify_block_stateless` не пересчитывает post-root. Tightening — S1.5-P03 (SCIP) | core `tests/state_root.rs` (7: tamper→reject, determinism, proptest); e2e `tests/state_root.rs` (3); `tests/block_executor.rs::rejects_state_root_that_does_not_match_the_applied_state` | 🟡 residual (BUG-S0-012, BUG-S0-013; S1.5-P03) |
 | 20 | **Fee invariant:** `fee_burned + fee_to_miner = total_fees`; `gas_used <= block_gas_limit` | — (deferred Stage 5) | core `economics/fee_market.rs` — stub (fee=0, RBF-feerate прокси S1-P17) | — | Deferred Stage 5 |
 | 21 | **Consensus versioning:** `block.consensus_version <= current_version`; активация по высоте | — (deferred Stage 1, S1-P05) | core `governance/scip.rs` (SCIP + activation height); `src/blockchain/consensus_manager.rs` (expected version by height); `block_executor.rs:109` reject stale/future | `tests/consensus_version.rs` (3); core scip activation tests (5); `tests/block_executor.rs::rejects_stale_consensus_version` | ✅ |
-| 22 | **Reproducible builds:** CI публикует SLSA provenance + cosign signature для каждого release | `.github/workflows/release.yml` — pipeline exists; не запускался (no tags) | `.github/workflows/release.yml` (LTO, single codegen unit, `--remap-path-prefix`, cosign, SLSA L3). **Residual (BUG-S0-005):** первый `v*`-прогон на GitHub Actions не выполнен; evidence отсутствует | Pipeline config audit; run pending (S1.5-P06) | 🟡 residual (BUG-S0-005) |
+| 22 | **Reproducible builds:** CI публикует SLSA provenance + cosign signature для каждого release | `.github/workflows/release.yml` — triggers on `push: tags: ['v*']` | `.github/workflows/release.yml` (LTO, single codegen unit, `--remap-path-prefix`, cosign keyless, SLSA L3). First `v*` run executed **2026-10-10**: tag `v0.0.1-rc1` → run `38071514479` green on all 6 targets + provenance + sign + release | run 38071514479 (all jobs success); `docs/security/REPRODUCIBLE_BUILDS.md` §Verified Release Runs: 6 SHA256s, `cosign verify-blob` = `Verified OK`, `slsa-verifier` = `PASSED` @ commit `a830c51` | ✅ (BUG-S1-001, 2026-10-10) |
 
 ### Registering notes (S1-P20)
 
@@ -76,7 +76,7 @@
 | # | Residual | Bug | Fix path |
 |---|----------|-----|----------|
 | 19 | Zero `state_root` opt-in + stateless verify без post-root | BUG-S0-012, BUG-S0-013 | S1.5-P03 (SCIP: enforce без opt-out) |
-| 22 | Release pipeline не прогонялся на GitHub Actions | BUG-S0-005 | S1.5-P06 (тег `v0.0.0-rc1`) |
+| ~~22~~ | ~~Release pipeline не прогонялся на GitHub Actions~~ | ~~BUG-S0-005~~ | **closed 2026-10-10 (BUG-S1-001):** tag `v0.0.1-rc1`, run `38071514479` green, evidence в REPRODUCIBLE_BUILDS.md |
 
 ## Historical Context
 

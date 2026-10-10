@@ -4,7 +4,7 @@
 
 **Status**: In progress  
 **Date**: 2026-10-08  
-**Prompts**: S1.5-P02 (BUG-S0-011/014/016), S1.5-P04 (BUG-S0-018/019), S1.5-P01 (BUG-S0-015), BUG-S0-020
+**Prompts**: S1.5-P02 (BUG-S0-011/014/016), S1.5-P04 (BUG-S0-018/019), S1.5-P01 (BUG-S0-015), BUG-S0-020, BUG-S1-001
 
 ### BUG-S0-011: Sparse Merkle Tree replaces flat «Verkle»
 
@@ -59,6 +59,19 @@
 - `docs/security/THREAT_MODEL.md` §7/§8.4: cargo-fuzz obligation updated — CI job exists; residual = first CI run pending
 - Hygiene: `fuzz/target/` gitignored; `fuzz/Cargo.lock` tracked (reproducible fuzz builds)
 - Closes **BUG-S0-023**; residual: outcome of the first `fuzz-canonical-decode` run on GitHub Actions to be recorded in `fuzz/README.md`
+
+### BUG-S1-001: first release pipeline run — tag `v0.0.1-rc1` (2026-10-10)
+
+- Pre-flight fixes to `.github/workflows/release.yml` (commit `a830c51`) that would have failed the first run:
+  - `aggregate-hashes`: removed `merge-multiple: true` (all 6 `hash.txt` flattened into one dir → 5 of 6 overwritten; glob matched nothing → empty SLSA subjects); added `wc -l == 6` guard
+  - `base64-subjects` now base64-encoded per `slsa-github-generator@v2.1.0` contract (was raw text → provenance job would fail)
+  - `RUSTFLAGS`: `$GITHUB_WORKSPACE` (not shell-expanded in `env:` — silent no-op) → `${{ github.workspace }}`
+  - Retired `macos-13` runner → `macos-latest` + `x86_64-apple-darwin` target
+  - Hygiene: `if-no-files-found: error`, OS-gated uploads, `hash.txt` excluded from signing/assets, published `SHA256SUMS.txt`
+- Tag `v0.0.1-rc1` → run [38071514479](https://github.com/Reider85/strangecoin/actions/runs/38071514479) **green** (6 matrix builds + aggregate + sign + SLSA L3 provenance + release; 31 assets)
+- Independent verification: local SHA256 match (windows/linux x86_64), `cosign verify-blob` = `Verified OK`, `slsa-verifier` = `PASSED` @ commit `a830c51`
+- Evidence in `docs/security/REPRODUCIBLE_BUILDS.md` §Verified Release Runs (also fixed 3 stale `anomalyco/strangecoin` links → `Reider85/strangecoin`)
+- Closes **BUG-S1-001** (BUG-S0-005 continuation): invariant #22 → ✅ (`INVARIANTS_ENFORCED.md`); `STAGE1_SUMMARY.md` §6.4 closed; THREAT_MODEL V-33 closed
 
 ## 1.1.0 — Stage 1 (core extracted + Verkle + headers-first)
 

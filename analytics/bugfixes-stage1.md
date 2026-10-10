@@ -62,10 +62,10 @@
 | **Серьёзность** | H (High) |
 | **Источник** | BUG-S0-005 (перенос); инвариант #22; D03 КГ п.6; P24 КГ |
 | **Категория** | G — операционная |
-| **Статус** | **partial** |
+| **Статус** | **fixed** (2026-10-10) |
 | **Stage target** | Stage 1.5-P06 / ops gate |
 
-**Факт (по коду, 2026-10-10):**
+**Факт (по коду, 2026-10-10, до фикса):**
 - `.github/workflows/release.yml` существует (7067 байт), triggers on `push: tags: ['v*']`, 6 matrix targets, SHA256, cosign keyless OIDC, SLSA3 provenance.
 - Теги `v1.0.0-stage0` (commit `3dd37ef`) и `v1.1.0-stage1` (commit `68e358f`) **существуют** в git (подтверждено `git ls-remote --tags origin`).
 - `docs/security/REPRODUCIBLE_BUILDS.md` (113 строк) описывает verify-флоу, но **содержит 0 ссылок на Actions run URL**, 0 опубликованных SHA256, 0 `cosign verify-blob`/`slsa-verifier` output.
@@ -77,12 +77,30 @@
 - В `REPRODUCIBLE_BUILDS.md` должны появиться: Actions run URL, artifact SHA256s, `cosign verify-blob`/`slsa-verifier` outputs для каждого артефакта.
 - `INVARIANTS_ENFORCED.md` #22 должен стать ✅.
 
-**Воспроизводимость:**
+**Воспроизводимость (до фикса):**
 ```bash
 git clone https://github.com/Reider85/strangecoin.git && cd strangecoin
 grep -E "github.com/.*actions/runs|cosign verify-blob" docs/security/REPRODUCIBLE_BUILDS.md
 # Вывод: пусто (нет evidence)
 ```
+
+**Решение (2026-10-10):**
+
+Перед первым запуском в `release.yml` обнаружены и исправлены **4 блокирующих дефекта** (коммит `a830c51`), которые гарантированно уронили бы первый run:
+
+1. **`aggregate-hashes` — коллизия `hash.txt`:** `download-artifact` с `merge-multiple: true` складывал все 6 `*-checksum/hash.txt` в одну папку (перезапись 5 из 6), а цикл `for f in checksums/*/hash.txt` не матчил плоскую структуру → 0 subjects → job `provenance` падал на пустом `base64-subjects`. Фикс: `merge-multiple` убран (подпапки на артефакт) + guard `test $(wc -l) -eq 6`.
+2. **`base64-subjects` не был base64:** контракт `slsa-github-generator@v2.1.0` требует, чтобы вход декодировался в формат `sha256sum`; workflow передавал сырой текст. Фикс: `cat checksums/*/hash.txt | base64 -w0`.
+3. **`RUSTFLAGS` — silent no-op:** `env:`-блок GitHub Actions **не делает shell-экспанд** `$GITHUB_WORKSPACE` → rustc получал literal-строку и `--remap-path-prefix` ничего не вычищал (ломало локальную сверку воспроизводимости). Фикс: `${{ github.workspace }}`.
+4. **Ретированный runner `macos-13`** (retirement Dec 2025) → job x86_64-apple-darwin не получил бы рантайм. Фикс: `macos-latest` + target `x86_64-apple-darwin` (кросс-компиляция со ARM mac).
+
+Гигиена: `if-no-files-found: error` + OS-gate на upload-шагах; `hash.txt` исключён из подписи и из assets; опубликован нормальный `SHA256SUMS.txt` (6 строк, один на артефакт).
+
+**Прогон и evidence:**
+- Тег `v0.0.1-rc1` → `a830c51` → push → run https://github.com/Reider85/strangecoin/actions/runs/38071514479 — **green все jobs** (6 builds, aggregate-hashes, sign, SLSA Provenance detect-env/generator/upload-assets/final, Create Release).
+- Release: https://github.com/Reider85/strangecoin/releases/tag/v0.0.1-rc1 — 31 asset (6 бинарей, 6 `.sha256`, 6 `.cosign`, 6 `.cosign.pem`, `SHA256SUMS.txt`, `multiple.intoto.jsonl`).
+- Независимая верификация (Windows x86_64 + Linux x86_64, 2026-10-10): локальный SHA256 = MATCH; `cosign verify-blob` (v3.1.3) = `Verified OK`; `slsa-verifier` (v2.7.1) = `PASSED` @ commit `a830c51`.
+- Полное evidence — `docs/security/REPRODUCIBLE_BUILDS.md` §Verified Release Runs; попутно исправлены 3 битые ссылки `anomalyco/strangecoin` → `Reider85/strangecoin`.
+- Закрыты residual-маркеры: `INVARIANTS_ENFORCED.md` #22 → ✅; `STAGE1_SUMMARY.md` §6.4 п.4 → closed, критерии #12/#13 обновлены; `THREAT_MODEL.md` V-33 → closed (Residual: Низкий).
 
 **Рекомендуемое исправление:**
 1. Push тег `v0.0.1-rc1` (если v1.0.0/v1.1.0 уже использованы для аудита) → триггер `release.yml`.
@@ -630,7 +648,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 
 | BUG ID | Title | Severity | Status | Stage |
 |---|---|---|---|---|
-| BUG-S1-001 | Release pipeline не запускался на CI | H | partial | S1.5-P06 / ops |
+| BUG-S1-001 | Release pipeline не запускался на CI | H | **fixed** (2026-10-10) | S1.5-P06 / ops |
 | BUG-S1-002 | `state_root == [0;32]` opt-out ломает #19 | C | **open** | S1.5-P03 |
 | BUG-S1-003 | `verify_block_stateless` не пересчитывает post-root | C | **open** | S1.5-P03 |
 | BUG-S1-004 | `current_chain_id()` захардкожен в REGTEST | C | **open** | S1.5-P05 |
@@ -646,11 +664,11 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-014 | `INVARIANTS_ENFORCED.md` Stage 0 арифметика | L | **open** | S1.5-P12 |
 | BUG-S1-015 | Offline genesis key не сгенерирован | C (mainnet) | **open** (ops) | ops gate |
 
-**Итого:** 15 открытых пунктов: 4 Critical, 5 High, 4 Medium, 2 Low + 1 partial.
+**Итого:** 14 открытых пунктов: 4 Critical, 4 High, 4 Medium, 2 Low + 1 fixed (BUG-S1-001, 2026-10-10).
 - 3 Critical blocker для mainnet (BUG-S1-002, 003, 015).
 - 1 Critical blocker архитектурный (BUG-S1-004 — mainnet-ветка мёртвая).
 - 2 High сетевые/операционные (BUG-S1-005, 013).
-- Остальные 7 — качество/тесты/гигиена.
+- Остальные 6 — качество/тесты/гигиена.
 
 ---
 
@@ -690,7 +708,7 @@ BUG-S1-008 ──► remove `sha2` dep ──► можно закрыть ср�
 2. BUG-S1-015 — Offline genesis key (ops gate, блокирует mainnet)
 3. BUG-S1-002 — `state_root` opt-out (инвариант #19)
 4. BUG-S1-003 — `verify_block_stateless` post-root (инвариант #19)
-5. BUG-S1-001 — Release pipeline first run (инвариант #22)
+5. ~~BUG-S1-001 — Release pipeline first run (инвариант #22)~~ **закрыт 2026-10-10** (тег `v0.0.1-rc1`, run 38071514479 green)
 
 **Must-fix до public testnet (High):**
 6. BUG-S1-005 — Per-message rate-limit

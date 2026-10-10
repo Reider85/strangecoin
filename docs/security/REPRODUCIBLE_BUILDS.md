@@ -10,9 +10,9 @@ Strangecoin uses reproducible builds to ensure that release binaries can be inde
 
 ### 1. Download release assets
 
-From the [GitHub Releases page](https://github.com/anomalyco/strangecoin/releases), download:
+From the [GitHub Releases page](https://github.com/Reider85/strangecoin/releases), download:
 - The binary for your platform (e.g., `strangecoin-linux-x86_64`)
-- `SHA256SUMS.txt` (if published) or individual `.sha256` files
+- `SHA256SUMS.txt` (published) or individual `.sha256` files
 - `.cosign` signature file
 - `.cosign.pem` certificate file
 
@@ -33,7 +33,7 @@ shasum -a 256 strangecoin-linux-x86_64
 cosign verify-blob \
   --signature strangecoin-linux-x86_64.cosign \
   --certificate strangecoin-linux-x86_64.cosign.pem \
-  --certificate-identity "https://github.com/anomalyco/strangecoin/.github/workflows/release.yml@refs/tags/v<VERSION>" \
+  --certificate-identity "https://github.com/Reider85/strangecoin/.github/workflows/release.yml@refs/tags/v<VERSION>" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   strangecoin-linux-x86_64
 ```
@@ -49,10 +49,53 @@ go install github.com/slsa-framework/slsa-verifier/v2/cli/slsa-verifier@latest
 # Verify provenance
 slsa-verifier verify-artifact \
   --provenance-path multiple.intoto.jsonl \
-  --source-uri github.com/anomalyco/strangecoin \
+  --source-uri github.com/Reider85/strangecoin \
   --source-tag v<VERSION> \
   strangecoin-linux-x86_64
 ```
+
+## Verified Release Runs
+
+### v0.0.1-rc1 (2026-10-10) — first pipeline run (BUG-S1-001, invariant #22)
+
+- **Workflow run:** https://github.com/Reider85/strangecoin/actions/runs/38071514479
+- **Result:** green on all jobs — 6 matrix builds (linux x86_64/aarch64, macOS x86_64/aarch64, windows x86_64/aarch64) + `aggregate-hashes` + `sign` + `SLSA Provenance` (detect-env/generator/upload-assets/final) + `Create Release`.
+- **Release:** https://github.com/Reider85/strangecoin/releases/tag/v0.0.1-rc1 — 31 assets: 6 binaries, 6 `.sha256`, 6 `.cosign`, 6 `.cosign.pem`, `SHA256SUMS.txt`, `multiple.intoto.jsonl` (SLSA L3 provenance).
+- **Tag commit:** `a830c51f74ea407ff5e5b2507773928a6f1ac2f2`.
+
+**Published SHA256 (`SHA256SUMS.txt`):**
+
+| Artifact | SHA256 |
+|---|---|
+| strangecoin-linux-aarch64 | `b3d806decd49a1f6ea79e86681a4776d213e17fa610778f947304dbec8455253` |
+| strangecoin-linux-x86_64 | `c2c4eb590c622a374eb6e6bc70fb8bc8ef02f3a3d01d617dd460db395336af8e` |
+| strangecoin-macos-aarch64 | `906d447759162f62cf819031aec1af84fcfafeacf356f558cdeaf10a53657b2d` |
+| strangecoin-macos-x86_64 | `4a0cc74e15f7cc8abac35416a6717611d175a6bb1dccd56fa191991dff3a10d6` |
+| strangecoin-windows-aarch64.exe | `52f549b90617959642d18fb609d029e378f9e7867bf8e386bf0f1d5f11e69599` |
+| strangecoin-windows-x86_64.exe | `b392235aecf8a279bb574c23b205d5d06b33220b872724615f8f54606dd8dc97` |
+
+**Independent verification (Windows x86_64 + Linux x86_64 artifacts, 2026-10-10):**
+
+1. Local SHA256 of downloaded artifacts matched `SHA256SUMS.txt`:
+   - `strangecoin-windows-x86_64.exe` → MATCH
+   - `strangecoin-linux-x86_64` → MATCH
+2. `cosign verify-blob` (cosign v3.1.3) against the release workflow OIDC identity:
+   ```
+   cosign verify-blob --signature strangecoin-windows-x86_64.exe.cosign \
+     --certificate strangecoin-windows-x86_64.exe.cosign.pem \
+     --certificate-identity "https://github.com/Reider85/strangecoin/.github/workflows/release.yml@refs/tags/v0.0.1-rc1" \
+     --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+     strangecoin-windows-x86_64.exe
+   ```
+   Output: `Verified OK` (exit 0).
+3. `slsa-verifier verify-artifact` (slsa-verifier v2.7.1) against the published provenance:
+   ```
+   slsa-verifier verify-artifact strangecoin-windows-x86_64.exe \
+     --provenance-path multiple.intoto.jsonl \
+     --source-uri github.com/Reider85/strangecoin \
+     --source-tag v0.0.1-rc1
+   ```
+   Output: `Verified build using builder "https://github.com/slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@refs/tags/v2.1.0" at commit a830c51f74ea407ff5e5b2507773928a6f1ac2f2` — `PASSED` (exit 0).
 
 ## Building Locally (Reproducibility Check)
 

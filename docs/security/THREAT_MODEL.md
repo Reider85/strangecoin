@@ -635,10 +635,10 @@ Reproducible builds + cosign signatures для верификации бинар
 | **Название** | Release Pipeline Never Run — Artifacts Non-Reproducible |
 | **STRIDE** | Tampering |
 | **Описание** | `.github/workflows/release.yml` содержал дефекты (build-job не объявлял `outputs.hashes`, 5 таргетов вместо 6) и ни разу не запускался (нет тегов `v*` в GitHub Actions). Артефакты reproducible builds (cosign, SLSA provenance) существовали только на бумаге. |
-| **Mitigation** | Workflow исправлен в D03 (commit `60e1840`): добавлен job `aggregate-hashes` для SLSA subject, 6-й таргет `aarch64-pc-windows-msvc`. Локально: `cargo test`/`clippy` green. |
-| **Stage** | D03 (workflow fix) |
-| **Residual Risk** | **Средний.** Pipeline не верифицирован запуском на GitHub Actions (локального доступа к Actions нет; тег `v1.0.0-stage0` поставлен, но CI-прогон не подтверждён артефактом). Обязательство: первый запуск на `v1.1.0-stage1` (S1-P22) — evidence в STAGE1_SUMMARY. |
-| **Monitoring** | Мониторинг GitHub Actions после первого запуска тега; alert при failures/pipeline anomalies. |
+| **Mitigation** | Workflow исправлен в D03 (commit `60e1840`): добавлен job `aggregate-hashes` для SLSA subject, 6-й таргет `aarch64-pc-windows-msvc`. Pre-flight фиксы BUG-S1-001 (commit `a830c51`, 2026-10-10): коллизия `hash.txt` в aggregate (merge-multiple removed), `base64-subjects` по контракту SLSA-генератора, `RUSTFLAGS` expression expansion (неэкспандируемый `$GITHUB_WORKSPACE` был silent no-op), ретированный `macos-13` → `macos-latest`, публикация `SHA256SUMS.txt`. |
+| **Stage** | D03 (workflow fix) → **closed BUG-S1-001 (2026-10-10)** |
+| **Residual Risk** | **Низкий.** Закрыто первым запуском: тег `v0.0.1-rc1` → run https://github.com/Reider85/strangecoin/actions/runs/38071514479 green (6/6 builds + aggregate + sign + SLSA + release, 31 asset). Независимая верификация: SHA256-сверка windows/linux x86_64 = MATCH; `cosign verify-blob` = `Verified OK`; `slsa-verifier` = `PASSED` @ commit `a830c51`. Evidence: `docs/security/REPRODUCIBLE_BUILDS.md` §Verified Release Runs. |
+| **Monitoring** | Мониторинг GitHub Actions после каждого `v*`-тега; alert при failures/pipeline anomalies; сверять `SHA256SUMS.txt` при выпуске. |
 
 ---
 
@@ -887,7 +887,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | V-30 (Nonce manipulation) | mempool (nonce) | `tests/double_spend.rs` | ✅ D01 |
 | V-31 (Genesis key) | consensus (load_genesis pubkey-only) + SCIP-0001 | `tests/genesis_key.rs` (hash без секрета в коде, pubkey-only genesis.json, seed regression-guard); offline key — pre-mainnet ops (SCIP-0001) | ✅ code (S1.5-P01); ⚠️ ops (→ mainnet freeze) |
 | V-32 (Grant blocks) | consensus (validate_chain) + Config flag | `tests/grant_flag.rs` (4 теста), `tests/emission.rs`, `tests/block_executor.rs::grant_block_needs_the_opt_in_flag` | ✅ S1-P01 |
-| V-33 (Release pipeline) | CI/CD (D03 fix) | gap: GitHub Actions run не верифицирован | ⚠️ gap (→ S1-P22 first tag) |
+| V-33 (Release pipeline) | CI/CD (D03 fix + BUG-S1-001) | run 38071514479 (v0.0.1-rc1) green: 6 builds + SLSA L3 + cosign + SHA256SUMS; cosign verify-blob OK, slsa-verifier PASSED @ a830c51 | ✅ BUG-S1-001 (2026-10-10) |
 | V-34 (Headers-first poisoning) | network/sync.rs + consensus | `tests/sync_headers.rs::new_node_syncs_20_blocks_via_headers_first`, `::equal_chain_reports_nothing_better`, `::longer_fork_resolved_via_headers_first` | ✅ S1-P16 |
 | V-35 (state_root manipulation) | core state/sparse_merkle + block_executor | `tests/state_root.rs::tampered_state_root_is_rejected_by_the_second_node`, `::committed_state_root_chain_passes_on_a_second_node`, `::zero_state_root_is_tolerated_as_no_commitment`; core `tests/state_root.rs::tamper_state_root_rejected`, `::proptest_root_consistent`; `tests/block_executor.rs::rejects_state_root_that_does_not_match_the_applied_state` | ✅ S1-P06/P12/P19 |
 | V-36 (Witness spoofing) | core state/witness | core `tests/witness.rs::tampered_balance_rejected`, `::proptest_tamper_detected`, `::wrong_parent_root_rejected`, `::witness_contains_only_touched_addresses` | ✅ S1-P07 |
@@ -898,11 +898,11 @@ Reproducible builds + cosign signatures для верификации бинар
 | V-41 (SyncEngine flooding) | network/sync_engine | `tests/sync_engine.rs::concurrent_candidates_race_through_one_engine`; unit-тесты `src/network/sync_engine.rs::duplicate_candidate_is_dropped_at_the_inbox`, `::full_pull_lane_drops_without_ban`, `::full_inbound_lane_bans_the_producer`, `::headers_lane_is_separate_from_blocks`; `tests/network.rs::real_network_fast_registration_race` | ✅ S1-P18 |
 | V-42 (HRP confusion) | core address (bech32) | core `src/address.rs::test_round_trip`, `::test_checksum_error`, `::test_hrp_validation`, `::test_network_id_hrp_mapping`; `tests/two_clients.rs::bech32_address_transfer`; `tests/address_migration.rs::legacy_base64_balances_migrate_to_bech32_on_open` | ✅ S1-P15 |
 
-**Итого gaps:** 6 векторов без полных тестов (V-03, V-15, V-16, V-17, V-28, V-22/V-33). Из них:
+**Итого gaps:** 5 векторов без полных тестов (V-03, V-15, V-16, V-17, V-28). Из них:
 - V-03, V-16, V-17, V-28 — требуют интеграционных/unit-тестов (не закрыты Stage 1)
 - V-15 — частично закрыт reject-тестами block_executor/sync; ban-after-N остаётся gap
 - ~~V-31~~ — **closed code-side** (S1.5-P01): тест genesis без секрета в коде; residual ops (offline key) — SCIP-0001 pre-mainnet
-- V-22/V-33 — GitHub Actions run подтверждается первым тегом (S1-P22)
+- ~~V-22/V-33~~ — **closed** (BUG-S1-001, 2026-10-10): первый release-run на GitHub Actions верифицирован (run 38071514479)
 - Новые V-34..V-42 — все с тестами, gaps нет
 
 ---
@@ -934,7 +934,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | Plaintext P2P (V-24) | Noise Protocol deferred to Stage 2 | Accept; mitigate with monitoring |
 | Genesis key from public string (V-31) | Testnet/regtest only; secret removed from code (S1.5-P01); pubkey remains burned | **Obligation: offline key + SCIP-0001 before mainnet freeze** |
 | Grant blocks (V-32) | Flag-gated (S1-P01); must stay off on mainnet | Flag default false + tests |
-| Release pipeline (V-33) | Workflow fixed (D03); GitHub Actions run pending | **Obligation: first tag run evidence (S1-P22)** |
+| Release pipeline (V-33) | ~~Workflow fixed (D03); GitHub Actions run pending~~ **closed 2026-10-10 (BUG-S1-001)**: run 38071514479 green, cosign/SLSA verified | First-run evidence: REPRODUCIBLE_BUILDS.md §Verified Release Runs |
 | cargo-fuzz не запускается на dev-хосте (Windows, нет MSVC/ASan) | ASan unsupported on `x86_64-pc-windows-gnu`; no MSVC; libFuzzer needs clang/MSVC | Fallback soak runner (S1-P19) нашёл и закрыл OOB-баг; измеренный 10-min soak clean (2026-10-09). **Obligation закрыта (BUG-S0-023, 2026-10-09): job `fuzz-canonical-decode` — cargo-fuzz 600s на Linux CI, каждый push/PR**; residual — результат первого CI-прогона |
 | Zero state_root tolerated (opt-in no commitment) | Явное поведение для совместимости | Узлы с enforced commitments отклоняют zero root; документировано |
 | RBF при fee=0 (feerate = proxy по размеру) | Fee market — Stage 5 | RBF_MIN_DELTA + MAX_RBF_REPLACEMENTS + rate limiter |
