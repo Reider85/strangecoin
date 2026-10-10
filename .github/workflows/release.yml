@@ -12,7 +12,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "--remap-path-prefix $GITHUB_WORKSPACE=."
+  # env: does not shell-expand $GITHUB_WORKSPACE — expression context is required,
+  # otherwise --remap-path-prefix is a silent no-op.
+  RUSTFLAGS: "--remap-path-prefix ${{ github.workspace }}=."
 
 jobs:
   build:
@@ -29,7 +31,7 @@ jobs:
             target: aarch64-unknown-linux-gnu
             artifact: strangecoin-linux-aarch64
             cross: true
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
             artifact: strangecoin-macos-x86_64
           - os: macos-latest
@@ -96,12 +98,14 @@ jobs:
           "$hash  ${{ matrix.artifact }}.exe" | Out-File -Encoding ascii "${{ matrix.artifact }}.exe.sha256"
 
       - name: Upload artifact
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: |
             ${{ matrix.artifact }}
             ${{ matrix.artifact }}.sha256
+          if-no-files-found: error
           retention-days: 5
 
       - name: Upload Windows artifact
@@ -112,6 +116,7 @@ jobs:
           path: |
             ${{ matrix.artifact }}.exe
             ${{ matrix.artifact }}.exe.sha256
+          if-no-files-found: error
           retention-days: 5
 
       - name: Collect hash for this artifact
@@ -144,21 +149,17 @@ jobs:
         with:
           pattern: "*-checksum"
           path: checksums
-          merge-multiple: true
+          # merge-multiple would flatten all artifacts into one directory and
+          # overwrite identically-named hash.txt files (only 1 of 6 would survive).
 
       - name: Aggregate hashes
         id: aggregate
         run: |
-          combined=""
-          for f in checksums/*/hash.txt; do
-            if [ -n "$combined" ]; then
-              combined="$combined"$'\n'
-            fi
-            combined="$combined$(cat "$f")"
-          done
-          echo "hashes<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$combined" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          cat checksums/*/hash.txt > hashes.txt
+          test "$(wc -l < hashes.txt)" -eq 6
+          # base64-subjects input must decode to sha256sum output (SLSA generator docs).
+          echo "hashes=$(base64 -w0 hashes.txt)" >> "$GITHUB_OUTPUT"
 
   provenance:
     name: SLSA Provenance
@@ -192,7 +193,7 @@ jobs:
           for dir in artifacts/*/; do
             for file in "$dir"*; do
               case "$file" in
-                *.sha256) continue ;;
+                *.sha256|*/hash.txt) continue ;;
               esac
               echo "Signing $file..."
               cosign sign-blob \
@@ -220,11 +221,19 @@ jobs:
         with:
           path: artifacts
 
+      - name: Download checksum files
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-checksum"
+          path: checksums
+
       - name: Collect release assets
         run: |
           mkdir -p release
-          find artifacts -type f ! -name '*.cosign*' ! -name '*.pem' -exec cp {} release/ \;
-          find artifacts -type f \( -name '*.cosign' -o -name '*.pem' -o -name '*.sha256' \) -exec cp {} release/ \;
+          find artifacts -type f ! -name 'hash.txt' -exec cp {} release/ \;
+          # Combined SHA256SUMS.txt (one line per artifact, sha256sum format)
+          cat checksums/*/hash.txt > release/SHA256SUMS.txt
+          sort -k2 -o release/SHA256SUMS.txt release/SHA256SUMS.txt
           ls -la release/
 
       - name: Create GitHub Release
