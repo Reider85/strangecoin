@@ -2,6 +2,7 @@ use strangecoin_core::state::sparse_merkle::SparseMerkleTrie;
 use strangecoin_core::state::witness::{build_witness, verify_block_stateless};
 use strangecoin_core::state::{apply_block, State};
 use strangecoin_core::types::{AccountState, Block, Transaction};
+use strangecoin_core::CoreError;
 
 use proptest::prelude::*;
 
@@ -275,5 +276,186 @@ proptest! {
 
         let result = verify_block_stateless(&genesis_block.state_root, &block, &witness);
         prop_assert!(result.is_err(), "tampered witness should be rejected");
+    }
+}
+
+/// BUG-S1-003: the post-root recompute must reject an arbitrary commitment.
+#[test]
+fn forged_state_root_rejected() {
+    let mut state = State::new();
+    state.balances.insert(
+        "alice".to_string(),
+        AccountState {
+            balance: 1000,
+            nonce: 0,
+        },
+    );
+
+    let genesis = genesis_block(vec![coinbase("alice", 1000)]);
+    let after_genesis = apply_block(&state, &genesis).unwrap();
+    let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
+
+    let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)], &after_genesis);
+    let witness = build_witness(&after_genesis, &block).unwrap();
+
+    let mut forged = block;
+    forged.state_root = [0xaa; 32];
+    let result = verify_block_stateless(&genesis_root, &forged, &witness);
+    assert!(matches!(
+        result,
+        Err(CoreError::PostStateRootMismatch { .. })
+    ));
+}
+
+/// BUG-S1-003: a post-commitment that also tampers an untouched account is
+/// rejected — the recompute is anchored to the parent root, so an untouched
+/// leaf cannot diverge (the residual Option A would leave open).
+#[test]
+fn untouched_account_tamper_in_post_commitment_rejected() {
+    let mut state = State::new();
+    state.balances.insert(
+        "alice".to_string(),
+        AccountState {
+            balance: 5000,
+            nonce: 0,
+        },
+    );
+    state.balances.insert(
+        "charlie".to_string(),
+        AccountState {
+            balance: 3000,
+            nonce: 0,
+        },
+    );
+
+    let genesis = genesis_block(vec![coinbase("alice", 5000), coinbase("charlie", 3000)]);
+    let after_genesis = apply_block(&state, &genesis).unwrap();
+    let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
+
+    let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)], &after_genesis);
+    let witness = build_witness(&after_genesis, &block).unwrap();
+
+    let mut fake_post = apply_block(&after_genesis, &block).unwrap();
+    fake_post.balances.insert(
+        "charlie".to_string(),
+        AccountState {
+            balance: 999_999,
+            nonce: 0,
+        },
+    );
+    let mut forged = block;
+    forged.state_root = SparseMerkleTrie::compute_root(&fake_post.balances);
+
+    let result = verify_block_stateless(&genesis_root, &forged, &witness);
+    assert!(matches!(
+        result,
+        Err(CoreError::PostStateRootMismatch { .. })
+    ));
+}
+
+/// BUG-S1-003 / SCIP-0002: a non-genesis zero state_root can never match the
+/// recomputed root and is rejected by the stateless verifier.
+#[test]
+fn zero_state_root_on_non_genesis_rejected() {
+    let mut state = State::new();
+    state.balances.insert(
+        "alice".to_string(),
+        AccountState {
+            balance: 1000,
+            nonce: 0,
+        },
+    );
+
+    let genesis = genesis_block(vec![coinbase("alice", 1000)]);
+    let after_genesis = apply_block(&state, &genesis).unwrap();
+    let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
+
+    let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)], &after_genesis);
+    let witness = build_witness(&after_genesis, &block).unwrap();
+
+    let mut zeroed = block;
+    zeroed.state_root = [0u8; 32];
+    let result = verify_block_stateless(&genesis_root, &zeroed, &witness);
+    assert!(matches!(
+        result,
+        Err(CoreError::PostStateRootMismatch { .. })
+    ));
+}
+
+/// BUG-S1-003: a witness missing a touched address is rejected before the
+/// partial apply could default the account to (0, 0).
+#[test]
+fn missing_touched_address_rejected() {
+    let mut state = State::new();
+    state.balances.insert(
+        "alice".to_string(),
+        AccountState {
+            balance: 1000,
+            nonce: 0,
+        },
+    );
+
+    let genesis = genesis_block(vec![coinbase("alice", 1000)]);
+    let after_genesis = apply_block(&state, &genesis).unwrap();
+    let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
+
+    let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)], &after_genesis);
+    let mut witness = build_witness(&after_genesis, &block).unwrap();
+    witness.proofs.remove("bob");
+
+    let result = verify_block_stateless(&genesis_root, &block, &witness);
+    assert!(matches!(result, Err(CoreError::WitnessVerificationFailed)));
+}
+
+/// BUG-S1-003: genesis keeps the invariant #19 exemption — a zero state_root
+/// on index 0 is tolerated (same rule as `root_after` / SCIP-0002).
+#[test]
+fn genesis_zero_state_root_is_tolerated() {
+    let state = State::new();
+    let genesis = genesis_block(vec![coinbase("alice", 1000)]);
+    let empty_root = SparseMerkleTrie::compute_root(&state.balances);
+    let witness = build_witness(&state, &genesis).unwrap();
+
+    let result = verify_block_stateless(&empty_root, &genesis, &witness);
+    assert!(result.is_ok());
+
+    let mut forged = genesis;
+    forged.state_root = [0xbb; 32];
+    let result = verify_block_stateless(&empty_root, &forged, &witness);
+    assert!(matches!(
+        result,
+        Err(CoreError::PostStateRootMismatch { .. })
+    ));
+}
+
+proptest! {
+    /// BUG-S1-003: any bit-flip of the committed post-root is rejected.
+    #[test]
+    fn proptest_forged_state_root_rejected(
+        sender_bal in 1000u64..1_000_000u64,
+        amount in 1u64..500u64,
+        flip in 0usize..32,
+    ) {
+        let mut state = State::new();
+        state.balances.insert(
+            "alice".to_string(),
+            AccountState { balance: sender_bal, nonce: 0 },
+        );
+
+        let genesis = genesis_block(vec![coinbase("alice", sender_bal)]);
+        let after_genesis = apply_block(&state, &genesis).unwrap();
+        let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
+
+        let block = transfer_block(1, vec![transfer("alice", "bob", amount, 1)], &after_genesis);
+        let witness = build_witness(&after_genesis, &block).unwrap();
+
+        let mut forged = block;
+        forged.state_root[flip] ^= 0xff;
+        let result = verify_block_stateless(&genesis_root, &forged, &witness);
+        prop_assert!(
+            matches!(result, Err(CoreError::PostStateRootMismatch { .. })),
+            "forged post-root must be rejected, got {:?}",
+            result
+        );
     }
 }

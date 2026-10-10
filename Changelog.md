@@ -4,7 +4,7 @@
 
 **Status**: In progress  
 **Date**: 2026-10-08  
-**Prompts**: S1.5-P02 (BUG-S0-011/014/016), S1.5-P04 (BUG-S0-018/019), S1.5-P01 (BUG-S0-015), BUG-S0-020, BUG-S1-001, BUG-S1-002
+**Prompts**: S1.5-P02 (BUG-S0-011/014/016), S1.5-P04 (BUG-S0-018/019), S1.5-P01 (BUG-S0-015), BUG-S0-020, BUG-S1-001, BUG-S1-002, BUG-S1-003
 
 ### BUG-S0-011: Sparse Merkle Tree replaces flat «Verkle»
 
@@ -46,8 +46,8 @@
 
 ### Not in this change
 
-- BUG-S0-012 (`state_root == [0;32]` opt-out) — still open, S1.5-P03
-- BUG-S0-013 (`verify_block_stateless` post-root) — still open, S1.5-P03
+- ~~BUG-S0-012 (`state_root == [0;32]` opt-out)~~ — **fixed 2026-10-11** (BUG-S1-002 / SCIP-0002)
+- ~~BUG-S0-013 (`verify_block_stateless` post-root)~~ — **fixed 2026-10-11** (BUG-S1-003)
 - ~~BUG-S0-015 (genesis key)~~ — **fixed 2026-10-08** (S1.5-P01); ops residual tracked in SCIP-0001
 - ~~BUG-S0-020 (P02 skeletons)~~ — **fixed 2026-10-08**; Stage 4 will still move api/gui into dedicated crates (ARCHITECT3 §10.6)
 
@@ -83,6 +83,17 @@
 - Tests: core `tests/state_root.rs` (9: + zero-root reject, genesis exempt); `tests/block_executor.rs` (14: + strict reject / opt-in accept); e2e `tests/state_root.rs` (6: + strict adopt reject, mine/grant commit); `src/config.rs` unit tests (4: default resolution, override, mainnet/testnet reject, regtest accept)
 - Hygiene (clippy-gate enablers, pre-existing lints in untouched files): `address.rs` redundant `matches!`, `merkle.rs` redundant closures/`vec!`, `consensus_proptest.rs` redundant import + OR-pattern range
 - Closes **BUG-S1-002** (BUG-S0-012 continuation): invariant #19 → ✅ (`INVARIANTS_ENFORCED.md`, residual count 0); `STAGE1_SUMMARY.md` §6.5 п.5 closed, criteria #2/#12 updated; THREAT_MODEL V-35 zero-root vector closed
+
+### BUG-S1-003: stateless verifier recomputes the post-state root (2026-10-11)
+
+- `verify_block_stateless` no longer stops at pre-state proofs: it now **recomputes the post-state root from the parent root, the witness proofs and the applied block** (S1-P07 КГ, invariant #19) and compares it with the header commitment — `Err(PostStateRootMismatch { expected, got })` on mismatch. A light client can no longer be fed an arbitrary `state_root` (BUG-S0-013 exploit closed)
+- New `SparseMerkleTrie::root_after_updates(pre_root, updates)` — mulproof update for the depth-256 SMT: verifies each pre-proof against the pre-root, seeds the node map from the proofs, overwrites the updated leaves with their post-images, recomputes the ancestor chains bottom-up. Untouched sibling subtrees keep their pre-image hashes anchored to `pre_root`, so an **untouched account cannot diverge** in the committed post-state (stronger than the catalog's literal Option A, which would only have verified post-proofs for touched accounts)
+- Witness coverage guard: every address in `collect_touched_addresses(block)` must be present in `witness.proofs` (`Err(WitnessVerificationFailed)`) — `apply_block` on a partial state would otherwise default a missing account to `(0, 0)`
+- Genesis exemption mirrors `root_after` / SCIP-0002: `index == 0 && state_root == [0;32]` skips the comparison; a non-genesis zero root can never match the recomputed value and is rejected
+- **Witness format unchanged** (no new fields, no size doubling); full-node validation paths untouched; no new SCIP (stateless API only; witness is not yet on the wire — Stage 2+)
+- New `CoreError::PostStateRootMismatch` + node-side mapping in `src/error.rs`
+- Tests: core `sparse_merkle.rs` unit (8: single-key, overlapping key paths, pruned post, absent→present, invalid proof, wrong pre-account, empty updates, 64-account scatter) + proptest roundtrip; integration `tests/witness.rs` (6: forged root, untouched-account tamper in post-commitment, zero-root non-genesis, missing touched address, genesis exempt + forged genesis root, + proptest bit-flip)
+- Closes **BUG-S1-003** (BUG-S0-013 continuation): stateless post-root gap → ✅; THREAT_MODEL V-36 mitigation now matches the code; `STAGE1_SUMMARY.md` §6.5 п.5 + criterion #1 caveat updated
 
 ## 1.1.0 — Stage 1 (core extracted + Verkle + headers-first)
 

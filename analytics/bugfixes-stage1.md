@@ -182,10 +182,10 @@ rg "state_root != \[0u8; 32\]" crates/strangecoin-core/src/ src/blockchain/
 | **Серьёзность** | C (Critical) |
 | **Источник** | BUG-S0-013 (перенос); S1-P07 КГ; инвариант #19 |
 | **Категория** | B — криптографическая |
-| **Статус** | **open** |
+| **Статус** | **fixed** (2026-10-11) |
 | **Stage target** | S1.5-P03 |
 
-**Факт (по коду, 2026-10-10):**
+**Факт (по коду, 2026-10-10, до фикса):**
 - `crates/strangecoin-core/src/state/witness.rs:51-89` — `verify_block_stateless(parent_state_root, block, witness)`:
   - Проверяет pre-state proofs (что `witness.proofs` соответствуют `parent_state_root`).
   - Реконструирует partial state из witness.
@@ -219,6 +219,19 @@ sed -n '51,90p' crates/strangecoin-core/src/state/witness.rs
 **Опция C (минимум, честная):** Переименовать `verify_block_stateless` → `verify_pre_state_proofs` (честное имя, не обещает statelessness); обновить S1-P07 КГ; документировать light-client promise как «pre-state-only verification, full state commitment requires full node».
 
 **Рекомендация:** Опция A (S1.5-P03). Опция C как interim, если Stage 1.5-P03 не успевает.
+
+**Решение (2026-10-11) — вариант A′ (усиленный пересчёт, выбран вместо литературной Опции A):**
+
+Вместо добавления post-proofs в witness реализован **полный пересчёт post-root из parent root + witness + блока** — дословное выполнение КГ S1-P07 («пересчитать post-state-root из parent root + witness + блока») и текста mitigation V-36:
+
+1. **`SparseMerkleTrie::root_after_updates(pre_root, updates)`** (`state/sparse_merkle.rs`): mulproof-update для depth-256 SMT. Каждый `LeafUpdate` несёт pre-аккаунт + его 256-sibling inclusion proof + post-аккаунт. Алгоритм: (1) verify каждого pre-proof против `pre_root`; (2) seed node-map из proofs (frontier pre-дерева); (3) overwrite обновлённых leaves пост-хешами (`EMPTY_HASH` для pruned `(0,0)`); (4) bottom-up recompute ancestors каждого ключа — общий предок пересчитывается после детей, stale sibling из proof перезаписывается до использования. Незатронутые sibling-subtrees сохраняют pre-хеши, уже привязанные к `pre_root` → untouched-лист не может разойтись, не сломав pre-proof.
+2. **`verify_block_stateless`** (`state/witness.rs`): после apply_block собирает `updates` из witness + post-state, вызывает `root_after_updates`, сравнивает с `block.state_root` → `Err(PostStateRootMismatch { expected, got })`. Genesis-exempt (`index == 0 && state_root == [0;32]`) — то же правило, что в `root_after`/SCIP-0002. Новый guard: witness обязан покрывать все touched-адреса (`collect_touched_addresses` ⊆ `witness.proofs`) — иначе `Err(WitnessVerificationFailed)` (partial apply дефолтил бы отсутствующий аккаунт в `(0,0)`).
+3. **Новая ошибка** `CoreError::PostStateRootMismatch { expected, got }` + маппинг в `src/error.rs`.
+4. **Формат witness не изменился** (в отличие от Опции A: без удвоения размера, без новых полей). Zero-root на non-genesis отвергается автоматически — recomputed root никогда не `[0;32]`.
+5. **Тесты:** core unit (`sparse_merkle.rs`, 8 + proptest): single-key roundtrip; overlapping key paths (brute-forced пара с общим первым байтом ключа — stale-sibling overwrite); pruned post; absent→present; invalid pre-proof; wrong pre-account; empty updates; 64-аккаунтов scatter-update vs full recompute; proptest roundtrip. Integration (`tests/witness.rs`, 6 + proptest): `forged_state_root_rejected`; `untouched_account_tamper_in_post_commitment_rejected` (главное усиление: подделка untouched-аккаунта в post-commitment ловится, Опция A это оставила бы открытым); `zero_state_root_on_non_genesis_rejected`; `missing_touched_address_rejected`; `genesis_zero_state_root_is_tolerated` (+ forged genesis root rejected); `proptest_forged_state_root_rejected` (bit-flip любого байта корня → Err).
+6. **Docs:** `INVARIANTS_ENFORCED.md` #19 residual BUG-S1-003 снят; `STAGE1_SUMMARY.md` §6.5 п.5 + criterion #1 caveat; `THREAT_MODEL.md` V-36 mitigation обновлён до фактического пересчёта; Changelog.
+7. **Без нового SCIP:** full-node правило не менялось (уже SCIP-0002); фикс — только stateless API в core, wire-протокол witness не существует (Stage 2+).
+8. **Verification:** `cargo test --workspace` — green (33 suites); `cargo clippy --workspace --all-targets -- -D warnings` — clean.
 
 ---
 
@@ -663,7 +676,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 |---|---|---|---|---|
 | BUG-S1-001 | Release pipeline не запускался на CI | H | **fixed** (2026-10-10) | S1.5-P06 / ops |
 | BUG-S1-002 | `state_root == [0;32]` opt-out ломает #19 | C | **fixed** (2026-10-11) | S1.5-P03 (SCIP-0002) |
-| BUG-S1-003 | `verify_block_stateless` не пересчитывает post-root | C | **open** | S1.5-P03 |
+| BUG-S1-003 | `verify_block_stateless` не пересчитывает post-root | C | **fixed** (2026-10-11) | S1.5-P03 |
 | BUG-S1-004 | `current_chain_id()` захардкожен в REGTEST | C | **open** | S1.5-P05 |
 | BUG-S1-005 | Per-message rate-limit не enforced | H | **open** | Stage 2-P03 |
 | BUG-S1-006 | Single-block size check отсутствует | H | **open** | S1.5-P07 |
@@ -677,8 +690,8 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-014 | `INVARIANTS_ENFORCED.md` Stage 0 арифметика | L | **open** | S1.5-P12 |
 | BUG-S1-015 | Offline genesis key не сгенерирован | C (mainnet) | **open** (ops) | ops gate |
 
-**Итого:** 13 открытых пунктов: 3 Critical, 4 High, 4 Medium, 2 Low + 2 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11).
-- 2 Critical blocker для mainnet (BUG-S1-003, 015).
+**Итого:** 12 открытых пунктов: 2 Critical, 4 High, 4 Medium, 2 Low + 3 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11).
+- 1 Critical blocker для mainnet (BUG-S1-015).
 - 1 Critical blocker архитектурный (BUG-S1-004 — mainnet-ветка мёртвая).
 - 2 High сетевые/операционные (BUG-S1-005, 013).
 - Остальные 6 — качество/тесты/гигиена.
@@ -720,7 +733,7 @@ BUG-S1-008 ──► remove `sha2` dep ──► можно закрыть ср�
 1. BUG-S1-004 — `current_chain_id()` from Config (архитектурный prerequisite)
 2. BUG-S1-015 — Offline genesis key (ops gate, блокирует mainnet)
 3. ~~BUG-S1-002 — `state_root` opt-out (инвариант #19)~~ **закрыт 2026-10-11** (SCIP-0002 draft, mainnet/testnet reject + regtest opt-in)
-4. BUG-S1-003 — `verify_block_stateless` post-root (инвариант #19)
+4. ~~BUG-S1-003 — `verify_block_stateless` post-root (инвариант #19)~~ **закрыт 2026-10-11** (вариант A′: mulproof-update пересчёт post-root из parent root + witness + блока; `PostStateRootMismatch`; покрытие touched-адресов)
 5. ~~BUG-S1-001 — Release pipeline first run (инвариант #22)~~ **закрыт 2026-10-10** (тег `v0.0.1-rc1`, run 38071514479 green)
 
 **Must-fix до public testnet (High):**
@@ -747,7 +760,7 @@ BUG-S1-008 ──► remove `sha2` dep ──► можно закрыть ср�
 |---|---|---|
 | BUG-S0-005 (partial) | BUG-S1-001 | Перенос: pipeline написан, но не запускался |
 | BUG-S0-012 (open) | BUG-S1-002 | Перенос: state_root opt-out |
-| BUG-S0-013 (open) | BUG-S1-003 | Перенос: post-root в witness |
+| BUG-S0-013 (open) | BUG-S1-003 | Перенос: post-root в witness — **fixed 2026-10-11** (вариант A′) |
 | BUG-S0-015 (fixed in code) | BUG-S1-015 | Ops gate остался |
 | (none) | BUG-S1-004 | Новый: chain_id hardcoded (audit) |
 | (none) | BUG-S1-005 | Новый: per-message rate-limit (audit) |

@@ -65,6 +65,50 @@ fn bit_at(key: &[u8; 32], bit_index: usize) -> u8 {
     (byte >> shift) & 1
 }
 
+/// Copy of `key` with every bit at index `>= depth` zeroed — the path prefix
+/// identifying the node at `depth` on `key`'s path (root at 0, leaf at 256).
+fn path_prefix(key: &[u8; 32], depth: usize) -> [u8; 32] {
+    let mut prefix = [0u8; 32];
+    let whole = depth / 8;
+    prefix[..whole].copy_from_slice(&key[..whole]);
+    let rem = depth % 8;
+    if rem > 0 {
+        prefix[whole] = key[whole] & (0xffu8 << (8 - rem));
+    }
+    prefix
+}
+
+/// Path prefix of the sibling node at depth `level + 1` next to the on-path
+/// node of `key` — the prefix of length `level` with bit `level` flipped.
+fn sibling_path(key: &[u8; 32], level: usize) -> [u8; 32] {
+    let mut path = path_prefix(key, level);
+    if bit_at(key, level) == 0 {
+        path[level / 8] |= 1 << (7 - level % 8);
+    }
+    path
+}
+
+/// Leaf hash of `account` at `key`, or [`EMPTY_HASH`] when the account is
+/// pruned (`balance == 0 && nonce == 0` — absent from the trie).
+fn leaf_hash_for(key: &[u8; 32], account: &AccountState) -> [u8; 32] {
+    if account.balance == 0 && account.nonce == 0 {
+        EMPTY_HASH
+    } else {
+        account_leaf_hash(key, account)
+    }
+}
+
+/// One leaf replacement for [`SparseMerkleTrie::root_after_updates`]: the
+/// account as it stands in the pre-state (`pre` + its inclusion proof against
+/// the pre-root) and the account the block writes in its place (`post`).
+#[derive(Clone, Debug)]
+pub struct LeafUpdate<'a> {
+    pub address: &'a str,
+    pub pre: AccountState,
+    pub proof: &'a [[u8; 32]],
+    pub post: AccountState,
+}
+
 /// Precomputed hash of an empty subtree rooted at `depth`
 /// (bits already consumed = `depth`; remaining levels = `DEPTH - depth`).
 fn empty_subtree(depth: usize) -> [u8; 32] {
@@ -248,6 +292,80 @@ impl SparseMerkleTrie {
             }
         }
         acc == *root
+    }
+
+    /// Recompute the tree root after replacing the leaves of every key in
+    /// `updates`, anchored at `pre_root` (BUG-S1-003, S1-P07 КГ).
+    ///
+    /// Each update carries the pre-image account with its `DEPTH`-sibling
+    /// inclusion proof against `pre_root` (absence is proven by the empty
+    /// slot) and the post-image account the block writes. The function:
+    ///
+    /// 1. verifies every pre-proof against `pre_root`;
+    /// 2. seeds the node map from the proofs — the pre-tree frontier;
+    /// 3. overwrites the updated leaves with their post-image leaf hashes;
+    /// 4. recomputes the ancestor chain of every updated key bottom-up.
+    ///
+    /// Untouched sibling subtrees keep their pre-image hashes, which are
+    /// already anchored to `pre_root`, so the returned root commits to
+    /// exactly the tree obtained from the pre-state by applying `updates` —
+    /// an untouched leaf cannot diverge without breaking a pre-proof.
+    ///
+    /// Returns [`CoreError::WitnessVerificationFailed`] when any pre-proof
+    /// does not verify against `pre_root`.
+    pub fn root_after_updates(
+        pre_root: &[u8; 32],
+        updates: &[LeafUpdate<'_>],
+    ) -> Result<[u8; 32], CoreError> {
+        if updates.is_empty() {
+            return Ok(*pre_root);
+        }
+
+        let mut nodes: HashMap<(usize, [u8; 32]), [u8; 32]> = HashMap::new();
+
+        for update in updates {
+            let key = account_key_hash(update.address);
+            if !Self::verify_proof(pre_root, update.address, &update.pre, update.proof) {
+                return Err(CoreError::WitnessVerificationFailed);
+            }
+            nodes.insert((DEPTH, key), leaf_hash_for(&key, &update.pre));
+            for level in 0..DEPTH {
+                nodes.insert((level + 1, sibling_path(&key, level)), update.proof[level]);
+            }
+        }
+
+        for update in updates {
+            let key = account_key_hash(update.address);
+            nodes.insert((DEPTH, key), leaf_hash_for(&key, &update.post));
+        }
+
+        for update in updates {
+            let key = account_key_hash(update.address);
+            for level in (0..DEPTH).rev() {
+                let on_path = path_prefix(&key, level + 1);
+                let off_path = sibling_path(&key, level);
+                let (left, right) = if bit_at(&key, level) == 0 {
+                    (on_path, off_path)
+                } else {
+                    (off_path, on_path)
+                };
+                let left_hash = *nodes
+                    .get(&(level + 1, left))
+                    .ok_or(CoreError::WitnessVerificationFailed)?;
+                let right_hash = *nodes
+                    .get(&(level + 1, right))
+                    .ok_or(CoreError::WitnessVerificationFailed)?;
+                nodes.insert(
+                    (level, path_prefix(&key, level)),
+                    hash_pair(&left_hash, &right_hash),
+                );
+            }
+        }
+
+        let root = *nodes
+            .get(&(0, [0u8; 32]))
+            .ok_or(CoreError::WitnessVerificationFailed)?;
+        Ok(root)
     }
 }
 
@@ -510,6 +628,253 @@ mod tests {
         assert_ne!(root_with, trie.root());
     }
 
+    /// BUG-S1-003: one updated leaf — recomputed root equals a full recompute.
+    #[test]
+    fn root_after_updates_single_key() {
+        let accounts = accounts_map(&[("alice", 1000, 0), ("bob", 2000, 1)]);
+        let pre_root = SparseMerkleTrie::compute_root(&accounts);
+        let mut trie = SparseMerkleTrie::new();
+        for (addr, account) in &accounts {
+            trie.insert(addr, account);
+        }
+
+        let pre = make_account(1000, 0);
+        let post = make_account(900, 1);
+        let proof = trie.prove("alice", &pre).unwrap();
+        let updates = [LeafUpdate {
+            address: "alice",
+            pre: pre.clone(),
+            proof: &proof,
+            post: post.clone(),
+        }];
+
+        let mut updated = accounts.clone();
+        updated.insert("alice".to_string(), post);
+        let expected = SparseMerkleTrie::compute_root(&updated);
+
+        assert_eq!(
+            SparseMerkleTrie::root_after_updates(&pre_root, &updates).unwrap(),
+            expected
+        );
+    }
+
+    /// BUG-S1-003: two keys sharing a long path prefix — the shared ancestors
+    /// must be recomputed after both leaves, not taken stale from a proof.
+    #[test]
+    fn root_after_updates_overlapping_key_paths() {
+        let mut pair = None;
+        for i in 0..20_000u64 {
+            let a = format!("overlap_a_{i}");
+            let b = format!("overlap_b_{i}");
+            if account_key_hash(&a)[0] == account_key_hash(&b)[0] {
+                pair = Some((a, b));
+                break;
+            }
+        }
+        let (alice, bob) = pair.expect("no first-byte key collision found");
+
+        let mut accounts = HashMap::new();
+        accounts.insert(alice.clone(), make_account(1000, 0));
+        accounts.insert(bob.clone(), make_account(2000, 0));
+        let pre_root = SparseMerkleTrie::compute_root(&accounts);
+        let mut trie = SparseMerkleTrie::new();
+        for (addr, account) in &accounts {
+            trie.insert(addr, account);
+        }
+
+        let alice_pre = make_account(1000, 0);
+        let alice_post = make_account(500, 1);
+        let bob_pre = make_account(2000, 0);
+        let bob_post = make_account(1500, 1);
+        let alice_proof = trie.prove(&alice, &alice_pre).unwrap();
+        let bob_proof = trie.prove(&bob, &bob_pre).unwrap();
+        let updates = [
+            LeafUpdate {
+                address: &alice,
+                pre: alice_pre.clone(),
+                proof: &alice_proof,
+                post: alice_post.clone(),
+            },
+            LeafUpdate {
+                address: &bob,
+                pre: bob_pre.clone(),
+                proof: &bob_proof,
+                post: bob_post.clone(),
+            },
+        ];
+
+        let mut updated = accounts;
+        updated.insert(alice.clone(), alice_post);
+        updated.insert(bob.clone(), bob_post);
+        let expected = SparseMerkleTrie::compute_root(&updated);
+
+        assert_eq!(
+            SparseMerkleTrie::root_after_updates(&pre_root, &updates).unwrap(),
+            expected
+        );
+    }
+
+    /// BUG-S1-003: a pruned post-image (0, 0) removes the leaf.
+    #[test]
+    fn root_after_updates_pruned_post_account() {
+        let accounts = accounts_map(&[("alice", 1000, 0), ("bob", 42, 0)]);
+        let pre_root = SparseMerkleTrie::compute_root(&accounts);
+        let mut trie = SparseMerkleTrie::new();
+        for (addr, account) in &accounts {
+            trie.insert(addr, account);
+        }
+
+        let pre = make_account(1000, 0);
+        let proof = trie.prove("alice", &pre).unwrap();
+        let updates = [LeafUpdate {
+            address: "alice",
+            pre: pre.clone(),
+            proof: &proof,
+            post: make_account(0, 0),
+        }];
+
+        let mut updated = accounts;
+        updated.remove("alice");
+        let expected = SparseMerkleTrie::compute_root(&updated);
+        assert_eq!(expected, SparseMerkleTrie::compute_root(&accounts_map(&[("bob", 42, 0)])));
+
+        assert_eq!(
+            SparseMerkleTrie::root_after_updates(&pre_root, &updates).unwrap(),
+            expected
+        );
+    }
+
+    /// BUG-S1-003: an absent pre-image (empty slot proof) can gain a balance.
+    #[test]
+    fn root_after_updates_absent_to_present() {
+        let accounts = accounts_map(&[("alice", 1000, 0)]);
+        let pre_root = SparseMerkleTrie::compute_root(&accounts);
+        let mut trie = SparseMerkleTrie::new();
+        for (addr, account) in &accounts {
+            trie.insert(addr, account);
+        }
+
+        let absent = make_account(0, 0);
+        let proof = trie.prove("nobody", &absent).unwrap();
+        let updates = [LeafUpdate {
+            address: "nobody",
+            pre: absent.clone(),
+            proof: &proof,
+            post: make_account(500, 0),
+        }];
+
+        let mut updated = accounts;
+        updated.insert("nobody".to_string(), make_account(500, 0));
+        let expected = SparseMerkleTrie::compute_root(&updated);
+
+        assert_eq!(
+            SparseMerkleTrie::root_after_updates(&pre_root, &updates).unwrap(),
+            expected
+        );
+    }
+
+    /// BUG-S1-003: a proof that does not verify against the pre-root is rejected.
+    #[test]
+    fn root_after_updates_invalid_pre_proof_rejected() {
+        let accounts = accounts_map(&[("alice", 1000, 0)]);
+        let pre_root = SparseMerkleTrie::compute_root(&accounts);
+        let mut trie = SparseMerkleTrie::new();
+        for (addr, account) in &accounts {
+            trie.insert(addr, account);
+        }
+
+        let pre = make_account(1000, 0);
+        let mut proof = trie.prove("alice", &pre).unwrap();
+        proof[3][0] ^= 0xff;
+        let updates = [LeafUpdate {
+            address: "alice",
+            pre,
+            proof: &proof,
+            post: make_account(900, 0),
+        }];
+
+        assert!(matches!(
+            SparseMerkleTrie::root_after_updates(&pre_root, &updates),
+            Err(CoreError::WitnessVerificationFailed)
+        ));
+    }
+
+    /// BUG-S1-003: a claimed pre-image that disagrees with the trie is rejected.
+    #[test]
+    fn root_after_updates_wrong_pre_account_rejected() {
+        let accounts = accounts_map(&[("alice", 1000, 0)]);
+        let pre_root = SparseMerkleTrie::compute_root(&accounts);
+        let mut trie = SparseMerkleTrie::new();
+        for (addr, account) in &accounts {
+            trie.insert(addr, account);
+        }
+
+        let real = make_account(1000, 0);
+        let fake = make_account(999_999, 0);
+        let proof = trie.prove("alice", &real).unwrap();
+        let updates = [LeafUpdate {
+            address: "alice",
+            pre: fake,
+            proof: &proof,
+            post: make_account(900, 0),
+        }];
+
+        assert!(matches!(
+            SparseMerkleTrie::root_after_updates(&pre_root, &updates),
+            Err(CoreError::WitnessVerificationFailed)
+        ));
+    }
+
+    #[test]
+    fn root_after_updates_empty_returns_pre_root() {
+        let pre_root = SparseMerkleTrie::empty_root();
+        assert_eq!(
+            SparseMerkleTrie::root_after_updates(&pre_root, &[]).unwrap(),
+            pre_root
+        );
+    }
+
+    /// BUG-S1-003: scattered multi-key updates match a full recompute.
+    #[test]
+    fn root_after_updates_many_keys_matches_full_recompute() {
+        let mut accounts = HashMap::new();
+        for i in 0..64u64 {
+            accounts.insert(format!("acct_{i}"), make_account(i * 10 + 1, i % 3));
+        }
+        let pre_root = SparseMerkleTrie::compute_root(&accounts);
+        let mut trie = SparseMerkleTrie::new();
+        for (addr, account) in &accounts {
+            trie.insert(addr, account);
+        }
+
+        let targets = [0u64, 7, 13, 31, 63];
+        let mut updated = accounts.clone();
+        let mut owned: Vec<(String, AccountState, AccountState, Vec<[u8; 32]>)> = Vec::new();
+        for &i in &targets {
+            let addr = format!("acct_{i}");
+            let pre = accounts[&addr].clone();
+            let post = make_account(pre.balance + 1000, pre.nonce + 1);
+            let proof = trie.prove(&addr, &pre).unwrap();
+            updated.insert(addr.clone(), post.clone());
+            owned.push((addr, pre, post, proof));
+        }
+        let updates: Vec<LeafUpdate<'_>> = owned
+            .iter()
+            .map(|(addr, pre, post, proof)| LeafUpdate {
+                address: addr,
+                pre: pre.clone(),
+                proof,
+                post: post.clone(),
+            })
+            .collect();
+
+        let expected = SparseMerkleTrie::compute_root(&updated);
+        assert_eq!(
+            SparseMerkleTrie::root_after_updates(&pre_root, &updates).unwrap(),
+            expected
+        );
+    }
+
     proptest! {
         #[test]
         fn proptest_thousand_accounts_unique_deterministic_root(
@@ -549,6 +914,44 @@ mod tests {
             let bob = make_account(balance / 2 + 1, 1);
             let proof_bob = trie.prove("bob", &bob).unwrap();
             prop_assert!(SparseMerkleTrie::verify_proof(&root, "bob", &bob, &proof_bob));
+        }
+
+        /// BUG-S1-003: mulproof update recompute equals a full root recompute.
+        #[test]
+        fn proptest_root_after_updates_matches_full_recompute(
+            alice_bal in 1u64..1_000_000u64,
+            bob_bal in 1u64..1_000_000u64,
+            send in 1u64..500u64,
+        ) {
+            let mut accounts = HashMap::new();
+            accounts.insert("alice".to_string(), make_account(alice_bal, 0));
+            accounts.insert("bob".to_string(), make_account(bob_bal, 1));
+            accounts.insert("carol".to_string(), make_account(77, 2));
+            let pre_root = SparseMerkleTrie::compute_root(&accounts);
+
+            let mut trie = SparseMerkleTrie::new();
+            for (addr, account) in &accounts {
+                trie.insert(addr, account);
+            }
+
+            let alice_pre = make_account(alice_bal, 0);
+            let alice_post = make_account(alice_bal - send, 1);
+            let bob_pre = make_account(bob_bal, 1);
+            let bob_post = make_account(bob_bal + send, 1);
+            let alice_proof = trie.prove("alice", &alice_pre).unwrap();
+            let bob_proof = trie.prove("bob", &bob_pre).unwrap();
+            let updates = [
+                LeafUpdate { address: "alice", pre: alice_pre.clone(), proof: &alice_proof, post: alice_post.clone() },
+                LeafUpdate { address: "bob", pre: bob_pre.clone(), proof: &bob_proof, post: bob_post.clone() },
+            ];
+
+            let mut updated = accounts;
+            updated.insert("alice".to_string(), alice_post);
+            updated.insert("bob".to_string(), bob_post);
+            let expected = SparseMerkleTrie::compute_root(&updated);
+
+            let got = SparseMerkleTrie::root_after_updates(&pre_root, &updates).unwrap();
+            prop_assert_eq!(got, expected);
         }
     }
 }

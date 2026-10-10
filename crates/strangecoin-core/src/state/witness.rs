@@ -4,7 +4,7 @@ use crate::error::CoreError;
 use crate::types::{AccountState, Block};
 
 use super::inner::State;
-use super::sparse_merkle::SparseMerkleTrie;
+use super::sparse_merkle::{LeafUpdate, SparseMerkleTrie};
 
 #[derive(Clone, Debug)]
 pub struct AccountProof {
@@ -67,6 +67,15 @@ pub fn verify_block_stateless(
         }
     }
 
+    // apply_block on a partial state defaults a missing account to (0, 0):
+    // the witness must cover every address the block touches, or a stripped
+    // proof would silently invent an absent pre-image.
+    for addr in collect_touched_addresses(block) {
+        if !witness.proofs.contains_key(&addr) {
+            return Err(CoreError::WitnessVerificationFailed);
+        }
+    }
+
     let mut reconstructed = State::new();
     for (addr, account_proof) in &witness.proofs {
         reconstructed.balances.insert(
@@ -78,12 +87,42 @@ pub fn verify_block_stateless(
         );
     }
 
-    // The witness covers only the addresses the block touches, so the full
-    // post-state root cannot be recomputed here. Checking it is the job of a
-    // full node (`root_after` / `validate_chain`); a stateless verifier proves
-    // that the touched accounts are consistent with `parent_state_root` and
-    // that the block applies on top of them.
-    super::inner::apply_block(&reconstructed, block)?;
+    let post_state = super::inner::apply_block(&reconstructed, block)?;
+
+    // Recompute the post-state root from the parent root, the witness proofs
+    // and the applied block (BUG-S1-003, S1-P07 КГ, invariant #19), then
+    // compare it with the commitment in the header.
+    let updates: Vec<LeafUpdate<'_>> = witness
+        .proofs
+        .iter()
+        .map(|(addr, account_proof)| LeafUpdate {
+            address: addr,
+            pre: AccountState {
+                balance: account_proof.balance,
+                nonce: account_proof.nonce,
+            },
+            proof: &account_proof.proof,
+            post: post_state
+                .balances
+                .get(addr)
+                .cloned()
+                .unwrap_or_default(),
+        })
+        .collect();
+    let computed = SparseMerkleTrie::root_after_updates(parent_state_root, &updates)?;
+
+    // Genesis (index 0) is exempt from the commitment (invariant #19, same
+    // rule as `root_after` / SCIP-0002); a non-genesis zero root can never
+    // match the recomputed value and is rejected.
+    if block.index == 0 && block.state_root == [0u8; 32] {
+        return Ok(());
+    }
+    if block.state_root != computed {
+        return Err(CoreError::PostStateRootMismatch {
+            expected: block.state_root,
+            got: computed,
+        });
+    }
 
     Ok(())
 }
