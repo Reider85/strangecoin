@@ -112,5 +112,6 @@ Never acquire wallet lock while holding blockchain write lock from a different c
 
 ## PR / Commit Conventions
 - No commits without explicit user request
+- Commits/push are made as **Reider85 <krot1113@yandex.ru>** (remote: `github.com/Reider85/strangecoin`); verify `git config user.name`/`user.email` before committing
 - ADRs written **before** code changes
 - Each prompt = one logical change set; prompt ID in commit message
