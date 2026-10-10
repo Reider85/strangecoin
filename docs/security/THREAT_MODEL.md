@@ -672,13 +672,13 @@ Reproducible builds + cosign signatures для верификации бинар
 | **ID** | V-35 |
 | **Название** | State Root Manipulation |
 | **STRIDE** | Tampering |
-| **Описание** | `block.state_root` (Verkle Trie) коммитит post-state. Атакующий: (1) подделывает state_root в блоке (взломанный или невалидный корень), (2) пытается провести блок с корнем, не соответствующим применённому state, (3) эксплуатирует опциональный «zero root = no commitment» для обхода проверок узлов, требующих коммитмент. |
-| **Mitigation** | Инвариант №19 enforce: `root_after(parent_state, block) == block.state_root`, иначе typed error `StateRootMismatch` → reject; apply_block детерминирован (канонический порядок tx); zero state_root терпится только как явный opt-in «no commitment» (full-node с enforced commitments отклоняет). |
-| **Stage** | S1-P06 (ADR-0006), enforced в S1-P12 block_executor |
-| **Residual Risk** | Низкий при enforced commitments. Средний для узлов, работающих с zero root (light/SPV-режимы Stage 2+) — они не защищены от подделки state. Verkle witness-доказательства для stateless validation ещё не в сетевом протоколе (S1-P07 — только API ядра). |
+| **Описание** | `block.state_root` (SMT, ADR-0006 amended) коммитит post-state. Атакующий: (1) подделывает state_root в блоке (взломанный или невалидный корень), (2) пытается провести блок с корнем, не соответствующим применённому state, (3) ~~эксплуатирует опциональный «zero root = no commitment» для обхода проверок~~ — **закрыто BUG-S1-002 (SCIP-0002, 2026-10-11)**. |
+| **Mitigation** | Инвариант №19 enforce: `root_after(parent_state, block, allow_zero_state_root) == block.state_root`, иначе typed error `StateRootMismatch` → reject; apply_block детерминирован (канонический порядок tx); zero state_root отвергается на mainnet/testnet **без opt-out** (config-gate: `allow_zero_state_root=true` вне regtest — config error); genesis (index 0) освобождён; legacy regtest opt-in — network-aware default `Config.allow_zero_state_root` (SCIP-0002); mine/grant-пути коммитят реальный корень. |
+| **Stage** | S1-P06 (ADR-0006), enforced в S1-P12 block_executor; zero-root opt-out closed BUG-S1-002 (SCIP-0002) |
+| **Residual Risk** | Низкий. Mainnet/testnet: commitment обязателен, обхода нет. Regtest opt-in — только developer-среда без реальной ценности. Stateless post-root-проверка (light/SPV) остаётся под V-36/BUG-S1-003 — отдельный вектор. |
 | **Monitoring** | Мониторинг StateRootMismatch reject rate; alert при всплеске (potential attack или desync). |
-| **Код** | `crates/strangecoin-core/src/state/sparse_merkle.rs`, `state/mod.rs` (root_after), `src/blockchain/block_executor.rs` |
-| **Тест** | `tests/state_root.rs::tampered_state_root_is_rejected_by_the_second_node`, `::committed_state_root_chain_passes_on_a_second_node`; core `tests/state_root.rs::tamper_state_root_rejected`, `::proptest_root_consistent`; `tests/block_executor.rs::rejects_state_root_that_does_not_match_the_applied_state` |
+| **Код** | `crates/strangecoin-core/src/state/sparse_merkle.rs`, `state/mod.rs` (root_after), `src/blockchain/block_executor.rs`, `src/config.rs` (allow_zero_state_root gate) |
+| **Тест** | `tests/state_root.rs::tampered_state_root_is_rejected_by_the_second_node`, `::committed_state_root_chain_passes_on_a_second_node`, `::zero_state_root_chain_rejected_without_the_opt_in_flag`, `::grant_and_mined_blocks_commit_real_state_roots`; core `tests/state_root.rs::tamper_state_root_rejected`, `::zero_state_root_rejected_without_opt_in`, `::genesis_zero_state_root_is_always_tolerated`, `::proptest_root_consistent`; `tests/block_executor.rs::rejects_state_root_that_does_not_match_the_applied_state`, `::rejects_zero_state_root_when_commitment_required`, `::accepts_zero_state_root_with_opt_in_flag`; `src/config.rs` unit-тесты network-aware default + mainnet reject |
 
 ---
 
@@ -889,7 +889,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | V-32 (Grant blocks) | consensus (validate_chain) + Config flag | `tests/grant_flag.rs` (4 теста), `tests/emission.rs`, `tests/block_executor.rs::grant_block_needs_the_opt_in_flag` | ✅ S1-P01 |
 | V-33 (Release pipeline) | CI/CD (D03 fix + BUG-S1-001) | run 38071514479 (v0.0.1-rc1) green: 6 builds + SLSA L3 + cosign + SHA256SUMS; cosign verify-blob OK, slsa-verifier PASSED @ a830c51 | ✅ BUG-S1-001 (2026-10-10) |
 | V-34 (Headers-first poisoning) | network/sync.rs + consensus | `tests/sync_headers.rs::new_node_syncs_20_blocks_via_headers_first`, `::equal_chain_reports_nothing_better`, `::longer_fork_resolved_via_headers_first` | ✅ S1-P16 |
-| V-35 (state_root manipulation) | core state/sparse_merkle + block_executor | `tests/state_root.rs::tampered_state_root_is_rejected_by_the_second_node`, `::committed_state_root_chain_passes_on_a_second_node`, `::zero_state_root_is_tolerated_as_no_commitment`; core `tests/state_root.rs::tamper_state_root_rejected`, `::proptest_root_consistent`; `tests/block_executor.rs::rejects_state_root_that_does_not_match_the_applied_state` | ✅ S1-P06/P12/P19 |
+| V-35 (state_root manipulation) | core state/sparse_merkle + block_executor + config gate | `tests/state_root.rs::tampered_state_root_is_rejected_by_the_second_node`, `::committed_state_root_chain_passes_on_a_second_node`, `::zero_state_root_chain_rejected_without_the_opt_in_flag`, `::grant_and_mined_blocks_commit_real_state_roots`; core `tests/state_root.rs::tamper_state_root_rejected`, `::zero_state_root_rejected_without_opt_in`, `::proptest_root_consistent`; `tests/block_executor.rs::rejects_state_root_that_does_not_match_the_applied_state`, `::rejects_zero_state_root_when_commitment_required` | ✅ S1-P06/P12/P19 + **BUG-S1-002 (SCIP-0002, 2026-10-11)** |
 | V-36 (Witness spoofing) | core state/witness | core `tests/witness.rs::tampered_balance_rejected`, `::proptest_tamper_detected`, `::wrong_parent_root_rejected`, `::witness_contains_only_touched_addresses` | ✅ S1-P07 |
 | V-37 (tx_root manipulation) | core serialize + block_executor | core `tests/merkle.rs::empty_txids_returns_zero`, `::two_txids_pair_hash`, `::three_txids_odd_duplication`, `::proptest_deterministic_root`; `tests/block_executor.rs::rejects_wrong_tx_root` | ✅ S1-P08/P12 |
 | V-38 (consensus_version downgrade) | governance/scip + consensus_manager | `tests/consensus_version.rs::stale_consensus_version_rejected`, `::future_consensus_version_rejected`, `::correct_consensus_version_accepted`; `tests/block_executor.rs::rejects_stale_consensus_version` | ✅ S1-P05/P12 |
@@ -903,6 +903,7 @@ Reproducible builds + cosign signatures для верификации бинар
 - V-15 — частично закрыт reject-тестами block_executor/sync; ban-after-N остаётся gap
 - ~~V-31~~ — **closed code-side** (S1.5-P01): тест genesis без секрета в коде; residual ops (offline key) — SCIP-0001 pre-mainnet
 - ~~V-22/V-33~~ — **closed** (BUG-S1-001, 2026-10-10): первый release-run на GitHub Actions верифицирован (run 38071514479)
+- ~~V-35 zero-root вектор (3)~~ — **closed** (BUG-S1-002, 2026-10-11): zero-root opt-out удалён (SCIP-0002); mainnet/testnet обязателен commitment
 - Новые V-34..V-42 — все с тестами, gaps нет
 
 ---

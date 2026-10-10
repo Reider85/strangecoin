@@ -89,9 +89,9 @@ mod tests {
         let pk = PublicKey::from_secret_key(&secp, &sk);
         
         // Valid HRP
-        assert!(matches!(encode_address(&pk, 1), Ok(_)));
-        assert!(matches!(encode_address(&pk, 2), Ok(_)));
-        assert!(matches!(encode_address(&pk, 3), Ok(_)));
+        assert!(encode_address(&pk, 1).is_ok());
+        assert!(encode_address(&pk, 2).is_ok());
+        assert!(encode_address(&pk, 3).is_ok());
         
         // Invalid network ID
         assert!(matches!(encode_address(&pk, 99), Err(CoreError::UnknownNetworkId { network_id: 99 })));

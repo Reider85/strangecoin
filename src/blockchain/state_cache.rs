@@ -143,6 +143,7 @@ impl StateCache {
         chain: &[Block],
         now: u64,
         allow_grant_blocks: bool,
+        allow_zero_state_root: bool,
         rules: &super::consensus_manager::ConsensusManager,
     ) -> Result<Self, StrangecoinError> {
         let mut state = State::new();
@@ -153,7 +154,8 @@ impl StateCache {
                 allow_grant_blocks,
                 rules.expected_version(height as u64),
             )
-            .with_phase(rules.phase_at(height as u64));
+            .with_phase(rules.phase_at(height as u64))
+            .with_allow_zero_state_root(allow_zero_state_root);
             state = block_executor::validate_and_apply(&state, block, &view).map_err(|e| {
                 tracing::warn!(block_index = height, error = %e, "Rebuild stopped at an invalid block");
                 e
@@ -229,6 +231,7 @@ pub(crate) fn open_blockchain(port: u16) -> Blockchain {
         mempool: crate::mempool::Mempool::new(),
         storage,
         allow_grant_blocks: false,
+        allow_zero_state_root: false,
         total_work: [0, 0, 0, 0],
         rules: ConsensusManager::new(),
     };
@@ -405,6 +408,7 @@ impl Blockchain {
             &self.chain,
             block_executor::now_secs(),
             self.allow_grant_blocks,
+            self.allow_zero_state_root,
             &self.rules,
         ) {
             Ok(cache) => cache,
@@ -442,8 +446,13 @@ impl Blockchain {
 
     pub(crate) fn rebuild_state_cache(&mut self) -> Result<(), StrangecoinError> {
         let now = block_executor::now_secs();
-        self.balances =
-            StateCache::rebuild_from_chain(&self.chain, now, self.allow_grant_blocks, &self.rules)?;
+        self.balances = StateCache::rebuild_from_chain(
+            &self.chain,
+            now,
+            self.allow_grant_blocks,
+            self.allow_zero_state_root,
+            &self.rules,
+        )?;
         Ok(())
     }
 

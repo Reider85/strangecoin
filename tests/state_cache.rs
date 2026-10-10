@@ -10,7 +10,7 @@ use strangecoin::blockchain::state_cache::StateCache;
 use strangecoin::ConsensusManager;
 
 fn rebuild(chain: &[strangecoin::Block]) -> StateCache {
-    StateCache::rebuild_from_chain(chain, now_secs(), true, &ConsensusManager::new())
+    StateCache::rebuild_from_chain(chain, now_secs(), true, false, &ConsensusManager::new())
         .expect("chain must rebuild")
 }
 
@@ -95,7 +95,7 @@ fn rebuild_from_chain_rejects_a_tampered_block() {
     // Tamper with the payload but leave the stored header hash alone.
     let mut chain = bc.chain_snapshot();
     chain[0].tx_root = [0xff; 32];
-    let err = StateCache::rebuild_from_chain(&chain, now_secs(), true, &ConsensusManager::new())
+    let err = StateCache::rebuild_from_chain(&chain, now_secs(), true, false, &ConsensusManager::new())
         .expect_err("a tampered block must not rebuild");
     assert!(format!("{err}").contains("block 0"), "{err}");
     assert!(format!("{err}").contains("header hash mismatch"), "{err}");
@@ -105,7 +105,7 @@ fn rebuild_from_chain_rejects_a_tampered_block() {
     let mut chain = bc.chain_snapshot();
     chain[0].tx_root = [0xff; 32];
     chain[0].hash = hex::encode(strangecoin_core::serialize::block_hash(&chain[0]));
-    let err = StateCache::rebuild_from_chain(&chain, now_secs(), true, &ConsensusManager::new())
+    let err = StateCache::rebuild_from_chain(&chain, now_secs(), true, false, &ConsensusManager::new())
         .expect_err("a recomputed header over a bad tx_root must not rebuild");
     assert!(format!("{err}").contains("tx root mismatch"), "{err}");
 }

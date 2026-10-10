@@ -37,6 +37,7 @@ pub struct Blockchain {
     pub(crate) mempool: crate::mempool::Mempool,
     pub(crate) storage: crate::storage::Storage,
     pub(crate) allow_grant_blocks: bool,
+    pub(crate) allow_zero_state_root: bool,
     pub(crate) total_work: strangecoin_core::consensus::U256,
     pub(crate) rules: ConsensusManager,
 }
@@ -55,6 +56,7 @@ impl Blockchain {
             self.rules.expected_version(height),
         )
         .with_phase(self.rules.phase_at(height))
+        .with_allow_zero_state_root(self.allow_zero_state_root)
     }
 
     pub(crate) fn calculate_hash(&self, block: &Block) -> String {
@@ -243,6 +245,12 @@ impl BlockchainFacade {
 
     pub fn set_allow_grant_blocks(&self, allow: bool) {
         self.inner.write().expect(BLOCKCHAIN_LOCK).allow_grant_blocks = allow;
+    }
+
+    /// SCIP-0002 / BUG-S1-002: legacy regtest opt-in for zero `state_root`
+    /// blocks. Never enabled on mainnet/testnet (`Config::validate`).
+    pub fn set_allow_zero_state_root(&self, allow: bool) {
+        self.inner.write().expect(BLOCKCHAIN_LOCK).allow_zero_state_root = allow;
     }
 
     // -------------------------------------------------------------- operations

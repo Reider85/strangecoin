@@ -119,7 +119,7 @@ grep -E "github.com/.*actions/runs|cosign verify-blob" docs/security/REPRODUCIBL
 | **Серьёзность** | C (Critical) |
 | **Источник** | BUG-S0-012 (перенос); инвариант #19; S1-P06 КГ; S1-P07 КГ |
 | **Категория** | B — криптографическая |
-| **Статус** | **open** |
+| **Статус** | **fixed** (2026-10-11) |
 | **Stage target** | S1.5-P03 |
 
 **Факт (по коду, 2026-10-10):**
@@ -159,6 +159,19 @@ rg "state_root != \[0u8; 32\]" crates/strangecoin-core/src/ src/blockchain/
 5. Написать тест: regtest-блок с `state_root == [0;32]` и `allow_zero_state_root=true` → принимается.
 6. Обновить `INVARIANTS_ENFORCED.md` #19 с 🟡 на ✅.
 7. Активировать через SCIP с activation height (по правилу retro §8.1 — consensus-меняющие изменения через SCIP).
+
+**Решение (2026-10-11):**
+
+Закрыт полностью (SCIP-0002 draft, activation_height 0, consensus_version без bump):
+
+1. **Config:** `allow_zero_state_root: Option<bool>` (serde default `None`) + геттер `zero_state_root_allowed()` — network-aware default: `None` → `true` на regtest (network_id=3), `false` на mainnet/testnet. `Config::validate` отклоняет `Some(true)` вне regtest (mainnet/testnet физически не могут включить opt-out). Unit-тесты: default resolution ×3 сети, explicit override, mainnet/testnet reject, regtest accept.
+2. **Core `root_after(state, block, allow_zero_state_root)`:** нулевой корень допустим только при `index == 0` (genesis, инвариант #19 «кроме genesis») или явном opt-in; иначе `Err(StateRootMismatch { expected: [0;32], got: computed })`. Ненулевой корень обязан совпадать (как раньше).
+3. **`block_executor::validate_and_apply`:** та же логика через `BlockView.allow_zero_state_root` (builder `.with_allow_zero_state_root`, default `false` — secure by default); проброска `Blockchain.allow_zero_state_root` → `view_for` → `rebuild_from_chain` → `validate_chain`/`try_adopt_candidate` (паттерн `allow_grant_blocks`).
+4. **Node-блоки теперь коммитят реальный корень** (сверх оригинального пункта плана — без этого майнинг ломался строгой проверкой): `mine_block_inner` вычисляет post-state root через `apply_block(parent_state, block)` до PoW-цикла (unapplicable mempool-tx → abort mining); `create_grant_block` — аналогично до вычисления hash. Genesis (index 0) остаётся с нулевым корнем (exempt); `EXPECTED_GENESIS_HASH`/`genesis.json` не тронуты.
+5. **Deviation от рекомендации №3 (деструктивная миграция БД):** performed **не выполнялась** — перезапись `state_root` в сохранённых блоках меняет block hash → ломает цепь `previous_hash`. Вместо миграции: legacy regtest-БД валидны через network-aware default флага; mainnet/testnet legacy-цепей не существует (mainnet не запущен, testnet genesis key burned). Зафиксировано в SCIP-0002 §Migration + Changelog.
+6. **Тесты:** core `tests/state_root.rs` — `zero_state_root_rejected_without_opt_in`, `genesis_zero_state_root_is_always_tolerated` (+ обновлены существующие вызовы); `tests/block_executor.rs` — `rejects_zero_state_root_when_commitment_required`, `accepts_zero_state_root_with_opt_in_flag` (helper `view()` получает opt-in для legacy-фикстур); e2e `tests/state_root.rs` — `zero_state_root_chain_rejected_without_the_opt_in_flag`, `grant_and_mined_blocks_commit_real_state_roots`, переименован `zero_state_root_is_tolerated_under_the_opt_in_flag`.
+7. **Docs:** `INVARIANTS_ENFORCED.md` #19 → ✅ (residual count 2→0, #22 уже закрыт); `STAGE1_SUMMARY.md` §6.5 п.5 → closed, criteria #2/#12 обновлены; `THREAT_MODEL.md` V-35 → closed-вектор (3), residual обновлён; SCIP-0002 draft создан.
+8. **Verification:** `cargo test --workspace` — full green (включая новые тесты); `cargo clippy --workspace --all-targets -- -D warnings` — clean (попутно зачищены pre-existing clippy-lint'ы в `address.rs`, `merkle.rs`, `consensus_proptest.rs` — не входили в этот баг, но блокировали clippy-gate).
 
 ---
 
@@ -649,7 +662,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG ID | Title | Severity | Status | Stage |
 |---|---|---|---|---|
 | BUG-S1-001 | Release pipeline не запускался на CI | H | **fixed** (2026-10-10) | S1.5-P06 / ops |
-| BUG-S1-002 | `state_root == [0;32]` opt-out ломает #19 | C | **open** | S1.5-P03 |
+| BUG-S1-002 | `state_root == [0;32]` opt-out ломает #19 | C | **fixed** (2026-10-11) | S1.5-P03 (SCIP-0002) |
 | BUG-S1-003 | `verify_block_stateless` не пересчитывает post-root | C | **open** | S1.5-P03 |
 | BUG-S1-004 | `current_chain_id()` захардкожен в REGTEST | C | **open** | S1.5-P05 |
 | BUG-S1-005 | Per-message rate-limit не enforced | H | **open** | Stage 2-P03 |
@@ -664,8 +677,8 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-014 | `INVARIANTS_ENFORCED.md` Stage 0 арифметика | L | **open** | S1.5-P12 |
 | BUG-S1-015 | Offline genesis key не сгенерирован | C (mainnet) | **open** (ops) | ops gate |
 
-**Итого:** 14 открытых пунктов: 4 Critical, 4 High, 4 Medium, 2 Low + 1 fixed (BUG-S1-001, 2026-10-10).
-- 3 Critical blocker для mainnet (BUG-S1-002, 003, 015).
+**Итого:** 13 открытых пунктов: 3 Critical, 4 High, 4 Medium, 2 Low + 2 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11).
+- 2 Critical blocker для mainnet (BUG-S1-003, 015).
 - 1 Critical blocker архитектурный (BUG-S1-004 — mainnet-ветка мёртвая).
 - 2 High сетевые/операционные (BUG-S1-005, 013).
 - Остальные 6 — качество/тесты/гигиена.
@@ -706,7 +719,7 @@ BUG-S1-008 ──► remove `sha2` dep ──► можно закрыть ср�
 **Must-fix до mainnet freeze (Critical):**
 1. BUG-S1-004 — `current_chain_id()` from Config (архитектурный prerequisite)
 2. BUG-S1-015 — Offline genesis key (ops gate, блокирует mainnet)
-3. BUG-S1-002 — `state_root` opt-out (инвариант #19)
+3. ~~BUG-S1-002 — `state_root` opt-out (инвариант #19)~~ **закрыт 2026-10-11** (SCIP-0002 draft, mainnet/testnet reject + regtest opt-in)
 4. BUG-S1-003 — `verify_block_stateless` post-root (инвариант #19)
 5. ~~BUG-S1-001 — Release pipeline first run (инвариант #22)~~ **закрыт 2026-10-10** (тег `v0.0.1-rc1`, run 38071514479 green)
 

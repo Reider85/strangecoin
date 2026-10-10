@@ -3,7 +3,7 @@
 **Document**: `docs/stage1/INVARIANTS_ENFORCED.md`  
 **Status**: Complete ✅  
 **Original audit**: 2026-10-04 (S1-P20)  
-**Revision**: 2026-10-09 — BUG-S0-024/BUG-S0-031: нумерация 1:1 к `ARCHITECT3.md §5`, честные residual-статусы, битые ссылки устранены; BUG-S0-025: nonce-reject proptest закрыт  
+**Revision**: 2026-10-09 — BUG-S0-024/BUG-S0-031: нумерация 1:1 к `ARCHITECT3.md §5`, честные residual-статусы, битые ссылки устранены; BUG-S0-025: nonce-reject proptest закрыт; 2026-10-11 — BUG-S1-002: №19 closed (SCIP-0002), residual count обновлён  
 **Prompt**: S1-P20 — Regression audit of 22 Stage 0 invariants after strangler migration  
 
 **Нумерация**: 1:1 с `analytics/ARCHITECT3.md` §5 (22 инварианта; эталон — строки 484-507).  
@@ -13,8 +13,8 @@
 
 | Status | Count | Invariants |
 |--------|-------|------------|
-| ✅ Enforced | 17 | 1-14, 16, 17, 21 |
-| 🟡 Residual (enforced with known gaps) | 2 | 19, 22 |
+| ✅ Enforced | 19 | 1-14, 16, 17, 19, 21, 22 |
+| 🟡 Residual (enforced with known gaps) | 0 | — |
 | Deferred Stage 1.5 | 2 | 15, 18 |
 | Deferred Stage 5 | 1 | 20 |
 
@@ -40,14 +40,14 @@
 | 16 | **P2P framing:** length-prefixed, проверка размера ДО аллокации | `network/protocol.rs`: read length, validate, then `vec![0; length]` | `src/network/protocol.rs` — `read_length_prefixed:250` / async variant `:289`; count/len caps перед аллокацией | `src/network/protocol.rs` framing tests; `tests/sync_headers.rs` | ✅ |
 | 17 | **Rate limiting:** лимит сообщений/сек от одного пира; нарушение → бан | `RateLimiter` in `src/network/rate_limiter.rs` | `src/network/rate_limiter.rs::check:79`, `ban:107`, `is_banned:116` | `rate_limiter.rs` unit tests (4); `tests/network_id.rs` (ban path) | ✅ |
 | 18 | **Event log:** каждый tx имеет `Receipt { gas_used, logs, status }`; receipts неизменны | — (deferred Stage 1.5) | — (требует VM execution; EventBus `src/events.rs` — node-события, не receipts) | — | Deferred Stage 1.5 |
-| 19 | **State root match:** `state.root_after(block) == block.state_root`; иначе reject | — (deferred Stage 1, S1-P06) | core `state/mod.rs::root_after` (SMT depth 256, ADR-0006 amended); `block_executor.rs:136` — compare с computed root. **Residual (BUG-S0-012/013):** opt-out `state_root == [0u8;32]` — блоки с нулевым корнем принимаются без commitment; `verify_block_stateless` не пересчитывает post-root. Tightening — S1.5-P03 (SCIP) | core `tests/state_root.rs` (7: tamper→reject, determinism, proptest); e2e `tests/state_root.rs` (3); `tests/block_executor.rs::rejects_state_root_that_does_not_match_the_applied_state` | 🟡 residual (BUG-S0-012, BUG-S0-013; S1.5-P03) |
+| 19 | **State root match:** `state.root_after(block) == block.state_root`; иначе reject | — (deferred Stage 1, S1-P06) | core `state/mod.rs::root_after` (SMT depth 256, ADR-0006 amended; SCIP-0002: 3-й параметр `allow_zero_state_root`); `block_executor.rs::validate_and_apply` — zero-root reject вне genesis/regtest-opt-in + compare с computed root. Node-блоки (mine/grant) коммитят реальный корень. **closed 2026-10-11 (BUG-S1-002)**; остаточный post-root gap stateless-verifier — отдельный вектор BUG-S1-003/V-36 | core `tests/state_root.rs` (9: tamper→reject, zero-root reject без opt-in, genesis exempt, determinism, proptest); e2e `tests/state_root.rs` (6: strict reject, opt-in tolerate, mine/grant commit); `tests/block_executor.rs` (3: mismatch, zero-reject, zero-opt-in) | ✅ (BUG-S1-002, 2026-10-11; SCIP-0002) |
 | 20 | **Fee invariant:** `fee_burned + fee_to_miner = total_fees`; `gas_used <= block_gas_limit` | — (deferred Stage 5) | core `economics/fee_market.rs` — stub (fee=0, RBF-feerate прокси S1-P17) | — | Deferred Stage 5 |
 | 21 | **Consensus versioning:** `block.consensus_version <= current_version`; активация по высоте | — (deferred Stage 1, S1-P05) | core `governance/scip.rs` (SCIP + activation height); `src/blockchain/consensus_manager.rs` (expected version by height); `block_executor.rs:109` reject stale/future | `tests/consensus_version.rs` (3); core scip activation tests (5); `tests/block_executor.rs::rejects_stale_consensus_version` | ✅ |
 | 22 | **Reproducible builds:** CI публикует SLSA provenance + cosign signature для каждого release | `.github/workflows/release.yml` — triggers on `push: tags: ['v*']` | `.github/workflows/release.yml` (LTO, single codegen unit, `--remap-path-prefix`, cosign keyless, SLSA L3). First `v*` run executed **2026-10-10**: tag `v0.0.1-rc1` → run `38071514479` green on all 6 targets + provenance + sign + release | run 38071514479 (all jobs success); `docs/security/REPRODUCIBLE_BUILDS.md` §Verified Release Runs: 6 SHA256s, `cosign verify-blob` = `Verified OK`, `slsa-verifier` = `PASSED` @ commit `a830c51` | ✅ (BUG-S1-001, 2026-10-10) |
 
 ### Registering notes (S1-P20)
 
-- **№19, №21** — впервые enforce-нуты в Stage 1 (deferred → enforced): №19 через SMT + block_executor (с residual описан выше), №21 через SCIP/consensus_manager. Это **не новые** инварианты сверх ARCHITECT3 §5 — нумерация соответствует §5.
+- **№19, №21** — впервые enforce-нуты в Stage 1 (deferred → enforced): №19 через SMT + block_executor, zero-root opt-out закрыт SCIP-0002 (BUG-S1-002, 2026-10-11; stateless post-root gap остаётся под BUG-S1-003), №21 через SCIP/consensus_manager. Это **не новые** инварианты сверх ARCHITECT3 §5 — нумерация соответствует §5.
 - **№4** — enforce-место переехало: implicit-in-validate_chain → явные чистые функции core `state/inner.rs` + property-тесты.
 - **№1** — enforce-место переехало: `main.rs::validate_chain` → `state_cache::validate_chain` + `rebuild_from_chain`; balances-mutation gate — `tests/balances_gate.rs` (BUG-S0-022).
 
@@ -75,7 +75,7 @@
 
 | # | Residual | Bug | Fix path |
 |---|----------|-----|----------|
-| 19 | Zero `state_root` opt-in + stateless verify без post-root | BUG-S0-012, BUG-S0-013 | S1.5-P03 (SCIP: enforce без opt-out) |
+| 19 | ~~Zero `state_root` opt-in + stateless verify без post-root~~ | ~~BUG-S0-012~~, BUG-S0-013 | **closed 2026-10-11 (BUG-S1-002):** zero-root opt-out удалён (SCIP-0002, activation_height 0); regtest legacy — network-aware `Config.allow_zero_state_root`; mainnet/testnet — reject. Stateless post-root (BUG-S0-013) — отдельный баг BUG-S1-003 |
 | ~~22~~ | ~~Release pipeline не прогонялся на GitHub Actions~~ | ~~BUG-S0-005~~ | **closed 2026-10-10 (BUG-S1-001):** tag `v0.0.1-rc1`, run `38071514479` green, evidence в REPRODUCIBLE_BUILDS.md |
 
 ## Historical Context

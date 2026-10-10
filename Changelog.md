@@ -4,7 +4,7 @@
 
 **Status**: In progress  
 **Date**: 2026-10-08  
-**Prompts**: S1.5-P02 (BUG-S0-011/014/016), S1.5-P04 (BUG-S0-018/019), S1.5-P01 (BUG-S0-015), BUG-S0-020, BUG-S1-001
+**Prompts**: S1.5-P02 (BUG-S0-011/014/016), S1.5-P04 (BUG-S0-018/019), S1.5-P01 (BUG-S0-015), BUG-S0-020, BUG-S1-001, BUG-S1-002
 
 ### BUG-S0-011: Sparse Merkle Tree replaces flat «Verkle»
 
@@ -72,6 +72,17 @@
 - Independent verification: local SHA256 match (windows/linux x86_64), `cosign verify-blob` = `Verified OK`, `slsa-verifier` = `PASSED` @ commit `a830c51`
 - Evidence in `docs/security/REPRODUCIBLE_BUILDS.md` §Verified Release Runs (also fixed 3 stale `anomalyco/strangecoin` links → `Reider85/strangecoin`)
 - Closes **BUG-S1-001** (BUG-S0-005 continuation): invariant #22 → ✅ (`INVARIANTS_ENFORCED.md`); `STAGE1_SUMMARY.md` §6.4 closed; THREAT_MODEL V-33 closed
+
+### BUG-S1-002: mandatory state_root commitment (2026-10-11)
+
+- **Breaking (consensus, pre-mainnet):** the unconditional zero-`state_root` opt-out is **removed**. Non-genesis blocks with `state_root == [0u8; 32]` are now **rejected** on mainnet/testnet; no config can re-enable them there. Activation per `docs/SCIP/scip-0002-state-root-enforcement.md` (Draft; `activation_height: 0`, `consensus_version` unchanged at 1 — a version bump would have broken legacy regtest chains harder than the state-root rule)
+- `Config.allow_zero_state_root: Option<bool>` — network-aware default: unset → `true` on regtest (network_id 3), `false` on mainnet/testnet; `Config::validate` refuses `Some(true)` outside regtest; plumbed as `Blockchain.allow_zero_state_root` → `BlockView.allow_zero_state_root` (builder `.with_allow_zero_state_root`, secure-by-default `false`)
+- Core `root_after(state, block, allow_zero_state_root)`: zero root accepted only for genesis (`index == 0`, invariant #19 exemption) or the explicit regtest opt-in; otherwise `Err(StateRootMismatch)`
+- **Node-built blocks now commit to real state roots:** `mine_block_inner` computes the post-state root before sealing (unapplicable mempool tx aborts mining); `create_grant_block` likewise. Genesis keeps a zero root (exempt); `genesis.json` / `EXPECTED_GENESIS_HASH` untouched
+- **No destructive DB migration:** rewriting stored `state_root` values would change block hashes and break the `previous_hash` chain — legacy regtest DBs stay valid via the regtest default of the flag (rationale in SCIP-0002 §Migration)
+- Tests: core `tests/state_root.rs` (9: + zero-root reject, genesis exempt); `tests/block_executor.rs` (14: + strict reject / opt-in accept); e2e `tests/state_root.rs` (6: + strict adopt reject, mine/grant commit); `src/config.rs` unit tests (4: default resolution, override, mainnet/testnet reject, regtest accept)
+- Hygiene (clippy-gate enablers, pre-existing lints in untouched files): `address.rs` redundant `matches!`, `merkle.rs` redundant closures/`vec!`, `consensus_proptest.rs` redundant import + OR-pattern range
+- Closes **BUG-S1-002** (BUG-S0-012 continuation): invariant #19 → ✅ (`INVARIANTS_ENFORCED.md`, residual count 0); `STAGE1_SUMMARY.md` §6.5 п.5 closed, criteria #2/#12 updated; THREAT_MODEL V-35 zero-root vector closed
 
 ## 1.1.0 — Stage 1 (core extracted + Verkle + headers-first)
 

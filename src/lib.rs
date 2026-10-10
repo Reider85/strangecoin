@@ -1038,6 +1038,7 @@ pub async fn run_async() {
             log_level: "info".into(),
             data_dir: exe_dir.join("data"),
             allow_grant_blocks: false,
+            allow_zero_state_root: None,
         };
 
         let toml_content =
@@ -1114,6 +1115,8 @@ pub async fn run_async() {
     );
     node.blockchain
         .set_allow_grant_blocks(config.allow_grant_blocks);
+    node.blockchain
+        .set_allow_zero_state_root(config.zero_state_root_allowed());
     node.start_server(port, sync_tx.clone()).await;
     node.discover_peers();
 
@@ -1321,6 +1324,7 @@ pub mod test_support {
             mempool: crate::mempool::Mempool::new(),
             storage,
             allow_grant_blocks: true,
+            allow_zero_state_root: true,
             total_work: [0, 0, 0, 0],
             rules: crate::blockchain::consensus_manager::ConsensusManager::new(),
         };

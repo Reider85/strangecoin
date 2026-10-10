@@ -1,4 +1,3 @@
-use blake3;
 use proptest::prelude::*;
 use secp256k1::{ecdsa::RecoverableSignature, PublicKey, Secp256k1, SecretKey};
 use strangecoin_core::consensus::{
@@ -197,7 +196,7 @@ proptest! {
     fn chain_id_validation(tx in arbitrary_transaction()) {
         let valid_chain_ids = [1u32, 2u32, 3u32];
         let is_valid = valid_chain_ids.contains(&tx.chain_id);
-        prop_assert_eq!(is_valid, matches!(tx.chain_id, 1 | 2 | 3));
+        prop_assert_eq!(is_valid, matches!(tx.chain_id, 1..=3));
     }
 
     #[test]

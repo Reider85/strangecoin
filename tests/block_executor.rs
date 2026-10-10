@@ -15,6 +15,9 @@ const TARGET_EASY: &str = "7ffffffffffffffffffffffffffffffffffffffffffffffffffff
 const ZERO_TARGET: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 /// BlockView helper: test blocks carry CURRENT_CONSENSUS_VERSION, PoW phase.
+/// Zero-root fixtures below exercise other invariants (timestamp, difficulty,
+/// signatures), so the view keeps the legacy regtest opt-in; strict-mode
+/// state-root tests build their own view.
 fn view(chain: &[Block], allow_grant_blocks: bool) -> BlockView<'_> {
     BlockView::new(
         chain,
@@ -22,6 +25,7 @@ fn view(chain: &[Block], allow_grant_blocks: bool) -> BlockView<'_> {
         allow_grant_blocks,
         CURRENT_CONSENSUS_VERSION,
     )
+    .with_allow_zero_state_root(true)
 }
 
 fn coinbase(receiver: &str, amount: u64) -> Transaction {
@@ -365,6 +369,47 @@ fn accepts_state_root_matching_the_applied_state() {
     let view = view(std::slice::from_ref(&genesis), false);
     validate_and_apply(&parent_state, &committed, &view)
         .expect("a matching state_root must be accepted");
+}
+
+#[test]
+fn rejects_zero_state_root_when_commitment_required() {
+    // BUG-S1-002 / SCIP-0002: without the opt-in flag a non-genesis block
+    // that carries no state commitment is rejected.
+    let (genesis, parent_state) = fixture();
+    let block = child_of(&genesis, vec![coinbase("miner", 0)], 600);
+    assert_eq!(block.state_root, [0u8; 32], "fixture must be a zero-root block");
+
+    let strict = BlockView::new(
+        std::slice::from_ref(&genesis),
+        now_secs(),
+        false,
+        CURRENT_CONSENSUS_VERSION,
+    );
+    let err = validate_and_apply(&parent_state, &block, &strict)
+        .expect_err("a zero state_root must be rejected when a commitment is required");
+    match err {
+        StrangecoinError::InvalidBlock(msg) => {
+            assert!(msg.contains("state commitment"), "{msg}")
+        }
+        other => panic!("expected InvalidBlock, got {other:?}"),
+    }
+}
+
+#[test]
+fn accepts_zero_state_root_with_opt_in_flag() {
+    // The same legacy block is tolerated under the explicit regtest opt-in.
+    let (genesis, parent_state) = fixture();
+    let block = child_of(&genesis, vec![coinbase("miner", 0)], 600);
+
+    let legacy = BlockView::new(
+        std::slice::from_ref(&genesis),
+        now_secs(),
+        false,
+        CURRENT_CONSENSUS_VERSION,
+    )
+    .with_allow_zero_state_root(true);
+    validate_and_apply(&parent_state, &block, &legacy)
+        .expect("a zero state_root must be accepted under the opt-in flag");
 }
 
 #[test]

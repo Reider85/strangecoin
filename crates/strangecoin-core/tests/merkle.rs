@@ -107,11 +107,11 @@ fn seven_txids_multi_level() {
                 "sender",
                 &format!("recv_{}", i),
                 (i + 1) * 100,
-                i as u64 + 1,
+                i + 1,
             )
         })
         .collect();
-    let ids: Vec<[u8; 32]> = txs.iter().map(|tx| txid(tx)).collect();
+    let ids: Vec<[u8; 32]> = txs.iter().map(txid).collect();
 
     let root = merkle_root(&ids);
 
@@ -122,12 +122,12 @@ fn seven_txids_multi_level() {
 
 #[test]
 fn deterministic_same_input() {
-    let txs = vec![
+    let txs = [
         make_tx("a", "b", 10, 1),
         make_tx("c", "d", 20, 2),
         make_tx("e", "f", 30, 3),
     ];
-    let ids: Vec<[u8; 32]> = txs.iter().map(|tx| txid(tx)).collect();
+    let ids: Vec<[u8; 32]> = txs.iter().map(txid).collect();
 
     let root1 = merkle_root(&ids);
     let root2 = merkle_root(&ids);
@@ -136,10 +136,10 @@ fn deterministic_same_input() {
 
 #[test]
 fn different_inputs_different_roots() {
-    let txs1 = vec![make_tx("a", "b", 10, 1), make_tx("c", "d", 20, 2)];
-    let txs2 = vec![make_tx("a", "b", 10, 1), make_tx("c", "d", 20, 3)];
-    let ids1: Vec<[u8; 32]> = txs1.iter().map(|tx| txid(tx)).collect();
-    let ids2: Vec<[u8; 32]> = txs2.iter().map(|tx| txid(tx)).collect();
+    let txs1 = [make_tx("a", "b", 10, 1), make_tx("c", "d", 20, 2)];
+    let txs2 = [make_tx("a", "b", 10, 1), make_tx("c", "d", 20, 3)];
+    let ids1: Vec<[u8; 32]> = txs1.iter().map(txid).collect();
+    let ids2: Vec<[u8; 32]> = txs2.iter().map(txid).collect();
 
     assert_ne!(merkle_root(&ids1), merkle_root(&ids2));
 }
@@ -150,7 +150,7 @@ fn compute_tx_root_matches_manual() {
         make_coinbase("miner", 5000),
         make_tx("alice", "bob", 100, 1),
     ];
-    let ids: Vec<[u8; 32]> = txs.iter().map(|tx| txid(tx)).collect();
+    let ids: Vec<[u8; 32]> = txs.iter().map(txid).collect();
 
     let from_compute = compute_tx_root(&txs);
     let from_manual = merkle_root(&ids);
@@ -179,7 +179,7 @@ proptest! {
                 is_coinbase: false,
             }
         }).collect();
-        let ids: Vec<[u8; 32]> = txs.iter().map(|tx| txid(tx)).collect();
+        let ids: Vec<[u8; 32]> = txs.iter().map(txid).collect();
         let root1 = merkle_root(&ids);
         let root2 = merkle_root(&ids);
         prop_assert_eq!(root1, root2);
@@ -200,7 +200,7 @@ proptest! {
                 is_coinbase: false,
             }
         }).collect();
-        let ids: Vec<[u8; 32]> = txs.iter().map(|tx| txid(tx)).collect();
+        let ids: Vec<[u8; 32]> = txs.iter().map(txid).collect();
         let root = merkle_root(&ids);
         prop_assert_ne!(root, [0u8; 32]);
     }

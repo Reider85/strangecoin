@@ -1,3 +1,4 @@
+use strangecoin_core::error::CoreError;
 use strangecoin_core::state::{apply_block, compute_state_root, root_after, State};
 use strangecoin_core::types::{Block, Transaction};
 
@@ -87,7 +88,7 @@ fn root_after_matches_computed() {
     let after_genesis = apply_block(&state, &genesis).unwrap();
 
     let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)]);
-    let root = root_after(&after_genesis, &block).unwrap();
+    let root = root_after(&after_genesis, &block, true).unwrap();
 
     let new_state = apply_block(&after_genesis, &block).unwrap();
     let expected_root = compute_state_root(&new_state.balances);
@@ -102,15 +103,46 @@ fn tamper_state_root_rejected() {
     let after_genesis = apply_block(&state, &genesis).unwrap();
 
     let mut block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)]);
-    let correct_root = root_after(&after_genesis, &block).unwrap();
+    let correct_root = root_after(&after_genesis, &block, true).unwrap();
 
     block.state_root = correct_root;
-    assert!(root_after(&after_genesis, &block).is_ok());
+    assert!(root_after(&after_genesis, &block, false).is_ok());
 
     let mut tampered = block.clone();
     tampered.state_root[0] ^= 0xff;
-    let result = root_after(&after_genesis, &tampered);
+    let result = root_after(&after_genesis, &tampered, false);
     assert!(result.is_err());
+}
+
+#[test]
+fn zero_state_root_rejected_without_opt_in() {
+    // BUG-S1-002 / SCIP-0002: a non-genesis block without a state commitment
+    // is rejected unless the caller explicitly opts in (legacy regtest).
+    let state = State::new();
+    let genesis = genesis_block(vec![coinbase("alice", 1000)]);
+    let after_genesis = apply_block(&state, &genesis).unwrap();
+
+    let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)]);
+    assert_eq!(block.state_root, [0u8; 32], "fixture must be a zero-root block");
+
+    let err = root_after(&after_genesis, &block, false)
+        .expect_err("a zero state_root must be rejected when a commitment is required");
+    assert!(
+        matches!(err, CoreError::StateRootMismatch { .. }),
+        "{err:?}"
+    );
+
+    // The same block is tolerated with the explicit opt-in.
+    assert!(root_after(&after_genesis, &block, true).is_ok());
+}
+
+#[test]
+fn genesis_zero_state_root_is_always_tolerated() {
+    // Invariant #19 exempts genesis from the mandatory state commitment.
+    let state = State::new();
+    let genesis = genesis_block(vec![coinbase("alice", 1000)]);
+    assert_eq!(genesis.state_root, [0u8; 32]);
+    assert!(root_after(&state, &genesis, false).is_ok());
 }
 
 #[test]
@@ -121,12 +153,12 @@ fn chain_roots_consistent() {
 
     let b1 = transfer_block(1, vec![transfer("alice", "bob", 500, 1)]);
     let s1 = apply_block(&s0, &b1).unwrap();
-    let r1 = root_after(&s0, &b1).unwrap();
+    let r1 = root_after(&s0, &b1, true).unwrap();
     assert_eq!(r1, compute_state_root(&s1.balances));
 
     let b2 = transfer_block(2, vec![transfer("bob", "alice", 200, 1)]);
     let s2 = apply_block(&s1, &b2).unwrap();
-    let r2 = root_after(&s1, &b2).unwrap();
+    let r2 = root_after(&s1, &b2, true).unwrap();
     assert_eq!(r2, compute_state_root(&s2.balances));
 
     assert_ne!(r1, r2);
@@ -145,7 +177,7 @@ proptest! {
         let txs = vec![transfer("alice", "bob", amount, 1)];
         let block = transfer_block(1, txs);
 
-        let root = root_after(&s0, &block).unwrap();
+        let root = root_after(&s0, &block, true).unwrap();
         let new_state = apply_block(&s0, &block).unwrap();
         let expected = compute_state_root(&new_state.balances);
 

@@ -136,6 +136,7 @@ impl<'de> Deserialize<'de> for Blockchain {
             mempool,
             storage,
             allow_grant_blocks: false,
+            allow_zero_state_root: false,
             total_work,
             rules: ConsensusManager::new(),
         })
@@ -174,6 +175,7 @@ pub(crate) fn try_adopt_candidate(
         &candidate_chain,
         block_executor::now_secs(),
         current.allow_grant_blocks,
+        current.allow_zero_state_root,
         &current.rules,
     ) {
         Ok(cache) => cache,

@@ -9,15 +9,29 @@ use std::collections::HashMap;
 use crate::types::AccountState;
 use sparse_merkle::SparseMerkleTrie;
 
+/// Compute the post-block state root and check it against `block.state_root`
+/// (invariant #19, SCIP-0002).
+///
+/// A zero `state_root` is accepted only for the genesis block (`index == 0`)
+/// or when `allow_zero_state_root` is explicitly enabled (legacy regtest
+/// chains produced before BUG-S1-002). Everywhere else a block must commit
+/// to its post-state.
 pub fn root_after(
     state: &State,
     block: &crate::types::Block,
+    allow_zero_state_root: bool,
 ) -> Result<[u8; 32], crate::error::CoreError> {
     let new_state = apply_block(state, block)?;
     let computed = SparseMerkleTrie::compute_root(&new_state.balances);
-    // A zero state_root means the block does not commit to one yet
-    // (blocks produced before S1-P06); a non-zero value must match.
-    if block.state_root != [0u8; 32] && block.state_root != computed {
+    if block.state_root == [0u8; 32] {
+        let zero_allowed = block.index == 0 || allow_zero_state_root;
+        if !zero_allowed {
+            return Err(crate::error::CoreError::StateRootMismatch {
+                expected: [0u8; 32],
+                got: computed,
+            });
+        }
+    } else if block.state_root != computed {
         return Err(crate::error::CoreError::StateRootMismatch {
             expected: block.state_root,
             got: computed,

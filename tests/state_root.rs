@@ -91,17 +91,12 @@ fn tampered_state_root_is_rejected_by_the_second_node() {
     );
 }
 
-#[test]
-fn zero_state_root_is_tolerated_as_no_commitment() {
-    // Opt-in semantics (block_executor): zero means "does not commit", so a
-    // chain crafted without roots still adopts — the committed-root tests
-    // above are what pin invariant #19.
-    let dir_b = TestDir::new("sr_zero");
-    let bc_b = create_test_blockchain(dir_b.path());
-
-    let dir_a = TestDir::new("sr_zero_src");
+/// Craft a legacy chain (genesis + grant + one zero-root child) on a fresh
+/// source node.
+fn zero_root_chain(tag: &str) -> Vec<strangecoin::Block> {
+    let dir_a = TestDir::new(&format!("{tag}_src"));
     let bc_a = create_test_blockchain(dir_a.path());
-    let keypairs = generate_keypairs(2);
+    let keypairs = generate_keypairs(1);
     let alice = keypairs[0].0.clone();
     assert!(bc_a
         .grant_initial_balance_to_first_wallet(&alice)
@@ -128,12 +123,85 @@ fn zero_state_root_is_tolerated_as_no_commitment() {
     child.tx_root = strangecoin::serialize::compute_tx_root(&child.transactions);
     child.hash = hex::encode(strangecoin::serialize::block_hash(&child));
     prefix.push(child);
+    prefix
+}
 
+#[test]
+fn zero_state_root_is_tolerated_under_the_opt_in_flag() {
+    // SCIP-0002 legacy semantics (BUG-S1-002): a zero state_root means "no
+    // commitment" and is tolerated only under the explicit opt-in flag, which
+    // `create_test_blockchain` enables for regtest test nodes.
+    let dir_b = TestDir::new("sr_zero");
+    let bc_b = create_test_blockchain(dir_b.path());
+
+    let chain = zero_root_chain("sr_zero");
     assert!(
         bc_b
-            .adopt_candidate(prefix, None, Vec::new(), 0)
+            .adopt_candidate(chain, None, Vec::new(), 0)
             .expect("zero state_root means no commitment and must validate"),
-        "chain without state commitments must still adopt"
+        "chain without state commitments must still adopt under the opt-in"
     );
     assert_eq!(bc_b.chain_len(), 3);
+}
+
+#[test]
+fn zero_state_root_chain_rejected_without_the_opt_in_flag() {
+    // BUG-S1-002 / SCIP-0002: the same legacy chain is rejected once the
+    // node requires state commitments (mainnet/testnet default).
+    let dir_b = TestDir::new("sr_zero_strict");
+    let bc_b = create_test_blockchain(dir_b.path());
+    bc_b.set_allow_zero_state_root(false);
+
+    let chain = zero_root_chain("sr_zero_strict");
+    let adopted = bc_b
+        .adopt_candidate(chain, None, Vec::new(), 0)
+        .expect("rejection is a fork-choice/validation answer, not an error");
+    assert!(
+        !adopted,
+        "a zero state_root chain must be rejected when a commitment is required"
+    );
+    assert_eq!(bc_b.chain_len(), 1, "only the local genesis remains");
+}
+
+#[test]
+fn grant_and_mined_blocks_commit_real_state_roots() {
+    // BUG-S1-002: node-built blocks (grant + mining) carry real state
+    // commitments, so even a strict node accepts its own chain.
+    let dir = TestDir::new("sr_commit");
+    let bc = create_test_blockchain(dir.path());
+    bc.set_allow_zero_state_root(false);
+
+    let keypairs = generate_keypairs(2);
+    let alice = keypairs[0].0.clone();
+    let bob = keypairs[1].0.clone();
+    assert!(bc.grant_initial_balance_to_first_wallet(&alice).unwrap());
+
+    let grant = bc.tip().expect("grant block exists");
+    assert_ne!(
+        grant.state_root,
+        [0u8; 32],
+        "grant block must commit to its state root"
+    );
+
+    let mut transfer = Transaction {
+        sender: alice.clone(),
+        receiver: bob.clone(),
+        amount: 500,
+        nonce: 1,
+        chain_id: strangecoin::consensus::current_chain_id(),
+        signature: Vec::new(),
+        is_coinbase: false,
+    };
+    sign_transaction(&mut transfer, &keypairs[0].1);
+    bc.apply_tx(transfer).expect("transfer accepted");
+    mine_current(&bc);
+
+    let mined = bc.tip().expect("mined block exists");
+    assert_ne!(
+        mined.state_root,
+        [0u8; 32],
+        "mined block must commit to its state root"
+    );
+    assert!(bc.validate_chain(), "chain of committed blocks must validate");
+    assert_eq!(bc.get_balance(&bob), 500);
 }

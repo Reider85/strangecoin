@@ -13,7 +13,8 @@
 //! 6. proof of work and the retarget schedule for `block.target`;
 //! 7. transaction signatures (with the opt-in grant-block exemption);
 //! 8. state transition: coinbase emission, balances, nonces (`core::state`);
-//! 9. `state_root` commitment, when the header carries one.
+//! 9. `state_root` commitment — mandatory after genesis (invariant #19,
+//!    SCIP-0002); zero roots only under the regtest opt-in flag.
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -35,6 +36,10 @@ pub struct BlockView<'a> {
     pub chain: &'a [Block],
     pub now: u64,
     pub allow_grant_blocks: bool,
+    /// Legacy regtest opt-in (SCIP-0002 / BUG-S1-002): accept blocks whose
+    /// header carries a zero `state_root` (no commitment). Default `false` —
+    /// mainnet/testnet always require a state commitment after genesis.
+    pub allow_zero_state_root: bool,
     pub expected_consensus_version: u32,
     pub phase: ConsensusPhase,
 }
@@ -50,6 +55,7 @@ impl<'a> BlockView<'a> {
             chain,
             now,
             allow_grant_blocks,
+            allow_zero_state_root: false,
             expected_consensus_version,
             phase: ConsensusPhase::Pow,
         }
@@ -57,6 +63,11 @@ impl<'a> BlockView<'a> {
 
     pub fn with_phase(mut self, phase: ConsensusPhase) -> Self {
         self.phase = phase;
+        self
+    }
+
+    pub fn with_allow_zero_state_root(mut self, allow: bool) -> Self {
+        self.allow_zero_state_root = allow;
         self
     }
 
@@ -133,14 +144,24 @@ pub fn validate_and_apply(
 
     let new_state = apply_block(parent_state, block)?;
 
-    if block.state_root != [0u8; 32] && block.state_root != compute_state_root(&new_state.balances)
-    {
+    // Invariant #19 / SCIP-0002 (BUG-S1-002): every non-genesis block must
+    // commit to its post-state root. A zero root is tolerated only for
+    // genesis or under the explicit regtest `allow_zero_state_root` opt-in.
+    let computed_root = compute_state_root(&new_state.balances);
+    if block.state_root == [0u8; 32] {
+        let zero_allowed = block.index == 0 || view.allow_zero_state_root;
+        if !zero_allowed {
+            return Err(invalid(
+                block,
+                "state root is zero but a state commitment is required",
+            ));
+        }
+    } else if block.state_root != computed_root {
         return Err(invalid(
             block,
             format!(
                 "state root mismatch: stored {:x?}, computed {:x?}",
-                block.state_root,
-                compute_state_root(&new_state.balances)
+                block.state_root, computed_root
             ),
         ));
     }
@@ -315,10 +336,20 @@ impl Blockchain {
             tx_root: [0u8; 32],
         };
         block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
+
+        // BUG-S1-002 / SCIP-0002: grant blocks commit to their post-state
+        // root like any other block.
+        let parent_state = self.balances.to_state();
+        let post = apply_block(&parent_state, &block).map_err(|e| {
+            error!(error = %e, "Grant block transactions do not apply to the state");
+        });
+        match post {
+            Ok(post) => block.state_root = compute_state_root(&post.balances),
+            Err(_) => return,
+        }
         block.hash = self.calculate_hash(&block);
 
         let applied = {
-            let parent_state = self.balances.to_state();
             let view = self.view_for(height);
             validate_and_apply(&parent_state, &block, &view)
         };
@@ -477,6 +508,18 @@ impl Blockchain {
             tx_root: [0u8; 32],
         };
         block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
+
+        // BUG-S1-002 / SCIP-0002: mined blocks commit to their post-state
+        // root; a zero root would now be rejected by validate_and_apply.
+        let parent_state = self.balances.to_state();
+        let post = match apply_block(&parent_state, &block) {
+            Ok(state) => state,
+            Err(e) => {
+                error!(error = %e, "Мемпул-транзакции не применимы к состоянию");
+                return None;
+            }
+        };
+        block.state_root = compute_state_root(&post.balances);
 
         let target_bytes = hex::decode(&block.target).expect("valid target hex");
         let mut target_arr = [0u8; 32];
