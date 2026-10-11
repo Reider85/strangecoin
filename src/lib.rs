@@ -554,6 +554,25 @@ impl Drop for Node {
 
 // ---------------------------------------------------- connection handling
 
+/// Classify an inbound wire message for per-class rate limiting
+/// (BUG-S1-005). Binary tags (0x01..=0x04) are checked before the UTF-8
+/// text path — text messages start with ASCII letters.
+fn classify_request(request_bytes: &[u8]) -> crate::network::MessageClass {
+    use crate::network::protocol as proto;
+    use crate::network::MessageClass;
+    match request_bytes.first() {
+        Some(&proto::MSG_GET_HEADERS) => MessageClass::GetHeaders,
+        Some(&proto::MSG_GET_BLOCKS) => MessageClass::GetBlocks,
+        _ => {
+            if request_bytes.starts_with(b"UPDATE_BLOCKCHAIN:") {
+                MessageClass::ChainGossip
+            } else {
+                MessageClass::Other
+            }
+        }
+    }
+}
+
 /// Serve one inbound peer connection (ADR-0011: runs as a tokio task; the
 /// legacy version was a dedicated `std::thread` per TCP stream).
 ///
@@ -638,6 +657,17 @@ async fn handle_connection(
                 break;
             }
         };
+
+        // BUG-S1-005 (P13): per-message rate limit — the accept-time check
+        // only throttles connection rate; a long-lived peer must not stream
+        // unlimited messages through one TCP session. Classified after the
+        // read (classification needs the message bytes); exceeding the total
+        // or the per-class bucket bans the peer and closes the connection.
+        let class = classify_request(&request_bytes);
+        if let Err(e) = rate_limiter.check_class(peer_addr, class) {
+            warn!(peer = %peer_addr, error = %e, "Rate limit exceeded, closing connection");
+            break;
+        }
 
         // Binary requests (S1-P16) — checked before the UTF-8 text path;
         // text messages start with ASCII letters, tags with 0x01..=0x04.

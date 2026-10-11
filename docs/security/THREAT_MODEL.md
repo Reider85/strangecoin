@@ -117,9 +117,12 @@ Reproducible builds + cosign signatures для верификации бинар
 | **STRIDE** | Spoofing / Information Disclosure |
 | **Описание** | Изоляция целевого узла от честной сети. Атакующий контролирует все входящие и исходящие соединения узла, что позволяет: (1) показывать ложную цепочку, (2) предотвращать получение актуальных блоков, (3) melakukan double-spend через отставшую цепочку. |
 | **Stage 0 Mitigation** | Peer discovery через seed nodes + addr gossip; min 8 outgoing + 8 incoming connections; peer diversity (разные подсети); `peer_manager` scoring. Реализовано в P13 (rate limiting), P12 (size limits). |
+| **Stage 1 Amendment (BUG-S1-005, 2026-10-11)** | Per-message rate limiting enforced: каждый входящий message в `handle_connection` request-loop проходит `RateLimiter::check_class` (total + per-class bucket: GetHeaders/GetBlocks=100, ChainGossip/Other=30 за 10 s); превышение → бан + закрытие соединения. Ранее check был только на уровне TCP-коннекта — long-lived peer мог стримить неограниченный поток сообщений. |
 | **Stage** | P13 |
-| **Residual Risk** | Средний. На Stage 0 нет Noise Protocol (P24), поэтому MITM возможен. Peer diversity ограничена отсутствием DNSSEC. |
-| **Monitoring** | Мониторинг количества активных пиров; alert при падении ниже 8 outgoing; логирование новых/потерянных соединений. |
+| **Residual Risk** | Средний. На Stage 0 нет Noise Protocol (P24), поэтому MITM возможен. Peer diversity ограничена отсутствием DNSSEC. Rate-limit bucket ключируется по полному `SocketAddr` (ephemeral port), не per-IP — multi-connection флуд из-под одного IP не ограничен (Stage 2). |
+| **Monitoring** | Мониторинг количества активных пиров; alert при падении ниже 8 outgoing; логирование новых/потерянных соединений; ban-rate per peer (rate limiter). |
+| **Код** | `src/network/rate_limiter.rs` (`check`, `check_class`, `MessageClass`, `CLASS_LIMITS`), `src/lib.rs::handle_connection` (per-message `check_class`), `src/lib.rs::classify_request` |
+| **Тест** | `tests/rate_limit.rs::per_message_flood_bans_peer_on_single_connection` (flood 200 → EOF + ban); unit-тесты `rate_limiter.rs` (8); `tests/network.rs::real_network_three_nodes` |
 
 ---
 
@@ -378,6 +381,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | **STRIDE** | Spoofing |
 | **Описание** | Атакующий создает множество фейковых пиров для: (1) eclipse attack, (2) увеличения влияния на gossip, (3) перегрузки peer management. |
 | **Stage 0 Mitigation** | `peer_manager` scoring; limit on connections per IP range; ban on protocol violations (P13); connection limits (max_peers config). |
+| **Stage 1 Amendment (BUG-S1-005)** | Per-message ban усиливает Sybil-митигацию: сообщения каждого соединения ограничены total + per-class bucket'ами; спам-соединение банится по message rate, а не только по protocol violation. Per-IP connection limits по-прежнему gap (peer_manager не реализован). |
 | **Stage** | P13 |
 | **Residual Risk** | Средний. IP-based limits не идеальны (NAT, VPN, Tor). Более продвинутыеmeasures (proof of work for connections) — Stage 2+. |
 | **Monitoring** | Мониторинг connections per IP; alert при > 3 connections с одного /24 subnet. |
@@ -859,7 +863,7 @@ Reproducible builds + cosign signatures для верификации бинар
 
 | Вектор | Модуль/Функция | Тест | Статус |
 |--------|---------------|------|--------|
-| V-01 (Eclipse) | network/rate_limiter | `tests/network.rs::real_network_three_nodes` | ✅ D01 |
+| V-01 (Eclipse) | network/rate_limiter | `tests/network.rs::real_network_three_nodes`; `tests/rate_limit.rs::per_message_flood_bans_peer_on_single_connection` (per-message ban, BUG-S1-005) | ✅ D01 + BUG-S1-005 |
 | V-02 (Partition) | network/protocol | `tests/network.rs::real_network_three_nodes` | ✅ D01 |
 | V-03 (Selfish mining) | consensus/monitoring | gap: нет теста на orphan rate | ⚠️ gap |
 | V-04 (Time-warp) | consensus (MTP, retarget) | `tests/time.rs::mtp_rejection`, `tests/time.rs::future_timestamp_rejection`; `tests/block_executor.rs::rejects_timestamp_*` | ✅ D01 + S1-P12 |
@@ -875,7 +879,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | V-14 (Spam txs) | mempool (cap) | `tests/two_clients.rs` (нагрузочный) | ✅ D01 |
 | V-15 (Invalid blocks) | peer_manager (ban) + HeaderCache + block_executor | `tests/block_executor.rs` (reject-матрица), `tests/sync_headers.rs` (bad header не доходит до tip); ban-after-N — частично | ⚠️ частично |
 | V-16 (DNS poisoning) | config (seeds) | gap: нет теста на DNS | ⚠️ gap |
-| V-17 (Sybil) | peer_manager (limits) | gap: нет теста на connection limits | ⚠️ gap |
+| V-17 (Sybil) | peer_manager (limits) + rate_limiter (per-message ban) | gap: нет теста на connection limits; per-message ban покрыт `tests/rate_limit.rs` (BUG-S1-005) | ⚠️ gap (connection limits) |
 | V-18-V-21 (Contracts) | N/A (Stage 1.5+) | N/A | Deferred |
 | V-22 (Compromised build) | CI/CD (P24) | gap: GitHub Actions run не верифицирован | ⚠️ gap (→ first v* tag) |
 | V-23 (Key compromise) | wallet (keystore) | unit-тесты wallet | ✅ Stage 0 |

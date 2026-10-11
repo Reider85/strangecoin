@@ -306,7 +306,7 @@ sed -n '170,175p' crates/strangecoin-core/src/consensus.rs
 | **Серьёзность** | H (High) |
 | **Источник** | audit; P13 КГ; THREAT_MODEL V-16/V-17 |
 | **Категория** | F — сетевая |
-| **Статус** | **open** |
+| **Статус** | **fixed** (2026-10-11) |
 | **Stage target** | Stage 2-P03 (network crate migration) |
 
 **Факт (по коду, 2026-10-10):**
@@ -336,6 +336,18 @@ rg "rate_limiter\.check" src/
 3. Добавить тест: открыть 1 TCP-коннект, отправить 200 messages за < 1s → узел должен бан после 100-го.
 4. Дополнительно: рассмотреть **per-message-type** rate-limit (GET_HEADERS/HEADERS/BLOCKS — разные bucket'ы).
 5. После Stage 2-P03 (network crate migration) — вынести rate_limiter в `strangecoin-net` crate.
+
+**Решение (2026-10-11): per-message + per-message-type rate-limit**
+
+Выполнено базовое исправление (пункты 1–3) **и** per-message-type buckets (пункт 4 — реализован сейчас, не отложен):
+
+1. **`MessageClass` + per-class buckets** (`src/network/rate_limiter.rs`): enum `MessageClass { GetHeaders, GetBlocks, ChainGossip, Other }`; `PeerCounter` получил `class_counts: [usize; NUM_CLASSES]` (сбрасываются вместе с окном); константы `CLASS_LIMITS` — GetHeaders=100, GetBlocks=100, ChainGossip=30, Other=30 (окно то же, 10 s). Новый метод **`check_class(addr, class)`**: проверяет и инкрементирует **total + class**; превружение любого из bucket'ов → тот же бан (5 min), что и `check()`. Старый `check(addr)` — только total (обратная совместимость: outbound sync, `ban`-пути, `network_id.rs`). Общий bookkeeping (ban/window) вынесен в приватный `with_checked_counter`.
+2. **Классификация + per-message check** (`src/lib.rs`): новый `classify_request(&[u8]) -> MessageClass` (0x01→GetHeaders, 0x02→GetBlocks, префикс `UPDATE_BLOCKCHAIN:`→ChainGossip, остальное→Other). В `handle_connection` request-loop check стоит **после** успешного `read_length_prefixed_async` (не «before read», как предлагал баг): классификация требует прочитанные байты первого тега; попутно idle-timeout перестал сжигать токены. `Err` → warn + `break` (соединение закрывается). Accept-time `check()` (pre-HELLO) оставлен.
+3. **Тесты:** 4 новых unit-теста `rate_limiter.rs` (per-class флуд → бан, виден через `check()`; изоляция классов — Other-флуд не ест бюджет GetHeaders; сброс окна чистит class-счётчики; бан общий между `check`/`check_class`); интеграционный `tests/rate_limit.rs::per_message_flood_bans_peer_on_single_connection` — 1 TCP-коннект, 200 junk `PING` за <1s → сервер закрывает соединение (EOF/RST) + бан через `rate_limiter.check(client_addr)` (паттерн `network_id.rs`).
+4. **Docs:** инвариант #17 дополнен per-message/per-class enforcement; THREAT_MODEL V-01/V-17 + P13-mitigation обновлены; Changelog.
+5. **Residual / Stage 2-P03:** bucket ключируется по полному `SocketAddr` (ephemeral port входящего коннекта ≠ per-IP лимит — отдельный design change); `CLASS_LIMITS` захардкожены (config-driven — Stage 2, network crate); при миграции в `strangecoin-net` (Stage 2-P03) rate_limiter переезжает как есть.
+6. **Verification (2026-10-11):** `cargo test --workspace` — **green** (все suites, exit 0); `cargo clippy --workspace --all-targets -- -D warnings` — **clean**.
+7. **Без нового SCIP:** network-layer DoS mitigation, wire-протокол не менялся (те же фреймы/теги); консенсус не затронут.
 
 ---
 
@@ -689,7 +701,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-002 | `state_root == [0;32]` opt-out ломает #19 | C | **fixed** (2026-10-11) | S1.5-P03 (SCIP-0002) |
 | BUG-S1-003 | `verify_block_stateless` не пересчитывает post-root | C | **fixed** (2026-10-11) | S1.5-P03 |
 | BUG-S1-004 | `current_chain_id()` захардкожен в REGTEST | C | **fixed** (2026-10-11) | S1.5-P05 |
-| BUG-S1-005 | Per-message rate-limit не enforced | H | **open** | Stage 2-P03 |
+| BUG-S1-005 | Per-message rate-limit не enforced | H | **fixed** (2026-10-11) | Stage 2-P03 |
 | BUG-S1-006 | Single-block size check отсутствует | H | **open** | S1.5-P07 |
 | BUG-S1-007 | Golden-векторы блоков таутологичны | M | **open** | S1.5-P08 |
 | BUG-S1-008 | Мёртвая зависимость `sha2` | L | **open** | S1.5-P09 |
@@ -701,11 +713,12 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-014 | `INVARIANTS_ENFORCED.md` Stage 0 арифметика | L | **open** | S1.5-P12 |
 | BUG-S1-015 | Offline genesis key не сгенерирован | C (mainnet) | **open** (ops) | ops gate |
 
-**Итого:** 11 открытых пунктов: 1 Critical, 4 High, 4 Medium, 2 Low + 4 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11).
+**Итого:** 10 открытых пунктов: 1 Critical, 2 High, 4 Medium, 3 Low + 5 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11).
 - 1 Critical blocker для mainnet (BUG-S1-015).
 - ~~1 Critical blocker архитектурный (BUG-S1-004 — mainnet-ветка мёртвая)~~ **закрыт 2026-10-11**.
-- 2 High сетевые/операционные (BUG-S1-005, 013).
-- Остальные 6 — качество/тесты/гигиена.
+- ~~1 High сетевой (BUG-S1-005 — per-message RL)~~ **закрыт 2026-10-11** (per-message + per-type buckets).
+- 2 High: BUG-S1-006 (size check, network/arch), BUG-S1-013 (PGP, ops).
+- Остальные 7 — качество/тесты/гигиена.
 
 ---
 
@@ -730,7 +743,7 @@ BUG-S1-015 (offline genesis key) ──── зависит от ──── B
                                    mainnet freeze (block 1)
 
 BUG-S1-006 (size check) ──► independent ──► можно закрывать параллельно
-BUG-S1-005 (per-message RL) ──► independent ──► Stage 2-P03 (network crate)
+BUG-S1-005 (per-message RL) ──► independent ──► **закрыт 2026-10-11** (монолит; Stage 2-P03 перенесёт в network crate)
 BUG-S1-007..012 ──► test/quality track ──► параллельно
 BUG-S1-014 ──► doc-only ──► можно закрыть сразу
 BUG-S1-008 ──► remove `sha2` dep ──► можно закрыть сразу
@@ -748,7 +761,7 @@ BUG-S1-008 ──► remove `sha2` dep ──► можно закрыть ср�
 5. ~~BUG-S1-001 — Release pipeline first run (инвариант #22)~~ **закрыт 2026-10-10** (тег `v0.0.1-rc1`, run 38071514479 green)
 
 **Must-fix до public testnet (High):**
-6. BUG-S1-005 — Per-message rate-limit
+6. ~~BUG-S1-005 — Per-message rate-limit~~ **закрыт 2026-10-11** (per-message `check_class` в request-loop + per-type buckets: GetHeaders/GetBlocks=100, ChainGossip/Other=30; интеграционный flood-тест)
 7. BUG-S1-006 — Single-block size check
 8. BUG-S1-013 — PGP key + Immunefi
 

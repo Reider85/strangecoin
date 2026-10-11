@@ -4,7 +4,7 @@
 
 **Status**: In progress  
 **Date**: 2026-10-08  
-**Prompts**: S1.5-P02 (BUG-S0-011/014/016), S1.5-P04 (BUG-S0-018/019), S1.5-P01 (BUG-S0-015), BUG-S0-020, BUG-S1-001, BUG-S1-002, BUG-S1-003
+**Prompts**: S1.5-P02 (BUG-S0-011/014/016), S1.5-P04 (BUG-S0-018/019), S1.5-P01 (BUG-S0-015), BUG-S0-020, BUG-S1-001, BUG-S1-002, BUG-S1-003, BUG-S1-005
 
 ### BUG-S0-011: Sparse Merkle Tree replaces flat «Verkle»
 
@@ -94,6 +94,17 @@
 - New `CoreError::PostStateRootMismatch` + node-side mapping in `src/error.rs`
 - Tests: core `sparse_merkle.rs` unit (8: single-key, overlapping key paths, pruned post, absent→present, invalid proof, wrong pre-account, empty updates, 64-account scatter) + proptest roundtrip; integration `tests/witness.rs` (6: forged root, untouched-account tamper in post-commitment, zero-root non-genesis, missing touched address, genesis exempt + forged genesis root, + proptest bit-flip)
 - Closes **BUG-S1-003** (BUG-S0-013 continuation): stateless post-root gap → ✅; THREAT_MODEL V-36 mitigation now matches the code; `STAGE1_SUMMARY.md` §6.5 п.5 + criterion #1 caveat updated
+
+### BUG-S1-005: per-message + per-type rate limiting (2026-10-11)
+
+- **P13 enforcement gap closed:** the rate limiter ran only at TCP-accept time — a long-lived peer could stream unlimited messages through one connection. Every inbound message in the `handle_connection` request loop now goes through `RateLimiter::check_class` (total + per-class bucket); exceeding either bans the peer (5 min) and closes the connection
+- New `MessageClass { GetHeaders, GetBlocks, ChainGossip, Other }` + `CLASS_LIMITS` (same 10 s window): GetHeaders=100, GetBlocks=100 (legit headers-first sync unaffected), ChainGossip=30, Other=30 (junk/legacy floods banned early without starving other classes). `PeerCounter` gained per-class counters, reset with the window; shared ban/window bookkeeping factored into `with_checked_counter`
+- New `classify_request(&[u8])` (`src/lib.rs`): 0x01→GetHeaders, 0x02→GetBlocks, `UPDATE_BLOCKCHAIN:`→ChainGossip, else→Other. The per-message check runs **after** a successful read (classification needs the message bytes; idle timeouts no longer consume tokens) — the catalog suggested before-read; deviation recorded in `bugfixes-stage1.md`
+- Old `check(addr)` (total-only) kept for the pre-HELLO accept gate, outbound sync rounds and existing callers (`network_id.rs`, `sync_engine` inbox-overflow bans)
+- Tests: `rate_limiter.rs` unit (8: + per-class flood→ban, class isolation, window reset clears class counters, ban shared across `check`/`check_class`); integration `tests/rate_limit.rs::per_message_flood_bans_peer_on_single_connection` — one TCP connection, 200 junk messages <1 s → server closes (EOF/RST) + `rate_limiter.check(client_addr)` errs
+- Docs: invariant #17 updated (`INVARIANTS_ENFORCED.md`); THREAT_MODEL V-01 Stage 1 amendment + V-17 partial + test-map rows; `bugfixes-stage1.md` status → fixed
+- Residual / Stage 2-P03: buckets keyed by full `SocketAddr` (per-ephemeral-port, not per-IP); `CLASS_LIMITS` hard-coded; `RateLimiter` moves into `strangecoin-net` with the network-crate migration
+- Closes **BUG-S1-005**: P13 «ban mid-flood» expectation met end-to-end; no wire-format or consensus change (no new SCIP)
 
 ## 1.1.0 — Stage 1 (core extracted + Verkle + headers-first)
 
