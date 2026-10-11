@@ -923,6 +923,7 @@ mod tests {
             bob_bal in 1u64..1_000_000u64,
             send in 1u64..500u64,
         ) {
+            let send = send.min(alice_bal);
             let mut accounts = HashMap::new();
             accounts.insert("alice".to_string(), make_account(alice_bal, 0));
             accounts.insert("bob".to_string(), make_account(bob_bal, 1));

@@ -467,7 +467,7 @@ sed -n '195,210p' crates/strangecoin-core/tests/serialize_golden.rs
 | **Серьёзность** | L (Low) |
 | **Источник** | audit; P06 (PoW hash) |
 | **Категория** | E — гигиена |
-| **Статус** | **open** |
+| **Статус** | **fixed** (2026-10-11) |
 | **Stage target** | Stage 1.5-P09 |
 
 **Факт (по коду, 2026-10-10):**
@@ -488,6 +488,13 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 1. Удалить `sha2 = "0.10"` из `crates/strangecoin-core/Cargo.toml:13`.
 2. `cargo build --workspace` должен пройти.
 3. Если `sha2` нужен для будущих crypto additions (HMAC, RNG) — добавить через feature flag, не как безусловную dep.
+
+**Решение (2026-10-11): удаление direct-dep + drive-by фикс flake-проперти из BUG-S1-003**
+
+1. **Код:** `sha2 = "0.10"` удалён из `crates/strangecoin-core/Cargo.toml`. Отсутствие использований подтверждено повторно: `sha2::`/`Sha256` → 0 совпадений в `crates/strangecoin-core/` (src, tests, examples), `src/`, `tests/`. PoW-hash — blake3 (`serialize.rs`, `consensus.rs`). Будущие crypto additions — только через feature flag (п.3 рекомендации принят).
+2. **Lockfiles:** `Cargo.lock` — `sha2` убран из списка зависимостей `strangecoin-core`; сам пакет `sha2` остаётся в графе транзитивно через `pbkdf2` (wallet keystore — вне core). `fuzz/Cargo.lock` пересинхронизирован — `sha2` удалён полностью (fuzz-граф: strangecoin-core + libfuzzer-sys).
+3. **Drive-by (не новый BUG-ID):** при верификации `cargo test --workspace` впервые воспроизведён ~6%-flake `proptest_root_after_updates_matches_full_recompute` (`sparse_merkle.rs`, minimal failing input: `alice_bal=1, send=2` → subtract overflow; regression-seed сохранён proptest). Flake — из фикса BUG-S1-003 (коммит `a60e61a`): `alice_bal` и `send` генерируются независимо, без ограничения `send <= alice_bal`. Fix (test-only): `let send = send.min(alice_bal);`. Устаревший untracked `proptest-regressions/` удалён.
+4. **Verification (2026-10-11):** `cargo check` — green; `cargo test --workspace` — **green** (все suites, включая исправленный proptest); `cargo clippy --all-targets -- -D warnings` — **clean**. Cargo-fuzz по §9.5 не требуется (L-баг); fuzz-сборка на этом Windows-хосте падает на известном `getrandom`/`dlltool` (см. AGENTS.md), лок фикс не затрагивает.
 
 ---
 
@@ -733,7 +740,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-005 | Per-message rate-limit не enforced | H | **fixed** (2026-10-11) | Stage 2-P03 |
 | BUG-S1-006 | Single-block size check отсутствует | H | **fixed** (2026-10-11) | S1.5-P07 |
 | BUG-S1-007 | Golden-векторы блоков таутологичны | M | **fixed** (2026-10-11) | S1.5-P08 |
-| BUG-S1-008 | Мёртвая зависимость `sha2` | L | **open** | S1.5-P09 |
+| BUG-S1-008 | Мёртвая зависимость `sha2` | L | **fixed** (2026-10-11) | S1.5-P09 |
 | BUG-S1-009 | Нет Wallet round-trip теста | M | **open** | S1.5-P10 |
 | BUG-S1-010 | Нет теста `InvalidChainId` rejection | M | **open** | S1.5-P10 |
 | BUG-S1-011 | Нет теста retarget на высоте 2016 | M | **open** | S1.5-P10 |
@@ -742,14 +749,15 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-014 | `INVARIANTS_ENFORCED.md` Stage 0 арифметика | L | **open** | S1.5-P12 |
 | BUG-S1-015 | Offline genesis key не сгенерирован | C (mainnet) | **open** (ops) | ops gate |
 
-**Итого:** 8 открытых пунктов: 1 Critical, 1 High, 3 Medium, 3 Low + 7 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11; BUG-S1-007, 2026-10-11).
+**Итого:** 7 открытых пунктов: 1 Critical, 1 High, 3 Medium, 2 Low + 8 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11; BUG-S1-007, 2026-10-11; BUG-S1-008, 2026-10-11).
 - 1 Critical blocker для mainnet (BUG-S1-015).
 - ~~1 Critical blocker архитектурный (BUG-S1-004 — mainnet-ветка мёртвая)~~ **закрыт 2026-10-11**.
 - ~~1 High сетевой (BUG-S1-005 — per-message RL)~~ **закрыт 2026-10-11** (per-message + per-type buckets).
 - ~~1 High сетевой/архитектурный (BUG-S1-006 — size check)~~ **закрыт 2026-10-11** (block + per-tx checks в `validate_and_apply`).
 - 1 High: BUG-S1-013 (PGP, ops).
 - ~~1 Medium тестовый (BUG-S1-007 — golden vectors tautology)~~ **закрыт 2026-10-11** (literal hex + hash pin + example).
-- Остальные 6 — качество/тесты/гигиена.
+- ~~1 Low гигиена (BUG-S1-008 — sha2 dead dep)~~ **закрыт 2026-10-11** (direct-dep удалён; drive-by: flake-фикс proptest из BUG-S1-003).
+- Остальные 5 — качество/тесты/гигиена.
 
 ---
 
@@ -777,7 +785,7 @@ BUG-S1-006 (size check) ──► independent ──► **закрыт 2026-10-1
 BUG-S1-005 (per-message RL) ──► independent ──► **закрыт 2026-10-11** (монолит; Stage 2-P03 перенесёт в network crate)
 BUG-S1-007..012 ──► test/quality track ──► параллельно
 BUG-S1-014 ──► doc-only ──► можно закрыть сразу
-BUG-S1-008 ──► remove `sha2` dep ──► можно закрыть сразу
+BUG-S1-008 ──► remove `sha2` dep ──► **закрыт 2026-10-11**
 ```
 
 ---
@@ -803,7 +811,7 @@ BUG-S1-008 ──► remove `sha2` dep ──► можно закрыть ср�
 12. BUG-S1-011 — Retarget на высоте 2016
 
 **Hygiene track:**
-13. BUG-S1-008 — Remove `sha2`
+13. ~~BUG-S1-008 — Remove `sha2`~~ **закрыт 2026-10-11**
 14. BUG-S1-012 — `#[allow]` bandaids
 15. BUG-S1-014 — Doc arithmetic
 
