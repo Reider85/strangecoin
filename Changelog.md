@@ -4,7 +4,7 @@
 
 **Status**: In progress  
 **Date**: 2026-10-08  
-**Prompts**: S1.5-P02 (BUG-S0-011/014/016), S1.5-P04 (BUG-S0-018/019), S1.5-P01 (BUG-S0-015), BUG-S0-020, BUG-S1-001, BUG-S1-002, BUG-S1-003, BUG-S1-005
+**Prompts**: S1.5-P02 (BUG-S0-011/014/016), S1.5-P04 (BUG-S0-018/019), S1.5-P01 (BUG-S0-015), BUG-S0-020, BUG-S1-001, BUG-S1-002, BUG-S1-003, BUG-S1-005, BUG-S1-006
 
 ### BUG-S0-011: Sparse Merkle Tree replaces flat «Verkle»
 
@@ -105,6 +105,15 @@
 - Docs: invariant #17 updated (`INVARIANTS_ENFORCED.md`); THREAT_MODEL V-01 Stage 1 amendment + V-17 partial + test-map rows; `bugfixes-stage1.md` status → fixed
 - Residual / Stage 2-P03: buckets keyed by full `SocketAddr` (per-ephemeral-port, not per-IP); `CLASS_LIMITS` hard-coded; `RateLimiter` moves into `strangecoin-net` with the network-crate migration
 - Closes **BUG-S1-005**: P13 «ban mid-flood» expectation met end-to-end; no wire-format or consensus change (no new SCIP)
+
+### BUG-S1-006: block + per-transaction size checks in `validate_and_apply` (2026-10-11)
+
+- **Invariant #7 / P12 enforcement gap closed:** `MAX_BLOCK_SIZE` (4 MiB) and `MAX_TX_SIZE` (256 KB) were checked only at the wire (`parse_blocks`) and whole-chain scan (`state_cache::validate_chain`) — a `ChainSnapshot` adopted via `adopt_candidate`/`commit_block` bypassed them at the validation layer
+- `validate_and_apply` now rejects first-thing: serialized block (`serialize_block`, canonical wire metric) > `MAX_BLOCK_SIZE` → `SizeLimitExceeded("block")`; any signed tx (`serialize_transaction_signed`) > `MAX_TX_SIZE` → `SizeLimitExceeded("transaction")` (unconditional — the grant-block exemption covers signatures, not sizes). Both with `warn!` logs; constants reused from `network::protocol` (same pattern as `state_cache.rs`); `commit_block` inherits the check via `validate_and_apply`
+- Tests (`tests/block_executor.rs`, 3 new): 5 MiB-coinbase block → `SizeLimitExceeded("block")`; signed 300 KB-receiver tx inside a sub-4 MiB block → `SizeLimitExceeded("transaction")`; positive — ~3.1 MiB block (coinbase + 13 signed transfers, each tx < 256 KB) applies with balances intact
+- Docs: invariant #7 locations + tests updated; THREAT_MODEL V-13 mitigation; `bugfixes-stage1.md` status → fixed
+- No new SCIP: completing the already-declared invariant #7 / P12 limits — wire constants unchanged, every wire-accepted block was already ≤ 4 MiB (no chain-split risk); only the internal validation path was closed
+- Closes **BUG-S1-006** (High, audit/P12)
 
 ## 1.1.0 — Stage 1 (core extracted + Verkle + headers-first)
 

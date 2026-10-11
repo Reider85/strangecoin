@@ -316,7 +316,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | **Название** | DoS: OOM (Out of Memory) |
 | **STRIDE** | Denial of Service |
 | **Описание** | Атакующий отправляет сообщение с огромным length field (например, 10GB). Если `vec![0; length]` аллоцируется ДО проверки, узел потребляет всю память и падает (OOM kill). |
-| **Stage 0 Mitigation** | Length-prefixed framing с проверкой ДО аллокации (P12); `MAX_MESSAGE_SIZE = 32MB`, `MAX_BLOCK_SIZE = 4MB`, `MAX_TX_SIZE = 256KB`; инвариант #16. |
+| **Stage 0 Mitigation** | Length-prefixed framing с проверкой ДО аллокации (P12); `MAX_MESSAGE_SIZE = 32MB`, `MAX_BLOCK_SIZE = 4MB`, `MAX_TX_SIZE = 256KB`; инвариант #16. **BUG-S1-006 (2026-10-11):** те же `MAX_BLOCK_SIZE`/`MAX_TX_SIZE` enforced в `block_executor::validate_and_apply` первыми проверками — validation-layer путь (`adopt_candidate`/`commit_block`/`rebuild_from_chain`) больше не обходит wire-лимиты (инвариант #7). |
 | **Stage** | P12 |
 | **Residual Risk** | Низкий. P12 полностью mitigates OOM через pre-allocation validation. |
 | **Monitoring** | Alert при reject из-за SizeLimitExceeded; мониторинг rejected message rate. |

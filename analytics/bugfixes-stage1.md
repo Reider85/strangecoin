@@ -358,7 +358,7 @@ rg "rate_limiter\.check" src/
 | **Серьёзность** | H (High) |
 | **Источник** | audit; P12 КГ (лимиты размеров) |
 | **Категория** | F — сетевая / C — архитектурная |
-| **Статус** | **open** |
+| **Статус** | **fixed** (2026-10-11) |
 | **Stage target** | Stage 1.5-P07 |
 
 **Факт (по коду, 2026-10-10):**
@@ -391,6 +391,20 @@ rg "MAX_BLOCK_SIZE" src/
 2. Дополнительно: проверить каждый tx в блоке против `MAX_TX_SIZE`.
 3. Тест: блок 5 MB (или с tx 300 KB) → `validate_and_apply` возвращает `SizeLimitExceeded`.
 4. Тест: блок 3 MB → принимается.
+
+**Решение (2026-10-11): size checks в `validate_and_apply` — первыми проверками**
+
+1. **Код** (`src/blockchain/block_executor.rs`): в начало `validate_and_apply` (до `validate_position` — по P12 «до любых других проверок») добавлены обе проверки:
+   - **блок**: `strangecoin_core::serialize::serialize_block(block).len() > MAX_BLOCK_SIZE` → `SizeLimitExceeded("block")` (canonical wire-метрика — та же, что в `state_cache::validate_chain` и `parse_blocks`);
+   - **каждый tx**: `serialize_transaction_signed(tx).len() > MAX_TX_SIZE` → `SizeLimitExceeded("transaction")` (безусловный цикл — grant-исключение касается только подписей, не размеров).
+   Обе — с `warn!`-логом (observability THREAT_MODEL P12). Константы переиспользуются из `crate::network::protocol` (паттерн `state_cache.rs:374,399`), без дублирования. `commit_block` отдельной проверки не требует — он вызывает `validate_and_apply`. Doc-comment модуля дополнен пунктом 0.
+2. **Тесты** (`tests/block_executor.rs`, 3 новых):
+   - `rejects_block_larger_than_max_block_size` — coinbase с receiver ~4 MB → `SizeLimitExceeded("block")`;
+   - `rejects_transaction_larger_than_max_tx_size` — подписанный transfer с receiver > 256 KB в блоке < 4 MB → `SizeLimitExceeded("transaction")` (грань: block-check проходит, tx-check срабатывает);
+   - `accepts_block_under_both_size_limits` — позитивный: блок ~3.1 MB (coinbase + 13 подписанных transfer'ов с receiver по 250 KB; каждый tx < 256 KB) → применяется, `state.get_balance(alice) == 987`.
+3. **Docs:** инвариант #7 дополнен `validate_and_apply` в locations; THREAT_MODEL P12-mitigation — size limits теперь и на validation-уровне; Changelog.
+4. **Verification (2026-10-11):** `cargo test --workspace` — **green**; `cargo clippy --workspace --all-targets -- -D warnings` — **clean**.
+5. **Без нового SCIP:** завершение enforcement уже объявленного инварианта #7 / P12 — лимиты на wire не меняются (любой блок, прошедший `parse_blocks`, уже ≤ 4 MB), расщепления цепи нет; закрыт только внутренний путь (`adopt_candidate` / `commit_block` / `rebuild_from_chain`).
 
 ---
 
@@ -702,7 +716,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-003 | `verify_block_stateless` не пересчитывает post-root | C | **fixed** (2026-10-11) | S1.5-P03 |
 | BUG-S1-004 | `current_chain_id()` захардкожен в REGTEST | C | **fixed** (2026-10-11) | S1.5-P05 |
 | BUG-S1-005 | Per-message rate-limit не enforced | H | **fixed** (2026-10-11) | Stage 2-P03 |
-| BUG-S1-006 | Single-block size check отсутствует | H | **open** | S1.5-P07 |
+| BUG-S1-006 | Single-block size check отсутствует | H | **fixed** (2026-10-11) | S1.5-P07 |
 | BUG-S1-007 | Golden-векторы блоков таутологичны | M | **open** | S1.5-P08 |
 | BUG-S1-008 | Мёртвая зависимость `sha2` | L | **open** | S1.5-P09 |
 | BUG-S1-009 | Нет Wallet round-trip теста | M | **open** | S1.5-P10 |
@@ -713,11 +727,12 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-014 | `INVARIANTS_ENFORCED.md` Stage 0 арифметика | L | **open** | S1.5-P12 |
 | BUG-S1-015 | Offline genesis key не сгенерирован | C (mainnet) | **open** (ops) | ops gate |
 
-**Итого:** 10 открытых пунктов: 1 Critical, 2 High, 4 Medium, 3 Low + 5 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11).
+**Итого:** 9 открытых пунктов: 1 Critical, 1 High, 4 Medium, 3 Low + 6 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11).
 - 1 Critical blocker для mainnet (BUG-S1-015).
 - ~~1 Critical blocker архитектурный (BUG-S1-004 — mainnet-ветка мёртвая)~~ **закрыт 2026-10-11**.
 - ~~1 High сетевой (BUG-S1-005 — per-message RL)~~ **закрыт 2026-10-11** (per-message + per-type buckets).
-- 2 High: BUG-S1-006 (size check, network/arch), BUG-S1-013 (PGP, ops).
+- ~~1 High сетевой/архитектурный (BUG-S1-006 — size check)~~ **закрыт 2026-10-11** (block + per-tx checks в `validate_and_apply`).
+- 1 High: BUG-S1-013 (PGP, ops).
 - Остальные 7 — качество/тесты/гигиена.
 
 ---
@@ -742,7 +757,7 @@ BUG-S1-015 (offline genesis key) ──── зависит от ──── B
                                               ▼
                                    mainnet freeze (block 1)
 
-BUG-S1-006 (size check) ──► independent ──► можно закрывать параллельно
+BUG-S1-006 (size check) ──► independent ──► **закрыт 2026-10-11** (block + per-tx checks в validate_and_apply)
 BUG-S1-005 (per-message RL) ──► independent ──► **закрыт 2026-10-11** (монолит; Stage 2-P03 перенесёт в network crate)
 BUG-S1-007..012 ──► test/quality track ──► параллельно
 BUG-S1-014 ──► doc-only ──► можно закрыть сразу
@@ -762,7 +777,7 @@ BUG-S1-008 ──► remove `sha2` dep ──► можно закрыть ср�
 
 **Must-fix до public testnet (High):**
 6. ~~BUG-S1-005 — Per-message rate-limit~~ **закрыт 2026-10-11** (per-message `check_class` в request-loop + per-type buckets: GetHeaders/GetBlocks=100, ChainGossip/Other=30; интеграционный flood-тест)
-7. BUG-S1-006 — Single-block size check
+7. ~~BUG-S1-006 — Single-block size check~~ **закрыт 2026-10-11** (`serialize_block`/`serialize_transaction_signed` против `MAX_BLOCK_SIZE`/`MAX_TX_SIZE` первыми проверками в `validate_and_apply`; reject 5 MB block / 300 KB tx + positive 3 MB block)
 8. BUG-S1-013 — PGP key + Immunefi
 
 **Quality track (можно параллельно):**
@@ -823,6 +838,7 @@ rg "rate_limiter\.check" src/
 
 # BUG-S1-006
 rg "MAX_BLOCK_SIZE" src/
+# ожидается: src/network/protocol.rs (const + wire) + src/blockchain/block_executor.rs (validate_and_apply) + src/blockchain/state_cache.rs
 
 # BUG-S1-007
 sed -n '195,210p' crates/strangecoin-core/tests/serialize_golden.rs

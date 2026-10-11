@@ -5,6 +5,9 @@
 //!
 //! Checks in `validate_and_apply`:
 //!
+//! 0. size limits (invariant #7, P12 / BUG-S1-006): the serialized block and
+//!    every signed transaction stay under `MAX_BLOCK_SIZE` / `MAX_TX_SIZE` —
+//!    the wire-level limits now also hold for internally deserialized chains;
 //! 1. position in the chain (`index`, `previous_hash`);
 //! 2. header hash (`block.hash` over the serialized header);
 //! 3. `consensus_version`;
@@ -105,6 +108,33 @@ pub fn validate_and_apply(
     block: &Block,
     view: &BlockView<'_>,
 ) -> Result<State, StrangecoinError> {
+    // Invariant #7 / P12 (BUG-S1-006): bound block and per-transaction sizes
+    // before any other validation. Wire parsing already enforces these limits,
+    // but a `ChainSnapshot` deserialized and adopted through `adopt_candidate`
+    // must not bypass them at the validation layer.
+    let block_size = strangecoin_core::serialize::serialize_block(block).len();
+    if block_size > crate::network::protocol::MAX_BLOCK_SIZE {
+        warn!(
+            block_index = block.index,
+            block_size,
+            limit = crate::network::protocol::MAX_BLOCK_SIZE,
+            "Block size limit exceeded"
+        );
+        return Err(StrangecoinError::SizeLimitExceeded("block"));
+    }
+    for tx in &block.transactions {
+        let tx_size = strangecoin_core::serialize::serialize_transaction_signed(tx).len();
+        if tx_size > crate::network::protocol::MAX_TX_SIZE {
+            warn!(
+                block_index = block.index,
+                tx_size,
+                limit = crate::network::protocol::MAX_TX_SIZE,
+                "Transaction size limit exceeded"
+            );
+            return Err(StrangecoinError::SizeLimitExceeded("transaction"));
+        }
+    }
+
     validate_position(block, view.chain)?;
 
     let computed_hash = hex::encode(strangecoin_core::serialize::block_hash(block));

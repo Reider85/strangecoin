@@ -4,7 +4,8 @@
 use strangecoin::blockchain::block_executor::{now_secs, validate_and_apply, BlockView};
 use strangecoin::consensus::CURRENT_CONSENSUS_VERSION;
 use strangecoin::error::StrangecoinError;
-use strangecoin::serialize::{block_hash, compute_tx_root};
+use strangecoin::network::protocol::{MAX_BLOCK_SIZE, MAX_TX_SIZE};
+use strangecoin::serialize::{block_hash, compute_tx_root, serialize_block, serialize_transaction_signed};
 use strangecoin::test_support::{generate_keypair, sign_transaction};
 use strangecoin::{Block, Transaction};
 use strangecoin_core::consensus::{MAX_FUTURE_TIME, RETARGET_INTERVAL};
@@ -452,4 +453,92 @@ fn grant_block_needs_the_opt_in_flag() {
     let state = apply_block_on(&genesis, &grant, true).expect("opted-in grant block applies");
     assert_eq!(state.get_balance("grant_wallet"), 10_000);
     assert_eq!(state.get_balance("initial_wallet_address"), 0);
+}
+
+#[test]
+fn rejects_block_larger_than_max_block_size() {
+    // BUG-S1-006 / P12: the wire-level 4 MiB block limit must also hold at
+    // the validation layer (a ChainSnapshot adopted via adopt_candidate must
+    // not bypass it).
+    let (genesis, parent_state) = fixture();
+    let oversized_coinbase = coinbase(&"x".repeat(MAX_BLOCK_SIZE + 1), 0);
+    let block = child_of(&genesis, vec![oversized_coinbase], 600);
+    assert!(
+        serialize_block(&block).len() > MAX_BLOCK_SIZE,
+        "fixture must exceed MAX_BLOCK_SIZE"
+    );
+
+    let view = view(std::slice::from_ref(&genesis), false);
+    let err = validate_and_apply(&parent_state, &block, &view)
+        .expect_err("a block over MAX_BLOCK_SIZE must be rejected");
+    assert!(
+        matches!(err, StrangecoinError::SizeLimitExceeded("block")),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn rejects_transaction_larger_than_max_tx_size() {
+    // BUG-S1-006: per-transaction limit — the oversized tx rides in a block
+    // that is itself well under MAX_BLOCK_SIZE, so only the tx check fires.
+    let (alice, alice_sk) = generate_keypair();
+    let (genesis, parent_state) = fixture_for(&alice);
+    let receiver = format!("pad{}", "x".repeat(MAX_TX_SIZE));
+    let mut tx = transfer(&alice, &receiver, 1, 1);
+    sign_transaction(&mut tx, &alice_sk);
+    assert!(
+        serialize_transaction_signed(&tx).len() > MAX_TX_SIZE,
+        "fixture tx must exceed MAX_TX_SIZE"
+    );
+
+    let block = child_of(&genesis, vec![coinbase("miner", 0), tx], 600);
+    assert!(
+        serialize_block(&block).len() <= MAX_BLOCK_SIZE,
+        "the block itself must stay under MAX_BLOCK_SIZE"
+    );
+
+    let view = view(std::slice::from_ref(&genesis), false);
+    let err = validate_and_apply(&parent_state, &block, &view)
+        .expect_err("a tx over MAX_TX_SIZE must be rejected");
+    assert!(
+        matches!(err, StrangecoinError::SizeLimitExceeded("transaction")),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn accepts_block_under_both_size_limits() {
+    // BUG-S1-006 positive path: a ~3 MiB block (signed transfers with ~250 KB
+    // receiver strings — the largest format the current tx layout allows) sits
+    // under MAX_BLOCK_SIZE with every tx under MAX_TX_SIZE.
+    let (alice, alice_sk) = generate_keypair();
+    let (genesis, parent_state) = fixture_for(&alice);
+    let receiver = "x".repeat(250_000);
+
+    let mut block_txs = vec![coinbase("miner", 0)];
+    for nonce in 1..=13u64 {
+        let mut tx = transfer(&alice, &receiver, 1, nonce);
+        sign_transaction(&mut tx, &alice_sk);
+        assert!(
+            serialize_transaction_signed(&tx).len() <= MAX_TX_SIZE,
+            "each tx must stay under MAX_TX_SIZE"
+        );
+        block_txs.push(tx);
+    }
+
+    let block = child_of(&genesis, block_txs, 600);
+    let block_size = serialize_block(&block).len();
+    assert!(
+        block_size > 3 * 1024 * 1024,
+        "fixture must be over 3 MiB, got {block_size}"
+    );
+    assert!(
+        block_size <= MAX_BLOCK_SIZE,
+        "fixture must be under MAX_BLOCK_SIZE, got {block_size}"
+    );
+
+    let view = view(std::slice::from_ref(&genesis), false);
+    let state = validate_and_apply(&parent_state, &block, &view)
+        .expect("a block within both size limits must be accepted");
+    assert_eq!(state.get_balance(&alice), 1000 - 13);
 }
