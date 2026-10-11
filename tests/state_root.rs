@@ -27,7 +27,7 @@ fn committed_chain(tag: &str) -> (Vec<strangecoin::Block>, strangecoin::Block, S
         receiver: bob.clone(),
         amount: 500,
         nonce: 1,
-        chain_id: strangecoin::consensus::current_chain_id(),
+        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
         signature: Vec::new(),
         is_coinbase: false,
     };
@@ -188,7 +188,7 @@ fn grant_and_mined_blocks_commit_real_state_roots() {
         receiver: bob.clone(),
         amount: 500,
         nonce: 1,
-        chain_id: strangecoin::consensus::current_chain_id(),
+        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
         signature: Vec::new(),
         is_coinbase: false,
     };

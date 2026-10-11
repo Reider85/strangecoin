@@ -42,6 +42,9 @@ pub struct BlockView<'a> {
     pub allow_zero_state_root: bool,
     pub expected_consensus_version: u32,
     pub phase: ConsensusPhase,
+    /// Network the block is validated for (BUG-S1-004): every tx must carry
+    /// this `chain_id`, and the coinbase reward schedule follows it.
+    pub chain_id: u32,
 }
 
 impl<'a> BlockView<'a> {
@@ -50,6 +53,7 @@ impl<'a> BlockView<'a> {
         now: u64,
         allow_grant_blocks: bool,
         expected_consensus_version: u32,
+        chain_id: u32,
     ) -> Self {
         Self {
             chain,
@@ -58,6 +62,7 @@ impl<'a> BlockView<'a> {
             allow_zero_state_root: false,
             expected_consensus_version,
             phase: ConsensusPhase::Pow,
+            chain_id,
         }
     }
 
@@ -75,12 +80,14 @@ impl<'a> BlockView<'a> {
         chain: &'a [Block],
         allow_grant_blocks: bool,
         expected_consensus_version: u32,
+        chain_id: u32,
     ) -> Self {
         Self::new(
             chain,
             now_secs(),
             allow_grant_blocks,
             expected_consensus_version,
+            chain_id,
         )
     }
 }
@@ -138,11 +145,20 @@ pub fn validate_and_apply(
     let is_opt_in_grant_block = view.allow_grant_blocks && block.index == GRANT_BLOCK_INDEX;
     if !is_opt_in_grant_block {
         for tx in &block.transactions {
+            // Invariant #10 / BUG-S1-004: a block may only carry transactions
+            // of the network this node validates. The state machine repeats
+            // the check; failing early here gives a block-scoped error.
+            if tx.chain_id != view.chain_id {
+                return Err(StrangecoinError::InvalidChainId {
+                    expected: view.chain_id,
+                    got: tx.chain_id,
+                });
+            }
             strangecoin_core::consensus::verify_transaction(tx)?;
         }
     }
 
-    let new_state = apply_block(parent_state, block)?;
+    let new_state = apply_block(parent_state, block, view.chain_id)?;
 
     // Invariant #19 / SCIP-0002 (BUG-S1-002): every non-genesis block must
     // commit to its post-state root. A zero root is tolerated only for
@@ -254,7 +270,7 @@ impl Blockchain {
             receiver: "initial_wallet_address".to_string(),
             amount: 10000,
             nonce: 0,
-            chain_id: crate::consensus::current_chain_id(),
+            chain_id: self.chain_id,
             signature: Vec::new(),
             is_coinbase: true,
         };
@@ -280,6 +296,7 @@ impl Blockchain {
                 now_secs(),
                 self.allow_grant_blocks,
                 self.rules.expected_version(0),
+                self.chain_id,
             )
             .with_phase(self.rules.phase_at(0));
             validate_and_apply(&State::new(), &genesis_block, &view)
@@ -307,7 +324,7 @@ impl Blockchain {
             receiver: wallet_address.to_string(),
             amount: 0,
             nonce: 0,
-            chain_id: crate::consensus::current_chain_id(),
+            chain_id: self.chain_id,
             signature: Vec::new(),
             is_coinbase: true,
         };
@@ -316,7 +333,7 @@ impl Blockchain {
             receiver: wallet_address.to_string(),
             amount,
             nonce: 0,
-            chain_id: crate::consensus::current_chain_id(),
+            chain_id: self.chain_id,
             signature: Vec::new(),
             is_coinbase: false,
         };
@@ -340,7 +357,7 @@ impl Blockchain {
         // BUG-S1-002 / SCIP-0002: grant blocks commit to their post-state
         // root like any other block.
         let parent_state = self.balances.to_state();
-        let post = apply_block(&parent_state, &block).map_err(|e| {
+        let post = apply_block(&parent_state, &block, self.chain_id).map_err(|e| {
             error!(error = %e, "Grant block transactions do not apply to the state");
         });
         match post {
@@ -433,8 +450,11 @@ impl Blockchain {
 
         let total_supply = self.balances.total_supply();
         let height = previous_block.index + 1;
-        let coinbase_amount =
-            crate::economics::emission::block_reward_at_height(height, total_supply);
+        let coinbase_amount = crate::economics::emission::block_reward_at_height_for_chain(
+            height,
+            total_supply,
+            self.chain_id,
+        );
 
         let miner_address = self
             .balances
@@ -447,7 +467,7 @@ impl Blockchain {
             receiver: miner_address,
             amount: coinbase_amount,
             nonce: 0,
-            chain_id: crate::consensus::current_chain_id(),
+            chain_id: self.chain_id,
             signature: Vec::new(),
             is_coinbase: true,
         };
@@ -512,7 +532,7 @@ impl Blockchain {
         // BUG-S1-002 / SCIP-0002: mined blocks commit to their post-state
         // root; a zero root would now be rejected by validate_and_apply.
         let parent_state = self.balances.to_state();
-        let post = match apply_block(&parent_state, &block) {
+        let post = match apply_block(&parent_state, &block, self.chain_id) {
             Ok(state) => state,
             Err(e) => {
                 error!(error = %e, "Мемпул-транзакции не применимы к состоянию");
@@ -556,52 +576,40 @@ impl Blockchain {
     }
 
     /// Install genesis when the DB has no chain (fresh node).
+    ///
+    /// Regtest builds its own in-code genesis; mainnet/testnet load the
+    /// network-specific genesis file and validate it against the committed
+    /// expected hash (BUG-S1-004: the network comes from `Config.network_id`
+    /// via `Blockchain::chain_id`).
     pub(crate) fn install_fresh_genesis(blockchain: &mut Blockchain) {
-        let chain_id = crate::consensus::current_chain_id();
-        let is_regtest = crate::consensus::is_regtest(chain_id);
+        let chain_id = blockchain.chain_id;
 
-        let genesis_block = if is_regtest {
-            let genesis_tx = Transaction {
-                sender: "genesis".to_string(),
-                receiver: "regtest_initial_holder".to_string(),
-                amount: 1_000_000_000,
-                nonce: 0,
-                chain_id,
-                signature: Vec::new(),
-                is_coinbase: true,
-            };
-            let target_bytes =
-                hex::decode("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
-                    .expect("valid target hex");
-            let mut target_arr = [0u8; 32];
-            target_arr.copy_from_slice(&target_bytes);
-            let mut block = Block {
-                index: 0,
-                timestamp: 0,
-                transactions: vec![genesis_tx],
-                previous_hash: "0".repeat(64),
-                hash: String::new(),
-                nonce: 0,
-                target: hex::encode(target_arr),
-                consensus_version: blockchain.rules.expected_version(0),
-                state_root: [0u8; 32],
-                tx_root: [0u8; 32],
-            };
-            block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
-            block.hash = hex::encode(strangecoin_core::serialize::block_hash(&block));
-            block
+        let genesis_block = if crate::consensus::is_regtest(chain_id) {
+            crate::consensus::regtest_genesis_block(blockchain.rules.expected_version(0))
         } else {
-            let exe_path =
-                std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
-            let exe_dir = exe_path
-                .parent()
-                .expect("Не удалось получить директорию исполняемого файла");
-            let genesis_path = exe_dir.join("genesis.json");
-            crate::consensus::load_genesis(genesis_path.to_str().unwrap())
-                .expect("Failed to load genesis from genesis.json")
+            let genesis_path = crate::consensus::genesis_file_for_chain(chain_id)
+                .unwrap_or_else(|| {
+                    panic!("No genesis file configured for network_id {}", chain_id)
+                });
+            let block = crate::consensus::load_genesis(genesis_path.to_str().unwrap())
+                .expect("Failed to load genesis from genesis file");
+            let declared = block
+                .transactions
+                .first()
+                .map(|tx| tx.chain_id)
+                .unwrap_or(0);
+            if declared != chain_id {
+                panic!(
+                    "Genesis network mismatch: {} declares chain_id {}, node runs {}",
+                    genesis_path.display(),
+                    declared,
+                    chain_id
+                );
+            }
+            block
         };
 
-        if let Err(e) = crate::consensus::validate_genesis(&genesis_block, is_regtest) {
+        if let Err(e) = crate::consensus::validate_genesis(&genesis_block, chain_id) {
             panic!("Genesis validation failed: {}", e);
         }
         blockchain.chain.push(genesis_block.clone());

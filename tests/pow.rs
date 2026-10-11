@@ -25,7 +25,7 @@ fn mining_on_regtest_low_difficulty() {
             receiver: "recipient".to_string(),
             amount: 100,
             nonce: 1,
-            chain_id: strangecoin::consensus::current_chain_id(),
+            chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
             signature: Vec::new(),
             is_coinbase: false,
         };

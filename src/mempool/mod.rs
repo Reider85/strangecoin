@@ -1,4 +1,4 @@
-use crate::consensus::{current_chain_id, verify_transaction};
+use crate::consensus::verify_transaction;
 use crate::error::StrangecoinError;
 use crate::{AccountState, Transaction};
 use std::collections::{BTreeMap, HashMap};
@@ -21,6 +21,9 @@ pub enum InsertOutcome {
 
 #[derive(Clone)]
 pub struct Mempool {
+    /// Network this pool accepts transactions for (BUG-S1-004): every
+    /// inserted tx must carry this `chain_id`.
+    chain_id: u32,
     txs: HashMap<TxId, Transaction>,
     by_sender: HashMap<String, BTreeMap<u64, TxId>>,
     /// Поколение цепочки замен: 0 — исходная tx, N — N-я замена в цепочке.
@@ -55,8 +58,9 @@ fn feerate_bump_ok(old: &Transaction, new: &Transaction) -> bool {
 }
 
 impl Mempool {
-    pub fn new() -> Self {
+    pub fn new(chain_id: u32) -> Self {
         Mempool {
+            chain_id,
             txs: HashMap::new(),
             by_sender: HashMap::new(),
             generations: HashMap::new(),
@@ -89,9 +93,9 @@ impl Mempool {
 
         verify_transaction(&tx)?;
 
-        if tx.chain_id != current_chain_id() {
+        if tx.chain_id != self.chain_id {
             return Err(StrangecoinError::InvalidChainId {
-                expected: current_chain_id(),
+                expected: self.chain_id,
                 got: tx.chain_id,
             });
         }
@@ -226,11 +230,5 @@ impl Mempool {
 
     pub fn transactions(&self) -> Vec<Transaction> {
         self.txs.values().cloned().collect()
-    }
-}
-
-impl Default for Mempool {
-    fn default() -> Self {
-        Self::new()
     }
 }

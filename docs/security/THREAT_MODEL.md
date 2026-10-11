@@ -278,7 +278,8 @@ Reproducible builds + cosign signatures для верификации бинар
 | **Название** | Replay Attack (Cross-Chain) |
 | **STRIDE** | Spoofing |
 | **Описание** | Транзакция, валидная в testnet, повторяется в mainnet (или наоборот). Если формат tx одинаковый и нет chain_id, tx может быть replayed. |
-| **Stage 0 Mitigation** | `chain_id` в каждой tx (P05); mainnet=1, testnet=2, regtest=3; инвариант #10: `tx.chain_id != current_chain_id() → reject`. |
+| **Stage 0 Mitigation** | `chain_id` в каждой tx (P05); mainnet=1, testnet=2, regtest=3; инвариант #10: `tx.chain_id != node chain_id → reject`. |
+| **Stage 1 Mitigation** | **BUG-S1-004 (2026-10-11):** `current_chain_id()` (хардкод regtest) удалён; chain_id пробрасывается из `Config.network_id` через `Blockchain::chain_id` → `Mempool::insert`, `BlockView.chain_id` → `validate_and_apply` (per-tx reject) и core `apply_block` (state-machine gate + эмиссионное расписание). Межсетевой генезис: `validate_genesis(block, chain_id)` против network-specific `EXPECTED_*_GENESIS_HASH`; тесты `tests/chain_id.rs`, `tests/genesis_key.rs`. |
 | **Stage** | P05 |
 | **Residual Risk** | Низкий. chain_id полностью mitigates cross-chain replay. |
 | **Monitoring** | Alert при reject из-за chain_id mismatch (потенциальная атака или misconfiguration). |

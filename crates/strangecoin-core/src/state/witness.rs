@@ -48,9 +48,15 @@ pub fn build_witness(pre_state: &State, block: &Block) -> Result<StateWitness, C
     })
 }
 
+/// Stateless verification of `block` against `parent_state_root` with a
+/// Merkle witness (BUG-S1-003). `chain_id` pins the validating network
+/// (BUG-S1-004) — the caller supplies the expected network constant; the
+/// state transition rejects foreign-chain transactions and applies the
+/// chain's own coinbase reward schedule.
 pub fn verify_block_stateless(
     parent_state_root: &[u8; 32],
     block: &Block,
+    chain_id: u32,
     witness: &StateWitness,
 ) -> Result<(), CoreError> {
     if witness.pre_state_root != *parent_state_root {
@@ -87,7 +93,7 @@ pub fn verify_block_stateless(
         );
     }
 
-    let post_state = super::inner::apply_block(&reconstructed, block)?;
+    let post_state = super::inner::apply_block(&reconstructed, block, chain_id)?;
 
     // Recompute the post-state root from the parent root, the witness proofs
     // and the applied block (BUG-S1-003, S1-P07 КГ, invariant #19), then

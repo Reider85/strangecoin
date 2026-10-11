@@ -15,12 +15,13 @@ fn stale_consensus_version_rejected() {
     let coinbase_tx = Transaction {
         sender: "coinbase".to_string(),
         receiver: "miner".to_string(),
-        amount: strangecoin::economics::emission::block_reward_at_height(
+        amount: strangecoin::economics::emission::block_reward_at_height_for_chain(
             previous_block.index + 1,
             bc.total_supply(),
+            strangecoin::consensus::CHAIN_ID_REGTEST,
         ),
         nonce: 0,
-        chain_id: strangecoin::consensus::current_chain_id(),
+        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
         signature: Vec::new(),
         is_coinbase: true,
     };
@@ -60,12 +61,13 @@ fn future_consensus_version_rejected() {
     let coinbase_tx = Transaction {
         sender: "coinbase".to_string(),
         receiver: "miner".to_string(),
-        amount: strangecoin::economics::emission::block_reward_at_height(
+        amount: strangecoin::economics::emission::block_reward_at_height_for_chain(
             previous_block.index + 1,
             bc.total_supply(),
+            strangecoin::consensus::CHAIN_ID_REGTEST,
         ),
         nonce: 0,
-        chain_id: strangecoin::consensus::current_chain_id(),
+        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
         signature: Vec::new(),
         is_coinbase: true,
     };
@@ -110,7 +112,7 @@ fn correct_consensus_version_accepted() {
         receiver: "recipient".to_string(),
         amount: 100,
         nonce: 1,
-        chain_id: strangecoin::consensus::current_chain_id(),
+        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
         signature: Vec::new(),
         is_coinbase: false,
     };

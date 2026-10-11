@@ -295,7 +295,7 @@ if let Some(ref progress_rx) = self.progress_rx {
                                 receiver: self.receiver_address.trim().to_string(),
                                 amount,
                                 nonce: sender_nonce + 1,
-                                chain_id: crate::consensus::current_chain_id(),
+                                chain_id: self.node.network_id,
                                 signature: Vec::new(),
                                 is_coinbase: false,
                             };

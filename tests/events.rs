@@ -51,7 +51,7 @@ async fn three_subscribers_each_receive_live_node_events() {
         receiver: bob.clone(),
         amount: 500,
         nonce: 1,
-        chain_id: strangecoin::consensus::current_chain_id(),
+        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
         signature: Vec::new(),
         is_coinbase: false,
     };

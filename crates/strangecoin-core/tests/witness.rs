@@ -1,3 +1,4 @@
+use strangecoin_core::consensus::CHAIN_ID_REGTEST;
 use strangecoin_core::state::sparse_merkle::SparseMerkleTrie;
 use strangecoin_core::state::witness::{build_witness, verify_block_stateless};
 use strangecoin_core::state::{apply_block, State};
@@ -60,7 +61,7 @@ fn transfer_block(index: u64, txs: Vec<Transaction>, state: &State) -> Block {
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
     };
-    let post = apply_block(state, &block).unwrap();
+    let post = apply_block(state, &block, CHAIN_ID_REGTEST).unwrap();
     block.state_root = SparseMerkleTrie::compute_root(&post.balances);
     block
 }
@@ -77,7 +78,7 @@ fn build_witness_then_verify() {
     );
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
-    let after_genesis = apply_block(&state, &genesis).unwrap();
+    let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
     let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
     let mut genesis_block = genesis;
@@ -86,7 +87,7 @@ fn build_witness_then_verify() {
     let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)], &after_genesis);
     let witness = build_witness(&after_genesis, &block).unwrap();
 
-    let result = verify_block_stateless(&genesis_root, &block, &witness);
+    let result = verify_block_stateless(&genesis_root, &block, CHAIN_ID_REGTEST, &witness);
     assert!(result.is_ok());
 }
 
@@ -102,7 +103,7 @@ fn tampered_balance_rejected() {
     );
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
-    let after_genesis = apply_block(&state, &genesis).unwrap();
+    let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
     let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
     let mut genesis_block = genesis;
@@ -115,7 +116,7 @@ fn tampered_balance_rejected() {
         alice_proof.balance = 999999;
     }
 
-    let result = verify_block_stateless(&genesis_root, &block, &witness);
+    let result = verify_block_stateless(&genesis_root, &block, CHAIN_ID_REGTEST, &witness);
     assert!(result.is_err());
 }
 
@@ -138,7 +139,7 @@ fn witness_contains_only_touched_addresses() {
     );
 
     let genesis = genesis_block(vec![coinbase("alice", 5000), coinbase("charlie", 3000)]);
-    let after_genesis = apply_block(&state, &genesis).unwrap();
+    let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
     let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
     let mut genesis_block = genesis;
@@ -159,7 +160,7 @@ fn coinbase_only_block_witness() {
     let state = State::new();
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
-    let after_genesis = apply_block(&state, &genesis).unwrap();
+    let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
     let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
     let mut genesis_block = genesis;
@@ -171,7 +172,7 @@ fn coinbase_only_block_witness() {
     assert!(witness.proofs.contains_key("miner"));
     assert_eq!(witness.proofs.len(), 1);
 
-    let result = verify_block_stateless(&genesis_root, &block, &witness);
+    let result = verify_block_stateless(&genesis_root, &block, CHAIN_ID_REGTEST, &witness);
     assert!(result.is_ok());
 }
 
@@ -187,7 +188,7 @@ fn wrong_parent_root_rejected() {
     );
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
-    let after_genesis = apply_block(&state, &genesis).unwrap();
+    let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
     let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
     let mut genesis_block = genesis;
@@ -197,7 +198,7 @@ fn wrong_parent_root_rejected() {
     let witness = build_witness(&after_genesis, &block).unwrap();
 
     let wrong_root = [0xff; 32];
-    let result = verify_block_stateless(&wrong_root, &block, &witness);
+    let result = verify_block_stateless(&wrong_root, &block, CHAIN_ID_REGTEST, &witness);
     assert!(result.is_err());
 }
 
@@ -213,18 +214,18 @@ fn chain_of_blocks_witness() {
     );
 
     let genesis = genesis_block(vec![coinbase("alice", 10000)]);
-    let after_genesis = apply_block(&state, &genesis).unwrap();
+    let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
     let mut genesis_block = genesis;
     genesis_block.state_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
     let block1 = transfer_block(1, vec![transfer("alice", "bob", 500, 1)], &after_genesis);
     let witness1 = build_witness(&after_genesis, &block1).unwrap();
-    verify_block_stateless(&genesis_block.state_root, &block1, &witness1).unwrap();
+    verify_block_stateless(&genesis_block.state_root, &block1, CHAIN_ID_REGTEST, &witness1).unwrap();
 
-    let after_block1 = apply_block(&after_genesis, &block1).unwrap();
+    let after_block1 = apply_block(&after_genesis, &block1, CHAIN_ID_REGTEST).unwrap();
     let block2 = transfer_block(2, vec![transfer("bob", "charlie", 200, 1)], &after_block1);
     let witness2 = build_witness(&after_block1, &block2).unwrap();
-    verify_block_stateless(&block1.state_root, &block2, &witness2).unwrap();
+    verify_block_stateless(&block1.state_root, &block2, CHAIN_ID_REGTEST, &witness2).unwrap();
 }
 
 proptest! {
@@ -240,14 +241,14 @@ proptest! {
         );
 
         let genesis = genesis_block(vec![coinbase("alice", sender_bal)]);
-        let after_genesis = apply_block(&state, &genesis).unwrap();
+        let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
         let mut genesis_block = genesis;
         genesis_block.state_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
         let block = transfer_block(1, vec![transfer("alice", "bob", amount, 1)], &after_genesis);
         let witness = build_witness(&after_genesis, &block).unwrap();
 
-        let result = verify_block_stateless(&genesis_block.state_root, &block, &witness);
+        let result = verify_block_stateless(&genesis_block.state_root, &block, CHAIN_ID_REGTEST, &witness);
         prop_assert!(result.is_ok(), "witness verification failed: {:?}", result.err());
     }
 
@@ -263,7 +264,7 @@ proptest! {
         );
 
         let genesis = genesis_block(vec![coinbase("alice", sender_bal)]);
-        let after_genesis = apply_block(&state, &genesis).unwrap();
+        let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
         let mut genesis_block = genesis;
         genesis_block.state_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
@@ -274,7 +275,7 @@ proptest! {
             proof.balance ^= 1;
         }
 
-        let result = verify_block_stateless(&genesis_block.state_root, &block, &witness);
+        let result = verify_block_stateless(&genesis_block.state_root, &block, CHAIN_ID_REGTEST, &witness);
         prop_assert!(result.is_err(), "tampered witness should be rejected");
     }
 }
@@ -292,7 +293,7 @@ fn forged_state_root_rejected() {
     );
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
-    let after_genesis = apply_block(&state, &genesis).unwrap();
+    let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
     let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
     let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)], &after_genesis);
@@ -300,7 +301,7 @@ fn forged_state_root_rejected() {
 
     let mut forged = block;
     forged.state_root = [0xaa; 32];
-    let result = verify_block_stateless(&genesis_root, &forged, &witness);
+    let result = verify_block_stateless(&genesis_root, &forged, CHAIN_ID_REGTEST, &witness);
     assert!(matches!(
         result,
         Err(CoreError::PostStateRootMismatch { .. })
@@ -329,13 +330,13 @@ fn untouched_account_tamper_in_post_commitment_rejected() {
     );
 
     let genesis = genesis_block(vec![coinbase("alice", 5000), coinbase("charlie", 3000)]);
-    let after_genesis = apply_block(&state, &genesis).unwrap();
+    let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
     let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
     let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)], &after_genesis);
     let witness = build_witness(&after_genesis, &block).unwrap();
 
-    let mut fake_post = apply_block(&after_genesis, &block).unwrap();
+    let mut fake_post = apply_block(&after_genesis, &block, CHAIN_ID_REGTEST).unwrap();
     fake_post.balances.insert(
         "charlie".to_string(),
         AccountState {
@@ -346,7 +347,7 @@ fn untouched_account_tamper_in_post_commitment_rejected() {
     let mut forged = block;
     forged.state_root = SparseMerkleTrie::compute_root(&fake_post.balances);
 
-    let result = verify_block_stateless(&genesis_root, &forged, &witness);
+    let result = verify_block_stateless(&genesis_root, &forged, CHAIN_ID_REGTEST, &witness);
     assert!(matches!(
         result,
         Err(CoreError::PostStateRootMismatch { .. })
@@ -367,7 +368,7 @@ fn zero_state_root_on_non_genesis_rejected() {
     );
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
-    let after_genesis = apply_block(&state, &genesis).unwrap();
+    let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
     let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
     let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)], &after_genesis);
@@ -375,7 +376,7 @@ fn zero_state_root_on_non_genesis_rejected() {
 
     let mut zeroed = block;
     zeroed.state_root = [0u8; 32];
-    let result = verify_block_stateless(&genesis_root, &zeroed, &witness);
+    let result = verify_block_stateless(&genesis_root, &zeroed, CHAIN_ID_REGTEST, &witness);
     assert!(matches!(
         result,
         Err(CoreError::PostStateRootMismatch { .. })
@@ -396,14 +397,14 @@ fn missing_touched_address_rejected() {
     );
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
-    let after_genesis = apply_block(&state, &genesis).unwrap();
+    let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
     let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
     let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)], &after_genesis);
     let mut witness = build_witness(&after_genesis, &block).unwrap();
     witness.proofs.remove("bob");
 
-    let result = verify_block_stateless(&genesis_root, &block, &witness);
+    let result = verify_block_stateless(&genesis_root, &block, CHAIN_ID_REGTEST, &witness);
     assert!(matches!(result, Err(CoreError::WitnessVerificationFailed)));
 }
 
@@ -416,12 +417,12 @@ fn genesis_zero_state_root_is_tolerated() {
     let empty_root = SparseMerkleTrie::compute_root(&state.balances);
     let witness = build_witness(&state, &genesis).unwrap();
 
-    let result = verify_block_stateless(&empty_root, &genesis, &witness);
+    let result = verify_block_stateless(&empty_root, &genesis, CHAIN_ID_REGTEST, &witness);
     assert!(result.is_ok());
 
     let mut forged = genesis;
     forged.state_root = [0xbb; 32];
-    let result = verify_block_stateless(&empty_root, &forged, &witness);
+    let result = verify_block_stateless(&empty_root, &forged, CHAIN_ID_REGTEST, &witness);
     assert!(matches!(
         result,
         Err(CoreError::PostStateRootMismatch { .. })
@@ -443,7 +444,7 @@ proptest! {
         );
 
         let genesis = genesis_block(vec![coinbase("alice", sender_bal)]);
-        let after_genesis = apply_block(&state, &genesis).unwrap();
+        let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
         let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
 
         let block = transfer_block(1, vec![transfer("alice", "bob", amount, 1)], &after_genesis);
@@ -451,7 +452,7 @@ proptest! {
 
         let mut forged = block;
         forged.state_root[flip] ^= 0xff;
-        let result = verify_block_stateless(&genesis_root, &forged, &witness);
+        let result = verify_block_stateless(&genesis_root, &forged, CHAIN_ID_REGTEST, &witness);
         prop_assert!(
             matches!(result, Err(CoreError::PostStateRootMismatch { .. })),
             "forged post-root must be rejected, got {:?}",

@@ -98,6 +98,7 @@ impl Node {
         let blockchain = Arc::new(BlockchainFacade::with_event_bus(
             port,
             event_bus.clone(),
+            network_id,
         ));
         let peers = Arc::new(Mutex::new(vec![]));
         let rate_limiter = Arc::new(crate::network::RateLimiter::new(10, 100));
@@ -1314,22 +1315,32 @@ pub mod test_support {
         crate::blockchain::state_cache::db_path_for_port(port)
     }
 
-    pub fn create_test_blockchain(db_path: &Path) -> BlockchainFacade {
+    /// Test blockchain on `network_id` (BUG-S1-004): regtest by default;
+    /// mainnet/testnet modes exercise the configured chain's rules.
+    pub fn create_test_blockchain_for_network(
+        db_path: &Path,
+        network_id: u32,
+    ) -> BlockchainFacade {
         fs::create_dir_all(db_path).expect("Failed to create test DB directory");
         let storage = crate::storage::Storage::new(db_path).expect("Failed to open test DB");
         let mut bc = Blockchain {
             chain: vec![],
             balances: crate::blockchain::state_cache::StateCache::new(),
             difficulty: 0,
-            mempool: crate::mempool::Mempool::new(),
+            mempool: crate::mempool::Mempool::new(network_id),
             storage,
             allow_grant_blocks: true,
             allow_zero_state_root: true,
             total_work: [0, 0, 0, 0],
             rules: crate::blockchain::consensus_manager::ConsensusManager::new(),
+            chain_id: network_id,
         };
         bc.create_genesis_block();
         BlockchainFacade::from_blockchain(bc)
+    }
+
+    pub fn create_test_blockchain(db_path: &Path) -> BlockchainFacade {
+        create_test_blockchain_for_network(db_path, crate::consensus::CHAIN_ID_REGTEST)
     }
 
     pub fn mine_current(blockchain: &BlockchainFacade) {
@@ -1497,8 +1508,8 @@ pub mod test_support {
         let secp = Secp256k1::new();
         let sk = SecretKey::new(&mut OsRng);
         let pk = PublicKey::from_secret_key(&secp, &sk);
-        let addr = crate::address::encode_address(&pk, crate::consensus::current_chain_id())
-            .expect("Failed to encode address for current chain");
+        let addr = crate::address::encode_address(&pk, crate::consensus::CHAIN_ID_REGTEST)
+            .expect("Failed to encode address for regtest");
         (addr, sk)
     }
 
@@ -1519,7 +1530,7 @@ pub mod test_support {
             receiver: receiver_addr.to_string(),
             amount,
             nonce: sender_nonce + 1,
-            chain_id: crate::consensus::current_chain_id(),
+            chain_id: bc.chain_id(),
             signature: Vec::new(),
             is_coinbase: false,
         };

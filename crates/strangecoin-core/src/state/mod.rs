@@ -10,7 +10,8 @@ use crate::types::AccountState;
 use sparse_merkle::SparseMerkleTrie;
 
 /// Compute the post-block state root and check it against `block.state_root`
-/// (invariant #19, SCIP-0002).
+/// (invariant #19, SCIP-0002). `chain_id` pins the validating network
+/// (BUG-S1-004) — same rule as [`apply_block`].
 ///
 /// A zero `state_root` is accepted only for the genesis block (`index == 0`)
 /// or when `allow_zero_state_root` is explicitly enabled (legacy regtest
@@ -19,9 +20,10 @@ use sparse_merkle::SparseMerkleTrie;
 pub fn root_after(
     state: &State,
     block: &crate::types::Block,
+    chain_id: u32,
     allow_zero_state_root: bool,
 ) -> Result<[u8; 32], crate::error::CoreError> {
-    let new_state = apply_block(state, block)?;
+    let new_state = apply_block(state, block, chain_id)?;
     let computed = SparseMerkleTrie::compute_root(&new_state.balances);
     if block.state_root == [0u8; 32] {
         let zero_allowed = block.index == 0 || allow_zero_state_root;

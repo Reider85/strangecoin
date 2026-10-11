@@ -15,15 +15,18 @@ fn emission_matches_block_reward() {
     let mut total_supply: u64 = bc.total_supply();
 
     for height in 2..=11u64 {
-        let expected_reward =
-            strangecoin::economics::emission::block_reward_at_height(height, total_supply);
+        let expected_reward = strangecoin::economics::emission::block_reward_at_height_for_chain(
+            height,
+            total_supply,
+            strangecoin::consensus::CHAIN_ID_REGTEST,
+        );
 
         let mut tx = Transaction {
             sender: addr.clone(),
             receiver: "recipient".to_string(),
             amount: 0,
             nonce: height - 1,
-            chain_id: strangecoin::consensus::current_chain_id(),
+            chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
             signature: Vec::new(),
             is_coinbase: false,
         };

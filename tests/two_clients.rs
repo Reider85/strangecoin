@@ -40,7 +40,7 @@ fn hundred_transactions_five_wallets() {
             receiver: addrs[r].clone(),
             amount,
             nonce: sender_nonce + 1,
-            chain_id: strangecoin::consensus::current_chain_id(),
+            chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
             signature: Vec::new(),
             is_coinbase: false,
         };

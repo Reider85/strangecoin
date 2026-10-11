@@ -119,7 +119,10 @@ impl<'de> Deserialize<'de> for Blockchain {
         } = BlockchainDeserialize::deserialize(deserializer)?;
 
         let db_path = super::state_cache::db_path_from_env();
-        let mut mempool = crate::mempool::Mempool::new();
+        // Legacy serde-JSON wire path (tests/diagnostics): the snapshot does
+        // not carry a chain; the receiving node pins its own network when it
+        // adopts via `try_adopt_candidate` (BUG-S1-004).
+        let mut mempool = crate::mempool::Mempool::new(strangecoin_core::consensus::CHAIN_ID_REGTEST);
         for tx in pending_transactions.into_iter().chain(mempool_txs) {
             let account = AccountState {
                 balance: 0,
@@ -139,6 +142,7 @@ impl<'de> Deserialize<'de> for Blockchain {
             allow_zero_state_root: false,
             total_work,
             rules: ConsensusManager::new(),
+            chain_id: strangecoin_core::consensus::CHAIN_ID_REGTEST,
         })
     }
 }
@@ -177,6 +181,7 @@ pub(crate) fn try_adopt_candidate(
         current.allow_grant_blocks,
         current.allow_zero_state_root,
         &current.rules,
+        current.chain_id,
     ) {
         Ok(cache) => cache,
         Err(e) => {
@@ -200,7 +205,7 @@ pub(crate) fn try_adopt_candidate(
     }
 
     let local_mempool = current.mempool.transactions();
-    let mut merged = crate::mempool::Mempool::new();
+    let mut merged = crate::mempool::Mempool::new(current.chain_id);
     let mut merged_txids: Vec<[u8; 32]> = Vec::new();
     for tx in candidate_mempool_txs.into_iter().chain(local_mempool) {
         if chain_has_tx(&candidate_chain, &tx) {

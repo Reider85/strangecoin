@@ -9,10 +9,6 @@ pub const INITIAL_REWARD: u64 = 50 * 100_000_000;
 
 const REGTEST_REWARD: u64 = 0;
 
-pub fn block_reward_at_height(height: u64, total_supply: u64) -> u64 {
-    block_reward_at_height_for_chain(height, total_supply, consensus::current_chain_id())
-}
-
 pub fn block_reward_at_height_for_chain(height: u64, total_supply: u64, chain_id: u32) -> u64 {
     if chain_id == consensus::CHAIN_ID_REGTEST {
         return REGTEST_REWARD;

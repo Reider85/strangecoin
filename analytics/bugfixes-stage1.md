@@ -246,7 +246,7 @@ sed -n '51,90p' crates/strangecoin-core/src/state/witness.rs
 | **Серьёзность** | C (Critical) |
 | **Источник** | audit (2026-10-10); P10 КГ (детерминированный генезис); P05 КГ (chain_id) |
 | **Категория** | C — архитектурная |
-| **Статус** | **open** |
+| **Статус** | **fixed** (2026-10-11) |
 | **Stage target** | Stage 1.5-P05 (или раньше) |
 
 **Факт (по коду, 2026-10-10):**
@@ -285,6 +285,17 @@ sed -n '170,175p' crates/strangecoin-core/src/consensus.rs
 5. Mainnet startup path (`block_executor.rs:517-518`) активировать через `view.chain_id() == CHAIN_ID_MAINNET` → сравнение с `EXPECTED_GENESIS_HASH`.
 6. Тест `tests/genesis_key.rs` расширить: mainnet → `EXPECTED_GENESIS_HASH`, testnet → отдельный hash, regtest → own genesis.
 7. Тест на `chain_id=2` (testnet) tx отвергается на mainnet-узле — отдельный integration test.
+
+**Решение (2026-10-11):** Исправлено полностью, объём шире описанного в баге — хардкод жил глубже, чем mempool:
+
+1. **Core (`strangecoin-core`)**: `current_chain_id()` **удалён**; `block_reward_at_height()` (глобальная зависимость) и `address_from_public_key()` удалены — остались явные `block_reward_at_height_for_chain(.., chain_id)` / `encode_address(pk, network_id)`.
+2. **State-machine**: `apply_block(state, block, chain_id)` / `root_after(.., chain_id)` / `verify_block_stateless(.., chain_id)` — **явный параметр** (не вывод из tx). Внутри: награда по расписанию сети + **новый state-level gate** — каждая `tx.chain_id == chain_id`, иначе `CoreError::InvalidChainId` (закрывает и witness-, и rebuild-пути). Это критично: прежний `apply_non_genesis` брал reward-cap из хардкода (regtest=0) и **отклонил бы mainnet-блоки с реальной наградой**.
+3. **Node**: `Blockchain.chain_id` (из `Config.network_id` через `BlockchainFacade::new(port, chain_id)` / `with_event_bus(.., chain_id)`; `Node::new` прокидывает уже существовавший `network_id`); `BlockView.chain_id`; `Mempool.chain_id` (insert-reject); **новая per-tx проверка в `validate_and_apply`** (invariant #10 теперь и на block-пути); майнинг/grant/genesis-конструирование — `self.chain_id`; миграция bech32 — `self.chain_id`; `create_test_blockchain_for_network(db, network_id)` для тестов mainnet-режима.
+4. **Genesis по сетям**: `validate_genesis(block, chain_id)` — regtest skip / mainnet `EXPECTED_GENESIS_HASH` / testnet **`EXPECTED_TESTNET_GENESIS_HASH` (новая константа)**; новый файл **`genesis-testnet.json`** (network_id=2; burned pubkey SCIP-0001 §2 допустим для testnet); `install_fresh_genesis` выбирает файл по сети и сверяет chain_id гезиса с конфигом; regtest-гезис вынесен в тестируемую `regtest_genesis_block()`.
+5. **Тесты**: `tests/chain_id.rs` (5: mainnet mempool reject testnet tx + accept control; block с foreign-chain tx → reject; mainnet reward schedule в mining; coinbase-overpay reject); `tests/genesis_key.rs` расширен до 9 (mainnet/testnet/regtest hashes, cross-network reject, mismatched file fields); taутологичный proptest `chain_id_validation` заменён реальным apply_block-гейтом (закладывает фундамент BUG-S1-010).
+6. **Verification (2026-10-11)**: `cargo test --workspace` — **green** (все suites, exit 0); `cargo clippy --workspace --all-targets -- -D warnings` — **clean**; `cargo run --example canonical_decode_soak` — 223,103 inputs / 10s / **0 panics** (cargo-fuzz — CI job `fuzz-canonical-decode`).
+7. **Docs**: `INVARIANTS_ENFORCED.md` №6/№8/№10 обновлены; `THREAT_MODEL.md` V-11 Stage 1 mitigation; `STAGE1_SUMMARY.md` §6.1 — prerequisite BUG-S1-015 снят.
+8. **Без нового SCIP**: полный переход на config-driven chain_id — не консенсус-изменение действующей regtest-цепи (та же сериализация/хеши), а снятие мёртвого mainnet-кода и prerequisite для mainnet freeze (SCIP-0001 ops-gate остаётся отдельным).
 
 ---
 
@@ -677,7 +688,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-001 | Release pipeline не запускался на CI | H | **fixed** (2026-10-10) | S1.5-P06 / ops |
 | BUG-S1-002 | `state_root == [0;32]` opt-out ломает #19 | C | **fixed** (2026-10-11) | S1.5-P03 (SCIP-0002) |
 | BUG-S1-003 | `verify_block_stateless` не пересчитывает post-root | C | **fixed** (2026-10-11) | S1.5-P03 |
-| BUG-S1-004 | `current_chain_id()` захардкожен в REGTEST | C | **open** | S1.5-P05 |
+| BUG-S1-004 | `current_chain_id()` захардкожен в REGTEST | C | **fixed** (2026-10-11) | S1.5-P05 |
 | BUG-S1-005 | Per-message rate-limit не enforced | H | **open** | Stage 2-P03 |
 | BUG-S1-006 | Single-block size check отсутствует | H | **open** | S1.5-P07 |
 | BUG-S1-007 | Golden-векторы блоков таутологичны | M | **open** | S1.5-P08 |
@@ -690,9 +701,9 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-014 | `INVARIANTS_ENFORCED.md` Stage 0 арифметика | L | **open** | S1.5-P12 |
 | BUG-S1-015 | Offline genesis key не сгенерирован | C (mainnet) | **open** (ops) | ops gate |
 
-**Итого:** 12 открытых пунктов: 2 Critical, 4 High, 4 Medium, 2 Low + 3 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11).
+**Итого:** 11 открытых пунктов: 1 Critical, 4 High, 4 Medium, 2 Low + 4 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11).
 - 1 Critical blocker для mainnet (BUG-S1-015).
-- 1 Critical blocker архитектурный (BUG-S1-004 — mainnet-ветка мёртвая).
+- ~~1 Critical blocker архитектурный (BUG-S1-004 — mainnet-ветка мёртвая)~~ **закрыт 2026-10-11**.
 - 2 High сетевые/операционные (BUG-S1-005, 013).
 - Остальные 6 — качество/тесты/гигиена.
 
@@ -730,8 +741,8 @@ BUG-S1-008 ──► remove `sha2` dep ──► можно закрыть ср�
 ## 6. Приоритеты
 
 **Must-fix до mainnet freeze (Critical):**
-1. BUG-S1-004 — `current_chain_id()` from Config (архитектурный prerequisite)
-2. BUG-S1-015 — Offline genesis key (ops gate, блокирует mainnet)
+1. ~~BUG-S1-004 — `current_chain_id()` from Config (архитектурный prerequisite)~~ **закрыт 2026-10-11** (chain_id из Config через Blockchain/BlockView/Mempool; per-network genesis; state-machine gate; per-tx block reject)
+2. BUG-S1-015 — Offline genesis key (ops gate, блокирует mainnet; prerequisite BUG-S1-004 снят)
 3. ~~BUG-S1-002 — `state_root` opt-out (инвариант #19)~~ **закрыт 2026-10-11** (SCIP-0002 draft, mainnet/testnet reject + regtest opt-in)
 4. ~~BUG-S1-003 — `verify_block_stateless` post-root (инвариант #19)~~ **закрыт 2026-10-11** (вариант A′: mulproof-update пересчёт post-root из parent root + witness + блока; `PostStateRootMismatch`; покрытие touched-адресов)
 5. ~~BUG-S1-001 — Release pipeline first run (инвариант #22)~~ **закрыт 2026-10-10** (тег `v0.0.1-rc1`, run 38071514479 green)

@@ -47,10 +47,6 @@ pub fn decode_address(s: &str) -> Result<(PublicKey, u32), CoreError> {
     Ok((pk, network_id))
 }
 
-pub fn address_from_public_key(pk: &PublicKey) -> Result<String, CoreError> {
-    encode_address(pk, consensus::current_chain_id())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,17 +121,5 @@ mod tests {
         
         let regtest_addr = encode_address(&pk, 3).unwrap();
         assert!(regtest_addr.starts_with("rsc1"));
-    }
-
-    #[test]
-    fn test_address_from_public_key_wrapper() {
-        let secp = Secp256k1::new();
-        let mut sk_bytes = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut sk_bytes);
-        let sk = SecretKey::from_slice(&sk_bytes).unwrap();
-        let pk = PublicKey::from_secret_key(&secp, &sk);
-        
-        let addr = address_from_public_key(&pk).unwrap();
-        assert!(addr.starts_with("rsc1")); // current_chain_id() returns REGTEST = 3
     }
 }

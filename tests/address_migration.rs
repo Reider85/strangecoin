@@ -1,7 +1,7 @@
 //! BUG-S0-017 — legacy base64(pubkey) address migration on DB open.
 //!
 //! `migrate_addresses_to_bech32` (S1-P15) runs only on the DB-open path
-//! (`BlockchainFacade::new(port)` → `open_blockchain`). These tests seed a
+//! (`BlockchainFacade::new(port, strangecoin::consensus::CHAIN_ID_REGTEST)` → `open_blockchain`). These tests seed a
 //! LevelDB fixture the way a Stage 0 node left it — balances keyed by
 //! base64(pubkey) — and verify the open path rewrites them to bech32,
 //! resets a chain that still contains legacy tx addresses, and is
@@ -37,7 +37,7 @@ fn legacy_address(sk: &SecretKey) -> String {
 fn expected_bech32(sk: &SecretKey) -> String {
     let secp = Secp256k1::new();
     let pk = PublicKey::from_secret_key(&secp, sk);
-    address::encode_address(&pk, consensus::current_chain_id()).expect("bech32 encode")
+    address::encode_address(&pk, consensus::CHAIN_ID_REGTEST).expect("bech32 encode")
 }
 
 /// (legacy base64 address, expected bech32 address)
@@ -137,7 +137,7 @@ fn legacy_base64_balances_migrate_to_bech32_on_open() {
     seed_balances(db.path(), &balances);
 
     // Open #1: DB-open path runs `migrate_addresses_to_bech32`.
-    let facade = BlockchainFacade::new(port);
+    let facade = BlockchainFacade::new(port, strangecoin::consensus::CHAIN_ID_REGTEST);
 
     assert_no_legacy_keys(&facade);
     let keys = facade.account_keys();
@@ -169,7 +169,7 @@ fn legacy_base64_balances_migrate_to_bech32_on_open() {
     drop(facade);
 
     // Open #2: idempotent — nothing left to migrate, balances stay put.
-    let reopened = BlockchainFacade::new(port);
+    let reopened = BlockchainFacade::new(port, strangecoin::consensus::CHAIN_ID_REGTEST);
     assert_no_legacy_keys(&reopened);
     assert_eq!(
         reopened.account_keys().len(),
@@ -203,7 +203,7 @@ fn legacy_base64_addresses_in_chain_reset_and_migrate() {
             receiver: "regtest_initial_holder".to_string(),
             amount: 0,
             nonce: 0,
-            chain_id: consensus::current_chain_id(),
+            chain_id: consensus::CHAIN_ID_REGTEST,
             signature: Vec::new(),
             is_coinbase: true,
         }],
@@ -215,7 +215,7 @@ fn legacy_base64_addresses_in_chain_reset_and_migrate() {
             receiver: legacy_b.clone(),
             amount: 100,
             nonce: 1,
-            chain_id: consensus::current_chain_id(),
+            chain_id: consensus::CHAIN_ID_REGTEST,
             signature: Vec::new(),
             is_coinbase: false,
         }],
@@ -223,7 +223,7 @@ fn legacy_base64_addresses_in_chain_reset_and_migrate() {
     seed_balances_and_chain(db.path(), &balances, &[genesis, legacy_block]);
 
     // Open #1: legacy tx addresses force a chain reset to fresh genesis.
-    let facade = BlockchainFacade::new(port);
+    let facade = BlockchainFacade::new(port, strangecoin::consensus::CHAIN_ID_REGTEST);
 
     assert_no_legacy_keys(&facade);
     assert_eq!(facade.get_balance(&bech32_a), 10_000, "balance a migrated");
@@ -250,7 +250,7 @@ fn legacy_base64_addresses_in_chain_reset_and_migrate() {
     drop(facade);
 
     // Open #2: idempotent — no second reset, balances survive.
-    let reopened = BlockchainFacade::new(port);
+    let reopened = BlockchainFacade::new(port, strangecoin::consensus::CHAIN_ID_REGTEST);
     assert_eq!(
         reopened.chain_len(),
         1,

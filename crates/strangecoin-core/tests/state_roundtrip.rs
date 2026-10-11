@@ -1,3 +1,4 @@
+use strangecoin_core::consensus::CHAIN_ID_REGTEST;
 use strangecoin_core::state::{apply_block, unapply_block, State};
 use strangecoin_core::types::{Block, Transaction};
 
@@ -85,11 +86,11 @@ proptest! {
         state.clone().set_nonce("alice", 0);
 
         let genesis = genesis_block(vec![coinbase("alice", sender_bal)]);
-        let after_genesis = apply_block(&state, &genesis).unwrap();
+        let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
 
         let txs = vec![transfer("alice", "bob", amount, 1)];
         let block = transfer_block(1, txs);
-        let after_block = apply_block(&after_genesis, &block).unwrap();
+        let after_block = apply_block(&after_genesis, &block, CHAIN_ID_REGTEST).unwrap();
 
         let restored = unapply_block(&after_block, &block).unwrap();
         prop_assert_eq!(restored, after_genesis);
@@ -113,20 +114,20 @@ proptest! {
             coinbase("alice", bal1),
             coinbase("bob", bal2),
         ]);
-        let s0 = apply_block(&state, &genesis).unwrap();
+        let s0 = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
 
         let txs1 = vec![transfer("alice", "bob", amt1, 1)];
         let b1 = transfer_block(1, txs1);
-        let s1 = apply_block(&s0, &b1).unwrap();
+        let s1 = apply_block(&s0, &b1, CHAIN_ID_REGTEST).unwrap();
 
         let txs2 = vec![transfer("bob", "alice", amt2, 1)];
         let b2 = transfer_block(2, txs2);
-        let s2 = apply_block(&s1, &b2).unwrap();
+        let s2 = apply_block(&s1, &b2, CHAIN_ID_REGTEST).unwrap();
 
         let txs3 = vec![transfer("alice", "bob", amt3.min(s2.get_balance("alice")), 2)];
         let b3 = transfer_block(3, txs3);
 
-        if let Ok(s3) = apply_block(&s2, &b3) {
+        if let Ok(s3) = apply_block(&s2, &b3, CHAIN_ID_REGTEST) {
             let r2 = unapply_block(&s3, &b3).unwrap();
             prop_assert_eq!(&r2, &s2);
             let r1 = unapply_block(&r2, &b2).unwrap();
@@ -143,12 +144,12 @@ proptest! {
     ) {
         let state = make_state(vec![("alice".to_string(), sender_bal)]);
         let genesis = genesis_block(vec![coinbase("alice", sender_bal)]);
-        let after_genesis = apply_block(&state, &genesis).unwrap();
+        let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
         let supply_before = after_genesis.total_supply();
 
         let txs = vec![transfer("alice", "bob", amount, 1)];
         let block = transfer_block(1, txs);
-        let after_block = apply_block(&after_genesis, &block).unwrap();
+        let after_block = apply_block(&after_genesis, &block, CHAIN_ID_REGTEST).unwrap();
 
         prop_assert_eq!(after_block.total_supply(), supply_before);
     }
@@ -163,11 +164,11 @@ proptest! {
         state.set_nonce("alice", 0);
 
         let genesis = genesis_block(vec![coinbase("alice", sender_bal)]);
-        let after_genesis = apply_block(&state, &genesis).unwrap();
+        let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
 
         let txs = vec![transfer("alice", "bob", amount, 1)];
         let block = transfer_block(1, txs);
-        let after_block = apply_block(&after_genesis, &block).unwrap();
+        let after_block = apply_block(&after_genesis, &block, CHAIN_ID_REGTEST).unwrap();
 
         let restored = unapply_block(&after_block, &block).unwrap();
         prop_assert_eq!(restored.get_balance("alice"), after_genesis.get_balance("alice"));
@@ -184,7 +185,7 @@ mod unit_tests {
     fn genesis_creates_value() {
         let state = State::new();
         let block = genesis_block(vec![coinbase("miner", 100_000)]);
-        let new_state = apply_block(&state, &block).unwrap();
+        let new_state = apply_block(&state, &block, CHAIN_ID_REGTEST).unwrap();
         assert_eq!(new_state.get_balance("miner"), 100_000);
         assert_eq!(new_state.total_supply(), 100_000);
     }
@@ -193,7 +194,7 @@ mod unit_tests {
     fn unapply_genesis_removes_value() {
         let state = State::new();
         let block = genesis_block(vec![coinbase("miner", 100_000)]);
-        let applied = apply_block(&state, &block).unwrap();
+        let applied = apply_block(&state, &block, CHAIN_ID_REGTEST).unwrap();
         let restored = unapply_block(&applied, &block).unwrap();
         assert_eq!(restored, state);
     }
@@ -203,16 +204,16 @@ mod unit_tests {
         let state = State::new();
 
         let genesis = genesis_block(vec![coinbase("alice", 10_000), coinbase("bob", 5_000)]);
-        let s0 = apply_block(&state, &genesis).unwrap();
+        let s0 = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
 
         let b1 = transfer_block(1, vec![transfer("alice", "bob", 1000, 1)]);
-        let s1 = apply_block(&s0, &b1).unwrap();
+        let s1 = apply_block(&s0, &b1, CHAIN_ID_REGTEST).unwrap();
 
         let b2 = transfer_block(2, vec![transfer("bob", "alice", 500, 1)]);
-        let s2 = apply_block(&s1, &b2).unwrap();
+        let s2 = apply_block(&s1, &b2, CHAIN_ID_REGTEST).unwrap();
 
         let b3 = transfer_block(3, vec![transfer("alice", "bob", 2000, 2)]);
-        let s3 = apply_block(&s2, &b3).unwrap();
+        let s3 = apply_block(&s2, &b3, CHAIN_ID_REGTEST).unwrap();
 
         assert_eq!(s3.get_balance("alice"), 7500);
         assert_eq!(s3.get_balance("bob"), 7500);
@@ -235,14 +236,14 @@ mod unit_tests {
         state.set_nonce("alice", 0);
 
         let genesis = genesis_block(vec![coinbase("alice", 10_000)]);
-        let s0 = apply_block(&state, &genesis).unwrap();
+        let s0 = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
 
         let b1 = transfer_block(1, vec![transfer("alice", "bob", 100, 1)]);
-        let s1 = apply_block(&s0, &b1).unwrap();
+        let s1 = apply_block(&s0, &b1, CHAIN_ID_REGTEST).unwrap();
         assert_eq!(s1.get_nonce("alice"), 1);
 
         let b2 = transfer_block(2, vec![transfer("alice", "bob", 100, 2)]);
-        let s2 = apply_block(&s1, &b2).unwrap();
+        let s2 = apply_block(&s1, &b2, CHAIN_ID_REGTEST).unwrap();
         assert_eq!(s2.get_nonce("alice"), 2);
 
         let r2 = unapply_block(&s2, &b2).unwrap();
@@ -255,7 +256,7 @@ mod unit_tests {
     fn insufficient_balance_rejected() {
         let state = make_state(vec![("alice".to_string(), 100)]);
         let block = transfer_block(1, vec![transfer("alice", "bob", 200, 1)]);
-        assert!(apply_block(&state, &block).is_err());
+        assert!(apply_block(&state, &block, CHAIN_ID_REGTEST).is_err());
     }
 
     #[test]
@@ -263,10 +264,10 @@ mod unit_tests {
         let state = State::new();
 
         let genesis = genesis_block(vec![coinbase("alice", 1000)]);
-        let s0 = apply_block(&state, &genesis).unwrap();
+        let s0 = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
 
         let block = transfer_block(1, vec![transfer("alice", "bob", 0, 1)]);
-        let s1 = apply_block(&s0, &block).unwrap();
+        let s1 = apply_block(&s0, &block, CHAIN_ID_REGTEST).unwrap();
 
         assert_eq!(s1.get_balance("alice"), 1000);
         assert_eq!(s1.get_balance("bob"), 0);
@@ -277,10 +278,10 @@ mod unit_tests {
         let state = State::new();
 
         let genesis = genesis_block(vec![coinbase("alice", 1000)]);
-        let s0 = apply_block(&state, &genesis).unwrap();
+        let s0 = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
 
         let block = transfer_block(1, vec![transfer("alice", "alice", 500, 1)]);
-        let s1 = apply_block(&s0, &block).unwrap();
+        let s1 = apply_block(&s0, &block, CHAIN_ID_REGTEST).unwrap();
 
         assert_eq!(s1.get_balance("alice"), 1000);
     }

@@ -40,12 +40,15 @@ pub struct Blockchain {
     pub(crate) allow_zero_state_root: bool,
     pub(crate) total_work: strangecoin_core::consensus::U256,
     pub(crate) rules: ConsensusManager,
+    /// Network this node validates (BUG-S1-004): propagated from
+    /// `Config.network_id`; drives genesis, rewards and tx chain_id checks.
+    pub(crate) chain_id: u32,
 }
 
 impl Blockchain {
     /// Open storage for `port` via `state_cache::open_blockchain`.
-    pub(crate) fn new(port: u16) -> Self {
-        super::state_cache::open_blockchain(port)
+    pub(crate) fn new(port: u16, chain_id: u32) -> Self {
+        super::state_cache::open_blockchain(port, chain_id)
     }
 
     pub(crate) fn view_for(&self, height: u64) -> BlockView<'_> {
@@ -54,6 +57,7 @@ impl Blockchain {
             block_executor::now_secs(),
             self.allow_grant_blocks,
             self.rules.expected_version(height),
+            self.chain_id,
         )
         .with_phase(self.rules.phase_at(height))
         .with_allow_zero_state_root(self.allow_zero_state_root)
@@ -75,16 +79,20 @@ pub struct BlockchainFacade {
 }
 
 impl BlockchainFacade {
-    pub fn new(port: u16) -> Self {
+    pub fn new(port: u16, chain_id: u32) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(Blockchain::new(port))),
+            inner: Arc::new(RwLock::new(Blockchain::new(port, chain_id))),
             event_bus: Arc::new(crate::events::EventBus::new()),
         }
     }
 
-    pub fn with_event_bus(port: u16, event_bus: Arc<crate::events::EventBus>) -> Self {
+    pub fn with_event_bus(
+        port: u16,
+        event_bus: Arc<crate::events::EventBus>,
+        chain_id: u32,
+    ) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(Blockchain::new(port))),
+            inner: Arc::new(RwLock::new(Blockchain::new(port, chain_id))),
             event_bus,
         }
     }
@@ -134,6 +142,11 @@ impl BlockchainFacade {
 
     pub fn difficulty(&self) -> u32 {
         self.inner.read().expect(BLOCKCHAIN_LOCK).difficulty
+    }
+
+    /// Network this node validates (`Config.network_id`, BUG-S1-004).
+    pub fn chain_id(&self) -> u32 {
+        self.inner.read().expect(BLOCKCHAIN_LOCK).chain_id
     }
 
     pub fn push_block_unchecked(&self, block: Block) {

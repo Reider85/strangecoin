@@ -1,4 +1,5 @@
 use strangecoin_core::error::CoreError;
+use strangecoin_core::consensus::CHAIN_ID_REGTEST;
 use strangecoin_core::state::{apply_block, compute_state_root, root_after, State};
 use strangecoin_core::types::{Block, Transaction};
 
@@ -75,7 +76,7 @@ fn genesis_changes_root() {
     let root_before = compute_state_root(&state.balances);
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
-    let new_state = apply_block(&state, &genesis).unwrap();
+    let new_state = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
     let root_after_genesis = compute_state_root(&new_state.balances);
 
     assert_ne!(root_before, root_after_genesis);
@@ -85,12 +86,12 @@ fn genesis_changes_root() {
 fn root_after_matches_computed() {
     let state = State::new();
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
-    let after_genesis = apply_block(&state, &genesis).unwrap();
+    let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
 
     let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)]);
-    let root = root_after(&after_genesis, &block, true).unwrap();
+    let root = root_after(&after_genesis, &block, CHAIN_ID_REGTEST, true).unwrap();
 
-    let new_state = apply_block(&after_genesis, &block).unwrap();
+    let new_state = apply_block(&after_genesis, &block, CHAIN_ID_REGTEST).unwrap();
     let expected_root = compute_state_root(&new_state.balances);
 
     assert_eq!(root, expected_root);
@@ -100,17 +101,17 @@ fn root_after_matches_computed() {
 fn tamper_state_root_rejected() {
     let state = State::new();
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
-    let after_genesis = apply_block(&state, &genesis).unwrap();
+    let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
 
     let mut block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)]);
-    let correct_root = root_after(&after_genesis, &block, true).unwrap();
+    let correct_root = root_after(&after_genesis, &block, CHAIN_ID_REGTEST, true).unwrap();
 
     block.state_root = correct_root;
-    assert!(root_after(&after_genesis, &block, false).is_ok());
+    assert!(root_after(&after_genesis, &block, CHAIN_ID_REGTEST, false).is_ok());
 
     let mut tampered = block.clone();
     tampered.state_root[0] ^= 0xff;
-    let result = root_after(&after_genesis, &tampered, false);
+    let result = root_after(&after_genesis, &tampered, CHAIN_ID_REGTEST, false);
     assert!(result.is_err());
 }
 
@@ -120,12 +121,12 @@ fn zero_state_root_rejected_without_opt_in() {
     // is rejected unless the caller explicitly opts in (legacy regtest).
     let state = State::new();
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
-    let after_genesis = apply_block(&state, &genesis).unwrap();
+    let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
 
     let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)]);
     assert_eq!(block.state_root, [0u8; 32], "fixture must be a zero-root block");
 
-    let err = root_after(&after_genesis, &block, false)
+    let err = root_after(&after_genesis, &block, CHAIN_ID_REGTEST, false)
         .expect_err("a zero state_root must be rejected when a commitment is required");
     assert!(
         matches!(err, CoreError::StateRootMismatch { .. }),
@@ -133,7 +134,7 @@ fn zero_state_root_rejected_without_opt_in() {
     );
 
     // The same block is tolerated with the explicit opt-in.
-    assert!(root_after(&after_genesis, &block, true).is_ok());
+    assert!(root_after(&after_genesis, &block, CHAIN_ID_REGTEST, true).is_ok());
 }
 
 #[test]
@@ -142,23 +143,23 @@ fn genesis_zero_state_root_is_always_tolerated() {
     let state = State::new();
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
     assert_eq!(genesis.state_root, [0u8; 32]);
-    assert!(root_after(&state, &genesis, false).is_ok());
+    assert!(root_after(&state, &genesis, CHAIN_ID_REGTEST, false).is_ok());
 }
 
 #[test]
 fn chain_roots_consistent() {
     let state = State::new();
     let genesis = genesis_block(vec![coinbase("alice", 5000), coinbase("bob", 3000)]);
-    let s0 = apply_block(&state, &genesis).unwrap();
+    let s0 = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
 
     let b1 = transfer_block(1, vec![transfer("alice", "bob", 500, 1)]);
-    let s1 = apply_block(&s0, &b1).unwrap();
-    let r1 = root_after(&s0, &b1, true).unwrap();
+    let s1 = apply_block(&s0, &b1, CHAIN_ID_REGTEST).unwrap();
+    let r1 = root_after(&s0, &b1, CHAIN_ID_REGTEST, true).unwrap();
     assert_eq!(r1, compute_state_root(&s1.balances));
 
     let b2 = transfer_block(2, vec![transfer("bob", "alice", 200, 1)]);
-    let s2 = apply_block(&s1, &b2).unwrap();
-    let r2 = root_after(&s1, &b2, true).unwrap();
+    let s2 = apply_block(&s1, &b2, CHAIN_ID_REGTEST).unwrap();
+    let r2 = root_after(&s1, &b2, CHAIN_ID_REGTEST, true).unwrap();
     assert_eq!(r2, compute_state_root(&s2.balances));
 
     assert_ne!(r1, r2);
@@ -172,13 +173,13 @@ proptest! {
     ) {
         let state = State::new();
         let genesis = genesis_block(vec![coinbase("alice", sender_bal)]);
-        let s0 = apply_block(&state, &genesis).unwrap();
+        let s0 = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
 
         let txs = vec![transfer("alice", "bob", amount, 1)];
         let block = transfer_block(1, txs);
 
-        let root = root_after(&s0, &block, true).unwrap();
-        let new_state = apply_block(&s0, &block).unwrap();
+        let root = root_after(&s0, &block, CHAIN_ID_REGTEST, true).unwrap();
+        let new_state = apply_block(&s0, &block, CHAIN_ID_REGTEST).unwrap();
         let expected = compute_state_root(&new_state.balances);
 
         prop_assert_eq!(root, expected);

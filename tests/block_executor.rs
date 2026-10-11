@@ -24,6 +24,7 @@ fn view(chain: &[Block], allow_grant_blocks: bool) -> BlockView<'_> {
         now_secs(),
         allow_grant_blocks,
         CURRENT_CONSENSUS_VERSION,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
     )
     .with_allow_zero_state_root(true)
 }
@@ -34,7 +35,7 @@ fn coinbase(receiver: &str, amount: u64) -> Transaction {
         receiver: receiver.to_string(),
         amount,
         nonce: 0,
-        chain_id: strangecoin::consensus::current_chain_id(),
+        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
         signature: Vec::new(),
         is_coinbase: true,
     }
@@ -46,7 +47,7 @@ fn transfer(sender: &str, receiver: &str, amount: u64, nonce: u64) -> Transactio
         receiver: receiver.to_string(),
         amount,
         nonce,
-        chain_id: strangecoin::consensus::current_chain_id(),
+        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
         signature: Vec::new(),
         is_coinbase: false,
     }
@@ -359,7 +360,12 @@ fn rejects_state_root_that_does_not_match_the_applied_state() {
 fn accepts_state_root_matching_the_applied_state() {
     let (genesis, parent_state) = fixture();
     let block = child_of(&genesis, vec![coinbase("miner", 0)], 600);
-    let post = apply_block(&parent_state, &block).expect("block applies");
+    let post = apply_block(
+        &parent_state,
+        &block,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    )
+    .expect("block applies");
     let root = compute_state_root(&post.balances);
 
     let mut committed = block;
@@ -384,6 +390,7 @@ fn rejects_zero_state_root_when_commitment_required() {
         now_secs(),
         false,
         CURRENT_CONSENSUS_VERSION,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
     );
     let err = validate_and_apply(&parent_state, &block, &strict)
         .expect_err("a zero state_root must be rejected when a commitment is required");
@@ -406,6 +413,7 @@ fn accepts_zero_state_root_with_opt_in_flag() {
         now_secs(),
         false,
         CURRENT_CONSENSUS_VERSION,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
     )
     .with_allow_zero_state_root(true);
     validate_and_apply(&parent_state, &block, &legacy)

@@ -1,8 +1,9 @@
 use proptest::prelude::*;
 use secp256k1::{ecdsa::RecoverableSignature, PublicKey, Secp256k1, SecretKey};
 use strangecoin_core::consensus::{
-    current_chain_id, u256_div, u256_from_bytes, u256_from_u64, u256_gt, u256_le, u256_max, u256_min,
-    u256_mul, validate_nonce, MAX_TARGET_CHANGE_FACTOR, RETARGET_INTERVAL, TARGET_BLOCK_TIME,
+    u256_div, u256_from_bytes, u256_from_u64, u256_gt, u256_le, u256_max, u256_min, u256_mul,
+    validate_nonce, CHAIN_ID_REGTEST, MAX_TARGET_CHANGE_FACTOR, RETARGET_INTERVAL,
+    TARGET_BLOCK_TIME,
 };
 use strangecoin_core::error::CoreError;
 use strangecoin_core::economics::emission::{
@@ -31,7 +32,7 @@ fn arbitrary_secret_key() -> impl Strategy<Value = SecretKey> {
 
 fn arbitrary_address() -> impl Strategy<Value = String> {
     arbitrary_public_key().prop_map(|pk| {
-        strangecoin_core::address::address_from_public_key(&pk)
+        strangecoin_core::address::encode_address(&pk, CHAIN_ID_REGTEST)
             .expect("Failed to generate address in proptest")
     })
 }
@@ -84,7 +85,7 @@ fn arbitrary_signed_transaction() -> impl Strategy<Value = Transaction> {
             let public_key = PublicKey::from_secret_key(&secp, &secret_key);
             // verify_transaction() recovers the signer and compares its address
             // against tx.sender, so the sender must be derived from this key.
-            let sender = strangecoin_core::address::address_from_public_key(&public_key)
+            let sender = strangecoin_core::address::encode_address(&public_key, chain_id)
                 .expect("Failed to generate sender address in proptest");
             let mut tx = Transaction {
                 sender: sender.clone(),
@@ -136,7 +137,7 @@ proptest! {
 
     #[test]
     fn block_reward_bounded_by_schedule(height in 0u64..1_000_000u64, supply in 0u64..MAX_SUPPLY_PRE_TAIL) {
-        let reward = block_reward_at_height_for_chain(height, supply, current_chain_id());
+        let reward = block_reward_at_height_for_chain(height, supply, CHAIN_ID_REGTEST);
         prop_assert!(reward <= INITIAL_REWARD);
     }
 
@@ -194,9 +195,54 @@ proptest! {
 
     #[test]
     fn chain_id_validation(tx in arbitrary_transaction()) {
-        let valid_chain_ids = [1u32, 2u32, 3u32];
-        let is_valid = valid_chain_ids.contains(&tx.chain_id);
-        prop_assert_eq!(is_valid, matches!(tx.chain_id, 1..=3));
+        use strangecoin_core::state::{apply_block, State};
+        use strangecoin_core::types::Block;
+
+        // BUG-S1-004: the state machine pins every tx to the validating
+        // chain — a foreign chain_id is rejected regardless of other rules.
+        let mut transfer = tx;
+        transfer.is_coinbase = false;
+        let coinbase = Transaction {
+            sender: "coinbase".to_string(),
+            receiver: "miner".to_string(),
+            amount: 0,
+            nonce: 0,
+            chain_id: transfer.chain_id,
+            signature: Vec::new(),
+            is_coinbase: true,
+        };
+        let block = Block {
+            index: 1,
+            timestamp: 1600,
+            transactions: vec![coinbase, transfer.clone()],
+            previous_hash: "prev_hash".to_string(),
+            hash: "block_hash_1".to_string(),
+            nonce: 0,
+            target: "ff".to_string(),
+            consensus_version: 1,
+            state_root: [0u8; 32],
+            tx_root: [0u8; 32],
+        };
+
+        // Own chain: the chain_id gate passes (other consensus rules may
+        // still reject the unsigned fixture — that is fine here).
+        let own = apply_block(&State::new(), &block, transfer.chain_id);
+        prop_assert!(
+            !matches!(own, Err(CoreError::InvalidChainId { .. })),
+            "own chain_id must not trip the chain_id gate: {own:?}"
+        );
+
+        // Foreign chain: rejected at the state-machine level.
+        let foreign_id = if transfer.chain_id == 1 { 2 } else { 1 };
+        let foreign = apply_block(&State::new(), &block, foreign_id);
+        prop_assert!(
+            matches!(
+                foreign,
+                Err(CoreError::InvalidChainId { expected, got })
+                    if expected == foreign_id && got == transfer.chain_id
+            ),
+            "foreign chain_id must be rejected: {foreign:?}"
+        );
     }
 
     #[test]

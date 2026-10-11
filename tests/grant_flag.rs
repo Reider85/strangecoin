@@ -51,7 +51,7 @@ fn block1_rejects_over_emission_when_disabled() {
     let keypairs = generate_keypairs(1);
     let addr = keypairs[0].0.clone();
 
-    // Manually create a grant block with excessive coinbase (10000 > block_reward_at_height(1, ...))
+    // Manually create a grant block with excessive coinbase (10000 > block_reward_at_height_for_chain(1, ...))
     use strangecoin::Block;
     use strangecoin::Transaction;
 
@@ -63,7 +63,7 @@ fn block1_rejects_over_emission_when_disabled() {
         receiver: addr.clone(),
         amount: genesis_balance,
         nonce: 0,
-        chain_id: strangecoin::consensus::current_chain_id(),
+        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
         signature: Vec::new(),
         is_coinbase: true,
     };
@@ -110,7 +110,7 @@ fn magic_string_sender_rejected_in_normal_block() {
         receiver: addr.clone(),
         amount: 9999,
         nonce: 0,
-        chain_id: strangecoin::consensus::current_chain_id(),
+        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
         signature: Vec::new(),
         is_coinbase: false,
     };

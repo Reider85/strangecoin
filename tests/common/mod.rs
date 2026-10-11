@@ -41,8 +41,12 @@ pub fn wait_for_block_applied(bus: &EventBus, timeout: Duration) -> Option<NodeE
 pub fn walk_state(prefix: &[strangecoin::Block]) -> strangecoin_core::state::State {
     let mut state = strangecoin_core::state::State::new();
     for block in prefix {
-        state = strangecoin_core::state::apply_block(&state, block)
-            .expect("prefix chain must apply");
+        state = strangecoin_core::state::apply_block(
+            &state,
+            block,
+            strangecoin::consensus::CHAIN_ID_REGTEST,
+        )
+        .expect("prefix chain must apply");
     }
     state
 }
@@ -55,7 +59,7 @@ pub fn coinbase_tx(receiver: &str, amount: u64) -> strangecoin::Transaction {
         receiver: receiver.to_string(),
         amount,
         nonce: 0,
-        chain_id: strangecoin::consensus::current_chain_id(),
+        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
         signature: Vec::new(),
         is_coinbase: true,
     }
@@ -89,8 +93,12 @@ pub fn craft_child(
         tx_root: [0u8; 32],
     };
     block.tx_root = strangecoin::serialize::compute_tx_root(&block.transactions);
-    let post = strangecoin_core::state::apply_block(&walk_state(prefix), &block)
-        .expect("crafted block must apply to the prefix state");
+    let post = strangecoin_core::state::apply_block(
+        &walk_state(prefix),
+        &block,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    )
+    .expect("crafted block must apply to the prefix state");
     block.state_root = strangecoin_core::state::compute_state_root(&post.balances);
     block.hash = hex::encode(strangecoin::serialize::block_hash(&block));
     block

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::economics::emission::block_reward_at_height;
+use crate::economics::emission::block_reward_at_height_for_chain;
 use crate::error::CoreError;
 use crate::types::{AccountState, Block, Transaction};
 
@@ -51,28 +51,46 @@ impl State {
     }
 }
 
-pub fn apply_block(state: &State, block: &Block) -> Result<State, CoreError> {
+/// Apply `block` on top of `state`. `chain_id` pins the network the block is
+/// validated for (BUG-S1-004): every transaction must carry it, and the
+/// coinbase reward schedule is the one configured for that chain.
+pub fn apply_block(state: &State, block: &Block, chain_id: u32) -> Result<State, CoreError> {
     let mut new_state = state.clone();
 
     if block.index == 0 {
-        apply_genesis(&mut new_state, block)?;
+        apply_genesis(&mut new_state, block, chain_id)?;
     } else {
-        apply_non_genesis(&mut new_state, block)?;
+        apply_non_genesis(&mut new_state, block, chain_id)?;
     }
 
     Ok(new_state)
 }
 
-fn apply_genesis(state: &mut State, block: &Block) -> Result<(), CoreError> {
+fn apply_genesis(state: &mut State, block: &Block, chain_id: u32) -> Result<(), CoreError> {
     for tx in &block.transactions {
+        validate_tx_chain_id(tx, chain_id)?;
         credit_receiver(state, tx)?;
     }
     Ok(())
 }
 
-fn apply_non_genesis(state: &mut State, block: &Block) -> Result<(), CoreError> {
+fn validate_tx_chain_id(tx: &Transaction, chain_id: u32) -> Result<(), CoreError> {
+    if tx.chain_id != chain_id {
+        return Err(CoreError::InvalidChainId {
+            expected: chain_id,
+            got: tx.chain_id,
+        });
+    }
+    Ok(())
+}
+
+fn apply_non_genesis(state: &mut State, block: &Block, chain_id: u32) -> Result<(), CoreError> {
+    for tx in &block.transactions {
+        validate_tx_chain_id(tx, chain_id)?;
+    }
+
     let total_supply = state.total_supply();
-    let expected_reward = block_reward_at_height(block.index, total_supply);
+    let expected_reward = block_reward_at_height_for_chain(block.index, total_supply, chain_id);
 
     let coinbase = block.transactions.iter().find(|tx| tx.is_coinbase).ok_or(
         CoreError::InvalidCoinbaseAmount {
@@ -192,6 +210,12 @@ fn decrement_nonce(state: &mut State, tx: &Transaction) -> Result<(), CoreError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::consensus::CHAIN_ID_REGTEST;
+
+    /// All fixtures below are regtest chains (chain_id 3, reward 0).
+    fn apply_regtest(state: &State, block: &Block) -> Result<State, CoreError> {
+        apply_block(state, block, CHAIN_ID_REGTEST)
+    }
 
     fn test_state_with_balance(addr: &str, balance: u64) -> State {
         let mut state = State::new();
@@ -250,7 +274,7 @@ mod tests {
         let state = State::new();
         let tx = coinbase_tx("alice", 1000);
         let block = test_block(0, vec![tx]);
-        let new_state = apply_block(&state, &block).unwrap();
+        let new_state = apply_regtest(&state, &block).unwrap();
         assert_eq!(new_state.get_balance("alice"), 1000);
     }
 
@@ -259,7 +283,7 @@ mod tests {
         let state = State::new();
         let txs = vec![coinbase_tx("alice", 500), coinbase_tx("bob", 300)];
         let block = test_block(0, txs);
-        let new_state = apply_block(&state, &block).unwrap();
+        let new_state = apply_regtest(&state, &block).unwrap();
         assert_eq!(new_state.get_balance("alice"), 500);
         assert_eq!(new_state.get_balance("bob"), 300);
     }
@@ -269,7 +293,7 @@ mod tests {
         let state = test_state_with_balance("alice", 1000);
         let txs = vec![transfer_tx("alice", "bob", 400, 1)];
         let block = test_block(1, txs);
-        let new_state = apply_block(&state, &block).unwrap();
+        let new_state = apply_regtest(&state, &block).unwrap();
         assert_eq!(new_state.get_balance("alice"), 600);
         assert_eq!(new_state.get_balance("bob"), 400);
     }
@@ -280,7 +304,7 @@ mod tests {
         state.set_nonce("alice", 0);
         let txs = vec![transfer_tx("alice", "bob", 100, 1)];
         let block = test_block(1, txs);
-        let new_state = apply_block(&state, &block).unwrap();
+        let new_state = apply_regtest(&state, &block).unwrap();
         assert_eq!(new_state.get_nonce("alice"), 1);
     }
 
@@ -289,7 +313,7 @@ mod tests {
         let state = test_state_with_balance("alice", 100);
         let txs = vec![transfer_tx("alice", "bob", 200, 1)];
         let block = test_block(1, txs);
-        assert!(apply_block(&state, &block).is_err());
+        assert!(apply_regtest(&state, &block).is_err());
     }
 
     #[test]
@@ -307,7 +331,7 @@ mod tests {
             state_root: [0u8; 32],
             tx_root: [0u8; 32],
         };
-        let new_state = apply_block(&state, &block).unwrap();
+        let new_state = apply_regtest(&state, &block).unwrap();
         assert_eq!(new_state.get_balance("miner"), 0);
     }
 
@@ -316,7 +340,7 @@ mod tests {
         let state = test_state_with_balance("alice", 1000);
         let txs = vec![coinbase_tx("alice", 1000)];
         let block = test_block(0, txs);
-        let applied = apply_block(&state, &block).unwrap();
+        let applied = apply_regtest(&state, &block).unwrap();
         let restored = unapply_block(&applied, &block).unwrap();
         assert_eq!(restored, state);
     }
@@ -327,7 +351,7 @@ mod tests {
         state.set_nonce("alice", 0);
         let txs = vec![transfer_tx("alice", "bob", 100, 1)];
         let block = test_block(1, txs);
-        let applied = apply_block(&state, &block).unwrap();
+        let applied = apply_regtest(&state, &block).unwrap();
         assert_eq!(applied.get_nonce("alice"), 1);
         let restored = unapply_block(&applied, &block).unwrap();
         assert_eq!(restored.get_nonce("alice"), 0);
@@ -345,18 +369,18 @@ mod tests {
 
         let genesis_txs = vec![coinbase_tx("alice", 5000), coinbase_tx("bob", 2000)];
         let genesis = test_block(0, genesis_txs);
-        let after_genesis = apply_block(&state, &genesis).unwrap();
+        let after_genesis = apply_regtest(&state, &genesis).unwrap();
 
         let txs = vec![
             transfer_tx("alice", "bob", 300, 1),
             transfer_tx("bob", "alice", 100, 1),
         ];
         let block1 = test_block(1, txs);
-        let after_block1 = apply_block(&after_genesis, &block1).unwrap();
+        let after_block1 = apply_regtest(&after_genesis, &block1).unwrap();
 
         let txs2 = vec![transfer_tx("alice", "bob", 500, 2)];
         let block2 = test_block(2, txs2);
-        let after_block2 = apply_block(&after_block1, &block2).unwrap();
+        let after_block2 = apply_regtest(&after_block1, &block2).unwrap();
 
         let restored2 = unapply_block(&after_block2, &block2).unwrap();
         assert_eq!(restored2, after_block1);
@@ -373,7 +397,7 @@ mod tests {
         let state = State::new();
         let txs = vec![coinbase_tx("miner", 100)];
         let block = test_block(0, txs);
-        let new_state = apply_block(&state, &block).unwrap();
+        let new_state = apply_regtest(&state, &block).unwrap();
         assert_eq!(new_state.total_supply(), 100);
     }
 
@@ -388,7 +412,7 @@ mod tests {
             transfer_tx("alice", "charlie", 300, 2),
         ];
         let block = test_block(1, txs);
-        let new_state = apply_block(&state, &block).unwrap();
+        let new_state = apply_regtest(&state, &block).unwrap();
 
         assert_eq!(new_state.get_balance("alice"), 9500);
         assert_eq!(new_state.get_balance("bob"), 200);

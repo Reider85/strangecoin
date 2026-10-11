@@ -76,17 +76,84 @@ pub fn load_genesis(path: &str) -> Result<crate::Block, crate::error::Strangecoi
 
 pub fn validate_genesis(
     block: &crate::Block,
-    is_regtest: bool,
+    chain_id: u32,
 ) -> Result<(), crate::error::StrangecoinError> {
-    if is_regtest {
+    if strangecoin_core::consensus::is_regtest(chain_id) {
         return Ok(());
     }
+    let expected = match chain_id {
+        strangecoin_core::consensus::CHAIN_ID_MAINNET => {
+            strangecoin_core::consensus::EXPECTED_GENESIS_HASH
+        }
+        strangecoin_core::consensus::CHAIN_ID_TESTNET => {
+            strangecoin_core::consensus::EXPECTED_TESTNET_GENESIS_HASH
+        }
+        other => {
+            return Err(crate::error::StrangecoinError::ConfigError(format!(
+                "unknown network ID: {}",
+                other
+            )));
+        }
+    };
     let hash = strangecoin_core::serialize::block_hash(block);
-    if hash != strangecoin_core::consensus::EXPECTED_GENESIS_HASH {
+    if hash != expected {
         return Err(crate::error::StrangecoinError::GenesisMismatch {
-            expected: strangecoin_core::consensus::EXPECTED_GENESIS_HASH,
+            expected,
             got: hash,
         });
     }
     Ok(())
+}
+
+/// Genesis file name for a public network (regtest builds its own genesis).
+pub fn genesis_file_for_chain(
+    chain_id: u32,
+) -> Option<std::path::PathBuf> {
+    let file_name = match chain_id {
+        strangecoin_core::consensus::CHAIN_ID_MAINNET => "genesis.json",
+        strangecoin_core::consensus::CHAIN_ID_TESTNET => "genesis-testnet.json",
+        _ => return None,
+    };
+    let exe_path =
+        std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
+    let exe_dir = exe_path
+        .parent()
+        .expect("Не удалось получить директорию исполняемого файла");
+    Some(exe_dir.join(file_name))
+}
+
+/// The deterministic regtest genesis (BUG-S1-004): built in code, no file,
+/// no expected-hash pin — regtest chains are disposable.
+pub fn regtest_genesis_block(consensus_version: u32) -> crate::Block {
+    use strangecoin_core::consensus::CHAIN_ID_REGTEST;
+
+    let genesis_tx = crate::Transaction {
+        sender: "genesis".to_string(),
+        receiver: "regtest_initial_holder".to_string(),
+        amount: 1_000_000_000,
+        nonce: 0,
+        chain_id: CHAIN_ID_REGTEST,
+        signature: Vec::new(),
+        is_coinbase: true,
+    };
+    let target_bytes =
+        hex::decode("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+            .expect("valid target hex");
+    let mut target_arr = [0u8; 32];
+    target_arr.copy_from_slice(&target_bytes);
+    let mut block = crate::Block {
+        index: 0,
+        timestamp: 0,
+        transactions: vec![genesis_tx],
+        previous_hash: "0".repeat(64),
+        hash: String::new(),
+        nonce: 0,
+        target: hex::encode(target_arr),
+        consensus_version,
+        state_root: [0u8; 32],
+        tx_root: [0u8; 32],
+    };
+    block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
+    block.hash = hex::encode(strangecoin_core::serialize::block_hash(&block));
+    block
 }

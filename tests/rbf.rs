@@ -23,7 +23,7 @@ fn transfer(
         receiver: receiver.to_string(),
         amount,
         nonce,
-        chain_id: strangecoin::consensus::current_chain_id(),
+        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
         signature: Vec::new(),
         is_coinbase: false,
     };

@@ -24,7 +24,7 @@ fn double_spend_rejected() {
         receiver: receiver1.clone(),
         amount: tx_amount,
         nonce: 1,
-        chain_id: strangecoin::consensus::current_chain_id(),
+        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
         signature: Vec::new(),
         is_coinbase: false,
     };
@@ -35,7 +35,7 @@ fn double_spend_rejected() {
         receiver: receiver2,
         amount: tx_amount,
         nonce: 1,
-        chain_id: strangecoin::consensus::current_chain_id(),
+        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
         signature: Vec::new(),
         is_coinbase: false,
     };

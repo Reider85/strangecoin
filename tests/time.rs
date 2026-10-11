@@ -12,7 +12,7 @@ fn zero_reward_coinbase() -> Transaction {
         receiver: "miner".to_string(),
         amount: 0,
         nonce: 0,
-        chain_id: strangecoin::consensus::current_chain_id(),
+        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
         signature: Vec::new(),
         is_coinbase: true,
     }

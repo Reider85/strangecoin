@@ -145,6 +145,7 @@ impl StateCache {
         allow_grant_blocks: bool,
         allow_zero_state_root: bool,
         rules: &super::consensus_manager::ConsensusManager,
+        chain_id: u32,
     ) -> Result<Self, StrangecoinError> {
         let mut state = State::new();
         for (height, block) in chain.iter().enumerate() {
@@ -153,6 +154,7 @@ impl StateCache {
                 now,
                 allow_grant_blocks,
                 rules.expected_version(height as u64),
+                chain_id,
             )
             .with_phase(rules.phase_at(height as u64))
             .with_allow_zero_state_root(allow_zero_state_root);
@@ -213,7 +215,7 @@ pub(crate) fn db_path_from_env() -> PathBuf {
 
 /// Open or create storage for `port`, load persisted state, install genesis
 /// when the DB is empty, run migrations, persist. (S1.5-P04: moved from facade.)
-pub(crate) fn open_blockchain(port: u16) -> Blockchain {
+pub(crate) fn open_blockchain(port: u16, chain_id: u32) -> Blockchain {
     use super::consensus_manager::ConsensusManager;
     use tracing::info;
 
@@ -228,12 +230,13 @@ pub(crate) fn open_blockchain(port: u16) -> Blockchain {
         chain: vec![],
         balances: StateCache::new(),
         difficulty: 1,
-        mempool: crate::mempool::Mempool::new(),
+        mempool: crate::mempool::Mempool::new(chain_id),
         storage,
         allow_grant_blocks: false,
         allow_zero_state_root: false,
         total_work: [0, 0, 0, 0],
         rules: ConsensusManager::new(),
+        chain_id,
     };
     blockchain.debug_db();
 
@@ -246,9 +249,8 @@ pub(crate) fn open_blockchain(port: u16) -> Blockchain {
         let _ = blockchain.mempool.insert(tx, &account);
     }
     if let Some(chain) = loaded.chain {
-        let is_regtest = crate::consensus::is_regtest(crate::consensus::current_chain_id());
         if !chain.is_empty() {
-            if let Err(e) = crate::consensus::validate_genesis(&chain[0], is_regtest) {
+            if let Err(e) = crate::consensus::validate_genesis(&chain[0], chain_id) {
                 panic!("Genesis validation failed: {}", e);
             }
         }
@@ -410,6 +412,7 @@ impl Blockchain {
             self.allow_grant_blocks,
             self.allow_zero_state_root,
             &self.rules,
+            self.chain_id,
         ) {
             Ok(cache) => cache,
             Err(e) => {
@@ -452,6 +455,7 @@ impl Blockchain {
             self.allow_grant_blocks,
             self.allow_zero_state_root,
             &self.rules,
+            self.chain_id,
         )?;
         Ok(())
     }
@@ -520,7 +524,7 @@ impl Blockchain {
         use base64::engine::general_purpose::STANDARD as BASE64;
         use base64::Engine;
 
-        let network_id = crate::consensus::current_chain_id();
+        let network_id = self.chain_id;
         let mut new_balances = HashMap::new();
         let mut migrated_count = 0usize;
         let mut unchanged_count = 0usize;
