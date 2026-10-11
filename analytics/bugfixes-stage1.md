@@ -415,7 +415,7 @@ rg "MAX_BLOCK_SIZE" src/
 | **Серьёзность** | M (Medium) |
 | **Источник** | audit; P06 КГ (golden vectors); BUG-S0-024 (родственная проблема) |
 | **Категория** | D — тестовая |
-| **Статус** | **open** |
+| **Статус** | **fixed** (2026-10-11) |
 | **Stage target** | Stage 1.5-P08 |
 
 **Факт (по коду, 2026-10-10):**
@@ -442,6 +442,21 @@ sed -n '195,210p' crates/strangecoin-core/tests/serialize_golden.rs
 2. Зафиксировать как golden vector — каноническая сериализация 3 эталонных блоков.
 3. Добавить CI-проверку: если `serialize_block`/`serialize_block_header` меняется → golden vector test падает → разработчик обязан либо обновить вектор с пометкой `FORMAT_VERSION` bump + ADR, либо откатить изменение.
 4. Дополнительно: для tx golden vectors — сделать `serialize_deserialize_roundtrip` (есть в proptest), но golden hex — более сильный тест (ловит и order, и padding, и т.д.).
+
+**Решение (2026-10-11): literal hex для всех трёх таутологий + pin block_hash + example для регенерации**
+
+Уточнение к факту: строковые диапазоны в баге смещены — таутологии жили в `test_golden_block1` (serialize_block), `test_golden_block2_header` (serialize_block_header) и `test_golden_block2` (serialize_block); отдельного «блока 3» в файле не было. Tx-golden'ы (9 тестов) уже были корректны и не менялись.
+
+1. **Код** (`crates/strangecoin-core/tests/serialize_golden.rs`):
+   - 3 таутологии `expected_hex = actual_hex.clone()` заменены на сравнение с literal hex (FORMAT_VERSION = 4):
+     - `test_golden_block1` → `serialize_block(block1)` = 322 hex chars (161 байт = `HEADER_WIRE_LEN` 157 + u32 tx_count);
+     - `test_golden_block2_header` → `serialize_block_header(block2)` = 314 hex chars (157 байт);
+     - `test_golden_block2` → `serialize_block(block2)` = 648 hex chars (header + 2 length-prefixed tx: 0x73 и 0x28).
+   - Hash-тесты усилены: `test_golden_block1_hash` и `test_golden_block2_hash` теперь также пинят `hex::encode(block_hash(...))` (blake3 от header) — ловит и смену кодировки, и подмену хеш-функции.
+   - В шапку файла добавлен anti-regression комментарий (процедура при изменении кодировки: FORMAT_VERSION bump + ADR + регенерация векторов).
+2. **Example** (`crates/strangecoin-core/examples/print_serialized_block.rs`, новый): конструирует block1/block2 (те же структуры, что в тесте) и печатает все 5 golden hex — инструмент регенерации векторов при будущих FORMAT_VERSION bump.
+3. **Verification (2026-10-11):** `cargo test -p strangecoin-core --test serialize_golden` — **14/14 green**; `cargo test --workspace` — **green**; `cargo clippy --all-targets -- -D warnings` — **clean**.
+4. **CI-gate:** как отдельный CI job не требуется — тесты входят в стандартный `cargo test --workspace`; любое молчаливое изменение `serialize_block`/`serialize_block_header`/`block_hash` теперь ломает 5 golden-тестов. Ожидаемое действие разработчика задокументировано в шапке `serialize_golden.rs`.
 
 ---
 
@@ -717,7 +732,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-004 | `current_chain_id()` захардкожен в REGTEST | C | **fixed** (2026-10-11) | S1.5-P05 |
 | BUG-S1-005 | Per-message rate-limit не enforced | H | **fixed** (2026-10-11) | Stage 2-P03 |
 | BUG-S1-006 | Single-block size check отсутствует | H | **fixed** (2026-10-11) | S1.5-P07 |
-| BUG-S1-007 | Golden-векторы блоков таутологичны | M | **open** | S1.5-P08 |
+| BUG-S1-007 | Golden-векторы блоков таутологичны | M | **fixed** (2026-10-11) | S1.5-P08 |
 | BUG-S1-008 | Мёртвая зависимость `sha2` | L | **open** | S1.5-P09 |
 | BUG-S1-009 | Нет Wallet round-trip теста | M | **open** | S1.5-P10 |
 | BUG-S1-010 | Нет теста `InvalidChainId` rejection | M | **open** | S1.5-P10 |
@@ -727,13 +742,14 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-014 | `INVARIANTS_ENFORCED.md` Stage 0 арифметика | L | **open** | S1.5-P12 |
 | BUG-S1-015 | Offline genesis key не сгенерирован | C (mainnet) | **open** (ops) | ops gate |
 
-**Итого:** 9 открытых пунктов: 1 Critical, 1 High, 4 Medium, 3 Low + 6 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11).
+**Итого:** 8 открытых пунктов: 1 Critical, 1 High, 3 Medium, 3 Low + 7 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11; BUG-S1-007, 2026-10-11).
 - 1 Critical blocker для mainnet (BUG-S1-015).
 - ~~1 Critical blocker архитектурный (BUG-S1-004 — mainnet-ветка мёртвая)~~ **закрыт 2026-10-11**.
 - ~~1 High сетевой (BUG-S1-005 — per-message RL)~~ **закрыт 2026-10-11** (per-message + per-type buckets).
 - ~~1 High сетевой/архитектурный (BUG-S1-006 — size check)~~ **закрыт 2026-10-11** (block + per-tx checks в `validate_and_apply`).
 - 1 High: BUG-S1-013 (PGP, ops).
-- Остальные 7 — качество/тесты/гигиена.
+- ~~1 Medium тестовый (BUG-S1-007 — golden vectors tautology)~~ **закрыт 2026-10-11** (literal hex + hash pin + example).
+- Остальные 6 — качество/тесты/гигиена.
 
 ---
 

@@ -1,3 +1,12 @@
+//! Golden vectors for canonical serialization (FORMAT_VERSION = 4).
+//!
+//! BUG-S1-007: any change to `serialize_block`, `serialize_block_header`, or
+//! `block_hash` must fail these tests. To land such a change: bump
+//! `FORMAT_VERSION`, record an ADR, regenerate the literals via
+//! `cargo run -p strangecoin-core --example print_serialized_block`, and
+//! update the vectors here in the same commit. Do not "fix" a failing test
+//! by copying the new output into the literals without that procedure.
+
 use strangecoin_core::serialize::*;
 use strangecoin_core::types::{Block, Transaction};
 
@@ -180,6 +189,11 @@ fn test_golden_block1_hash() {
     let h2 = block_hash(&block1);
     assert_eq!(h1, h2, "block_hash must be deterministic");
     assert_ne!(h1, [0u8; 32], "genesis block hash must not be zero");
+    assert_eq!(
+        hex::encode(h1),
+        "17d69d81188d5f7fe43ab0a38db3a6c12d658c5bf0799876d6c06fd7bc101c60",
+        "golden block_hash(block1) changed"
+    );
 }
 
 #[test]
@@ -199,7 +213,7 @@ fn test_golden_block1() {
     };
     let serialized = serialize_block(&block1);
     let actual_hex = hex::encode(&serialized);
-    let expected_hex = actual_hex.clone();
+    let expected_hex = "040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000";
     assert_eq!(actual_hex, expected_hex);
 }
 
@@ -242,7 +256,7 @@ fn test_golden_block2_header() {
     };
     let serialized = serialize_block_header(&block2);
     let actual_hex = hex::encode(&serialized);
-    let expected_hex = actual_hex.clone();
+    let expected_hex = "04000000000000000100000000499602d211111111111111111111111111111111111111111111111111111111111111110000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000002a000000010000000000000000000000000000000000000000000000000000000000000000";
     assert_eq!(actual_hex, expected_hex);
 }
 
@@ -287,6 +301,11 @@ fn test_golden_block2_hash() {
     let h2 = block_hash(&block2);
     assert_eq!(h1, h2, "block_hash must be deterministic");
     assert_ne!(h1, [0u8; 32], "block hash must not be zero");
+    assert_eq!(
+        hex::encode(h1),
+        "a0c909565901ce4ed38cbf79cdd76f063f85a77ec2fe85ed906c204efad6551d",
+        "golden block_hash(block2) changed"
+    );
 }
 
 #[test]
@@ -328,6 +347,6 @@ fn test_golden_block2() {
     };
     let serialized = serialize_block(&block2);
     let actual_hex = hex::encode(&serialized);
-    let expected_hex = actual_hex.clone();
+    let expected_hex = "04000000000000000100000000499602d211111111111111111111111111111111111111111111111111111111111111110000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000002a0000000100000000000000000000000000000000000000000000000000000000000000000000000200000073040000000773656e6465723100000009726563656976657231000000000000006400000000000000010000000100000000410102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f4041000000280400000000000000066d696e657231000000012a05f2000000000000000000000000010100000000";
     assert_eq!(actual_hex, expected_hex);
 }
