@@ -550,7 +550,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | **Серьёзность** | M (Medium) |
 | **Источник** | audit; P05 КГ |
 | **Категория** | D — тестовая |
-| **Статус** | **open** |
+| **Статус** | **fixed** (2026-10-12) |
 | **Stage target** | Stage 1.5-P10 |
 
 **Факт (по коду, 2026-10-10):**
@@ -571,6 +571,18 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
    - `correct_chain_tx_accepted` — control test.
 2. Использовать `view.chain_id()` после исправления BUG-S1-004 (chain_id from Config).
 3. Заменить таутологический `chain_id_validation` proptest на реальный вызов `mempool::insert`.
+
+**Решение (2026-10-12):** Закрыт на основании коммита `b9bec04` (фикс BUG-S1-004, 2026-10-11) — рекомендованные тесты легли в тот же changeset; статус обновлён по факту верификации:
+
+1. **Тесты** (`tests/chain_id.rs`, создан в `b9bec04`, 5 тестов):
+   - `cross_chain_tx_rejected_in_mempool` — mainnet-mempool (`create_test_blockchain_for_network(dir, CHAIN_ID_MAINNET)`) отвергает testnet-tx (`chain_id=2`) → `Err(InvalidChainId { expected: CHAIN_ID_MAINNET, got: CHAIN_ID_TESTNET })` + mempool остаётся пустым;
+   - `block_with_foreign_chain_id_tx_rejected` (≈ рекомендованный `cross_chain_tx_rejected_in_validate_and_apply`) — структурно валидный блок (position/hash/tx_root/target OK) с foreign-chain transfer → `add_block` → `Err(InvalidChainId { .. })` на state-machine гейте до любого state-transition;
+   - `correct_chain_tx_accepted` — control: same-chain tx принят, `mempool_len == 1`;
+   - +2 сверх рекомендации: mainnet reward schedule в mining; coinbase-overpay reject.
+2. **Proptest** `chain_id_validation` (`consensus_proptest.rs:197-246`) — таутологичный `x == x` заменён реальным `apply_block(&State::new(), &block, chain_id)`-гейтом: own chain → не `InvalidChainId`; foreign chain → `Err(InvalidChainId { expected, got })`. Рекомендация «реальный вызов `mempool::insert`» выполнена интеграционно через `Blockchain::apply_tx` → mempool в `cross_chain_tx_rejected_in_mempool` (п.1); на proptest-уровне выбран state-machine гейт — он закрывает witness- и rebuild-пути (инвариант #10).
+3. **chain_id из Config**: тесты используют `create_test_blockchain_for_network(db, network_id)` / `bc.chain_id()` — prerequisite п.2 рекомендации (BUG-S1-004) выполнен.
+4. **CI/Changelog**: категория D — отдельный CI job не добавлялся (`cargo test --all` уже запускает `tests/chain_id.rs`); Changelog не обновлялся (precedent BUG-S1-007/008/009).
+5. **Verification (2026-10-12)**: `cargo test --test chain_id` — **5/5 green**; `cargo test -p strangecoin-core --test consensus_proptest` — **9/9 green** (`chain_id_validation` ok); `cargo test --workspace` — **green** (EXIT=0, все suites); `cargo clippy --all-targets -- -D warnings` — **clean**. Cargo-fuzz не требуется (категория D — тестовая; production-код и wire/consensus не затронуты).
 
 ---
 
@@ -754,14 +766,14 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-007 | Golden-векторы блоков таутологичны | M | **fixed** (2026-10-11) | S1.5-P08 |
 | BUG-S1-008 | Мёртвая зависимость `sha2` | L | **fixed** (2026-10-11) | S1.5-P09 |
 | BUG-S1-009 | Нет Wallet round-trip теста | M | **fixed** (2026-10-12) | S1.5-P10 |
-| BUG-S1-010 | Нет теста `InvalidChainId` rejection | M | **open** | S1.5-P10 |
+| BUG-S1-010 | Нет теста `InvalidChainId` rejection | M | **fixed** (2026-10-12) | S1.5-P10 |
 | BUG-S1-011 | Нет теста retarget на высоте 2016 | M | **open** | S1.5-P10 |
 | BUG-S1-012 | `#[allow(dead_code)]` бандажи без TODO | L | **open** | S1.5-P11 |
 | BUG-S1-013 | PGP-ключ — placeholder | H | **open** | ops gate |
 | BUG-S1-014 | `INVARIANTS_ENFORCED.md` Stage 0 арифметика | L | **open** | S1.5-P12 |
 | BUG-S1-015 | Offline genesis key не сгенерирован | C (mainnet) | **open** (ops) | ops gate |
 
-**Итого:** 6 открытых пунктов: 1 Critical, 1 High, 2 Medium, 2 Low + 9 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11; BUG-S1-007, 2026-10-11; BUG-S1-008, 2026-10-11; BUG-S1-009, 2026-10-12).
+**Итого:** 5 открытых пунктов: 1 Critical, 1 High, 1 Medium, 2 Low + 10 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11; BUG-S1-007, 2026-10-11; BUG-S1-008, 2026-10-11; BUG-S1-009, 2026-10-12; BUG-S1-010, 2026-10-12).
 - 1 Critical blocker для mainnet (BUG-S1-015).
 - ~~1 Critical blocker архитектурный (BUG-S1-004 — mainnet-ветка мёртвая)~~ **закрыт 2026-10-11**.
 - ~~1 High сетевой (BUG-S1-005 — per-message RL)~~ **закрыт 2026-10-11** (per-message + per-type buckets).
@@ -770,7 +782,8 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 - ~~1 Medium тестовый (BUG-S1-007 — golden vectors tautology)~~ **закрыт 2026-10-11** (literal hex + hash pin + example).
 - ~~1 Low гигиена (BUG-S1-008 — sha2 dead dep)~~ **закрыт 2026-10-11** (direct-dep удалён; drive-by: flake-фикс proptest из BUG-S1-003).
 - ~~1 Medium тестовый (BUG-S1-009 — Wallet round-trip)~~ **закрыт 2026-10-12** (`tests/wallet.rs`: round-trip new→save→load→sign/verify + wrong password / corrupted keystore / tampered ciphertext / wrong pubkey).
-- Остальные 4 — качество/тесты/гигиена.
+- ~~1 Medium тестовый (BUG-S1-010 — InvalidChainId rejection)~~ **закрыт 2026-10-12** (тесты легли в коммит BUG-S1-004 `b9bec04`: `tests/chain_id.rs` — mempool reject testnet tx + block reject + control accept; таутологичный proptest заменён apply_block-гейтом).
+- Остальные 3 — качество/тесты/гигиена.
 
 ---
 
@@ -796,7 +809,7 @@ BUG-S1-015 (offline genesis key) ──── зависит от ──── B
 
 BUG-S1-006 (size check) ──► independent ──► **закрыт 2026-10-11** (block + per-tx checks в validate_and_apply)
 BUG-S1-005 (per-message RL) ──► independent ──► **закрыт 2026-10-11** (монолит; Stage 2-P03 перенесёт в network crate)
-BUG-S1-007..012 ──► test/quality track ──► параллельно; BUG-S1-009 **закрыт 2026-10-12**
+BUG-S1-007..012 ──► test/quality track ──► параллельно; BUG-S1-009 **закрыт 2026-10-12**; BUG-S1-010 **закрыт 2026-10-12**
 BUG-S1-014 ──► doc-only ──► можно закрыть сразу
 BUG-S1-008 ──► remove `sha2` dep ──► **закрыт 2026-10-11**
 ```
@@ -820,7 +833,7 @@ BUG-S1-008 ──► remove `sha2` dep ──► **закрыт 2026-10-11**
 **Quality track (можно параллельно):**
 9. BUG-S1-007 — Golden vectors
 10. ~~BUG-S1-009 — Wallet round-trip~~ **закрыт 2026-10-12** (`tests/wallet.rs`, 5 тестов)
-11. BUG-S1-010 — `InvalidChainId` test
+11. ~~BUG-S1-010 — `InvalidChainId` test~~ **закрыт 2026-10-12** (тесты в `tests/chain_id.rs`, легли в коммит BUG-S1-004 `b9bec04`)
 12. BUG-S1-011 — Retarget на высоте 2016
 
 **Hygiene track:**
