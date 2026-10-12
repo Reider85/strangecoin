@@ -505,7 +505,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | **Серьёзность** | M (Medium) |
 | **Источник** | audit; P04 КГ |
 | **Категория** | D — тестовая |
-| **Статус** | **open** |
+| **Статус** | **fixed** (2026-10-12) |
 | **Stage target** | Stage 1.5-P10 |
 
 **Факт (по коду, 2026-10-10):**
@@ -528,6 +528,18 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
    - `wallet_sign_verify_with_wrong_pubkey_rejected` — подпись не верифицируется чужим pubkey.
 2. Использовать `TestDir` из `tests/common/mod.rs`.
 3. Добавить в CI как отдельный `cargo test --test wallet`.
+
+**Решение (2026-10-12): `tests/wallet.rs` — round-trip + 4 негативных сценария (test-only)**
+
+1. **Тесты** (`tests/wallet.rs`, новый файл, 5 тестов; production-код не менялся):
+   - `wallet_new_save_load_sign_verify_roundtrip` — `TestDir` → `Wallet::new` → keystore сохранён (`list_keystores` = 1 файл) → `Wallet::load` тем же паролем → pubkey совпадает → `sign(blake3-digest)` → `Wallet::verify(compact[64], digest, loaded_pk)` = **true**;
+   - `wallet_load_rejects_wrong_password` — неверный пароль → `Err(ConfigError)` (AES-GCM decrypt fail);
+   - `wallet_load_rejects_corrupted_keystore` — не-JSON мусор вместо keystore → `Err(ConfigError)`;
+   - `wallet_load_rejects_tampered_ciphertext` — flip 1 байта ciphertext через decode/re-encode base64 (base64 остаётся валидным → load доходит до AES-GCM decrypt и падает по auth-tag; nonce/salt не тронуты — `Nonce::from_slice` паникует на неверной длине) → `Err(ConfigError)`;
+   - `wallet_sign_verify_with_wrong_pubkey_rejected` — подпись wallet A **не** верифицируется pubkey из `test_support::generate_keypair()`; sanity-проверка своим pubkey = true.
+2. **CI (п.3 рекомендации — с оговоркой по прецеденту):** отдельный step `cargo test --test wallet` **не добавлен** — CI уже гоняет `cargo test --all`, который запускает все `tests/*.rs` включая новый `wallet.rs`; тот же rationale зафиксирован при закрытии BUG-S1-007 (п.4: «как отдельный CI job не требуется»).
+3. **Changelog** не обновлялся — прецедент BUG-S1-007/008 (test/hygiene-фиксы категории D/E без Changelog-записей; Changelog пополняется только production-изменениями).
+4. **Verification (2026-10-12):** `cargo test --test wallet` — **5/5 green**; `cargo test --workspace` — **green** (EXIT=0, все suites); `cargo clippy --all-targets -- -D warnings` — **clean**. Cargo-fuzz не требуется (категория D — тестовая; production-код и wire/consensus не затронуты).
 
 ---
 
@@ -741,7 +753,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-006 | Single-block size check отсутствует | H | **fixed** (2026-10-11) | S1.5-P07 |
 | BUG-S1-007 | Golden-векторы блоков таутологичны | M | **fixed** (2026-10-11) | S1.5-P08 |
 | BUG-S1-008 | Мёртвая зависимость `sha2` | L | **fixed** (2026-10-11) | S1.5-P09 |
-| BUG-S1-009 | Нет Wallet round-trip теста | M | **open** | S1.5-P10 |
+| BUG-S1-009 | Нет Wallet round-trip теста | M | **fixed** (2026-10-12) | S1.5-P10 |
 | BUG-S1-010 | Нет теста `InvalidChainId` rejection | M | **open** | S1.5-P10 |
 | BUG-S1-011 | Нет теста retarget на высоте 2016 | M | **open** | S1.5-P10 |
 | BUG-S1-012 | `#[allow(dead_code)]` бандажи без TODO | L | **open** | S1.5-P11 |
@@ -749,7 +761,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-014 | `INVARIANTS_ENFORCED.md` Stage 0 арифметика | L | **open** | S1.5-P12 |
 | BUG-S1-015 | Offline genesis key не сгенерирован | C (mainnet) | **open** (ops) | ops gate |
 
-**Итого:** 7 открытых пунктов: 1 Critical, 1 High, 3 Medium, 2 Low + 8 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11; BUG-S1-007, 2026-10-11; BUG-S1-008, 2026-10-11).
+**Итого:** 6 открытых пунктов: 1 Critical, 1 High, 2 Medium, 2 Low + 9 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11; BUG-S1-007, 2026-10-11; BUG-S1-008, 2026-10-11; BUG-S1-009, 2026-10-12).
 - 1 Critical blocker для mainnet (BUG-S1-015).
 - ~~1 Critical blocker архитектурный (BUG-S1-004 — mainnet-ветка мёртвая)~~ **закрыт 2026-10-11**.
 - ~~1 High сетевой (BUG-S1-005 — per-message RL)~~ **закрыт 2026-10-11** (per-message + per-type buckets).
@@ -757,7 +769,8 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 - 1 High: BUG-S1-013 (PGP, ops).
 - ~~1 Medium тестовый (BUG-S1-007 — golden vectors tautology)~~ **закрыт 2026-10-11** (literal hex + hash pin + example).
 - ~~1 Low гигиена (BUG-S1-008 — sha2 dead dep)~~ **закрыт 2026-10-11** (direct-dep удалён; drive-by: flake-фикс proptest из BUG-S1-003).
-- Остальные 5 — качество/тесты/гигиена.
+- ~~1 Medium тестовый (BUG-S1-009 — Wallet round-trip)~~ **закрыт 2026-10-12** (`tests/wallet.rs`: round-trip new→save→load→sign/verify + wrong password / corrupted keystore / tampered ciphertext / wrong pubkey).
+- Остальные 4 — качество/тесты/гигиена.
 
 ---
 
@@ -783,7 +796,7 @@ BUG-S1-015 (offline genesis key) ──── зависит от ──── B
 
 BUG-S1-006 (size check) ──► independent ──► **закрыт 2026-10-11** (block + per-tx checks в validate_and_apply)
 BUG-S1-005 (per-message RL) ──► independent ──► **закрыт 2026-10-11** (монолит; Stage 2-P03 перенесёт в network crate)
-BUG-S1-007..012 ──► test/quality track ──► параллельно
+BUG-S1-007..012 ──► test/quality track ──► параллельно; BUG-S1-009 **закрыт 2026-10-12**
 BUG-S1-014 ──► doc-only ──► можно закрыть сразу
 BUG-S1-008 ──► remove `sha2` dep ──► **закрыт 2026-10-11**
 ```
@@ -806,7 +819,7 @@ BUG-S1-008 ──► remove `sha2` dep ──► **закрыт 2026-10-11**
 
 **Quality track (можно параллельно):**
 9. BUG-S1-007 — Golden vectors
-10. BUG-S1-009 — Wallet round-trip
+10. ~~BUG-S1-009 — Wallet round-trip~~ **закрыт 2026-10-12** (`tests/wallet.rs`, 5 тестов)
 11. BUG-S1-010 — `InvalidChainId` test
 12. BUG-S1-011 — Retarget на высоте 2016
 
