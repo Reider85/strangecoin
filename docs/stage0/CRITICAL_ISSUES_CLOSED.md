@@ -1,14 +1,17 @@
 # CRITICAL_ISSUES_CLOSED.md — Stage 0
 
-**Source:** `analytics/ARCHITECT2.md` §1.1 (13 critical issues)
+**Source:** `analytics/ARCHITECT2.md` §1.1 (13 critical issues) + 2 rows added by debt prompts D02/D03 («Release pipeline never ran», «Changelog claims non-existent P22 work») = 15 detail rows
 **Date:** 2026-09-28
-**Status:** 10 closed, 3 partially closed, 0 deferred to Stage 1
+**Revision:** 2026-10-13 — BUG-S1-014: header/summary arithmetic corrected (was «10 closed, 3 partially closed, 0 deferred»; detail table tallies 12 closed, 3 partially closed, 0 deferred)
+**Status:** 12 closed, 3 partially closed, 0 deferred
+
+**Source of truth:** this document's detail table is the authoritative Stage 0 critical-issues status (BUG-S1-014). `docs/stage0/STAGE0_SUMMARY.md` §Overview references this table; counts are CI-checked by `scripts/audit/check_stage0_arith.py`.
 
 ## Summary
 
 | Status | Count |
 |--------|-------|
-| Closed | 10 |
+| Closed | 12 |
 | Partially closed | 3 |
 | Deferred | 0 |
 

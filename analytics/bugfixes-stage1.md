@@ -728,7 +728,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | **Серьёзность** | L (Low) |
 | **Источник** | audit; P26 КГ; BUG-S0-024 (родственная, но для Stage 1) |
 | **Категория** | E — документационная |
-| **Статус** | **open** |
+| **Статус** | **fixed** (2026-10-13) |
 | **Stage target** | Stage 1.5-P12 |
 
 **Факт (по коду, 2026-10-10):**
@@ -749,6 +749,15 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 3. Переписать `docs/stage0/STAGE0_SUMMARY.md:19` с согласованной арифметикой.
 4. Добавить cross-reference между тремя документами (либо один-источник, остальные ссылки).
 5. Скрипт-проверка в CI: `python3 scripts/audit/check_stage0_arith.py` — парсит 3 документа, сверяет суммы.
+
+**Решение (2026-10-13): три header'а переписаны по фактическим таблицам + cross-refs + CI-gate**
+
+1. **`docs/stage0/INVARIANTS_ENFORCED.md`:** summary-таблица → `Enforced 17 / Deferred 5 / N/A 0 / **Total** 22` (фактическое распределение таблиц: enforced #1–14,16,17,22; deferred #15,18,19,20,21; N/A — none); label `Deferred (planned Stage 1)` → `Deferred` (#20 — Stage 5, #15/18 — Stage 1.5, старый label был неверен и по составу); добавлена Revision-строка и source-of-truth ссылка (таблицы документа — авторитетный источник; STAGE0_SUMMARY ссылается; CI-gate `check_stage0_arith.py`).
+2. **`docs/stage0/CRITICAL_ISSUES_CLOSED.md`:** header + summary-таблица → `12 closed, 3 partially closed, 0 deferred` (детальная таблица: 11 нумерованных closed + строка D02 «Changelog claims»; partial — #8, #13, строка D03 «Release pipeline»); Source-строка уточнена: 13 original + 2 rows (D02/D03) = 15 detail rows; добавлены Revision-строка и source-of-truth ссылка.
+3. **`docs/stage0/STAGE0_SUMMARY.md:18-19`:** обе metric-строки переписаны с cross-refs: `12 closed, 3 partially closed, 0 deferred — see CRITICAL_ISSUES_CLOSED.md` и `17/22 enforced, 5 deferred, 0 N/A — see INVARIANTS_ENFORCED.md`. Историческое состояние tag-момента (9/3/1, где «1 deferred» = #6 bech32) сохранено в Notes-столбце детальной таблицы (#6 «Closed on Stage 1», #8 «closed by S1-P01»).
+4. **Cross-reference модель:** детальные таблицы (INVARIANTS_ENFORCED, CRITICAL_ISSUES_CLOSED) — источники истины; STAGE0_SUMMARY — указатель; взаимная согласованность защищена CI-gate.
+5. **CI-gate** (`scripts/audit/check_stage0_arith.py` + step в `.github/workflows/ci.yml` job `source-gates`): парсит 3 документа — summary-счётчики == row-счётчики секций; сумма инвариантов == 22 и полное покрытие #1..22 без дублей/пропусков; header `**Status:**` == summary-таблица == detail-таблица; metric-строки STAGE0_SUMMARY == другим двум документам. Python stdlib; exit 1 + отчёт при любом расхождении; без Rust-сборки (прецедент gates BUG-S0-022 / BUG-S1-012).
+6. **Verification (2026-10-13):** doc-only + CI-YAML — cargo-сборка не применялась (precedent BUG-S1-012/013). Симуляция CI-gate на хосте (нет Python; PowerShell-реплика логики скрипта, Select-String/regex): INV sections 17/5/0 sum=22, coverage 1..22 без dupes/missing; CRITICAL header=summary=detail 12/3/0; STAGE0_SUMMARY metric-строки совпадают. Grep-аудит: `4 deferred|1 N/A|10 closed|9/13` — 0 hits вне исторических записей (`analytics/strangecoin_audit_report.md` — источник бага, «Факт»-секции BUG-S1-014, Revision-заметки «was …» в исправленных документах). Реальный запуск скрипта — на CI (ubuntu-latest, python3).
 
 ---
 
@@ -851,11 +860,11 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-011 | Нет теста retarget на высоте 2016 | M | **fixed** (2026-10-13) | S1.5-P10 |
 | BUG-S1-012 | `#[allow(dead_code)]` бандажи без TODO | L | **fixed** (2026-10-13) | S1.5-P11 |
 | BUG-S1-013 | PGP-ключ — placeholder | H | **partially fixed (2026-10-13, doc) / open (ops)** | ops gate |
-| BUG-S1-014 | `INVARIANTS_ENFORCED.md` Stage 0 арифметика | L | **open** | S1.5-P12 |
+| BUG-S1-014 | `INVARIANTS_ENFORCED.md` Stage 0 арифметика | L | **fixed** (2026-10-13) | S1.5-P12 |
 | BUG-S1-015 | Offline genesis key не сгенерирован | C (mainnet) | **open** (ops) | ops gate |
 | BUG-S1-016 | U256-конвертеры в другом limb-порядке (clamp мёртв, PoW garbled) | C | **fixed** (2026-10-13) | S1.5-P10 (с BUG-S1-011) |
 
-**Итого:** 2 открытых пункта (1 Critical, 1 Low) + 1 частично закрытый (BUG-S1-013: doc-side fixed, ops gate открыт) + 13 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11; BUG-S1-007, 2026-10-11; BUG-S1-008, 2026-10-11; BUG-S1-009, 2026-10-12; BUG-S1-010, 2026-10-12; BUG-S1-011, 2026-10-13; BUG-S1-012, 2026-10-13; BUG-S1-016, 2026-10-13).
+**Итого:** 1 открытый пункт (1 Critical) + 1 частично закрытый (BUG-S1-013: doc-side fixed, ops gate открыт) + 14 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11; BUG-S1-007, 2026-10-11; BUG-S1-008, 2026-10-11; BUG-S1-009, 2026-10-12; BUG-S1-010, 2026-10-12; BUG-S1-011, 2026-10-13; BUG-S1-012, 2026-10-13; BUG-S1-014, 2026-10-13; BUG-S1-016, 2026-10-13).
 - 1 Critical blocker для mainnet (BUG-S1-015).
 - ~~1 Critical blocker архитектурный (BUG-S1-004 — mainnet-ветка мёртвая)~~ **закрыт 2026-10-11**.
 - ~~1 High сетевой (BUG-S1-005 — per-message RL)~~ **закрыт 2026-10-11** (per-message + per-type buckets).
@@ -867,7 +876,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 - ~~1 Medium тестовый (BUG-S1-010 — InvalidChainId rejection)~~ **закрыт 2026-10-12** (тесты легли в коммит BUG-S1-004 `b9bec04`: `tests/chain_id.rs` — mempool reject testnet tx + block reject + control accept; таутологичный proptest заменён apply_block-гейтом).
 - ~~1 Medium тестовый (BUG-S1-011 — retarget на 2016)~~ **закрыт 2026-10-13** (`tests/retarget.rs`: height-2016 equality + ×2/÷2 + clamp ×4/÷4 + below-interval inherit; literal-hex эталоны без дублирования формулы; proptest `difficulty_target_clamp` переписан на реальный `compute_target`).
 - ~~1 Critical consensus (BUG-S1-016 — U256 limb-order)~~ **закрыт 2026-10-13** (discovered by BUG-S1-011 clamp-тесты: конвертеры BE-limb vs арифметика LE-limb → retarget clamp молча не срабатывал, `validate_difficulty` сравнивал limb-reversed; фикс: LE-limb конвертеры + `u256_mul_sat` + u64 clamp short-circuit + `tests/u256.rs` 7 regression-тестов).
-- Остальные 2 — качество/гигиена (BUG-S1-012, BUG-S1-014); ~~BUG-S1-012~~ **закрыт 2026-10-13** (удалены 3 мёртвых helper'а, 3 allow обоснованы, 8 await_holding_lock — held-by-design, CI-gate в source-gates).
+- Остальные 2 — качество/гигиена (BUG-S1-012, BUG-S1-014); ~~BUG-S1-012~~ **закрыт 2026-10-13** (удалены 3 мёртвых helper'а, 3 allow обоснованы, 8 await_holding_lock — held-by-design, CI-gate в source-gates); ~~BUG-S1-014~~ **закрыт 2026-10-13** (3 Stage 0 header'а переписаны по фактическим таблицам: invariants 17/5/0, critical issues 12/3/0; cross-refs; CI-gate `check_stage0_arith.py` в source-gates).
 
 ---
 
@@ -895,7 +904,7 @@ BUG-S1-006 (size check) ──► independent ──► **закрыт 2026-10-1
 BUG-S1-005 (per-message RL) ──► independent ──► **закрыт 2026-10-11** (монолит; Stage 2-P03 перенесёт в network crate)
 BUG-S1-007..012 ──► test/quality track ──► параллельно; BUG-S1-009 **закрыт 2026-10-12**; BUG-S1-010 **закрыт 2026-10-12**; BUG-S1-011 **закрыт 2026-10-13** (вместе с BUG-S1-016); BUG-S1-012 **закрыт 2026-10-13** (hygiene: allow-инвентаризация + CI-gate)
 BUG-S1-016 (U256 limb-order) ──► discovered by BUG-S1-011 tests ──► **закрыт 2026-10-13** (LE-limb конвертеры + u256_mul_sat + u64 clamp short-circuit)
-BUG-S1-014 ──► doc-only ──► можно закрыть сразу
+BUG-S1-014 ──► doc-only ──► **закрыт 2026-10-13** (3 header'а переписаны, cross-refs, CI-gate check_stage0_arith.py)
 BUG-S1-008 ──► remove `sha2` dep ──► **закрыт 2026-10-11**
 ```
 
@@ -924,7 +933,7 @@ BUG-S1-008 ──► remove `sha2` dep ──► **закрыт 2026-10-11**
 **Hygiene track:**
 13. ~~BUG-S1-008 — Remove `sha2`~~ **закрыт 2026-10-11**
 14. ~~BUG-S1-012 — `#[allow]` bandaids~~ **закрыт 2026-10-13** (3 мёртвых helper'а удалены; 11 оставшихся allow с обоснованием; CI-gate `source-gates` требует `//`-комментарий над каждым allow)
-15. BUG-S1-014 — Doc arithmetic
+15. ~~BUG-S1-014 — Doc arithmetic~~ **закрыт 2026-10-13** (invariants 17/5/0 of 22, critical issues 12/3/0 — header'ы переписаны по таблицам; STAGE0_SUMMARY metric-строки с cross-refs; CI-gate `python3 scripts/audit/check_stage0_arith.py` в job `source-gates`)
 
 ---
 
@@ -946,7 +955,7 @@ BUG-S1-008 ──► remove `sha2` dep ──► **закрыт 2026-10-11**
 | (none) | BUG-S1-011 | Новый: retarget на 2016 test (audit) — **fixed 2026-10-13**, вскрыл BUG-S1-016 |
 | (none) | BUG-S1-012 | Новый: `#[allow]` без TODO (audit) |
 | (none) | BUG-S1-013 | Новый: PGP placeholder (audit) — **doc-side fixed 2026-10-13**, ops gate remains |
-| (none) | BUG-S1-014 | Новый: doc arithmetic (audit) |
+| (none) | BUG-S1-014 | Новый: doc arithmetic (audit) — **fixed 2026-10-13** (3 Stage 0 header'а + cross-refs + CI-gate) |
 | (none) | BUG-S1-016 | Новый: U256 limb-order inconsistency (discovered during BUG-S1-011) |
 
 ---

@@ -58,6 +58,12 @@ jobs:
           fi
           echo "OK: all dead_code / await_holding_lock allows carry a justification comment"
 
+      # BUG-S1-014: the three Stage 0 summary docs must agree with their own
+      # detail tables and with each other (invariants 17/5/0 of 22; critical
+      # issues 12/3/0). Fails fast without a Rust build.
+      - name: "Gate: Stage 0 summary arithmetic (BUG-S1-014)"
+        run: python3 scripts/audit/check_stage0_arith.py
+
   test:
     name: Test (${{ matrix.os }}, ${{ matrix.rust }})
     strategy:

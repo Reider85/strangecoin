@@ -3,14 +3,18 @@
 **Source:** `analytics/ARCHITECT3.md` §5 (22 invariants)
 **Date:** 2026-09-28
 **Tag:** v1.0.0-stage0
+**Revision:** 2026-10-13 — BUG-S1-014: header arithmetic corrected (was «4 Deferred, 1 N/A»; actual table distribution is 5 Deferred, 0 N/A)
+
+**Source of truth:** this document's tables are the authoritative Stage 0 invariant counts (BUG-S1-014). `docs/stage0/STAGE0_SUMMARY.md` §Overview references this table; counts are CI-checked by `scripts/audit/check_stage0_arith.py`.
 
 ## Summary
 
 | Status | Count |
 |--------|-------|
 | Enforced | 17 |
-| Deferred (planned Stage 1) | 4 |
-| N/A at Stage 0 | 1 |
+| Deferred | 5 |
+| N/A at Stage 0 | 0 |
+| **Total** | **22** |
 
 ## Enforced Invariants
 

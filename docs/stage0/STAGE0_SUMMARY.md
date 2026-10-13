@@ -15,8 +15,8 @@ Stage 0 (Sanitized Prototype) is complete. 22/26 original prompts (P01–P25) we
 | Unit tests | 48 in `src/` |
 | Integration tests | 8 files in `tests/` (D01) |
 | ADRs | 5 (0001–0005) |
-| Critical issues closed | 9/13 fully, 3 partially, 1 deferred |
-| Invariants enforced | 17/22, 4 deferred, 1 N/A |
+| Critical issues closed | 12 closed, 3 partially closed, 0 deferred — see `CRITICAL_ISSUES_CLOSED.md` (BUG-S1-014) |
+| Invariants enforced | 17/22 enforced, 5 deferred, 0 N/A — see `INVARIANTS_ENFORCED.md` (BUG-S1-014) |
 
 ## What Was Done
 
