@@ -267,7 +267,7 @@
 ### P25: Bug bounty + ADR-0003 (hybrid PoW→PoS) (2026-09-17)
 
 - Created `docs/ADR/0003-hybrid-pow-pos.md` — hybrid PoW (Stage 0–6) → PoS (Stage 7+) migration decision
-- Created `docs/security/BOUNTY.md` — bug bounty program: scope, 3 reward tiers ($1k/$10k/$100k), 90-day disclosure, Immunefi setup
+- Created `docs/security/BOUNTY.md` — bug bounty program: scope, 4 reward tiers ($500/$1k/$10k/$100k), 90-day disclosure, Immunefi setup (tier count corrected 2026-10-13, BUG-S1-013: delivered BOUNTY.md had 4 tiers, not the 3 originally planned in P25)
 - Created `docs/security/SECURITY.md` — security contacts, PGP key placeholder, 48h SLA, safe harbor policy
 
 ### P24: Reproducible builds (2026-09-17)

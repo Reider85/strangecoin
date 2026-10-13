@@ -685,7 +685,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | **Серьёзность** | H (High) |
 | **Источник** | audit; P25 КГ (SECURITY.md с PGP key) |
 | **Категория** | G — операционная |
-| **Статус** | **open** |
+| **Статус** | **partially fixed (2026-10-13, doc-side) / open (ops gate)** |
 | **Stage target** | ops gate (до mainnet freeze) |
 
 **Факт (по коду, 2026-10-10):**
@@ -707,6 +707,17 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 5. В `BOUNTY.md` — или привести к 3 tier'ам (удалить $500), или обновить Changelog с правильным количеством.
 6. Зарегистрировать bounty program на Immunefi (или явно удалить претензию из P26 DoD).
 7. После (5) — обновить `STAGE0_SUMMARY.md` и `STAGE1_SUMMARY.md` DoD-критерии #9.
+
+**Решение (2026-10-13): doc-side закрыто; key generation + Immunefi — human ops gate**
+
+1. **Tier-расхождение устранено в пользу фактического артефакта:** BOUNTY.md сохраняет 4 tier'а (Critical $100k / High $10k / Medium $1k / Low $500); `Changelog.md` P25-запись исправлена с «3 reward tiers ($1k/$10k/$100k)» на «4 reward tiers ($500/$1k/$10k/$100k)» с пометкой о коррекции (precedent — коррекция P22-записи в Changelog). Вариант «урезать BOUNTY.md до 3» отклонён: 4-уровневая таблица — нормативная программа, соответствует Immunefi-конвенциям.
+2. **SECURITY.md §2 — placeholder убран, fake armor-блок удалён:** прежний `-----BEGIN PGP PUBLIC KEY BLOCK-----` с текстом `[PLACEHOLDER: ...]` был неимпортируем и вводил в заблуждение; §2 теперь содержит честный ops-gate статус (pending до mainnet launch), 4-пунктовый чек-лист, слот fingerprint `[TBD]` и pointer на `pgp_key.asc` (pending). Таблица контактов и футер обновлены; §2.1 переписан как pointer на процедуру. Версия документа 1.0 → 1.1.
+3. **Процедура зафиксирована в `docs/security/PGP_SETUP.md`:** offline-генерация (RSA 4096 / ed25519, security@strangecoin.io, no expiration) → export pubkey → commit `pgp_key.asc` + fingerprint → keyservers (keys.openpgp.org, keyserver.ubuntu.com) → Immunefi dashboard → verification → §7 closure checklist (9 пунктов, включая обновление этого файла и `STAGE1_SUMMARY §6.8`). Явные non-actions: не генерировать на dev-станции/CI, не оборачивать fingerprint в armor-блок.
+4. **STAGE1_SUMMARY.md §6.8 — новый residual:** PGP key + Immunefi = открытый ops gate со ссылкой на процедуру (требование §9.6 процесса закрытия — «для ops gate багов описать offline-процедуру и записать в §6 статус»).
+5. **Immunefi: претензия из P26 DoD НЕ удалялась** — DoD #9 уже содержит escape-hatch «активна на Immunefi **(или локально подготовлена)**» (`prompt-stage0.md` P26 п.9); локально подготовленная программа документационно закрывает критерий. Регистрация на Immunefi остаётся human action (BOUNTY.md §5.1).
+6. **Drive-by:** `INCIDENT_RESPONSE.md` §3.2 — фантомный URL `immunefi.com/strangecoin` заменён на «pending registration (BOUNTY.md §5.1)»; email `security@strangecoin.org` приведён к `.io` (несоответствие SECURITY.md/BOUNTY.md).
+7. **Статус:** doc-side части закрыты (tier-счётчик, placeholder, процедура, §6.8); генерация ключа, commit `pgp_key.asc`, keyserver upload и Immunefi registration — human ops, баг остаётся **open (ops gate)** до выполнения чек-листа `PGP_SETUP.md §7`. Ограничение среды: gpg на dev-хосте отсутствует, приватный ключ не должен кустариться на сетевой рабочей станции — потому п.1–4 рекомендованного исправления (offline-машина) выполняет maintainer, не агент. Категория G — cargo-сборка не применялась (doc-only); верификация — grep-проверки (см. ниже).
+8. **Verification (2026-10-13):** grep-аудит doc-side (вне исторических записей audit/bugfixes): `PLACEHOLDER` в SECURITY.md — 0; fake armor-блок (`BEGIN PGP PUBLIC KEY BLOCK`) — 0 в SECURITY.md; «3 reward tiers» в Changelog — 0; `security@strangecoin.org` — 0; `immunefi.com/strangecoin` — 0; `pgp_key.asc` упоминается только как pending/ops-gate или в процедурах; статус бага + секция `Решение` присутствуют. `cargo test` не запускался — изменения doc-only (precedent BUG-S1-012: doc-части не требуют workspace-сборки).
 
 ---
 
@@ -839,17 +850,17 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-010 | Нет теста `InvalidChainId` rejection | M | **fixed** (2026-10-12) | S1.5-P10 |
 | BUG-S1-011 | Нет теста retarget на высоте 2016 | M | **fixed** (2026-10-13) | S1.5-P10 |
 | BUG-S1-012 | `#[allow(dead_code)]` бандажи без TODO | L | **fixed** (2026-10-13) | S1.5-P11 |
-| BUG-S1-013 | PGP-ключ — placeholder | H | **open** | ops gate |
+| BUG-S1-013 | PGP-ключ — placeholder | H | **partially fixed (2026-10-13, doc) / open (ops)** | ops gate |
 | BUG-S1-014 | `INVARIANTS_ENFORCED.md` Stage 0 арифметика | L | **open** | S1.5-P12 |
 | BUG-S1-015 | Offline genesis key не сгенерирован | C (mainnet) | **open** (ops) | ops gate |
 | BUG-S1-016 | U256-конвертеры в другом limb-порядке (clamp мёртв, PoW garbled) | C | **fixed** (2026-10-13) | S1.5-P10 (с BUG-S1-011) |
 
-**Итого:** 3 открытых пункта: 1 Critical, 1 High, 1 Low + 13 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11; BUG-S1-007, 2026-10-11; BUG-S1-008, 2026-10-11; BUG-S1-009, 2026-10-12; BUG-S1-010, 2026-10-12; BUG-S1-011, 2026-10-13; BUG-S1-012, 2026-10-13; BUG-S1-016, 2026-10-13).
+**Итого:** 2 открытых пункта (1 Critical, 1 Low) + 1 частично закрытый (BUG-S1-013: doc-side fixed, ops gate открыт) + 13 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11; BUG-S1-007, 2026-10-11; BUG-S1-008, 2026-10-11; BUG-S1-009, 2026-10-12; BUG-S1-010, 2026-10-12; BUG-S1-011, 2026-10-13; BUG-S1-012, 2026-10-13; BUG-S1-016, 2026-10-13).
 - 1 Critical blocker для mainnet (BUG-S1-015).
 - ~~1 Critical blocker архитектурный (BUG-S1-004 — mainnet-ветка мёртвая)~~ **закрыт 2026-10-11**.
 - ~~1 High сетевой (BUG-S1-005 — per-message RL)~~ **закрыт 2026-10-11** (per-message + per-type buckets).
 - ~~1 High сетевой/архитектурный (BUG-S1-006 — size check)~~ **закрыт 2026-10-11** (block + per-tx checks в `validate_and_apply`).
-- 1 High: BUG-S1-013 (PGP, ops).
+- 1 High: BUG-S1-013 (PGP, ops) — **doc-side закрыт 2026-10-13** (placeholder убран, процедура в `PGP_SETUP.md`, tier-счётчик выровнен); key generation + Immunefi — human ops gate, см. `STAGE1_SUMMARY §6.8`.
 - ~~1 Medium тестовый (BUG-S1-007 — golden vectors tautology)~~ **закрыт 2026-10-11** (literal hex + hash pin + example).
 - ~~1 Low гигиена (BUG-S1-008 — sha2 dead dep)~~ **закрыт 2026-10-11** (direct-dep удалён; drive-by: flake-фикс proptest из BUG-S1-003).
 - ~~1 Medium тестовый (BUG-S1-009 — Wallet round-trip)~~ **закрыт 2026-10-12** (`tests/wallet.rs`: round-trip new→save→load→sign/verify + wrong password / corrupted keystore / tampered ciphertext / wrong pubkey).
@@ -875,7 +886,7 @@ BUG-S1-015 (offline genesis key) ──── зависит от ──── B
                                    BUG-S1-001 (release pipeline) ──► первый v* tag push
                                               │
                                               ▼
-                                   BUG-S1-013 (PGP key)
+                                    BUG-S1-013 (PGP key — doc-side closed 2026-10-13; ops key-gen остаётся)
                                               │
                                               ▼
                                    mainnet freeze (block 1)
@@ -902,7 +913,7 @@ BUG-S1-008 ──► remove `sha2` dep ──► **закрыт 2026-10-11**
 **Must-fix до public testnet (High):**
 6. ~~BUG-S1-005 — Per-message rate-limit~~ **закрыт 2026-10-11** (per-message `check_class` в request-loop + per-type buckets: GetHeaders/GetBlocks=100, ChainGossip/Other=30; интеграционный flood-тест)
 7. ~~BUG-S1-006 — Single-block size check~~ **закрыт 2026-10-11** (`serialize_block`/`serialize_transaction_signed` против `MAX_BLOCK_SIZE`/`MAX_TX_SIZE` первыми проверками в `validate_and_apply`; reject 5 MB block / 300 KB tx + positive 3 MB block)
-8. BUG-S1-013 — PGP key + Immunefi
+8. BUG-S1-013 — PGP key + Immunefi — **doc-side закрыт 2026-10-13** (SECURITY.md ops-gate status, `PGP_SETUP.md` процедура, tier-фикс Changelog); осталось human ops: offline keygen + commit `pgp_key.asc` + keyservers + Immunefi (чек-лист `PGP_SETUP.md §7`, `STAGE1_SUMMARY §6.8`)
 
 **Quality track (можно параллельно):**
 9. BUG-S1-007 — Golden vectors
@@ -934,7 +945,7 @@ BUG-S1-008 ──► remove `sha2` dep ──► **закрыт 2026-10-11**
 | (none) | BUG-S1-010 | Новый: InvalidChainId test (audit) |
 | (none) | BUG-S1-011 | Новый: retarget на 2016 test (audit) — **fixed 2026-10-13**, вскрыл BUG-S1-016 |
 | (none) | BUG-S1-012 | Новый: `#[allow]` без TODO (audit) |
-| (none) | BUG-S1-013 | Новый: PGP placeholder (audit) |
+| (none) | BUG-S1-013 | Новый: PGP placeholder (audit) — **doc-side fixed 2026-10-13**, ops gate remains |
 | (none) | BUG-S1-014 | Новый: doc arithmetic (audit) |
 | (none) | BUG-S1-016 | Новый: U256 limb-order inconsistency (discovered during BUG-S1-011) |
 

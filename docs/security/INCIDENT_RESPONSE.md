@@ -64,8 +64,8 @@
 
 | Source | Channel | SLA |
 |--------|---------|-----|
-| Bug Bounty (Immunefi) | immunefi.com/strangecoin | 48h acknowledgment |
-| Security email | security@strangecoin.org | 48h acknowledgment |
+| Bug Bounty (Immunefi) | pending registration (see `BOUNTY.md` §5.1) | 48h acknowledgment |
+| Security email | security@strangecoin.io (PGP key pending — ops gate, see `PGP_SETUP.md`) | 48h acknowledgment |
 | GitHub Issues | security label | 72h triage |
 | Discord #security | Direct message to maintainers | 24h response |
 
