@@ -665,6 +665,17 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 2. Для `#[allow(clippy::await_holding_lock)]` — изучить, реально ли удерживается lock across `.await`. Если да — refactor (переместить lock acquisition после `.await` или в `spawn_blocking`). Если нет — убрать атрибут.
 3. Добавить CI-проверку: `rg "#\[allow\(dead_code\)\]" tests/ src/ --count` → должно быть 0 или только с TODO.
 
+**Решение (2026-10-13): удаление мёртвых helper'ов + обоснование оставшихся allow + CI-gate**
+
+1. **Удалено (3 полностью мёртвых helper'а):**
+   - `tests/common/mod.rs`: `wait_for_event` + `wait_for_block_applied` — использовались только друг другом, ни один тест не вызывал;
+   - `crates/strangecoin-core/tests/state_roundtrip.rs`: `arbitrary_address` — не вызывался (в `consensus_proptest.rs` своя независимая копия, используемая там).
+2. **Обоснованы (3 `#[allow(dead_code)]` в `tests/common/mod.rs`):** рекомендация «убрать allow у используемых в других тестах helpers» неприменима: 20 integration-бинарей через `mod common;` компилируют свою копию модуля; `coinbase_tx`/`craft_child` живы только в `events.rs`/`state_root.rs`, в остальных 18 бинарях lint срабатывает. Над каждым allow — `//`-комментарий с фактическим использованием (P21).
+3. **`#[allow(clippy::await_holding_lock)]` (8 сайтов: network×2, network_id, sync_headers×3, events, rate_limit) — оставлены, рефакторинг отклонён:** анализ подтвердил осознанное удержание `NETWORK_TEST_LOCK` (std Mutex) через весь тест — cross-binary serialization (ADR-0011; зафиксировано ещё в BUG-S0-005 resolution); перенос lock acquisition после `.await` сломал бы инвариант сериализации сетевых тестов. 3 сайта (`network.rs:169`, `sync_headers.rs:86,133`) были без обоснования — добавлен стандартный комментарий, как у остальных 5.
+4. **CI-gate** (`.github/workflows/ci.yml`, job `source-gates`): rg-проверка — каждый `#[allow(dead_code)]`/`#[allow(clippy::await_holding_lock)]` в `src/ tests/ crates/` обязан иметь `//`-комментарий на предыдущей строке; без Rust-сборки, как существующий balances-gate (BUG-S0-022 / S1-P12).
+5. **Итог инвентаризации:** было 14 allow (6 dead_code + 8 await_holding_lock) → стало 11 (3 dead_code + 8 await_holding_lock), все с обоснованием; `src/` — 0 allow.
+6. **Verification (2026-10-13):** `cargo check` — green; `cargo test --workspace` — **green** (EXIT=0, все suites, включая events/state_root с craft_child и state_roundtrip 11/11); `cargo clippy --all-targets -- -D warnings` — **clean**; симуляция CI-gate (Select-String, на хосте нет rg) — **11 hits / 0 violations**. `cargo fmt --check` — предсуществующие расхождения форматирования по всему репо не связаны с правками BUG-S1-012 (мои правки fmt-clean) — отдельный гигиен-вопрос, не в скоупе этого бага. Категория E — отдельный CI job не добавлялся (gate встроен в существующий `source-gates`); Changelog не обновлялся (precedent BUG-S1-007/009/010/011).
+
 ---
 
 ### BUG-S1-013 — PGP-ключ — placeholder, файла `pgp_key.asc` нет
@@ -827,13 +838,13 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-009 | Нет Wallet round-trip теста | M | **fixed** (2026-10-12) | S1.5-P10 |
 | BUG-S1-010 | Нет теста `InvalidChainId` rejection | M | **fixed** (2026-10-12) | S1.5-P10 |
 | BUG-S1-011 | Нет теста retarget на высоте 2016 | M | **fixed** (2026-10-13) | S1.5-P10 |
-| BUG-S1-012 | `#[allow(dead_code)]` бандажи без TODO | L | **open** | S1.5-P11 |
+| BUG-S1-012 | `#[allow(dead_code)]` бандажи без TODO | L | **fixed** (2026-10-13) | S1.5-P11 |
 | BUG-S1-013 | PGP-ключ — placeholder | H | **open** | ops gate |
 | BUG-S1-014 | `INVARIANTS_ENFORCED.md` Stage 0 арифметика | L | **open** | S1.5-P12 |
 | BUG-S1-015 | Offline genesis key не сгенерирован | C (mainnet) | **open** (ops) | ops gate |
 | BUG-S1-016 | U256-конвертеры в другом limb-порядке (clamp мёртв, PoW garbled) | C | **fixed** (2026-10-13) | S1.5-P10 (с BUG-S1-011) |
 
-**Итого:** 4 открытых пункта: 1 Critical, 1 High, 2 Low + 12 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11; BUG-S1-007, 2026-10-11; BUG-S1-008, 2026-10-11; BUG-S1-009, 2026-10-12; BUG-S1-010, 2026-10-12; BUG-S1-011, 2026-10-13; BUG-S1-016, 2026-10-13).
+**Итого:** 3 открытых пункта: 1 Critical, 1 High, 1 Low + 13 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11; BUG-S1-007, 2026-10-11; BUG-S1-008, 2026-10-11; BUG-S1-009, 2026-10-12; BUG-S1-010, 2026-10-12; BUG-S1-011, 2026-10-13; BUG-S1-012, 2026-10-13; BUG-S1-016, 2026-10-13).
 - 1 Critical blocker для mainnet (BUG-S1-015).
 - ~~1 Critical blocker архитектурный (BUG-S1-004 — mainnet-ветка мёртвая)~~ **закрыт 2026-10-11**.
 - ~~1 High сетевой (BUG-S1-005 — per-message RL)~~ **закрыт 2026-10-11** (per-message + per-type buckets).
@@ -845,7 +856,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 - ~~1 Medium тестовый (BUG-S1-010 — InvalidChainId rejection)~~ **закрыт 2026-10-12** (тесты легли в коммит BUG-S1-004 `b9bec04`: `tests/chain_id.rs` — mempool reject testnet tx + block reject + control accept; таутологичный proptest заменён apply_block-гейтом).
 - ~~1 Medium тестовый (BUG-S1-011 — retarget на 2016)~~ **закрыт 2026-10-13** (`tests/retarget.rs`: height-2016 equality + ×2/÷2 + clamp ×4/÷4 + below-interval inherit; literal-hex эталоны без дублирования формулы; proptest `difficulty_target_clamp` переписан на реальный `compute_target`).
 - ~~1 Critical consensus (BUG-S1-016 — U256 limb-order)~~ **закрыт 2026-10-13** (discovered by BUG-S1-011 clamp-тесты: конвертеры BE-limb vs арифметика LE-limb → retarget clamp молча не срабатывал, `validate_difficulty` сравнивал limb-reversed; фикс: LE-limb конвертеры + `u256_mul_sat` + u64 clamp short-circuit + `tests/u256.rs` 7 regression-тестов).
-- Остальные 2 — качество/гигиена (BUG-S1-012, BUG-S1-014).
+- Остальные 2 — качество/гигиена (BUG-S1-012, BUG-S1-014); ~~BUG-S1-012~~ **закрыт 2026-10-13** (удалены 3 мёртвых helper'а, 3 allow обоснованы, 8 await_holding_lock — held-by-design, CI-gate в source-gates).
 
 ---
 
@@ -871,7 +882,7 @@ BUG-S1-015 (offline genesis key) ──── зависит от ──── B
 
 BUG-S1-006 (size check) ──► independent ──► **закрыт 2026-10-11** (block + per-tx checks в validate_and_apply)
 BUG-S1-005 (per-message RL) ──► independent ──► **закрыт 2026-10-11** (монолит; Stage 2-P03 перенесёт в network crate)
-BUG-S1-007..012 ──► test/quality track ──► параллельно; BUG-S1-009 **закрыт 2026-10-12**; BUG-S1-010 **закрыт 2026-10-12**; BUG-S1-011 **закрыт 2026-10-13** (вместе с BUG-S1-016)
+BUG-S1-007..012 ──► test/quality track ──► параллельно; BUG-S1-009 **закрыт 2026-10-12**; BUG-S1-010 **закрыт 2026-10-12**; BUG-S1-011 **закрыт 2026-10-13** (вместе с BUG-S1-016); BUG-S1-012 **закрыт 2026-10-13** (hygiene: allow-инвентаризация + CI-gate)
 BUG-S1-016 (U256 limb-order) ──► discovered by BUG-S1-011 tests ──► **закрыт 2026-10-13** (LE-limb конвертеры + u256_mul_sat + u64 clamp short-circuit)
 BUG-S1-014 ──► doc-only ──► можно закрыть сразу
 BUG-S1-008 ──► remove `sha2` dep ──► **закрыт 2026-10-11**
@@ -901,7 +912,7 @@ BUG-S1-008 ──► remove `sha2` dep ──► **закрыт 2026-10-11**
 
 **Hygiene track:**
 13. ~~BUG-S1-008 — Remove `sha2`~~ **закрыт 2026-10-11**
-14. BUG-S1-012 — `#[allow]` bandaids
+14. ~~BUG-S1-012 — `#[allow]` bandaids~~ **закрыт 2026-10-13** (3 мёртвых helper'а удалены; 11 оставшихся allow с обоснованием; CI-gate `source-gates` требует `//`-комментарий над каждым allow)
 15. BUG-S1-014 — Doc arithmetic
 
 ---

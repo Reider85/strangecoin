@@ -1,42 +1,9 @@
-use std::time::Duration;
-use strangecoin::events::{EventBus, NodeEvent};
 pub use strangecoin::test_support::*;
-
-#[allow(dead_code)]
-pub fn wait_for_event(
-    bus: &EventBus,
-    predicate: impl Fn(&NodeEvent) -> bool,
-    timeout: Duration,
-) -> Option<NodeEvent> {
-    let rx = bus.subscribe();
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        if remaining.is_zero() {
-            return None;
-        }
-        match rx.recv_timeout(remaining) {
-            Ok(event) => {
-                if predicate(&event) {
-                    return Some(event);
-                }
-            }
-            Err(_) => return None,
-        }
-    }
-}
-
-#[allow(dead_code)]
-pub fn wait_for_block_applied(bus: &EventBus, timeout: Duration) -> Option<NodeEvent> {
-    wait_for_event(
-        bus,
-        |e| matches!(e, NodeEvent::BlockApplied { .. }),
-        timeout,
-    )
-}
 
 /// Replay `prefix` from an empty state with the pure core executor — the same
 /// reconstruction `StateCache::rebuild_from_chain` performs on adoption.
+// Called by craft_child below; the allow covers the test binaries that
+// compile `mod common;` but never reach it (P21 / BUG-S1-012).
 #[allow(dead_code)]
 pub fn walk_state(prefix: &[strangecoin::Block]) -> strangecoin_core::state::State {
     let mut state = strangecoin_core::state::State::new();
@@ -52,6 +19,8 @@ pub fn walk_state(prefix: &[strangecoin::Block]) -> strangecoin_core::state::Sta
 }
 
 /// A zero-amount coinbase — every non-genesis block needs one.
+// Used by tests/events.rs and tests/state_root.rs; the allow covers the
+// remaining test binaries that compile `mod common;` (P21 / BUG-S1-012).
 #[allow(dead_code)]
 pub fn coinbase_tx(receiver: &str, amount: u64) -> strangecoin::Transaction {
     strangecoin::Transaction {
@@ -69,6 +38,8 @@ pub fn coinbase_tx(receiver: &str, amount: u64) -> strangecoin::Transaction {
 /// post-state root: canonical `tx_root` first, then `state_root` over the
 /// applied state, then the header hash (S1-P19; the genesis target is maximal
 /// and inherited until the first retarget, so the proof of work passes as-is).
+// Used by tests/events.rs and tests/state_root.rs; the allow covers the
+// remaining test binaries that compile `mod common;` (P21 / BUG-S1-012).
 #[allow(dead_code)]
 pub fn craft_child(
     prefix: &[strangecoin::Block],

@@ -166,6 +166,8 @@ async fn real_network_three_nodes() {
     }
 }
 
+// The NETWORK_TEST_LOCK std Mutex is held for the whole test by design
+// (cross-binary serialization); nothing on this runtime contends for it.
 #[allow(clippy::await_holding_lock)]
 #[tokio::test(flavor = "multi_thread")]
 async fn real_network_fast_registration_race() {

@@ -83,6 +83,8 @@ async fn new_node_syncs_20_blocks_via_headers_first() {
     );
 }
 
+// The NETWORK_TEST_LOCK std Mutex is held for the whole test by design
+// (cross-binary serialization); nothing on this runtime contends for it.
 #[allow(clippy::await_holding_lock)]
 #[tokio::test(flavor = "multi_thread")]
 async fn equal_chain_reports_nothing_better() {
@@ -130,6 +132,8 @@ async fn equal_chain_reports_nothing_better() {
     assert_eq!(client_bc.chain_len(), 4);
 }
 
+// The NETWORK_TEST_LOCK std Mutex is held for the whole test by design
+// (cross-binary serialization); nothing on this runtime contends for it.
 #[allow(clippy::await_holding_lock)]
 #[tokio::test(flavor = "multi_thread")]
 async fn longer_fork_resolved_via_headers_first() {

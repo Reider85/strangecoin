@@ -4,11 +4,6 @@ use strangecoin_core::types::{Block, Transaction};
 
 use proptest::prelude::*;
 
-#[allow(dead_code)]
-fn arbitrary_address() -> impl Strategy<Value = String> {
-    "[a-z]{3,8}".prop_map(|s| format!("addr_{}", s))
-}
-
 fn make_state(balances: Vec<(String, u64)>) -> State {
     let mut state = State::new();
     for (addr, bal) in balances {

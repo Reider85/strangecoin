@@ -33,6 +33,31 @@ jobs:
           fi
           echo "OK: 0 direct balances mutations outside state_cache/block_executor/chain_selector"
 
+      # BUG-S1-012 / P21: #[allow(dead_code)] and #[allow(clippy::await_holding_lock)]
+      # are permitted only with a // justification comment on the preceding line.
+      - name: "Gate: allow(dead_code)/await_holding_lock must be justified (BUG-S1-012)"
+        run: |
+          set -euo pipefail
+          violations=0
+          while IFS= read -r hit; do
+            file="${hit%%:*}"
+            rest="${hit#*:}"
+            line="${rest%%:*}"
+            prev=$(sed -n "$((line - 1))p" "$file" | sed 's/^[[:space:]]*//')
+            case "$prev" in
+              //*) ;;
+              *)
+                echo "Unjustified allow at $hit"
+                violations=1
+                ;;
+            esac
+          done < <(rg -n '#\[allow\((dead_code|clippy::await_holding_lock)\)\]' src/ tests/ crates/ --glob '*.rs' || true)
+          if [ "$violations" -ne 0 ]; then
+            echo "Each #[allow(dead_code)] / #[allow(clippy::await_holding_lock)] needs a // justification comment on the previous line (P21 / BUG-S1-012)"
+            exit 1
+          fi
+          echo "OK: all dead_code / await_holding_lock allows carry a justification comment"
+
   test:
     name: Test (${{ matrix.os }}, ${{ matrix.rust }})
     strategy:
