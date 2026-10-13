@@ -27,24 +27,31 @@ pub const MAX_RBF_REPLACEMENTS: u32 = 10;
 
 pub type U256 = [u64; 4];
 
+/// Limb order is little-endian: `words[0]` is the least-significant 64 bits —
+/// the layout `u256_mul`/`u256_div`/`u256_gt` operate on. The byte slice is
+/// standard big-endian, so the first 8 bytes map to `words[3]` (BUG-S1-016:
+/// converters previously stored limbs in BE order, which made the arithmetic
+/// helpers compare and scale a limb-reversed value — the retarget clamp in
+/// `compute_target` never engaged and `validate_difficulty` did not implement
+/// a numeric `hash <= target`).
 pub fn u256_from_bytes(bytes: &[u8; 32]) -> U256 {
     let mut words = [0u64; 4];
     let (chunks, _) = bytes.as_chunks::<8>();
     for (i, chunk) in chunks.iter().enumerate() {
-        words[i] = u64::from_be_bytes(*chunk);
+        words[3 - i] = u64::from_be_bytes(*chunk);
     }
     words
 }
 
 pub fn u256_from_u64(v: u64) -> U256 {
-    [0, 0, 0, v]
+    [v, 0, 0, 0]
 }
 
 pub fn u256_to_bytes(v: U256) -> [u8; 32] {
     let mut bytes = [0u8; 32];
     for (i, word) in v.iter().enumerate() {
         let word_bytes = word.to_be_bytes();
-        bytes[i * 8..(i + 1) * 8].copy_from_slice(&word_bytes);
+        bytes[(3 - i) * 8..(4 - i) * 8].copy_from_slice(&word_bytes);
     }
     bytes
 }
@@ -135,6 +142,23 @@ pub fn u256_min(a: U256, b: U256) -> U256 {
     a
 }
 
+/// `a * b` saturating at `U256::MAX` instead of silently wrapping.
+/// The retarget ceiling `prev_target * 4` must never wrap: a wrapped ceiling
+/// lands below the `prev_target / 4` floor and makes the clamp in
+/// [`compute_target`] return a value below the minimum (BUG-S1-016).
+pub fn u256_mul_sat(a: U256, b: U256) -> U256 {
+    if a == [0, 0, 0, 0] || b == [0, 0, 0, 0] {
+        return [0, 0, 0, 0];
+    }
+    let product = u256_mul(a, b);
+    // Overflow check: (a*b)/b must recover a exactly.
+    if u256_div(product, b) == a {
+        product
+    } else {
+        [u64::MAX; 4]
+    }
+}
+
 pub fn u256_max(a: U256, b: U256) -> U256 {
     for i in (0..4).rev() {
         if a[i] > b[i] {
@@ -214,14 +238,24 @@ pub fn compute_target(prev_blocks: &[Block]) -> [u8; 32] {
     prev_target_arr.copy_from_slice(&prev_target_bytes);
 
     let prev_u256 = u256_from_bytes(&prev_target_arr);
-    let actual_u256 = u256_from_u64(actual_time);
-    let expected_u256 = u256_from_u64(expected_time);
-
-    let numerator = u256_mul(prev_u256, actual_u256);
-    let new_target = u256_div(numerator, expected_u256);
-
-    let max_target = u256_mul(prev_u256, u256_from_u64(MAX_TARGET_CHANGE_FACTOR));
     let min_target = u256_div(prev_u256, u256_from_u64(MAX_TARGET_CHANGE_FACTOR));
+    // Ceiling saturates instead of wrapping (u256_mul_sat): a wrapped
+    // `prev * 4` would sit below the `prev / 4` floor and the clamp could
+    // return a target below the minimum (BUG-S1-016).
+    let max_target = u256_mul_sat(prev_u256, u256_from_u64(MAX_TARGET_CHANGE_FACTOR));
+
+    // Decide the clamp bounds from the u64 ratio before touching the u256
+    // multiply: outside [1/4, 4] the answer is a bound, and returning early
+    // keeps near-max targets from wrapping the numerator (BUG-S1-016).
+    if actual_time >= expected_time.saturating_mul(MAX_TARGET_CHANGE_FACTOR) {
+        return u256_to_bytes(max_target);
+    }
+    if actual_time.saturating_mul(MAX_TARGET_CHANGE_FACTOR) <= expected_time {
+        return u256_to_bytes(min_target);
+    }
+
+    let numerator = u256_mul(prev_u256, u256_from_u64(actual_time));
+    let new_target = u256_div(numerator, u256_from_u64(expected_time));
     let clamped = u256_min(u256_max(new_target, min_target), max_target);
 
     u256_to_bytes(clamped)

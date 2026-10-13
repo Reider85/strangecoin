@@ -593,7 +593,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | **Серьёзность** | M (Medium) |
 | **Источник** | audit; P08 КГ |
 | **Категория** | D — тестовая |
-| **Статус** | **open** |
+| **Статус** | **fixed** (2026-10-13) |
 | **Stage target** | Stage 1.5-P10 |
 
 **Факт (по коду, 2026-10-10):**
@@ -615,6 +615,20 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
    - Сравнить с эталоном (тот же sliding window расчёт в тесте).
 2. Дополнительно: тест с разными фактическими times (300s, 1200s, 6000s) → проверка clamp [prev/4, prev*4].
 3. Запускать через `cargo test --test retarget` — должен быть < 5s.
+
+**Решение (2026-10-13): `tests/retarget.rs` + обнаружен и исправлен production consensus-баг BUG-S1-016**
+
+1. **Тесты** (`tests/retarget.rs`, новый файл, 6 тестов; хелпер `chain_with_spacing` строит цепочку без PoW/хешей — `compute_target` читает только timestamp и target):
+   - `compute_target_at_height_2016` — 2016 блоков, spacing 600s (= TARGET_BLOCK_TIME) → ratio 1.0 → target возвращается **byte-for-byte** (сравнение с literal hex, формула не дублируется);
+   - `retarget_doubles_target_when_blocks_twice_as_slow` — 1200s → ×2 (точная арифметика степеней двойки);
+   - `retarget_halves_target_when_blocks_twice_as_fast` — 300s → ÷2;
+   - `retarget_clamps_at_max_factor` — 6000s (ratio 10) → clamp ×4;
+   - `retarget_clamps_at_min_factor` — 75s (ratio ⅛) → clamp ÷4;
+   - `no_retarget_below_interval` — 2015 блоков → inherit parent target.
+2. **Production-баг, вскрытый тестами** — clamp-тесты упали: `compute_target` вернул raw ratio 10× без clamp. Корневая причина — **endian-инконсистентность U256-хелперов** (`consensus.rs`): конвертеры `u256_from_bytes`/`u256_to_bytes`/`u256_from_u64` хранят limbs в BE-порядке, а арифметика (`u256_mul`/`u256_div`/`u256_gt`/`u256_min`/`u256_max`) — в LE. Ratio-арифметика случайно корректна (факторы сокращаются в div), а clamp-границы и `validate_difficulty` сравнивают limb-reversed значения. Описан подробно в **BUG-S1-016** (новая запись ниже) — фикс применён совместно.
+3. **Proptest усилен по рекомендации аудита** (п.1 «сравнение с эталоном» + критика «пересчитывает формулу сам»): `difficulty_target_clamp` (`consensus_proptest.rs`) переписан — теперь вызывает **реальный** `compute_target` на синтетической цепочке из 2016 блоков и проверяет clamp-инварианты против `u256_mul_sat`/`u256_div`-границ; диапазон timespan расширен до 10M (покрывает max-clamp ветку).
+4. **CI/Changelog**: категория D — отдельный CI job не добавлялся (`cargo test --all` запускает `tests/retarget.rs`); Changelog не обновлялся (precedent BUG-S1-007/009/010).
+5. **Verification (2026-10-13)**: `cargo test --test retarget` — **6/6 green** (< 0.05s); `cargo test -p strangecoin-core --test u256` — **7/7 green**; `cargo test -p strangecoin-core --test consensus_proptest` — **9/9 green**; `cargo test --workspace` — **green** (EXIT=0, все suites); `cargo clippy --all-targets -- -D warnings` — **clean**. Cargo-fuzz не требуется (категория D + consensus-фикс BUG-S1-016 покрыт детерминированными тестами).
 
 ---
 
@@ -753,6 +767,51 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 
 ---
 
+### BUG-S1-016 — U256-конвертеры в другом limb-порядке, чем арифметика (endian inconsistency)
+
+| Поле | Значение |
+|------|----------|
+| **Серьёзность** | C (Critical) — consensus |
+| **Источник** | discovered during BUG-S1-011 (retarget-тесты упали на clamp) |
+| **Категория** | B — криптографическая / C — консенсус |
+| **Статус** | **fixed** (2026-10-13) |
+| **Stage target** | S1.5-P10 (вместе с BUG-S1-011) |
+
+**Факт (по коду, 2026-10-13):**
+- `crates/strangecoin-core/src/consensus.rs` — U256 = `[u64; 4]`, но две группы функций использовали **разные limb-порядки**:
+  - Конвертеры `u256_from_bytes` / `u256_to_bytes` / `u256_from_u64` — **BE-limb** (`words[0]` = старшие 8 байт; `from_u64(v) = [0,0,0,v]`);
+  - Арифметика `u256_mul` / `u256_div` / `u256_add` / `u256_gt` / `u256_le` / `u256_min` / `u256_max` / `u256_shl1` — **LE-limb** (`words[0]` = младший).
+- **Следствие 1 (retarget clamp мёртв):** в `compute_target` ratio-арифметика случайно корректна (фактор `2^192` из `from_u64` сокращается в div), но clamp-границы `prev*4` / `prev/4` живут в `words[3]`, а результат ratio — в `words[0]` → `u256_min`/`u256_max` сравнивают «через limbs» и clamp **никогда не срабатывает**. Тест BUG-S1-011 `retarget_clamps_at_max_factor` это доказал: ratio 10× проходил без clamp (`0x0a00` в первом limb).
+- **Следствие 2 (PoW-правило garbled):** `validate_difficulty` / `validate_header_pow` / mining-loop сравнивают `u256_from_bytes(hash)` с `u256_from_bytes(target)` через `u256_gt`/`u256_le` — численно это **limb-reversed сравнение**, не `hash <= target`. Для real-world target'ов с leading zeros PoW-правило фактически не ограничивает хеш (Mitigation V-05 / инвариант #3 формально выполнялся, семантически — нет).
+- **Следствие 3 (fork choice):** `work_from_target` → `cumulative_work` → `chain_selector` — work-значения и их сравнения вычислялись в garbled-порядке; при разных target'ах в цепочке порядок cumulative work мог инвертироваться относительно истинного.
+- **Следствие 4 (clamp overflow edge):** даже после endian-фикса `prev_target * 4` переполняет u256 для prev ≥ 2^254 (regtest-специфика: genesis target = `0xffff…ff`); wrap-нутая ceiling < floor → clamp возвращал target ниже минимума. Proptest `difficulty_target_clamp` это поймал (minimal input: prev_target top-byte 193).
+- Wire-формат не затронут: `target` в блоках — hex BE-строка, менялся только внутренний limb-порядок после decode.
+
+**Ожидание:**
+- `u256_from_bytes`/`to_bytes`/`from_u64` обязаны отдавать/принимать значения в том же limb-порядке, в котором работают `mul`/`div`/`gt`/`min`/`max`.
+- Clamp `[prev/4, prev*4]` в `compute_target` обязан срабатывать на всех допустимых target'ах, включая regtest max-target.
+- `validate_difficulty` обязан реализовывать численное `hash <= target`.
+
+**Решение (2026-10-13): LE-limb конвертеры + saturating ceiling + u64 short-circuit (вместе с BUG-S1-011)**
+
+1. **Конвертеры → LE-limb** (`consensus.rs`):
+   - `u256_from_bytes`: `words[3 - i] = u64::from_be_bytes(chunk_i)` (первые 8 BE-байт → `words[3]` = старший limb);
+   - `u256_to_bytes`: обратная индексация `(3 - i) * 8`;
+   - `u256_from_u64(v) = [v, 0, 0, 0]` (младший limb);
+   - Doc-comment фиксирует конвенцию ссылкой на BUG-S1-016.
+2. **`u256_mul_sat`** (новая pub-fn): saturating multiply — переполнение детектируется как `(a*b)/b != a`; ceiling clamp в `compute_target` теперь `u256_mul_sat(prev, 4)` → при prev ≥ 2^254 возвращает `U256::MAX` вместо wrap.
+3. **`compute_target` u64 short-circuit**: clamp-границы decide'ятся по u64-отношению `actual_time` к `expected_time` **до** u256-умножения (`actual >= 4*expected` → ceiling; `4*actual <= expected` → floor) — устраняет переполнение numerator для near-max target'ов и делает clamp точным на границах.
+4. **Regression-тесты конвертеров** (`crates/strangecoin-core/tests/u256.rs`, новый файл, 7 тестов): limb-placement, bytes-roundtrip, from_u64≡from_bytes, mul-без-overflow, численный ordering, add/div, `work_from_target` numeric difficulty.
+5. **Proptest `difficulty_target_clamp` переписан** (по прямой рекомендации BUG-S1-011 «не пересчитывать формулу сам»): вызывает реальный `compute_target` на синтетической цепочке из 2016 блоков; timespan-диапазон расширен до 10M (покрытие max-clamp ветки).
+6. **Chain-compat анализ:** mainnet/testnet genesis не используют U256-конвертеры в wire-путях, где старый и новый порядок различались бы на существующих данных; regtest-цепочки с `0xffff…ff`/`0x7fff…ff`/нулевым target'ом дают идентичные результаты до/после (symmetric/zero patterns). Cumulative work пересчитывается из chain при загрузке (`state_cache.rs:268`, `chain_selector.rs:227`) — stale garbled-значения не переживают рестарт.
+7. **Verification (2026-10-13):** `cargo test --test retarget` — **6/6 green**; `cargo test -p strangecoin-core --test u256` — **7/7 green**; `cargo test -p strangecoin-core --test consensus_proptest` — **9/9 green** (включая переписанный `difficulty_target_clamp` + сохранённые proptest-regression seeds); `cargo test --workspace` — **green** (EXIT=0); `cargo clippy --all-targets -- -D warnings` — **clean**.
+
+**Residual / follow-up:**
+- V-04 mitigation «clamp factor 4x» (THREAT_MODEL) теперь реально enforced — обновить строку V-04 при следующем THREAT_MODEL review.
+- Инвариант #3 (`hash <= target`, INVARIANTS_ENFORCED.md) семантически исправлен — строка таблицы не требует правки (локации те же), но формулировка «via U256 arithmetic» теперь соответствует действительности.
+
+---
+
 ## 4. Сводная таблица
 
 | BUG ID | Title | Severity | Status | Stage |
@@ -767,13 +826,14 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-008 | Мёртвая зависимость `sha2` | L | **fixed** (2026-10-11) | S1.5-P09 |
 | BUG-S1-009 | Нет Wallet round-trip теста | M | **fixed** (2026-10-12) | S1.5-P10 |
 | BUG-S1-010 | Нет теста `InvalidChainId` rejection | M | **fixed** (2026-10-12) | S1.5-P10 |
-| BUG-S1-011 | Нет теста retarget на высоте 2016 | M | **open** | S1.5-P10 |
+| BUG-S1-011 | Нет теста retarget на высоте 2016 | M | **fixed** (2026-10-13) | S1.5-P10 |
 | BUG-S1-012 | `#[allow(dead_code)]` бандажи без TODO | L | **open** | S1.5-P11 |
 | BUG-S1-013 | PGP-ключ — placeholder | H | **open** | ops gate |
 | BUG-S1-014 | `INVARIANTS_ENFORCED.md` Stage 0 арифметика | L | **open** | S1.5-P12 |
 | BUG-S1-015 | Offline genesis key не сгенерирован | C (mainnet) | **open** (ops) | ops gate |
+| BUG-S1-016 | U256-конвертеры в другом limb-порядке (clamp мёртв, PoW garbled) | C | **fixed** (2026-10-13) | S1.5-P10 (с BUG-S1-011) |
 
-**Итого:** 5 открытых пунктов: 1 Critical, 1 High, 1 Medium, 2 Low + 10 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11; BUG-S1-007, 2026-10-11; BUG-S1-008, 2026-10-11; BUG-S1-009, 2026-10-12; BUG-S1-010, 2026-10-12).
+**Итого:** 4 открытых пункта: 1 Critical, 1 High, 2 Low + 12 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11; BUG-S1-007, 2026-10-11; BUG-S1-008, 2026-10-11; BUG-S1-009, 2026-10-12; BUG-S1-010, 2026-10-12; BUG-S1-011, 2026-10-13; BUG-S1-016, 2026-10-13).
 - 1 Critical blocker для mainnet (BUG-S1-015).
 - ~~1 Critical blocker архитектурный (BUG-S1-004 — mainnet-ветка мёртвая)~~ **закрыт 2026-10-11**.
 - ~~1 High сетевой (BUG-S1-005 — per-message RL)~~ **закрыт 2026-10-11** (per-message + per-type buckets).
@@ -783,7 +843,9 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 - ~~1 Low гигиена (BUG-S1-008 — sha2 dead dep)~~ **закрыт 2026-10-11** (direct-dep удалён; drive-by: flake-фикс proptest из BUG-S1-003).
 - ~~1 Medium тестовый (BUG-S1-009 — Wallet round-trip)~~ **закрыт 2026-10-12** (`tests/wallet.rs`: round-trip new→save→load→sign/verify + wrong password / corrupted keystore / tampered ciphertext / wrong pubkey).
 - ~~1 Medium тестовый (BUG-S1-010 — InvalidChainId rejection)~~ **закрыт 2026-10-12** (тесты легли в коммит BUG-S1-004 `b9bec04`: `tests/chain_id.rs` — mempool reject testnet tx + block reject + control accept; таутологичный proptest заменён apply_block-гейтом).
-- Остальные 3 — качество/тесты/гигиена.
+- ~~1 Medium тестовый (BUG-S1-011 — retarget на 2016)~~ **закрыт 2026-10-13** (`tests/retarget.rs`: height-2016 equality + ×2/÷2 + clamp ×4/÷4 + below-interval inherit; literal-hex эталоны без дублирования формулы; proptest `difficulty_target_clamp` переписан на реальный `compute_target`).
+- ~~1 Critical consensus (BUG-S1-016 — U256 limb-order)~~ **закрыт 2026-10-13** (discovered by BUG-S1-011 clamp-тесты: конвертеры BE-limb vs арифметика LE-limb → retarget clamp молча не срабатывал, `validate_difficulty` сравнивал limb-reversed; фикс: LE-limb конвертеры + `u256_mul_sat` + u64 clamp short-circuit + `tests/u256.rs` 7 regression-тестов).
+- Остальные 2 — качество/гигиена (BUG-S1-012, BUG-S1-014).
 
 ---
 
@@ -809,7 +871,8 @@ BUG-S1-015 (offline genesis key) ──── зависит от ──── B
 
 BUG-S1-006 (size check) ──► independent ──► **закрыт 2026-10-11** (block + per-tx checks в validate_and_apply)
 BUG-S1-005 (per-message RL) ──► independent ──► **закрыт 2026-10-11** (монолит; Stage 2-P03 перенесёт в network crate)
-BUG-S1-007..012 ──► test/quality track ──► параллельно; BUG-S1-009 **закрыт 2026-10-12**; BUG-S1-010 **закрыт 2026-10-12**
+BUG-S1-007..012 ──► test/quality track ──► параллельно; BUG-S1-009 **закрыт 2026-10-12**; BUG-S1-010 **закрыт 2026-10-12**; BUG-S1-011 **закрыт 2026-10-13** (вместе с BUG-S1-016)
+BUG-S1-016 (U256 limb-order) ──► discovered by BUG-S1-011 tests ──► **закрыт 2026-10-13** (LE-limb конвертеры + u256_mul_sat + u64 clamp short-circuit)
 BUG-S1-014 ──► doc-only ──► можно закрыть сразу
 BUG-S1-008 ──► remove `sha2` dep ──► **закрыт 2026-10-11**
 ```
@@ -834,7 +897,7 @@ BUG-S1-008 ──► remove `sha2` dep ──► **закрыт 2026-10-11**
 9. BUG-S1-007 — Golden vectors
 10. ~~BUG-S1-009 — Wallet round-trip~~ **закрыт 2026-10-12** (`tests/wallet.rs`, 5 тестов)
 11. ~~BUG-S1-010 — `InvalidChainId` test~~ **закрыт 2026-10-12** (тесты в `tests/chain_id.rs`, легли в коммит BUG-S1-004 `b9bec04`)
-12. BUG-S1-011 — Retarget на высоте 2016
+12. ~~BUG-S1-011 — Retarget на высоте 2016~~ **закрыт 2026-10-13** (`tests/retarget.rs`, 6 тестов; вскрыл production-баг BUG-S1-016 — U256 limb-order — исправлен вместе)
 
 **Hygiene track:**
 13. ~~BUG-S1-008 — Remove `sha2`~~ **закрыт 2026-10-11**
@@ -858,10 +921,11 @@ BUG-S1-008 ──► remove `sha2` dep ──► **закрыт 2026-10-11**
 | (none) | BUG-S1-008 | Новый: sha2 dead dep (audit) |
 | (none) | BUG-S1-009 | Новый: wallet round-trip test (audit) |
 | (none) | BUG-S1-010 | Новый: InvalidChainId test (audit) |
-| (none) | BUG-S1-011 | Новый: retarget на 2016 test (audit) |
+| (none) | BUG-S1-011 | Новый: retarget на 2016 test (audit) — **fixed 2026-10-13**, вскрыл BUG-S1-016 |
 | (none) | BUG-S1-012 | Новый: `#[allow]` без TODO (audit) |
 | (none) | BUG-S1-013 | Новый: PGP placeholder (audit) |
 | (none) | BUG-S1-014 | Новый: doc arithmetic (audit) |
+| (none) | BUG-S1-016 | Новый: U256 limb-order inconsistency (discovered during BUG-S1-011) |
 
 ---
 

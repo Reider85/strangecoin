@@ -1,15 +1,15 @@
 use proptest::prelude::*;
 use secp256k1::{ecdsa::RecoverableSignature, PublicKey, Secp256k1, SecretKey};
 use strangecoin_core::consensus::{
-    u256_div, u256_from_bytes, u256_from_u64, u256_gt, u256_le, u256_max, u256_min, u256_mul,
+    compute_target, u256_div, u256_from_bytes, u256_from_u64, u256_le, u256_mul, u256_mul_sat,
     validate_nonce, CHAIN_ID_REGTEST, MAX_TARGET_CHANGE_FACTOR, RETARGET_INTERVAL,
-    TARGET_BLOCK_TIME,
 };
 use strangecoin_core::error::CoreError;
 use strangecoin_core::economics::emission::{
     block_reward_at_height_for_chain, HALVING_INTERVAL, INITIAL_REWARD, MAX_SUPPLY_PRE_TAIL,
 };
 use strangecoin_core::serialize;
+use strangecoin_core::types::Block;
 use strangecoin_core::Transaction;
 
 fn arbitrary_public_key() -> impl Strategy<Value = PublicKey> {
@@ -118,7 +118,7 @@ fn arbitrary_target() -> impl Strategy<Value = [u8; 32]> {
 }
 
 fn arbitrary_timespan() -> impl Strategy<Value = u64> {
-    1u64..1_000_000u64
+    1u64..10_000_000u64
 }
 
 proptest! {
@@ -178,19 +178,33 @@ proptest! {
 
     #[test]
     fn difficulty_target_clamp(prev_target in arbitrary_target(), timespan in arbitrary_timespan()) {
+        // BUG-S1-011/016: drive the real `compute_target` over a full
+        // retarget window instead of re-deriving its formula. The window's
+        // first/last timestamps span `timespan`, everything else is inert.
+        let target_hex = hex::encode(prev_target);
+        let last_index = RETARGET_INTERVAL as usize - 1;
+        let chain: Vec<Block> = (0..RETARGET_INTERVAL as usize)
+            .map(|i| Block {
+                index: i as u64,
+                timestamp: if i == last_index { timespan } else { 0 },
+                transactions: Vec::new(),
+                previous_hash: String::new(),
+                hash: String::new(),
+                nonce: 0,
+                target: target_hex.clone(),
+                consensus_version: 1,
+                state_root: [0u8; 32],
+                tx_root: [0u8; 32],
+            })
+            .collect();
+
+        let clamped = u256_from_bytes(&compute_target(&chain));
         let prev_u256 = u256_from_bytes(&prev_target);
-        let actual_u256 = u256_from_u64(timespan);
-        let expected_u256 = u256_from_u64(TARGET_BLOCK_TIME * (RETARGET_INTERVAL - 1));
-
-        let numerator = u256_mul(prev_u256, actual_u256);
-        let new_target = u256_div(numerator, expected_u256);
-
-        let max_target = u256_mul(prev_u256, u256_from_u64(MAX_TARGET_CHANGE_FACTOR));
+        let max_target = u256_mul_sat(prev_u256, u256_from_u64(MAX_TARGET_CHANGE_FACTOR));
         let min_target = u256_div(prev_u256, u256_from_u64(MAX_TARGET_CHANGE_FACTOR));
-        let clamped = u256_min(u256_max(new_target, min_target), max_target);
 
-        prop_assert!(!u256_gt(clamped, max_target), "Clamped target should not exceed max (factor 4)");
-        prop_assert!(!u256_gt(min_target, clamped), "Clamped target should not be below min (factor 4)");
+        prop_assert!(u256_le(clamped, max_target), "Clamped target should not exceed max (factor 4)");
+        prop_assert!(u256_le(min_target, clamped), "Clamped target should not be below min (factor 4)");
     }
 
     #[test]

@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc c6a235d276b793ca3612d670dedd8590ffe50706237a68dc19162e42f1047efb # shrinks to prev_target = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 4], timespan = 1
 cc ddb6587a9550321a8222c2e2263ab796e210685f7cfde1db20056b5509bf8e30 # shrinks to a = [119962535220508394, 508862529167479478, 3079313555280417260, 822647807], b = [2113040495771634673, 1578425759915149851, 12618202682069, 0]
+cc b0acb212a3952d05531413d6cbde03866f9f78dbe41e654cd5a8697044a7f2e2 # shrinks to prev_target = [193, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], timespan = 1
