@@ -612,7 +612,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | **Stage 0 Mitigation** | Осознанный компромисс для Stage 0/testnet. Комментарий в коде: «Real offline key will be used before mainnet freeze». На testnet/regtest генезисные средства не имеют реальной ценности. |
 | **Mitigation (закрыто S1.5-P01 / BUG-S0-015)** | `genesis_keypair()` и seed-строка **удалены** из `src/consensus/mod.rs`; `genesis.json` содержит только `initial_holder_pubkey`. SCIP-0001 (`docs/SCIP/scip-0001-genesis-key-replacement.md`) фиксирует offline-ключ как обязательный gate до mainnet freeze. Тест `tests/genesis_key.rs`: genesis валидируется по `EXPECTED_GENESIS_HASH` без секрета в коде + regression-guard на seed-строку. |
 | **Stage** | Pre-mainnet (SCIP-0001) |
-| **Residual Risk** | **Высокий** для любой публичной цепочки, запущенной с текущим testnet-генезисом. Residual: genesis key derived from `"strangecoin-genesis-seed-2026"`; **BURNED** (pubkey остался в testnet `genesis.json`); replacement via **SCIP-0001 mandatory before block 1 of mainnet**. Код больше не хранит секрет; замена ключа — операционный шаг (offline key → новый pubkey → новый `EXPECTED_GENESIS_HASH`). |
+| **Residual Risk** | **Высокий** для любой публичной цепочки, запущенной с текущим testnet-генезисом. Residual: genesis key derived from `"strangecoin-genesis-seed-2026"`; **BURNED** (pubkey остался в testnet `genesis.json`); replacement via **SCIP-0001 mandatory before block 1 of mainnet**. Код больше не хранит секрет; замена ключа — операционный шаг (offline key → новый pubkey → новый `EXPECTED_GENESIS_HASH`). Offline-keygen tooling готов (2026-10-14, BUG-S1-015): `examples/generate_offline_genesis_key.rs` — исполнение ops-gate остаётся human action на air-gapped машине. |
 | **Monitoring** | Мониторинг genesis-транзакций в mainnet; alert на любой mainnet-запуск без SCIP-0001-подписи. |
 
 ---
@@ -890,7 +890,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | V-28 (Config leakage) | config (P15) | gap: нет теста на secrets в config | ⚠️ gap |
 | V-29 (Genesis manipulation) | consensus (hash) | `tests/common/mod.rs::genesis_validation`; panic-guard при mismatch | ✅ D01 |
 | V-30 (Nonce manipulation) | mempool (nonce) | `tests/double_spend.rs` | ✅ D01 |
-| V-31 (Genesis key) | consensus (load_genesis pubkey-only) + SCIP-0001 | `tests/genesis_key.rs` (hash без секрета в коде, pubkey-only genesis.json, seed regression-guard); offline key — pre-mainnet ops (SCIP-0001) | ✅ code (S1.5-P01); ⚠️ ops (→ mainnet freeze) |
+| V-31 (Genesis key) | consensus (load_genesis pubkey-only) + SCIP-0001 | `tests/genesis_key.rs` (hash без секрета в коде, pubkey-only genesis.json, seed regression-guard); offline key — pre-mainnet ops (SCIP-0001); keygen tooling: `examples/generate_offline_genesis_key.rs` (2026-10-14) | ✅ code (S1.5-P01); ⚠️ ops (→ mainnet freeze) |
 | V-32 (Grant blocks) | consensus (validate_chain) + Config flag | `tests/grant_flag.rs` (4 теста), `tests/emission.rs`, `tests/block_executor.rs::grant_block_needs_the_opt_in_flag` | ✅ S1-P01 |
 | V-33 (Release pipeline) | CI/CD (D03 fix + BUG-S1-001) | run 38071514479 (v0.0.1-rc1) green: 6 builds + SLSA L3 + cosign + SHA256SUMS; cosign verify-blob OK, slsa-verifier PASSED @ a830c51 | ✅ BUG-S1-001 (2026-10-10) |
 | V-34 (Headers-first poisoning) | network/sync.rs + consensus | `tests/sync_headers.rs::new_node_syncs_20_blocks_via_headers_first`, `::equal_chain_reports_nothing_better`, `::longer_fork_resolved_via_headers_first` | ✅ S1-P16 |

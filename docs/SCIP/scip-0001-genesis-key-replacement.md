@@ -37,6 +37,7 @@ before mainnet freeze (BUG-S0-015 / S1.5-P01).
 | Testnet chain | Continues with the burned key's pubkey — testnet/regtest value only |
 | `EXPECTED_GENESIS_HASH` | Still pins the testnet genesis built from the burned pubkey |
 | Regression guard | `tests/genesis_key.rs` fails if the seed string reappears in consensus source |
+| Offline keygen tooling | `examples/generate_offline_genesis_key.rs` (2026-10-14, BUG-S1-015): pubkey→stdout, privkey→file/stderr — §4 primary path |
 
 ## Specification
 
@@ -80,6 +81,24 @@ any future testnet reset the same offline procedure applies.
 
 ### 4. Offline generation procedure (operators)
 
+**Primary path — repository example (uses the node's own secp256k1 stack):**
+
+```text
+# On an air-gapped machine:
+# 1. Generate key; pubkey goes to stdout (redirect to a file), privkey to vault media
+cargo run --release --example generate_offline_genesis_key -- genesis_privkey.hex > genesis_pubkey.txt
+# 2. Copy genesis_privkey.hex to physical vault (paper + steel plate), then
+#    delete the local copy. Never copy it to the repo host.
+# 3. On the build host: put the pubkey from genesis_pubkey.txt into
+#    genesis.json as initial_holder_pubkey (0x-prefixed).
+```
+
+The example refuses to overwrite an existing privkey file, never prints the
+secret to stdout, and prints only the 33-byte compressed pubkey (`0x`-hex)
+to stdout — safe to redirect per the command above.
+
+**Alternative — openssl:**
+
 ```text
 # On an air-gapped machine (example; any secp256k1 tool is fine):
 # 1. Generate key
@@ -91,8 +110,8 @@ openssl ec -in genesis.key -pubout -conv_form compressed -outform DER | tail -c 
 #    as initial_holder_pubkey (0x-prefixed).
 ```
 
-Alternative: a one-off Rust example or hardware wallet export may be used; the
-rule is the same — **pubkey in git, secret offline**.
+Any secp256k1 tool or hardware wallet export may be used; the rule is the
+same — **pubkey in git, secret offline**.
 
 ## Rationale
 
@@ -119,5 +138,7 @@ rule is the same — **pubkey in git, secret offline**.
 - `genesis.json` — `initial_holder_pubkey`
 - `tests/genesis_key.rs` — node validates `EXPECTED_GENESIS_HASH` without any
   secret in code; seed-string regression guard
+- `examples/generate_offline_genesis_key.rs` — offline keygen tooling
+  (BUG-S1-015, 2026-10-14): pubkey→stdout, privkey→file/stderr
 - `docs/security/THREAT_MODEL.md` — V-31 residual risk
 - `analytics/bugfixes-stage0.md` — BUG-S0-015

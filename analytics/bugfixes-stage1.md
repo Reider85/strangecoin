@@ -768,7 +768,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | **Серьёзность** | C (Critical) для mainnet |
 | **Источник** | SCIP-0001; BUG-S0-015 (код закрыт, ops — нет); audit |
 | **Категория** | G — операционная / B — криптографическая |
-| **Статус** | **open** (ops gate) |
+| **Статус** | **partially fixed (2026-10-14, tooling) / open (ops)** |
 | **Stage target** | ops gate (до mainnet freeze / block 1) |
 
 **Факт (по коду, 2026-10-10):**
@@ -795,6 +795,18 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 7. Commit + tag `v1.0.0-mainnet-freeze` (или `v1.0.0-rc1`).
 8. Публично объявить BURN тестnet key.
 9. После (8) — обновить `STAGE1_SUMMARY.md §6.1` статус с 🟡 на ✅.
+
+**Решение (2026-10-14): tooling + docs закрыты; offline keygen остаётся human ops**
+
+1. **`examples/generate_offline_genesis_key.rs` (новый):** генерирует свежий secp256k1-ключ через `SecretKey::new(&mut OsRng)`; stdout — только сжатый pubkey (33 bytes, `0x`-hex, одна строка, безопасно редиректить в `genesis_pubkey.txt`); privkey — hex-файл через позиционный аргумент с `create_new(true)` (никогда не перезаписывает) либо stderr с warning-баннером при отсутствии аргумента; privkey **никогда** не попадает в stdout; `--help`; doc-comment фиксирует air-gap контракт (SCIP-0001 §1/§4).
+2. **`docs/SCIP/scip-0001-genesis-key-replacement.md`:** §4 — Rust-example объявлен primary path (команда с `-- genesis_privkey.hex > genesis_pubkey.txt`), openssl понижен до alternative; Current-state таблица + Reference Implementation дополнены example'ом.
+3. **Документация:** `STAGE1_SUMMARY.md §6.1` и `THREAT_MODEL.md` V-31 дополнены ссылкой на tooling; `Changelog.md` — подсекция1.1.1.
+4. **Не сделано (намеренно, human ops):** ключ не сгенерирован — SCIP-0001 §4 требует air-gapped машину, генерация на сетевом dev-хосте нарушила бы контракт; `genesis.json:initial_holder_pubkey` и `EXPECTED_GENESIS_HASH` не тронуты (testnet genesis стабилен, тесты зелёные).
+5. **Остаток ops (шаги 3–9 «Рекомендуемого исправления» выше):** air-gapped прогон example → vault privkey → pubkey в `genesis.json` → `--print-genesis-hash` → новый `EXPECTED_GENESIS_HASH` → `cargo test --test genesis_key` → tag `v1.0.0-mainnet-freeze` → burn-announce → `STAGE1_SUMMARY §6.1` 🟡→✅.
+6. **Verification (2026-10-14):** `cargo check`, `cargo build --examples`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace` — green; прогон example: stdout = `0x` + 64 hex (02/03-префикс, 33 bytes), privkey-файл variant + no-overwrite refusal проверены, временные артефакты удалены; `git diff` подтверждает: `genesis.json`/`consensus.rs` (`EXPECTED_GENESIS_HASH`) не изменены.
+
+**Residual / follow-up:**
+- Human ops (шаги 3–9 выше) — закрывает BUG-S1-015 и снимает 🟡 в `STAGE1_SUMMARY §6.1`; блокирует mainnet freeze.
 
 ---
 
@@ -861,11 +873,11 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 | BUG-S1-012 | `#[allow(dead_code)]` бандажи без TODO | L | **fixed** (2026-10-13) | S1.5-P11 |
 | BUG-S1-013 | PGP-ключ — placeholder | H | **partially fixed (2026-10-13, doc) / open (ops)** | ops gate |
 | BUG-S1-014 | `INVARIANTS_ENFORCED.md` Stage 0 арифметика | L | **fixed** (2026-10-13) | S1.5-P12 |
-| BUG-S1-015 | Offline genesis key не сгенерирован | C (mainnet) | **open** (ops) | ops gate |
+| BUG-S1-015 | Offline genesis key не сгенерирован | C (mainnet) | **partially fixed (2026-10-14, tooling) / open (ops)** | ops gate |
 | BUG-S1-016 | U256-конвертеры в другом limb-порядке (clamp мёртв, PoW garbled) | C | **fixed** (2026-10-13) | S1.5-P10 (с BUG-S1-011) |
 
-**Итого:** 1 открытый пункт (1 Critical) + 1 частично закрытый (BUG-S1-013: doc-side fixed, ops gate открыт) + 14 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11; BUG-S1-007, 2026-10-11; BUG-S1-008, 2026-10-11; BUG-S1-009, 2026-10-12; BUG-S1-010, 2026-10-12; BUG-S1-011, 2026-10-13; BUG-S1-012, 2026-10-13; BUG-S1-014, 2026-10-13; BUG-S1-016, 2026-10-13).
-- 1 Critical blocker для mainnet (BUG-S1-015).
+**Итого:** 0 полностью открытых + 2 частично закрытых (BUG-S1-013: doc-side fixed, ops gate открыт; BUG-S1-015: tooling fixed 2026-10-14, offline keygen — human ops) + 14 fixed (BUG-S1-001, 2026-10-10; BUG-S1-002, 2026-10-11; BUG-S1-003, 2026-10-11; BUG-S1-004, 2026-10-11; BUG-S1-005, 2026-10-11; BUG-S1-006, 2026-10-11; BUG-S1-007, 2026-10-11; BUG-S1-008, 2026-10-11; BUG-S1-009, 2026-10-12; BUG-S1-010, 2026-10-12; BUG-S1-011, 2026-10-13; BUG-S1-012, 2026-10-13; BUG-S1-014, 2026-10-13; BUG-S1-016, 2026-10-13).
+- 1 Critical ops-gate для mainnet (BUG-S1-015: tooling закрыт 2026-10-14 — `examples/generate_offline_genesis_key.rs`; human ops остаётся: air-gapped keygen → vault → `genesis.json` + `EXPECTED_GENESIS_HASH` → tag, см. §3 «Решение»).
 - ~~1 Critical blocker архитектурный (BUG-S1-004 — mainnet-ветка мёртвая)~~ **закрыт 2026-10-11**.
 - ~~1 High сетевой (BUG-S1-005 — per-message RL)~~ **закрыт 2026-10-11** (per-message + per-type buckets).
 - ~~1 High сетевой/архитектурный (BUG-S1-006 — size check)~~ **закрыт 2026-10-11** (block + per-tx checks в `validate_and_apply`).
@@ -883,7 +895,7 @@ rg "sha2::|Sha256|sha2::Sha256" crates/strangecoin-core/src/
 ## 5. Карта зависимостей
 
 ```
-BUG-S1-015 (offline genesis key) ──── зависит от ──── BUG-S1-004 (chain_id from Config)
+BUG-S1-015 (offline genesis key; tooling 2026-10-14, ops keygen остаётся) ──── зависит от ──── BUG-S1-004 (chain_id from Config)
                                               │
                                               ▼
                                    BUG-S1-002 (state_root opt-out)
@@ -914,7 +926,7 @@ BUG-S1-008 ──► remove `sha2` dep ──► **закрыт 2026-10-11**
 
 **Must-fix до mainnet freeze (Critical):**
 1. ~~BUG-S1-004 — `current_chain_id()` from Config (архитектурный prerequisite)~~ **закрыт 2026-10-11** (chain_id из Config через Blockchain/BlockView/Mempool; per-network genesis; state-machine gate; per-tx block reject)
-2. BUG-S1-015 — Offline genesis key (ops gate, блокирует mainnet; prerequisite BUG-S1-004 снят)
+2. BUG-S1-015 — Offline genesis key (ops gate, блокирует mainnet; prerequisite BUG-S1-004 снят; **tooling 2026-10-14**: `examples/generate_offline_genesis_key.rs` + SCIP-0001 §4 primary path — остался human ops: air-gapped keygen → vault → genesis rebuild)
 3. ~~BUG-S1-002 — `state_root` opt-out (инвариант #19)~~ **закрыт 2026-10-11** (SCIP-0002 draft, mainnet/testnet reject + regtest opt-in)
 4. ~~BUG-S1-003 — `verify_block_stateless` post-root (инвариант #19)~~ **закрыт 2026-10-11** (вариант A′: mulproof-update пересчёт post-root из parent root + witness + блока; `PostStateRootMismatch`; покрытие touched-адресов)
 5. ~~BUG-S1-001 — Release pipeline first run (инвариант #22)~~ **закрыт 2026-10-10** (тег `v0.0.1-rc1`, run 38071514479 green)

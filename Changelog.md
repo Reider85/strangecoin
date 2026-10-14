@@ -4,7 +4,7 @@
 
 **Status**: In progress  
 **Date**: 2026-10-08  
-**Prompts**: S1.5-P02 (BUG-S0-011/014/016), S1.5-P04 (BUG-S0-018/019), S1.5-P01 (BUG-S0-015), BUG-S0-020, BUG-S1-001, BUG-S1-002, BUG-S1-003, BUG-S1-005, BUG-S1-006
+**Prompts**: S1.5-P02 (BUG-S0-011/014/016), S1.5-P04 (BUG-S0-018/019), S1.5-P01 (BUG-S0-015), BUG-S0-020, BUG-S1-001, BUG-S1-002, BUG-S1-003, BUG-S1-005, BUG-S1-006, BUG-S1-015 (tooling)
 
 ### BUG-S0-011: Sparse Merkle Tree replaces flat «Verkle»
 
@@ -114,6 +114,14 @@
 - Docs: invariant #7 locations + tests updated; THREAT_MODEL V-13 mitigation; `bugfixes-stage1.md` status → fixed
 - No new SCIP: completing the already-declared invariant #7 / P12 limits — wire constants unchanged, every wire-accepted block was already ≤ 4 MiB (no chain-split risk); only the internal validation path was closed
 - Closes **BUG-S1-006** (High, audit/P12)
+
+### BUG-S1-015: offline genesis keygen tooling — ops gate remains (2026-10-14)
+
+- New `examples/generate_offline_genesis_key.rs`: generates a fresh secp256k1 key (`SecretKey::new(&mut OsRng)`); stdout = compressed pubkey only (33 bytes, `0x`-hex, one line — safe to redirect to `genesis_pubkey.txt`); private key hex → optional file argument via `create_new(true)` (never overwrites) or stderr with a warning banner when omitted; the secret never touches stdout
+- `docs/SCIP/scip-0001-genesis-key-replacement.md` §4: Rust example is now the **primary** offline path; openssl path demoted to alternative; Current-state + Reference Implementation updated
+- Docs: `STAGE1_SUMMARY.md §6.1` (tooling noted, status stays 🟡); THREAT_MODEL V-31 residual + test-map row; `bugfixes-stage1.md` status → partially fixed (tooling) / open (ops)
+- **Not in this change (human ops, air-gapped machine):** running the example for the real mainnet key, vaulting the privkey, replacing `genesis.json:initial_holder_pubkey`, recomputing `EXPECTED_GENESIS_HASH`, tagging `v1.0.0-mainnet-freeze` — required before mainnet freeze/block 1 (SCIP-0001 §3)
+- Partially closes **BUG-S1-015** (tooling side; ops keygen remains the mainnet blocker)
 
 ## 1.1.0 — Stage 1 (core extracted + Verkle + headers-first)
 
