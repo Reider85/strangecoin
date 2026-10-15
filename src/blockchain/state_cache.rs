@@ -57,14 +57,14 @@ impl StateCache {
     pub fn balance(&self, address: &str) -> u64 {
         self.accounts
             .get(address)
-            .map(|account| account.balance)
+            .map(|account| account.balance())
             .unwrap_or(0)
     }
 
     pub fn nonce(&self, address: &str) -> u64 {
         self.accounts
             .get(address)
-            .map(|account| account.nonce)
+            .map(|account| account.nonce())
             .unwrap_or(0)
     }
 
@@ -97,14 +97,14 @@ impl StateCache {
     }
 
     pub fn total_supply(&self) -> u64 {
-        self.accounts.values().map(|account| account.balance).sum()
+        self.accounts.values().map(|account| account.balance()).sum()
     }
 
     pub fn nonzero_balances(&self) -> HashMap<String, u64> {
         self.accounts
             .iter()
-            .filter(|(_, account)| account.balance != 0)
-            .map(|(address, account)| (address.clone(), account.balance))
+            .filter(|(_, account)| account.balance() != 0)
+            .map(|(address, account)| (address.clone(), account.balance()))
             .collect()
     }
 
@@ -129,10 +129,8 @@ impl StateCache {
     }
 
     pub fn credit(&mut self, address: &str, amount: u64) {
-        self.accounts
-            .entry(address.to_string())
-            .or_default()
-            .balance += amount;
+        let account = self.accounts.entry(address.to_string()).or_default();
+        account.set_balance(account.balance().saturating_add(amount));
     }
 
     pub fn ensure_account(&mut self, address: &str) {
@@ -242,10 +240,7 @@ pub(crate) fn open_blockchain(port: u16, chain_id: u32) -> Blockchain {
 
     let loaded = load_persisted_state(&blockchain.storage);
     for tx in loaded.mempool_txs {
-        let account = AccountState {
-            balance: 0,
-            nonce: 0,
-        };
+        let account = AccountState::default();
         let _ = blockchain.mempool.insert(tx, &account);
     }
     if let Some(chain) = loaded.chain {
@@ -297,15 +292,7 @@ pub(crate) fn load_persisted_state(storage: &crate::storage::Storage) -> Persist
             serde_json::from_slice::<HashMap<String, u64>>(&v).ok().map(|legacy| {
                 legacy
                     .into_iter()
-                    .map(|(address, balance)| {
-                        (
-                            address,
-                            AccountState {
-                                balance,
-                                nonce: 0,
-                            },
-                        )
-                    })
+                    .map(|(address, balance)| (address, AccountState::eoa(balance, 0)))
                     .collect()
             })
         }
@@ -499,7 +486,7 @@ impl Blockchain {
             return;
         }
         let placeholder_amount = match self.balances.get("initial_wallet_address") {
-            Some(a) => a.balance,
+            Some(a) => a.balance(),
             None => return,
         };
         let real_wallets: Vec<String> = self
@@ -512,7 +499,7 @@ impl Blockchain {
             return;
         }
         let wallet = &real_wallets[0];
-        if self.balances.get(wallet).map(|a| a.balance).unwrap_or(0) != 0 {
+        if self.balances.get(wallet).map(|a| a.balance()).unwrap_or(0) != 0 {
             return;
         }
         self.create_grant_block(wallet, placeholder_amount);
@@ -551,7 +538,7 @@ impl Blockchain {
                 unchanged_count += 1;
                 addr.clone()
             };
-            *new_balances.entry(new_addr).or_insert(0u64) += account.balance;
+            *new_balances.entry(new_addr).or_insert(0u64) += account.balance();
         }
 
         if migrated_count > 0 {
@@ -561,7 +548,7 @@ impl Blockchain {
             );
             let mut new_accounts = HashMap::new();
             for (addr, balance) in new_balances {
-                new_accounts.insert(addr, AccountState { balance, nonce: 0 });
+                new_accounts.insert(addr, AccountState::eoa(balance, 0));
             }
             self.balances = StateCache::from_accounts(new_accounts);
         }

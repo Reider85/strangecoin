@@ -2,11 +2,11 @@ use std::collections::HashMap;
 
 use crate::economics::emission::block_reward_at_height_for_chain;
 use crate::error::CoreError;
-use crate::types::{AccountState, Block, Transaction};
+use crate::types::{Account, Block, Transaction};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct State {
-    pub balances: HashMap<String, AccountState>,
+    pub balances: HashMap<String, Account>,
 }
 
 impl State {
@@ -15,36 +15,60 @@ impl State {
     }
 
     pub fn get_balance(&self, addr: &str) -> u64 {
-        self.balances.get(addr).map(|a| a.balance).unwrap_or(0)
+        self.balances.get(addr).map(|a| a.balance()).unwrap_or(0)
     }
 
     pub fn get_nonce(&self, addr: &str) -> u64 {
-        self.balances.get(addr).map(|a| a.nonce).unwrap_or(0)
+        self.balances.get(addr).map(|a| a.nonce()).unwrap_or(0)
+    }
+
+    pub fn get_account(&self, addr: &str) -> Option<&Account> {
+        self.balances.get(addr)
     }
 
     pub fn total_supply(&self) -> u64 {
-        self.balances.values().map(|a| a.balance).sum()
+        self.balances.values().map(|a| a.balance()).sum()
     }
 
+    /// Set the balance, preserving the account variant: crediting or
+    /// debiting a contract account must not turn it into an EOA (S1.5-P07).
     pub fn set_balance(&mut self, addr: &str, balance: u64) {
-        self.balances.entry(addr.to_string()).or_default().balance = balance;
+        self.balances
+            .entry(addr.to_string())
+            .or_default()
+            .set_balance(balance);
         self.prune_if_empty(addr);
     }
 
     pub fn set_nonce(&mut self, addr: &str, nonce: u64) {
-        self.balances.entry(addr.to_string()).or_default().nonce = nonce;
+        self.balances
+            .entry(addr.to_string())
+            .or_default()
+            .set_nonce(nonce);
         self.prune_if_empty(addr);
     }
 
-    /// An account with neither balance nor nonce carries no information: every
-    /// read path defaults a missing account to `AccountState { 0, 0 }`. Keeping
-    /// the state free of empty accounts is what makes `apply`/`unapply` an exact
-    /// round-trip, which reorg and state-cache invalidation depend on.
+    /// Install `account` at `addr` verbatim (contract deploy path, S1.5-P07);
+    /// an empty account removes the entry.
+    pub fn set_account(&mut self, addr: &str, account: Account) {
+        if account.is_empty() {
+            self.balances.remove(addr);
+        } else {
+            self.balances.insert(addr.to_string(), account);
+        }
+    }
+
+    /// An empty account ([`Account::is_empty`]: EOA `(0, 0)`, phantom
+    /// contract) carries no information: every read path defaults a missing
+    /// account to the empty EOA. Keeping the state free of empty accounts is
+    /// what makes `apply`/`unapply` an exact round-trip, which reorg and
+    /// state-cache invalidation depend on. Deployed contract accounts are
+    /// never empty — their code_hash pins them in the state.
     fn prune_if_empty(&mut self, addr: &str) {
         let empty = self
             .balances
             .get(addr)
-            .is_some_and(|account| account.balance == 0 && account.nonce == 0);
+            .is_some_and(|account| account.is_empty());
         if empty {
             self.balances.remove(addr);
         }

@@ -124,10 +124,7 @@ impl<'de> Deserialize<'de> for Blockchain {
         // adopts via `try_adopt_candidate` (BUG-S1-004).
         let mut mempool = crate::mempool::Mempool::new(strangecoin_core::consensus::CHAIN_ID_REGTEST);
         for tx in pending_transactions.into_iter().chain(mempool_txs) {
-            let account = AccountState {
-                balance: 0,
-                nonce: 0,
-            };
+            let account = AccountState::default();
             let _ = mempool.insert(tx, &account);
         }
         let storage = crate::storage::Storage::new(&db_path).map_err(serde::de::Error::custom)?;
@@ -194,8 +191,8 @@ pub(crate) fn try_adopt_candidate(
         if !wire_balances.is_empty() {
             let wire_nonzero: HashMap<String, u64> = wire_balances
                 .iter()
-                .filter(|(_, acc)| acc.balance != 0)
-                .map(|(addr, acc)| (addr.clone(), acc.balance))
+                .filter(|(_, acc)| acc.balance() != 0)
+                .map(|(addr, acc)| (addr.clone(), acc.balance()))
                 .collect();
             if wire_nonzero != rebuilt.nonzero_balances() {
                 warn!("Candidate balances disagree with chain reconstruction; rejecting");

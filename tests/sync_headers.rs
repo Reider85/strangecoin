@@ -194,7 +194,7 @@ async fn longer_fork_resolved_via_headers_first() {
     for (addr, expected) in &server_state {
         assert_eq!(
             client_bc.get_balance(addr),
-            expected.balance,
+            expected.balance(),
             "balance mismatch after reorg for {}",
             addr
         );

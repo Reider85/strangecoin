@@ -7,13 +7,16 @@
 //! Construction:
 //! * key = `blake3(address)` (32 bytes = 256 bits)
 //! * binary tree, depth 256: level `i` branches on bit `i` (MSB of byte 0 first)
-//! * leaf hash = `blake3(key ‖ balance_le ‖ nonce_le)`; empty slot = `EMPTY_HASH`
+//! * leaf hash: EOA = `blake3(key ‖ balance_le ‖ nonce_le)` (unchanged from
+//!   Stage 0/1, S1.5-P07); contract = `blake3(key ‖ 0x01 ‖ code_hash ‖
+//!   storage_root ‖ balance_le ‖ nonce_le)`; empty slot = `EMPTY_HASH`
 //! * internal node = `blake3(left ‖ right)`
 //! * proof = 256 sibling hashes (8 KiB), one per level
 //!
 //! `prove(address, account)` consumes `account` (BUG-S0-016): the claimed
-//! account is validated against the trie state; a pruned account
-//! (`balance == 0 && nonce == 0`) is proven by the empty slot (`EMPTY_HASH`).
+//! account is validated against the trie state; an empty account
+//! ([`Account::is_empty`]: EOA `(0, 0)`, phantom contract) is proven by the
+//! empty slot (`EMPTY_HASH`).
 //! A mismatch between the claimed account and the trie returns
 //! `CoreError::ProofAccountMismatch`. True Verkle/KZG remains deferred to
 //! Stage 3+ per ADR-0006.
@@ -24,7 +27,7 @@ use std::sync::OnceLock;
 use blake3::Hasher;
 
 use crate::error::CoreError;
-use crate::types::AccountState;
+use crate::types::Account;
 
 const DEPTH: usize = 256;
 
@@ -50,11 +53,28 @@ fn account_key_hash(address: &str) -> [u8; 32] {
     hash_bytes(address.as_bytes())
 }
 
-fn account_leaf_hash(key_hash: &[u8; 32], account: &AccountState) -> [u8; 32] {
+/// Domain-separation tag for the contract-account leaf preimage (S1.5-P07).
+/// The EOA preimage (48 bytes) and the tagged contract preimage (113 bytes)
+/// differ in length and first-byte-after-key, so the two encodings cannot
+/// collide.
+const CONTRACT_LEAF_TAG: u8 = 0x01;
+
+fn account_leaf_hash(key_hash: &[u8; 32], account: &Account) -> [u8; 32] {
     let mut hasher = Hasher::new();
     hasher.update(key_hash);
-    hasher.update(&account.balance.to_le_bytes());
-    hasher.update(&account.nonce.to_le_bytes());
+    match account {
+        Account::Eoa(eoa) => {
+            hasher.update(&eoa.balance.to_le_bytes());
+            hasher.update(&eoa.nonce.to_le_bytes());
+        }
+        Account::Contract(contract) => {
+            hasher.update(&[CONTRACT_LEAF_TAG]);
+            hasher.update(&contract.code_hash);
+            hasher.update(&contract.storage_root);
+            hasher.update(&contract.balance.to_le_bytes());
+            hasher.update(&contract.nonce.to_le_bytes());
+        }
+    }
     *hasher.finalize().as_bytes()
 }
 
@@ -89,9 +109,9 @@ fn sibling_path(key: &[u8; 32], level: usize) -> [u8; 32] {
 }
 
 /// Leaf hash of `account` at `key`, or [`EMPTY_HASH`] when the account is
-/// pruned (`balance == 0 && nonce == 0` — absent from the trie).
-fn leaf_hash_for(key: &[u8; 32], account: &AccountState) -> [u8; 32] {
-    if account.balance == 0 && account.nonce == 0 {
+/// empty (absent from the trie — see [`Account::is_empty`]).
+fn leaf_hash_for(key: &[u8; 32], account: &Account) -> [u8; 32] {
+    if account.is_empty() {
         EMPTY_HASH
     } else {
         account_leaf_hash(key, account)
@@ -104,9 +124,9 @@ fn leaf_hash_for(key: &[u8; 32], account: &AccountState) -> [u8; 32] {
 #[derive(Clone, Debug)]
 pub struct LeafUpdate<'a> {
     pub address: &'a str,
-    pub pre: AccountState,
+    pub pre: Account,
     pub proof: &'a [[u8; 32]],
-    pub post: AccountState,
+    pub post: Account,
 }
 
 /// Precomputed hash of an empty subtree rooted at `depth`
@@ -191,9 +211,9 @@ impl SparseMerkleTrie {
         }
     }
 
-    pub fn insert(&mut self, address: &str, account: &AccountState) {
+    pub fn insert(&mut self, address: &str, account: &Account) {
         let key = account_key_hash(address);
-        if account.balance == 0 && account.nonce == 0 {
+        if account.is_empty() {
             self.leaves.remove(&key);
             return;
         }
@@ -207,13 +227,13 @@ impl SparseMerkleTrie {
         hash_range(&sorted, 0, 0, sorted.len())
     }
 
-    pub fn compute_root(accounts: &HashMap<String, AccountState>) -> [u8; 32] {
+    pub fn compute_root(accounts: &HashMap<String, Account>) -> [u8; 32] {
         if accounts.is_empty() {
             return Self::empty_root();
         }
         let mut sorted: Vec<([u8; 32], [u8; 32])> = accounts
             .iter()
-            .filter(|(_, a)| !(a.balance == 0 && a.nonce == 0))
+            .filter(|(_, a)| !a.is_empty())
             .map(|(addr, account)| {
                 let key = account_key_hash(addr);
                 (key, account_leaf_hash(&key, account))
@@ -234,15 +254,15 @@ impl SparseMerkleTrie {
     ///
     /// Validates that the claimed `account` matches the trie state
     /// (BUG-S0-016): a non-empty account must be present with the matching
-    /// leaf hash; a pruned account (`balance == 0 && nonce == 0`) must be
-    /// absent. Mismatch → [`CoreError::ProofAccountMismatch`].
+    /// leaf hash; an empty account ([`Account::is_empty`]) must be absent.
+    /// Mismatch → [`CoreError::ProofAccountMismatch`].
     pub fn prove(
         &self,
         address: &str,
-        account: &AccountState,
+        account: &Account,
     ) -> Result<Vec<[u8; 32]>, CoreError> {
         let key = account_key_hash(address);
-        let is_pruned = account.balance == 0 && account.nonce == 0;
+        let is_pruned = account.is_empty();
         let expected_leaf = if is_pruned {
             EMPTY_HASH
         } else {
@@ -265,23 +285,19 @@ impl SparseMerkleTrie {
 
     /// Verify `account` (or its absence) against `root` using `proof`.
     ///
-    /// Accounts with `balance == 0 && nonce == 0` are pruned from the state:
+    /// Empty accounts ([`Account::is_empty`]) are pruned from the state:
     /// such an account is proven by the empty slot (`EMPTY_HASH` leaf).
     pub fn verify_proof(
         root: &[u8; 32],
         address: &str,
-        account: &AccountState,
+        account: &Account,
         proof: &[[u8; 32]],
     ) -> bool {
         if proof.len() != DEPTH {
             return false;
         }
         let key = account_key_hash(address);
-        let leaf = if account.balance == 0 && account.nonce == 0 {
-            EMPTY_HASH
-        } else {
-            account_leaf_hash(&key, account)
-        };
+        let leaf = leaf_hash_for(&key, account);
 
         let mut acc = leaf;
         for i in (0..DEPTH).rev() {
@@ -374,11 +390,15 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    fn make_account(balance: u64, nonce: u64) -> AccountState {
-        AccountState { balance, nonce }
+    fn make_account(balance: u64, nonce: u64) -> Account {
+        Account::eoa(balance, nonce)
     }
 
-    fn accounts_map(pairs: &[(&str, u64, u64)]) -> HashMap<String, AccountState> {
+    fn make_contract(code_hash: [u8; 32], storage_root: [u8; 32]) -> Account {
+        Account::contract(code_hash, storage_root)
+    }
+
+    fn accounts_map(pairs: &[(&str, u64, u64)]) -> HashMap<String, Account> {
         pairs
             .iter()
             .map(|(a, b, n)| (a.to_string(), make_account(*b, *n)))
@@ -484,6 +504,84 @@ mod tests {
         let root = SparseMerkleTrie::compute_root(&accounts);
         let only_alice = accounts_map(&[("alice", 10, 0)]);
         assert_eq!(root, SparseMerkleTrie::compute_root(&only_alice));
+    }
+
+    /// S1.5-P07: contract leaf preimage is domain-tagged — same balance/nonce
+    /// as an EOA must still produce a different root.
+    #[test]
+    fn contract_leaf_differs_from_eoa_leaf() {
+        let code = [7u8; 32];
+        let storage = [9u8; 32];
+        let mut eoa_only = HashMap::new();
+        eoa_only.insert("acct".to_string(), make_account(10, 2));
+        let mut with_contract = HashMap::new();
+        with_contract.insert("acct".to_string(), make_contract(code, storage));
+        assert_ne!(
+            SparseMerkleTrie::compute_root(&eoa_only),
+            SparseMerkleTrie::compute_root(&with_contract)
+        );
+    }
+
+    /// S1.5-P07: a contract with zero balance/nonce is NOT pruned — its
+    /// code_hash/storage_root keep it in the trie.
+    #[test]
+    fn contract_with_zero_balance_is_not_pruned() {
+        let code = [7u8; 32];
+        let storage = [9u8; 32];
+        let mut accounts = HashMap::new();
+        accounts.insert("contract".to_string(), make_contract(code, storage));
+        accounts.insert("alice".to_string(), make_account(10, 0));
+        let root = SparseMerkleTrie::compute_root(&accounts);
+
+        let mut without_contract = HashMap::new();
+        without_contract.insert("alice".to_string(), make_account(10, 0));
+        assert_ne!(root, SparseMerkleTrie::compute_root(&without_contract));
+        assert_ne!(root, SparseMerkleTrie::empty_root());
+    }
+
+    /// S1.5-P07: changing a contract's storage_root changes the state root
+    /// (precondition for the P15 contract-storage integration).
+    #[test]
+    fn contract_storage_root_change_changes_root() {
+        let code = [7u8; 32];
+        let mut a1 = HashMap::new();
+        a1.insert("contract".to_string(), make_contract(code, [1u8; 32]));
+        let mut a2 = HashMap::new();
+        a2.insert("contract".to_string(), make_contract(code, [2u8; 32]));
+        assert_ne!(
+            SparseMerkleTrie::compute_root(&a1),
+            SparseMerkleTrie::compute_root(&a2)
+        );
+    }
+
+    /// S1.5-P07: prove/verify round-trip for a contract account.
+    #[test]
+    fn prove_verify_contract_account() {
+        let contract = make_contract([7u8; 32], [9u8; 32]);
+        let mut accounts = HashMap::new();
+        accounts.insert("contract".to_string(), contract.clone());
+        accounts.insert("alice".to_string(), make_account(1000, 0));
+        let root = SparseMerkleTrie::compute_root(&accounts);
+
+        let mut trie = SparseMerkleTrie::new();
+        for (addr, account) in &accounts {
+            trie.insert(addr, account);
+        }
+        let proof = trie.prove("contract", &contract).unwrap();
+        assert!(SparseMerkleTrie::verify_proof(
+            &root,
+            "contract",
+            &contract,
+            &proof
+        ));
+
+        let wrong_storage = make_contract([7u8; 32], [8u8; 32]);
+        assert!(!SparseMerkleTrie::verify_proof(
+            &root,
+            "contract",
+            &wrong_storage,
+            &proof
+        ));
     }
 
     #[test]
@@ -849,11 +947,11 @@ mod tests {
 
         let targets = [0u64, 7, 13, 31, 63];
         let mut updated = accounts.clone();
-        let mut owned: Vec<(String, AccountState, AccountState, Vec<[u8; 32]>)> = Vec::new();
+        let mut owned: Vec<(String, Account, Account, Vec<[u8; 32]>)> = Vec::new();
         for &i in &targets {
             let addr = format!("acct_{i}");
             let pre = accounts[&addr].clone();
-            let post = make_account(pre.balance + 1000, pre.nonce + 1);
+            let post = make_account(pre.balance() + 1000, pre.nonce() + 1);
             let proof = trie.prove(&addr, &pre).unwrap();
             updated.insert(addr.clone(), post.clone());
             owned.push((addr, pre, post, proof));

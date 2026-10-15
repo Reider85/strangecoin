@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::error::CoreError;
-use crate::types::{AccountState, Block};
+use crate::types::{Account, Block, ContractAccount};
 
 use super::inner::State;
 use super::sparse_merkle::{LeafUpdate, SparseMerkleTrie};
@@ -10,8 +10,26 @@ use super::sparse_merkle::{LeafUpdate, SparseMerkleTrie};
 pub struct AccountProof {
     pub balance: u64,
     pub nonce: u64,
+    /// `Some` iff the proven account is a contract (S1.5-P07).
+    pub code_hash: Option<[u8; 32]>,
+    /// `Some` iff the proven account is a contract (S1.5-P07).
+    pub storage_root: Option<[u8; 32]>,
     pub key_hash: [u8; 32],
     pub proof: Vec<[u8; 32]>,
+}
+
+impl AccountProof {
+    pub fn account(&self) -> Account {
+        match (self.code_hash, self.storage_root) {
+            (Some(code_hash), Some(storage_root)) => Account::Contract(ContractAccount {
+                code_hash,
+                storage_root,
+                nonce: self.nonce,
+                balance: self.balance,
+            }),
+            _ => Account::eoa(self.balance, self.nonce),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -31,11 +49,17 @@ pub fn build_witness(pre_state: &State, block: &Block) -> Result<StateWitness, C
         let account = pre_state.balances.get(addr).cloned().unwrap_or_default();
         let key_hash = *blake3::hash(addr.as_bytes()).as_bytes();
         let proof = trie.prove(addr, &account)?;
+        let (code_hash, storage_root) = match &account {
+            Account::Contract(contract) => (Some(contract.code_hash), Some(contract.storage_root)),
+            Account::Eoa(_) => (None, None),
+        };
         proofs.insert(
             addr.clone(),
             AccountProof {
-                balance: account.balance,
-                nonce: account.nonce,
+                balance: account.balance(),
+                nonce: account.nonce(),
+                code_hash,
+                storage_root,
                 key_hash,
                 proof,
             },
@@ -64,10 +88,7 @@ pub fn verify_block_stateless(
     }
 
     for (addr, account_proof) in &witness.proofs {
-        let account = AccountState {
-            balance: account_proof.balance,
-            nonce: account_proof.nonce,
-        };
+        let account = account_proof.account();
         if !SparseMerkleTrie::verify_proof(parent_state_root, addr, &account, &account_proof.proof) {
             return Err(CoreError::WitnessVerificationFailed);
         }
@@ -84,13 +105,9 @@ pub fn verify_block_stateless(
 
     let mut reconstructed = State::new();
     for (addr, account_proof) in &witness.proofs {
-        reconstructed.balances.insert(
-            addr.clone(),
-            AccountState {
-                balance: account_proof.balance,
-                nonce: account_proof.nonce,
-            },
-        );
+        reconstructed
+            .balances
+            .insert(addr.clone(), account_proof.account());
     }
 
     let post_state = super::inner::apply_block(&reconstructed, block, chain_id)?;
@@ -103,10 +120,7 @@ pub fn verify_block_stateless(
         .iter()
         .map(|(addr, account_proof)| LeafUpdate {
             address: addr,
-            pre: AccountState {
-                balance: account_proof.balance,
-                nonce: account_proof.nonce,
-            },
+            pre: account_proof.account(),
             proof: &account_proof.proof,
             post: post_state
                 .balances
@@ -135,7 +149,7 @@ pub fn verify_block_stateless(
 
 fn build_trie(state: &State) -> SparseMerkleTrie {
     let mut trie = SparseMerkleTrie::new();
-    let mut sorted: Vec<(&String, &AccountState)> = state.balances.iter().collect();
+    let mut sorted: Vec<(&String, &Account)> = state.balances.iter().collect();
     sorted.sort_by_key(|(addr, _)| *blake3::hash(addr.as_bytes()).as_bytes());
     for (addr, account) in sorted {
         trie.insert(addr, account);

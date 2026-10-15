@@ -163,7 +163,7 @@ impl Mempool {
         // validate_nonce (BUG-S0-025), маппинг ошибки через From<CoreError>.
         strangecoin_core::consensus::validate_nonce(
             tx.nonce,
-            account_state.nonce.saturating_add(pending_count),
+            account_state.nonce().saturating_add(pending_count),
         )?;
 
         let pending_spent: u64 = sender_map
@@ -175,7 +175,7 @@ impl Mempool {
                     .sum()
             })
             .unwrap_or(0);
-        let available = account_state.balance.saturating_sub(pending_spent);
+        let available = account_state.balance().saturating_sub(pending_spent);
         if tx.amount > available {
             return Err(StrangecoinError::InsufficientBalance {
                 available,

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use strangecoin_core::types::{AccountState, BlockHeader};
+use strangecoin_core::types::{Account, BlockHeader};
 use strangecoin_core::{
     BlockContext, ExecutionResult, ExecutionContext, GasCounter, Log, Opcode, Receipt, TxStatus,
     VmError, VmExecutor,
@@ -52,14 +52,8 @@ fn sample_header() -> BlockHeader {
 
 fn sample_context() -> ExecutionContext {
     let mut accounts = HashMap::new();
-    accounts.insert("sc1alice".to_string(), AccountState {
-        balance: 100,
-        nonce: 1,
-    });
-    accounts.insert("sc1contract".to_string(), AccountState {
-        balance: 0,
-        nonce: 0,
-    });
+    accounts.insert("sc1alice".to_string(), Account::eoa(100, 1));
+    accounts.insert("sc1contract".to_string(), Account::default());
     let mut storage_overlay = HashMap::new();
     storage_overlay.insert([9u8; 32], vec![1, 2, 3]);
     ExecutionContext {
@@ -127,7 +121,7 @@ fn mock_vm_sees_full_execution_context() {
     let ctx = sample_context();
     assert_eq!(ctx.block.index, 7);
     assert_eq!(ctx.accounts.len(), 2);
-    assert_eq!(ctx.accounts["sc1alice"].balance, 100);
+    assert_eq!(ctx.accounts["sc1alice"].balance(), 100);
     assert_eq!(ctx.caller, "sc1alice");
     assert_eq!(ctx.callee, "sc1contract");
     assert_eq!(ctx.value, 5);

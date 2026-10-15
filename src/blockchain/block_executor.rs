@@ -433,7 +433,7 @@ impl Blockchain {
             return Ok(false);
         }
         let amount = match self.balances.get("initial_wallet_address") {
-            Some(a) if a.balance > 0 => a.balance,
+            Some(a) if a.balance() > 0 => a.balance(),
             _ => return Ok(false),
         };
         self.create_grant_block(wallet_address, amount);

@@ -191,12 +191,12 @@ proptest! {
         bal2 in 1000u64..100_000u64,
     ) {
         let mut accounts1 = std::collections::HashMap::new();
-        accounts1.insert("alice".to_string(), strangecoin_core::AccountState { balance: bal1, nonce: 0 });
-        accounts1.insert("bob".to_string(), strangecoin_core::AccountState { balance: bal2, nonce: 0 });
+        accounts1.insert("alice".to_string(), strangecoin_core::Account::eoa(bal1, 0));
+        accounts1.insert("bob".to_string(), strangecoin_core::Account::eoa(bal2, 0));
 
         let mut accounts2 = std::collections::HashMap::new();
-        accounts2.insert("bob".to_string(), strangecoin_core::AccountState { balance: bal2, nonce: 0 });
-        accounts2.insert("alice".to_string(), strangecoin_core::AccountState { balance: bal1, nonce: 0 });
+        accounts2.insert("bob".to_string(), strangecoin_core::Account::eoa(bal2, 0));
+        accounts2.insert("alice".to_string(), strangecoin_core::Account::eoa(bal1, 0));
 
         prop_assert_eq!(
             compute_state_root(&accounts1),

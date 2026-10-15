@@ -62,9 +62,10 @@ fn full_reorg_longer_chain() {
     let balances_a = bc_a.state_snapshot();
     let balances_b = bc_b.state_snapshot();
     for (addr, expected) in &balances_b {
-        let a_bal = balances_a.get(addr).map(|a| a.balance).unwrap_or(0);
+        let a_bal = balances_a.get(addr).map(|a| a.balance()).unwrap_or(0);
         assert_eq!(
-            a_bal, expected.balance,
+            a_bal,
+            expected.balance(),
             "Balance mismatch after reorg for {}",
             addr
         );
