@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/strangecoin-core"]
+members = [".", "crates/strangecoin-core", "crates/strangecoin-vm-wasm"]
 resolver = "2"
 
 [package]
@@ -9,6 +9,7 @@ edition = "2021"
 
 [dependencies]
 strangecoin-core = { path = "crates/strangecoin-core" }
+strangecoin-vm-wasm = { path = "crates/strangecoin-vm-wasm", optional = true }
 ctrlc = "3.4"
 rusty-leveldb = "4.0.0"
 uuid = { version = "1.17.0", features = ["v4"] }
@@ -66,7 +67,10 @@ tokio = { version = "1", features = [
 ] }
 
 [features]
-default = []
+# vm-wasm is default-on (regtest/devnet builds); light nodes build with
+# --no-default-features.
+default = ["vm-wasm"]
+vm-wasm = ["dep:strangecoin-vm-wasm"]
 gui = ["dep:eframe", "dep:winapi"]
 
 [profile.release]

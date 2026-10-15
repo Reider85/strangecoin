@@ -1,0 +1,12 @@
+[package]
+name = "strangecoin-vm-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "Wasmi-backed VmExecutor implementation for Strangecoin (Stage 1.5)"
+
+[dependencies]
+# Exact pin: fuel/metering API churn across wasmi majors must not silently
+# change gas semantics. See docs/ADR/0012-wasm-wasmi-vs-risc-v.md.
+wasmi = "=2.0.0"
+strangecoin-core = { path = "../strangecoin-core" }
+thiserror = "1"
