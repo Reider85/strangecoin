@@ -58,15 +58,12 @@ fn block1_rejects_over_emission_when_disabled() {
     let previous_block = bc.tip().unwrap();
     let genesis_balance = bc.get_balance("initial_wallet_address");
 
-    let transaction = Transaction {
-        sender: "initial_wallet_address".to_string(),
-        receiver: addr.clone(),
-        amount: genesis_balance,
-        nonce: 0,
-        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: true,
-    };
+    let transaction = Transaction::coinbase(
+        "initial_wallet_address",
+        &addr,
+        genesis_balance,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    );
     let mut block = Block {
         index: previous_block.index + 1,
         timestamp: 0,
@@ -105,15 +102,13 @@ fn magic_string_sender_rejected_in_normal_block() {
 
     // Create block 2 with sender="genesis" (should be rejected in validate_chain)
     let previous_block = bc.tip().unwrap();
-    let fake_tx = Transaction {
-        sender: "genesis".to_string(),
-        receiver: addr.clone(),
-        amount: 9999,
-        nonce: 0,
-        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: false,
-    };
+    let fake_tx = Transaction::transfer(
+        "genesis",
+        &addr,
+        9999,
+        0,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    );
     let mut block = Block {
         index: previous_block.index + 1,
         timestamp: previous_block.timestamp + 1,

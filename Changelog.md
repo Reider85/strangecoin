@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.1.2 — Stage 1.5 proper: Tx types transfer/create/call (S1.5-P08)
+
+**Status**: In progress  
+**Date**: 2026-10-15  
+**Prompts**: S1.5-P08
+
+### Transaction enum + canonical FORMAT_VERSION 5
+
+- **Breaking (consensus):** `Transaction` — плоская структура → enum `Transfer(TransferTx) / Create(CreateTx) / Call(CallTx)`; канонический encoding **FORMAT_VERSION 4 → 5**: `version | tag(0=transfer,1=create,2=call) | variant payload`; **`fee` входит в подписываемые байты каждого варианта**. Десериализатор принимает только v5 (чистый break — mainnet не запущен, regtest/devnet цепочки одноразовые).
+- **Regenerated (S1.5-P08):** `EXPECTED_GENESIS_HASH` → `0xfcd79a70…653101`, `EXPECTED_TESTNET_GENESIS_HASH` → `0x23dde7b1…b8cf89` (пересчёт через `examples/print_genesis_hashes.rs`); `genesis.json`/`genesis-testnet.json` поля `genesis_hash` обновлены; golden vectors `tests/serialize_golden.rs` перегенерированы (18 тестов, procedure BUG-S1-007).
+- `TransferTx { from, to, amount, fee, nonce, chain_id, signature, is_coinbase }`; `CreateTx { from, init_code, init_args, endowment, fee, nonce, chain_id, signature }`; `CallTx { from, to, data, value, gas_limit, fee, nonce, chain_id, signature }`; accessors (`sender()/receiver()/value()/nonce()/chain_id()/fee()/is_coinbase()/signature_mut()`) + конструкторы `transfer/coinbase/create/call`.
+- `verify_transaction` per-variant: подпись ECDSA-recoverable поверх канонических байтов варианта (payload в подписи — replay protection инварианта #10); shape-проверки: `Create` → пустой `init_code` = `InvalidContractDeploy`, `Call` → `gas_limit == 0` = `InvalidGasLimit`; coinbase-bypass только у `Transfer.is_coinbase`.
+- `mempool::insert` валидирует все 3 варианта: nonce (core `validate_nonce`), баланс `value()+fee()` против состояния и пула, chain_id; RBF-логика без изменений.
+- `state::apply_block`/`unapply_block`: **Transfer** — прежняя логика (deduct/credit/nonce); **Create/Call → `CoreError::UnsupportedTxType`** до S1.5-P15 (исполнение/contract storage — отдельный промпт).
+- Serde-совместимость: `Transfer` сериализуется в legacy flat JSON `{sender, receiver, …}` (+ `fee`, default 0); `Create`/`Call` — internally tagged `{"type":"create"|"call",…}`; старые LevelDB-блобы и `GET_BLOCKCHAIN` снапшоты десериализуются как Transfer.
+- `address::derive_contract_address(creator, nonce, network_id)` — bech32m-адрес контракта из `blake3("sc-contract-addr"‖creator‖nonce)` (32-byte payload не коллидирует с 33-byte EOA); `address::is_precompile_address` — guard диапазона `0x01..0x07` (ADR-0015, полный dispatch — S1.5-P11).
+- Тесты: новый `crates/strangecoin-core/tests/tx_types.rs` (20 тестов: round-trip 3 вариантов, sign/verify, tamper-rejection, shape, serde-совместимость, apply-gate); mempool unit-тесты (8: transfer/create/call accepted, replay/cross-chain/gas_limit/init_code rejected, endowment balance accounting); `derive_contract_address` тесты (address.rs). Regression: Stage 0/1 тесты обновлены под конструкторы, `cargo test --workspace` зелёный.
+
+### Not in this change
+
+- Contract deploy/call **state transition** (установка ContractAccount, endowment transfer, execute) — S1.5-P15 (`state::apply_call`); код байтов не персистится до P15.
+- Fee market / минимальная комиссия — Stage 5 (fee сейчас подписывается, но не валидируется на минимум; RBF использует прежний feerate-прокси).
+- ABI-кодирование payload (`data`/`init_args` — «сырые» байты) — S1.5-P12.
+
+---
+
 ## 1.1.1 — Stage 1.5 debt track (BUG-S0-011 + S1.5-P04 + S1.5-P01)
 
 **Status**: In progress  

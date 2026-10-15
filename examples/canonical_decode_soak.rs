@@ -30,15 +30,7 @@ impl Xorshift {
 
 /// A structurally valid regtest-shaped block — the mutation seed.
 fn seed_block() -> Block {
-    let tx = Transaction {
-        sender: "coinbase".to_string(),
-        receiver: "miner".to_string(),
-        amount: 0,
-        nonce: 0,
-        chain_id: 1,
-        signature: Vec::new(),
-        is_coinbase: true,
-    };
+    let tx = Transaction::coinbase("coinbase", "miner", 0, 1);
     Block {
         index: 1,
         timestamp: 1_700_000_000,

@@ -22,15 +22,13 @@ fn committed_chain(tag: &str) -> (Vec<strangecoin::Block>, strangecoin::Block, S
     );
 
     let prefix = bc.chain_snapshot();
-    let mut transfer = Transaction {
-        sender: alice.clone(),
-        receiver: bob.clone(),
-        amount: 500,
-        nonce: 1,
-        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: false,
-    };
+    let mut transfer = Transaction::transfer(
+        &alice,
+        &bob,
+        500,
+        1,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    );
     sign_transaction(&mut transfer, &keypairs[0].1);
     let child = craft_child(&prefix, vec![coinbase_tx("miner", 0), transfer]);
     assert_ne!(
@@ -183,15 +181,13 @@ fn grant_and_mined_blocks_commit_real_state_roots() {
         "grant block must commit to its state root"
     );
 
-    let mut transfer = Transaction {
-        sender: alice.clone(),
-        receiver: bob.clone(),
-        amount: 500,
-        nonce: 1,
-        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: false,
-    };
+    let mut transfer = Transaction::transfer(
+        &alice,
+        &bob,
+        500,
+        1,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    );
     sign_transaction(&mut transfer, &keypairs[0].1);
     bc.apply_tx(transfer).expect("transfer accepted");
     mine_current(&bc);

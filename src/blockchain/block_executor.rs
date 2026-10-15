@@ -178,10 +178,10 @@ pub fn validate_and_apply(
             // Invariant #10 / BUG-S1-004: a block may only carry transactions
             // of the network this node validates. The state machine repeats
             // the check; failing early here gives a block-scoped error.
-            if tx.chain_id != view.chain_id {
+            if tx.chain_id() != view.chain_id {
                 return Err(StrangecoinError::InvalidChainId {
                     expected: view.chain_id,
-                    got: tx.chain_id,
+                    got: tx.chain_id(),
                 });
             }
             strangecoin_core::consensus::verify_transaction(tx)?;
@@ -295,15 +295,12 @@ fn invalid(block: &Block, reason: impl std::fmt::Display) -> StrangecoinError {
 
 impl Blockchain {
     pub(crate) fn create_genesis_block(&mut self) {
-        let genesis_transaction = Transaction {
-            sender: "genesis".to_string(),
-            receiver: "initial_wallet_address".to_string(),
-            amount: 10000,
-            nonce: 0,
-            chain_id: self.chain_id,
-            signature: Vec::new(),
-            is_coinbase: true,
-        };
+        let genesis_transaction = Transaction::coinbase(
+            "genesis",
+            "initial_wallet_address",
+            10000,
+            self.chain_id,
+        );
         let mut genesis_block = Block {
             index: 0,
             timestamp: 0,
@@ -349,24 +346,15 @@ impl Blockchain {
     pub(crate) fn create_grant_block(&mut self, wallet_address: &str, amount: u64) {
         let previous_block = self.chain.last().unwrap().clone();
         let height = previous_block.index + 1;
-        let coinbase = Transaction {
-            sender: "coinbase".to_string(),
-            receiver: wallet_address.to_string(),
-            amount: 0,
-            nonce: 0,
-            chain_id: self.chain_id,
-            signature: Vec::new(),
-            is_coinbase: true,
-        };
-        let transfer = Transaction {
-            sender: "initial_wallet_address".to_string(),
-            receiver: wallet_address.to_string(),
+        let coinbase =
+            Transaction::coinbase("coinbase", wallet_address, 0, self.chain_id);
+        let transfer = Transaction::transfer(
+            "initial_wallet_address",
+            wallet_address,
             amount,
-            nonce: 0,
-            chain_id: self.chain_id,
-            signature: Vec::new(),
-            is_coinbase: false,
-        };
+            0,
+            self.chain_id,
+        );
         let mut block = Block {
             index: height,
             timestamp: SystemTime::now()
@@ -449,7 +437,7 @@ impl Blockchain {
         };
         self.balances.commit(new_state);
         for tx in &block.transactions {
-            if !tx.is_coinbase {
+            if !tx.is_coinbase() {
                 self.mempool.remove(&strangecoin_core::serialize::txid(tx));
             }
         }
@@ -492,15 +480,7 @@ impl Blockchain {
             .next()
             .cloned()
             .unwrap_or_else(|| "miner".to_string());
-        let coinbase_tx = Transaction {
-            sender: "coinbase".to_string(),
-            receiver: miner_address,
-            amount: coinbase_amount,
-            nonce: 0,
-            chain_id: self.chain_id,
-            signature: Vec::new(),
-            is_coinbase: true,
-        };
+        let coinbase_tx = Transaction::coinbase("coinbase", &miner_address, coinbase_amount, self.chain_id);
 
         let mut all_transactions = vec![coinbase_tx];
         all_transactions.extend(transactions);
@@ -626,7 +606,7 @@ impl Blockchain {
             let declared = block
                 .transactions
                 .first()
-                .map(|tx| tx.chain_id)
+                .map(|tx| tx.chain_id())
                 .unwrap_or(0);
             if declared != chain_id {
                 panic!(
@@ -644,8 +624,10 @@ impl Blockchain {
         }
         blockchain.chain.push(genesis_block.clone());
         for tx in &genesis_block.transactions {
-            if tx.sender != "genesis" {
-                blockchain.balances.credit(&tx.receiver, tx.amount);
+            if tx.sender() != "genesis" {
+                if let Some(receiver) = tx.receiver() {
+                    blockchain.balances.credit(receiver, tx.value());
+                }
             }
         }
     }

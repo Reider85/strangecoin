@@ -23,15 +23,12 @@ pub fn walk_state(prefix: &[strangecoin::Block]) -> strangecoin_core::state::Sta
 // remaining test binaries that compile `mod common;` (P21 / BUG-S1-012).
 #[allow(dead_code)]
 pub fn coinbase_tx(receiver: &str, amount: u64) -> strangecoin::Transaction {
-    strangecoin::Transaction {
-        sender: "coinbase".to_string(),
-        receiver: receiver.to_string(),
+    strangecoin::Transaction::coinbase(
+        "coinbase",
+        receiver,
         amount,
-        nonce: 0,
-        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: true,
-    }
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    )
 }
 
 /// Craft the valid child of `prefix.last()` whose header commits to the real

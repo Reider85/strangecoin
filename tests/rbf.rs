@@ -18,15 +18,13 @@ fn transfer(
     nonce: u64,
     secret_key: &secp256k1::SecretKey,
 ) -> Transaction {
-    let mut tx = Transaction {
-        sender: sender.to_string(),
-        receiver: receiver.to_string(),
+    let mut tx = Transaction::transfer(
+        sender,
+        receiver,
         amount,
         nonce,
-        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: false,
-    };
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    );
     sign_transaction(&mut tx, secret_key);
     tx
 }
@@ -141,7 +139,8 @@ fn rbf_replacement_chain_is_limited() {
     // Каждая следующая замена — ровно на границе правила: len*10/13.
     let next_len = |prev: &Transaction| {
         let prev_len = signed_len(prev);
-        let overhead = prev_len - prev.receiver.len();
+        let receiver_len = prev.receiver().map(|r| r.len()).unwrap_or(0);
+        let overhead = prev_len - receiver_len;
         let len = prev_len * 10 / 13;
         assert!(len > overhead, "receiver must stay non-empty");
         len - overhead

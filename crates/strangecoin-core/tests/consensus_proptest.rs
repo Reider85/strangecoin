@@ -59,15 +59,16 @@ fn arbitrary_transaction() -> impl Strategy<Value = Transaction> {
         .prop_map(
             |(sender, receiver, amount, nonce, chain_id, signature, is_coinbase)| {
                 let sig = signature.unwrap_or_default();
-                Transaction {
-                    sender,
-                    receiver,
+                Transaction::Transfer(strangecoin_core::types::TransferTx {
+                    from: sender,
+                    to: receiver,
                     amount,
+                    fee: 0,
                     nonce,
                     chain_id,
                     signature: if is_coinbase { Vec::new() } else { sig },
                     is_coinbase,
-                }
+                })
             },
         )
 }
@@ -87,15 +88,7 @@ fn arbitrary_signed_transaction() -> impl Strategy<Value = Transaction> {
             // against tx.sender, so the sender must be derived from this key.
             let sender = strangecoin_core::address::encode_address(&public_key, chain_id)
                 .expect("Failed to generate sender address in proptest");
-            let mut tx = Transaction {
-                sender: sender.clone(),
-                receiver,
-                amount,
-                nonce,
-                chain_id,
-                signature: Vec::new(),
-                is_coinbase: false,
-            };
+            let mut tx = Transaction::transfer(&sender, &receiver, amount, nonce, chain_id);
             let msg_bytes = serialize::serialize_transaction(&tx);
             let msg_hash = blake3::hash(&msg_bytes);
             let msg =
@@ -105,7 +98,7 @@ fn arbitrary_signed_transaction() -> impl Strategy<Value = Transaction> {
             let mut sig_vec = Vec::with_capacity(65);
             sig_vec.extend_from_slice(&sig_bytes);
             sig_vec.push(rec_id.to_i32() as u8);
-            tx.signature = sig_vec;
+            *tx.signature_mut() = sig_vec;
             tx
         })
 }
@@ -154,12 +147,13 @@ proptest! {
     fn serialize_deserialize_roundtrip(tx in arbitrary_transaction()) {
         let bytes = serialize::serialize_transaction(&tx);
         let tx2 = serialize::deserialize_transaction(&bytes).unwrap();
-        prop_assert_eq!(tx.sender, tx2.sender);
-        prop_assert_eq!(tx.receiver, tx2.receiver);
-        prop_assert_eq!(tx.amount, tx2.amount);
-        prop_assert_eq!(tx.nonce, tx2.nonce);
-        prop_assert_eq!(tx.chain_id, tx2.chain_id);
-        prop_assert_eq!(tx.is_coinbase, tx2.is_coinbase);
+        prop_assert_eq!(tx.sender(), tx2.sender());
+        prop_assert_eq!(tx.receiver(), tx2.receiver());
+        prop_assert_eq!(tx.value(), tx2.value());
+        prop_assert_eq!(tx.nonce(), tx2.nonce());
+        prop_assert_eq!(tx.chain_id(), tx2.chain_id());
+        prop_assert_eq!(tx.is_coinbase(), tx2.is_coinbase());
+        prop_assert_eq!(tx.fee(), tx2.fee());
     }
 
     #[test]
@@ -215,16 +209,11 @@ proptest! {
         // BUG-S1-004: the state machine pins every tx to the validating
         // chain — a foreign chain_id is rejected regardless of other rules.
         let mut transfer = tx;
-        transfer.is_coinbase = false;
-        let coinbase = Transaction {
-            sender: "coinbase".to_string(),
-            receiver: "miner".to_string(),
-            amount: 0,
-            nonce: 0,
-            chain_id: transfer.chain_id,
-            signature: Vec::new(),
-            is_coinbase: true,
-        };
+        if let Transaction::Transfer(t) = &mut transfer {
+            t.is_coinbase = false;
+        }
+        let chain_id = transfer.chain_id();
+        let coinbase = Transaction::coinbase("coinbase", "miner", 0, chain_id);
         let block = Block {
             index: 1,
             timestamp: 1600,
@@ -240,20 +229,20 @@ proptest! {
 
         // Own chain: the chain_id gate passes (other consensus rules may
         // still reject the unsigned fixture — that is fine here).
-        let own = apply_block(&State::new(), &block, transfer.chain_id);
+        let own = apply_block(&State::new(), &block, chain_id);
         prop_assert!(
             !matches!(own, Err(CoreError::InvalidChainId { .. })),
             "own chain_id must not trip the chain_id gate: {own:?}"
         );
 
         // Foreign chain: rejected at the state-machine level.
-        let foreign_id = if transfer.chain_id == 1 { 2 } else { 1 };
+        let foreign_id = if chain_id == 1 { 2 } else { 1 };
         let foreign = apply_block(&State::new(), &block, foreign_id);
         prop_assert!(
             matches!(
                 foreign,
                 Err(CoreError::InvalidChainId { expected, got })
-                    if expected == foreign_id && got == transfer.chain_id
+                    if expected == foreign_id && got == chain_id
             ),
             "foreign chain_id must be rejected: {foreign:?}"
         );

@@ -6,7 +6,41 @@
 //! silently — revert or follow the bump procedure.
 
 use strangecoin_core::serialize::*;
-use strangecoin_core::types::{Block, Transaction};
+use strangecoin_core::types::{Block, CallTx, CreateTx, Transaction, TransferTx};
+
+fn tx1() -> Transaction {
+    Transaction::Transfer(TransferTx {
+        from: "sender1".to_string(),
+        to: "receiver1".to_string(),
+        amount: 100,
+        fee: 0,
+        nonce: 1,
+        chain_id: 1,
+        signature: vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
+            47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65,
+        ],
+        is_coinbase: false,
+    })
+}
+
+fn tx2() -> Transaction {
+    Transaction::coinbase("", "miner1", 5_000_000_000, 1)
+}
+
+fn tx3() -> Transaction {
+    Transaction::Transfer(TransferTx {
+        from: "alice".to_string(),
+        to: "bob".to_string(),
+        amount: 999_999,
+        fee: 0,
+        nonce: 42,
+        chain_id: 3,
+        signature: vec![0xaa; 65],
+        is_coinbase: false,
+    })
+}
 
 fn block1() -> Block {
     Block {
@@ -25,32 +59,10 @@ fn block1() -> Block {
 }
 
 fn block2() -> Block {
-    let tx1 = Transaction {
-        sender: "sender1".to_string(),
-        receiver: "receiver1".to_string(),
-        amount: 100,
-        nonce: 1,
-        chain_id: 1,
-        signature: vec![
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
-            47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65,
-        ],
-        is_coinbase: false,
-    };
-    let tx2 = Transaction {
-        sender: "".to_string(),
-        receiver: "miner1".to_string(),
-        amount: 5000000000,
-        nonce: 0,
-        chain_id: 1,
-        signature: vec![],
-        is_coinbase: true,
-    };
     Block {
         index: 1,
         timestamp: 1234567890,
-        transactions: vec![tx1, tx2],
+        transactions: vec![tx1(), tx2()],
         previous_hash: "1111111111111111111111111111111111111111111111111111111111111111"
             .to_string(),
         hash: "".to_string(),
@@ -66,7 +78,59 @@ fn main() {
     let b1 = block1();
     let b2 = block2();
 
+    let create = Transaction::Create(CreateTx {
+        from: "sender1".to_string(),
+        init_code: vec![1, 2, 3],
+        init_args: vec![4, 5],
+        endowment: 50,
+        fee: 0,
+        nonce: 1,
+        chain_id: 1,
+        signature: Vec::new(),
+    });
+    let call = Transaction::Call(CallTx {
+        from: "sender1".to_string(),
+        to: "receiver1".to_string(),
+        data: vec![9],
+        value: 7,
+        gas_limit: 100_000,
+        fee: 0,
+        nonce: 1,
+        chain_id: 1,
+        signature: Vec::new(),
+    });
+
     println!("FORMAT_VERSION = {}", FORMAT_VERSION);
+    println!();
+    println!("// tx1 unsigned");
+    println!("{}", hex::encode(serialize_transaction(&tx1())));
+    println!();
+    println!("// tx1 signed");
+    println!("{}", hex::encode(serialize_transaction_signed(&tx1())));
+    println!();
+    println!("// tx2 unsigned");
+    println!("{}", hex::encode(serialize_transaction(&tx2())));
+    println!();
+    println!("// tx2 signed");
+    println!("{}", hex::encode(serialize_transaction_signed(&tx2())));
+    println!();
+    println!("// tx3 unsigned");
+    println!("{}", hex::encode(serialize_transaction(&tx3())));
+    println!();
+    println!("// tx3 signed");
+    println!("{}", hex::encode(serialize_transaction_signed(&tx3())));
+    println!();
+    println!("// create unsigned");
+    println!("{}", hex::encode(serialize_transaction(&create)));
+    println!();
+    println!("// create signed");
+    println!("{}", hex::encode(serialize_transaction_signed(&create)));
+    println!();
+    println!("// call unsigned");
+    println!("{}", hex::encode(serialize_transaction(&call)));
+    println!();
+    println!("// call signed");
+    println!("{}", hex::encode(serialize_transaction_signed(&call)));
     println!();
     println!("// serialize_block(block1)");
     println!("{}", hex::encode(serialize_block(&b1)));

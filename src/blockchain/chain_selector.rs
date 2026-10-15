@@ -212,7 +212,7 @@ pub(crate) fn try_adopt_candidate(
         if merged_txids.contains(&txid) {
             continue;
         }
-        let account = rebuilt.get(&tx.sender).unwrap_or_default();
+        let account = rebuilt.get(tx.sender()).unwrap_or_default();
         if merged.insert(tx, &account).is_ok() {
             merged_txids.push(txid);
         }
@@ -232,15 +232,7 @@ mod tests {
 
     #[test]
     fn chain_has_tx_detects_confirmed() {
-        let tx = Transaction {
-            sender: "a".into(),
-            receiver: "b".into(),
-            amount: 1,
-            nonce: 0,
-            chain_id: 3,
-            signature: Vec::new(),
-            is_coinbase: false,
-        };
+        let tx = Transaction::transfer("a", "b", 1, 0, 3);
         let block = Block {
             index: 1,
             timestamp: 0,
@@ -254,7 +246,7 @@ mod tests {
             tx_root: [0u8; 32],
         };
         assert!(chain_has_tx(std::slice::from_ref(&block), &tx));
-        let other = Transaction { amount: 2, ..tx };
+        let other = Transaction::transfer("a", "b", 2, 0, 3);
         assert!(!chain_has_tx(std::slice::from_ref(&block), &other));
     }
 

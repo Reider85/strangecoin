@@ -31,27 +31,22 @@ fn view(chain: &[Block], allow_grant_blocks: bool) -> BlockView<'_> {
 }
 
 fn coinbase(receiver: &str, amount: u64) -> Transaction {
-    Transaction {
-        sender: "coinbase".to_string(),
-        receiver: receiver.to_string(),
+    Transaction::coinbase(
+        "coinbase",
+        receiver,
         amount,
-        nonce: 0,
-        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: true,
-    }
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    )
 }
 
 fn transfer(sender: &str, receiver: &str, amount: u64, nonce: u64) -> Transaction {
-    Transaction {
-        sender: sender.to_string(),
-        receiver: receiver.to_string(),
+    Transaction::transfer(
+        sender,
+        receiver,
         amount,
         nonce,
-        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: false,
-    }
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    )
 }
 
 fn rehash(mut block: Block) -> Block {

@@ -334,15 +334,18 @@ mod tests {
         let mut block = Block {
             index: 7,
             timestamp: 1_700_000_000,
-            transactions: vec![Transaction {
-                sender: "rsc1sender".into(),
-                receiver: "rsc1receiver".into(),
-                amount: 42,
-                nonce: 1,
-                chain_id: 3,
-                signature: vec![1u8; 65],
-                is_coinbase: false,
-            }],
+            transactions: vec![Transaction::Transfer(
+                strangecoin_core::types::TransferTx {
+                    from: "rsc1sender".into(),
+                    to: "rsc1receiver".into(),
+                    amount: 42,
+                    fee: 0,
+                    nonce: 1,
+                    chain_id: 3,
+                    signature: vec![1u8; 65],
+                    is_coinbase: false,
+                },
+            )],
             previous_hash: "aa".repeat(32),
             hash: String::new(),
             nonce: 99,
@@ -438,9 +441,9 @@ mod tests {
         assert_eq!(got.state_root, block.state_root);
         assert_eq!(got.tx_root, block.tx_root);
         assert_eq!(got.transactions.len(), 1);
-        assert_eq!(got.transactions[0].amount, 42);
-        assert_eq!(got.transactions[0].signature, vec![1u8; 65]);
-        assert_eq!(got.transactions[0].sender, "rsc1sender");
+        assert_eq!(got.transactions[0].value(), 42);
+        assert_eq!(got.transactions[0].signature(), vec![1u8; 65].as_slice());
+        assert_eq!(got.transactions[0].sender(), "rsc1sender");
         assert_eq!(
             strangecoin_core::serialize::serialize_block(got),
             strangecoin_core::serialize::serialize_block(&block),

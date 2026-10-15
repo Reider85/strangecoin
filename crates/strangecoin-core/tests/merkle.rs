@@ -3,27 +3,11 @@ use strangecoin_core::serialize::{compute_tx_root, merkle_root, txid};
 use strangecoin_core::types::Transaction;
 
 fn make_tx(sender: &str, receiver: &str, amount: u64, nonce: u64) -> Transaction {
-    Transaction {
-        sender: sender.to_string(),
-        receiver: receiver.to_string(),
-        amount,
-        nonce,
-        chain_id: 3,
-        signature: vec![],
-        is_coinbase: false,
-    }
+    Transaction::transfer(sender, receiver, amount, nonce, 3)
 }
 
 fn make_coinbase(receiver: &str, amount: u64) -> Transaction {
-    Transaction {
-        sender: "coinbase".to_string(),
-        receiver: receiver.to_string(),
-        amount,
-        nonce: 0,
-        chain_id: 3,
-        signature: vec![],
-        is_coinbase: true,
-    }
+    Transaction::coinbase("coinbase", receiver, amount, 3)
 }
 
 #[test]
@@ -169,15 +153,7 @@ proptest! {
         proptest::arbitrary::any::<(String, String, u64, u64)>(), 0..20
     )) {
         let txs: Vec<Transaction> = txs.into_iter().map(|(s, r, a, n)| {
-            Transaction {
-                sender: s,
-                receiver: r,
-                amount: a,
-                nonce: n,
-                chain_id: 3,
-                signature: vec![],
-                is_coinbase: false,
-            }
+            Transaction::transfer(&s, &r, a, n, 3)
         }).collect();
         let ids: Vec<[u8; 32]> = txs.iter().map(txid).collect();
         let root1 = merkle_root(&ids);
@@ -190,15 +166,7 @@ proptest! {
         proptest::arbitrary::any::<(String, String, u64, u64)>(), 1..20
     )) {
         let txs: Vec<Transaction> = txs.into_iter().map(|(s, r, a, n)| {
-            Transaction {
-                sender: s,
-                receiver: r,
-                amount: a,
-                nonce: n,
-                chain_id: 3,
-                signature: vec![],
-                is_coinbase: false,
-            }
+            Transaction::transfer(&s, &r, a, n, 3)
         }).collect();
         let ids: Vec<[u8; 32]> = txs.iter().map(txid).collect();
         let root = merkle_root(&ids);

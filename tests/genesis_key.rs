@@ -31,7 +31,7 @@ fn genesis_validates_without_private_key_in_code() {
     validate_genesis(&block, strangecoin::consensus::CHAIN_ID_MAINNET)
         .expect("validate_genesis must accept the EXPECTED_GENESIS_HASH genesis");
     assert_eq!(block.index, 0);
-    assert!(block.transactions[0].is_coinbase);
+    assert!(block.transactions[0].is_coinbase());
 }
 
 #[test]
@@ -52,7 +52,8 @@ fn initial_holder_address_derives_from_pubkey_only() {
         .expect("encode_address");
 
     assert_eq!(
-        block.transactions[0].receiver, addr,
+        block.transactions[0].receiver(),
+        Some(addr.as_str()),
         "genesis allocation receiver must be derived only from initial_holder_pubkey"
     );
 }
@@ -135,7 +136,7 @@ fn testnet_genesis_validates_against_its_own_hash() {
         hash, EXPECTED_TESTNET_GENESIS_HASH,
         "committed genesis-testnet.json must hash to EXPECTED_TESTNET_GENESIS_HASH"
     );
-    assert_eq!(block.transactions[0].chain_id, CHAIN_ID_TESTNET);
+    assert_eq!(block.transactions[0].chain_id(), CHAIN_ID_TESTNET);
 }
 
 #[test]
@@ -143,8 +144,8 @@ fn regtest_genesis_validates_without_a_file() {
     let block = regtest_genesis_block(CURRENT_CONSENSUS_VERSION);
     validate_genesis(&block, CHAIN_ID_REGTEST).expect("regtest genesis is always accepted");
     assert_eq!(block.index, 0);
-    assert_eq!(block.transactions[0].chain_id, CHAIN_ID_REGTEST);
-    assert!(block.transactions[0].is_coinbase);
+    assert_eq!(block.transactions[0].chain_id(), CHAIN_ID_REGTEST);
+    assert!(block.transactions[0].is_coinbase());
 }
 
 #[test]

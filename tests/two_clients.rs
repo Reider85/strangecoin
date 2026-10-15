@@ -35,15 +35,13 @@ fn hundred_transactions_five_wallets() {
 
         let sender_nonce = wallets[s].get_nonce(&addrs[s]);
 
-        let mut transaction = Transaction {
-            sender: addrs[s].clone(),
-            receiver: addrs[r].clone(),
+        let mut transaction = Transaction::transfer(
+            &addrs[s],
+            &addrs[r],
             amount,
-            nonce: sender_nonce + 1,
-            chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-            signature: Vec::new(),
-            is_coinbase: false,
-        };
+            sender_nonce + 1,
+            strangecoin::consensus::CHAIN_ID_REGTEST,
+        );
 
         sign_transaction(&mut transaction, &keypairs[s].1);
 

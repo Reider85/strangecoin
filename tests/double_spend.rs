@@ -19,26 +19,22 @@ fn double_spend_rejected() {
     assert_eq!(balance_before, 10000);
 
     let tx_amount = 5000u64;
-    let mut tx1 = Transaction {
-        sender: sender.clone(),
-        receiver: receiver1.clone(),
-        amount: tx_amount,
-        nonce: 1,
-        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: false,
-    };
+    let mut tx1 = Transaction::transfer(
+        &sender,
+        &receiver1,
+        tx_amount,
+        1,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    );
     sign_transaction(&mut tx1, &keypairs[0].1);
 
-    let mut tx2 = Transaction {
-        sender: sender.clone(),
-        receiver: receiver2,
-        amount: tx_amount,
-        nonce: 1,
-        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: false,
-    };
+    let mut tx2 = Transaction::transfer(
+        &sender,
+        &receiver2,
+        tx_amount,
+        1,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    );
     sign_transaction(&mut tx2, &keypairs[0].1);
 
     let result1 = bc.apply_tx(tx1);

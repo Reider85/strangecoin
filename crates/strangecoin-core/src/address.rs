@@ -47,6 +47,35 @@ pub fn decode_address(s: &str) -> Result<(PublicKey, u32), CoreError> {
     Ok((pk, network_id))
 }
 
+/// Deterministic contract address derivation (S1.5-P08): the address of the
+/// contract deployed by `creator_addr` at nonce `nonce` is the bech32m encoding
+/// of `blake3("sc-contract-addr" || creator || nonce)` with the network HRP.
+/// The 32-byte payload cannot collide with a 33-byte EOA pubkey encoding.
+pub fn derive_contract_address(
+    creator_addr: &str,
+    nonce: u64,
+    network_id: u32,
+) -> Result<String, CoreError> {
+    let hrp = hrp_for_network(network_id)?;
+    let hrp = Hrp::parse(hrp).map_err(|_| CoreError::InvalidAddressFormat {
+        reason: format!("Invalid HRP: {}", hrp),
+    })?;
+
+    let mut input = Vec::with_capacity(15 + creator_addr.len() + 8);
+    input.extend_from_slice(b"sc-contract-addr");
+    input.extend_from_slice(creator_addr.as_bytes());
+    input.extend_from_slice(&nonce.to_be_bytes());
+    let hash = blake3::hash(&input);
+
+    Ok(encode::<Bech32m>(hrp, hash.as_bytes())?)
+}
+
+/// Reserved precompile addresses `0x01..=0x07` (ADR-0015). `create` must never
+/// deploy into this range; full precompile dispatch lands in S1.5-P11.
+pub fn is_precompile_address(addr: &str) -> bool {
+    matches!(addr, "0x01" | "0x02" | "0x03" | "0x04" | "0x05" | "0x06" | "0x07")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,5 +150,39 @@ mod tests {
         
         let regtest_addr = encode_address(&pk, 3).unwrap();
         assert!(regtest_addr.starts_with("rsc1"));
+    }
+
+    #[test]
+    fn test_derive_contract_address_deterministic() {
+        let a1 = derive_contract_address("rsc1creator", 1, 3).unwrap();
+        let a2 = derive_contract_address("rsc1creator", 1, 3).unwrap();
+        assert_eq!(a1, a2, "same (creator, nonce) must derive the same address");
+        assert!(a1.starts_with("rsc1"), "regtest HRP expected, got {a1}");
+
+        let a3 = derive_contract_address("rsc1creator", 2, 3).unwrap();
+        assert_ne!(a1, a3, "different nonce must derive a different address");
+
+        let a4 = derive_contract_address("rsc1other", 1, 3).unwrap();
+        assert_ne!(a1, a4, "different creator must derive a different address");
+
+        let mainnet = derive_contract_address("sc1creator", 1, 1).unwrap();
+        assert!(mainnet.starts_with("sc1"));
+    }
+
+    #[test]
+    fn test_contract_address_is_not_an_eoa() {
+        let contract = derive_contract_address("rsc1creator", 0, 3).unwrap();
+        assert!(
+            decode_address(&contract).is_err(),
+            "32-byte contract payload must not decode as a 33-byte EOA pubkey"
+        );
+    }
+
+    #[test]
+    fn test_is_precompile_address() {
+        assert!(is_precompile_address("0x01"));
+        assert!(is_precompile_address("0x07"));
+        assert!(!is_precompile_address("0x08"));
+        assert!(!is_precompile_address("rsc1something"));
     }
 }

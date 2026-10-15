@@ -9,27 +9,11 @@ const CODE_HASH: [u8; 32] = [7u8; 32];
 const STORAGE_ROOT: [u8; 32] = [9u8; 32];
 
 fn coinbase_tx(receiver: &str, amount: u64) -> Transaction {
-    Transaction {
-        sender: "coinbase".to_string(),
-        receiver: receiver.to_string(),
-        amount,
-        nonce: 0,
-        chain_id: CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: true,
-    }
+    Transaction::coinbase("coinbase", receiver, amount, CHAIN_ID_REGTEST)
 }
 
 fn transfer_tx(sender: &str, receiver: &str, amount: u64, nonce: u64) -> Transaction {
-    Transaction {
-        sender: sender.to_string(),
-        receiver: receiver.to_string(),
-        amount,
-        nonce,
-        chain_id: CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: false,
-    }
+    Transaction::transfer(sender, receiver, amount, nonce, CHAIN_ID_REGTEST)
 }
 
 fn regtest_block(index: u64, transactions: Vec<Transaction>) -> Block {

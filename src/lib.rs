@@ -1531,7 +1531,7 @@ pub mod test_support {
         let mut sig_vec = Vec::with_capacity(65);
         sig_vec.extend_from_slice(&sig_bytes);
         sig_vec.push(rec_id.to_i32() as u8);
-        tx.signature = sig_vec;
+        *tx.signature_mut() = sig_vec;
     }
 
     pub fn generate_keypair() -> (String, SecretKey) {
@@ -1555,15 +1555,13 @@ pub mod test_support {
         secret_key: &SecretKey,
     ) {
         let sender_nonce = bc.get_nonce(sender_addr);
-        let mut tx = Transaction {
-            sender: sender_addr.to_string(),
-            receiver: receiver_addr.to_string(),
+        let mut tx = Transaction::transfer(
+            sender_addr,
+            receiver_addr,
             amount,
-            nonce: sender_nonce + 1,
-            chain_id: bc.chain_id(),
-            signature: Vec::new(),
-            is_coinbase: false,
-        };
+            sender_nonce + 1,
+            bc.chain_id(),
+        );
         sign_transaction(&mut tx, secret_key);
         assert!(bc.apply_tx(tx).is_ok(), "Transaction rejected");
         mine_current(bc);

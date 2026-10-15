@@ -21,15 +21,13 @@ fn emission_matches_block_reward() {
             strangecoin::consensus::CHAIN_ID_REGTEST,
         );
 
-        let mut tx = Transaction {
-            sender: addr.clone(),
-            receiver: "recipient".to_string(),
-            amount: 0,
-            nonce: height - 1,
-            chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-            signature: Vec::new(),
-            is_coinbase: false,
-        };
+        let mut tx = Transaction::transfer(
+            &addr,
+            "recipient",
+            0,
+            height - 1,
+            strangecoin::consensus::CHAIN_ID_REGTEST,
+        );
         sign_transaction(&mut tx, &keypairs[0].1);
         let _ = bc.apply_tx(tx);
 

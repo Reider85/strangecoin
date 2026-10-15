@@ -341,28 +341,48 @@ pub fn validate_nonce(tx_nonce: u64, account_nonce: u64) -> Result<(), CoreError
 }
 
 pub fn verify_transaction(tx: &Transaction) -> Result<(), CoreError> {
-    if tx.is_coinbase {
+    if tx.is_coinbase() {
         return Ok(());
     }
-    let pk = recover_pubkey_from_sig(&tx.signature, &serialize::serialize_transaction(tx))?;
-    let (sender_pk, _net) = crate::address::decode_address(&tx.sender)?;
+    match tx {
+        Transaction::Create(create) => {
+            if create.init_code.is_empty() {
+                return Err(CoreError::InvalidContractDeploy {
+                    reason: "init_code is empty".to_string(),
+                });
+            }
+        }
+        Transaction::Call(call) => {
+            if call.gas_limit == 0 {
+                return Err(CoreError::InvalidGasLimit {
+                    reason: "gas_limit must be > 0".to_string(),
+                });
+            }
+        }
+        Transaction::Transfer(_) => {}
+    }
+    let pk = recover_pubkey_from_sig(tx.signature(), &serialize::serialize_transaction(tx))?;
+    let (sender_pk, _net) = crate::address::decode_address(tx.sender())?;
     if sender_pk != pk {
         return Err(CoreError::InvalidSignature);
     }
     Ok(())
 }
 
+/// Hash of the mainnet genesis block built from `genesis.json`.
+/// S1.5-P08: regenerated after the FORMAT_VERSION 5 transaction encoding bump
+/// (Transaction enum: transfer/create/call; fee in the signed payload).
 pub const EXPECTED_GENESIS_HASH: [u8; 32] = [
-    0xcf, 0x34, 0x40, 0xb9, 0x67, 0x61, 0xb1, 0x17, 0x44, 0x31, 0xe5, 0xc3, 0xc4, 0xc6, 0x18, 0xdd,
-    0x5a, 0xf2, 0x72, 0x54, 0x0c, 0x2c, 0x16, 0x77, 0x92, 0x67, 0x08, 0xa6, 0x4a, 0x35, 0x63, 0x75,
+    0xfc, 0xd7, 0x9a, 0x70, 0xea, 0xcb, 0x83, 0x08, 0x32, 0xdf, 0x84, 0xac, 0x0f, 0x5f, 0x55, 0x10,
+    0x38, 0xea, 0xe4, 0x79, 0x05, 0x31, 0x41, 0x0c, 0x2a, 0x13, 0x02, 0x97, 0xdd, 0x65, 0x31, 0x01,
 ];
 
 /// Hash of the testnet genesis block built from `genesis-testnet.json`
 /// (BUG-S1-004). The testnet initial holder may reuse the burned testnet
 /// pubkey (SCIP-0001 §2: burned-key material is testnet/regtest-only).
 pub const EXPECTED_TESTNET_GENESIS_HASH: [u8; 32] = [
-    0xd4, 0x7f, 0xbe, 0x3e, 0x88, 0x92, 0xc4, 0x14, 0x1f, 0x36, 0xb9, 0x5e, 0xe3, 0x67, 0x83, 0x44,
-    0xa3, 0x77, 0xf9, 0x70, 0x01, 0xc4, 0xc4, 0x32, 0xb4, 0x43, 0x5c, 0x88, 0x11, 0xdd, 0x9c, 0x5a,
+    0x23, 0xdd, 0xe7, 0xb1, 0x4f, 0x81, 0x09, 0x70, 0x21, 0x67, 0x39, 0x3f, 0xb1, 0x3e, 0xbf, 0xb1,
+    0xdd, 0xe8, 0xec, 0x37, 0xf6, 0xe9, 0x65, 0xaa, 0x17, 0x9f, 0x60, 0xba, 0xf2, 0xb8, 0xcf, 0x89,
 ];
 
 pub fn validate_tx_root(block: &Block) -> Result<(), CoreError> {

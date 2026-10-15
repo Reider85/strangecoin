@@ -151,6 +151,15 @@ impl From<strangecoin_core::CoreError> for StrangecoinError {
                     expected, got
                 ))
             }
+            strangecoin_core::CoreError::UnsupportedTxType { reason } => {
+                StrangecoinError::InvalidBlock(format!("unsupported tx type: {}", reason))
+            }
+            strangecoin_core::CoreError::InvalidContractDeploy { reason } => {
+                StrangecoinError::InvalidBlock(format!("invalid contract deploy: {}", reason))
+            }
+            strangecoin_core::CoreError::InvalidGasLimit { reason } => {
+                StrangecoinError::InvalidBlock(format!("invalid gas limit: {}", reason))
+            }
         }
     }
 }

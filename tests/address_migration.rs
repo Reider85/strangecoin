@@ -198,27 +198,22 @@ fn legacy_base64_addresses_in_chain_reset_and_migrate() {
     // base64 addresses — the migration must detect it and reset the chain.
     let genesis = stub_block(
         0,
-        vec![Transaction {
-            sender: "genesis".to_string(),
-            receiver: "regtest_initial_holder".to_string(),
-            amount: 0,
-            nonce: 0,
-            chain_id: consensus::CHAIN_ID_REGTEST,
-            signature: Vec::new(),
-            is_coinbase: true,
-        }],
+        vec![Transaction::coinbase(
+            "genesis",
+            "regtest_initial_holder",
+            0,
+            consensus::CHAIN_ID_REGTEST,
+        )],
     );
     let legacy_block = stub_block(
         1,
-        vec![Transaction {
-            sender: legacy_a.clone(),
-            receiver: legacy_b.clone(),
-            amount: 100,
-            nonce: 1,
-            chain_id: consensus::CHAIN_ID_REGTEST,
-            signature: Vec::new(),
-            is_coinbase: false,
-        }],
+        vec![Transaction::transfer(
+            &legacy_a,
+            &legacy_b,
+            100,
+            1,
+            consensus::CHAIN_ID_REGTEST,
+        )],
     );
     seed_balances_and_chain(db.path(), &balances, &[genesis, legacy_block]);
 
@@ -238,8 +233,9 @@ fn legacy_base64_addresses_in_chain_reset_and_migrate() {
     );
     for block in &chain {
         for tx in &block.transactions {
-            for field in [&tx.sender, &tx.receiver] {
-                let is_magic = MAGIC_FIELDS.contains(&field.as_str());
+            let fields: [&str; 2] = [tx.sender(), tx.receiver().unwrap_or("")];
+            for field in fields {
+                let is_magic = MAGIC_FIELDS.contains(&field);
                 assert!(
                     is_magic || address::decode_address(field).is_ok(),
                     "no base64 pubkey may remain in chain tx fields, got {field}"

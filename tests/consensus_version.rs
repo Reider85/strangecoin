@@ -12,19 +12,16 @@ fn stale_consensus_version_rejected() {
 
     let previous_block = bc.tip().unwrap();
 
-    let coinbase_tx = Transaction {
-        sender: "coinbase".to_string(),
-        receiver: "miner".to_string(),
-        amount: strangecoin::economics::emission::block_reward_at_height_for_chain(
+    let coinbase_tx = Transaction::coinbase(
+        "coinbase",
+        "miner",
+        strangecoin::economics::emission::block_reward_at_height_for_chain(
             previous_block.index + 1,
             bc.total_supply(),
             strangecoin::consensus::CHAIN_ID_REGTEST,
         ),
-        nonce: 0,
-        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: true,
-    };
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    );
 
     let mut block = Block {
         index: previous_block.index + 1,
@@ -58,19 +55,16 @@ fn future_consensus_version_rejected() {
 
     let previous_block = bc.tip().unwrap();
 
-    let coinbase_tx = Transaction {
-        sender: "coinbase".to_string(),
-        receiver: "miner".to_string(),
-        amount: strangecoin::economics::emission::block_reward_at_height_for_chain(
+    let coinbase_tx = Transaction::coinbase(
+        "coinbase",
+        "miner",
+        strangecoin::economics::emission::block_reward_at_height_for_chain(
             previous_block.index + 1,
             bc.total_supply(),
             strangecoin::consensus::CHAIN_ID_REGTEST,
         ),
-        nonce: 0,
-        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: true,
-    };
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    );
 
     let mut block = Block {
         index: previous_block.index + 1,
@@ -107,15 +101,13 @@ fn correct_consensus_version_accepted() {
     assert!(bc.grant_initial_balance_to_first_wallet(&addr).unwrap());
 
     // mine_block() needs a pending transaction to build a block from.
-    let mut tx = Transaction {
-        sender: addr.clone(),
-        receiver: "recipient".to_string(),
-        amount: 100,
-        nonce: 1,
-        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: false,
-    };
+    let mut tx = Transaction::transfer(
+        &addr,
+        "recipient",
+        100,
+        1,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    );
     sign_transaction(&mut tx, &keypairs[0].1);
     bc.apply_tx(tx).expect("transaction rejected");
 

@@ -290,15 +290,13 @@ if let Some(ref progress_rx) = self.progress_rx {
                             return;
                         }
                         let sender_nonce = self.node.blockchain.get_nonce(&self.wallet_address);
-                            let mut transaction = Transaction {
-                                sender: self.wallet_address.clone(),
-                                receiver: self.receiver_address.trim().to_string(),
+                            let mut transaction = Transaction::transfer(
+                                &self.wallet_address,
+                                self.receiver_address.trim(),
                                 amount,
-                                nonce: sender_nonce + 1,
-                                chain_id: self.node.network_id,
-                                signature: Vec::new(),
-                                is_coinbase: false,
-                            };
+                                sender_nonce + 1,
+                                self.node.network_id,
+                            );
                             let data_dir = self.data_dir.clone();
                             let sanitized_address = self.wallet_address
                                 .replace("/", "_")

@@ -237,7 +237,7 @@ impl Wallet {
         let message_bytes = strangecoin_core::serialize::serialize_transaction(transaction);
         let message_hash = blake3::hash(&message_bytes);
         let signature = self.sign(message_hash.as_bytes())?;
-        transaction.signature = signature.to_vec();
+        *transaction.signature_mut() = signature.to_vec();
         Ok(())
     }
 }

@@ -351,7 +351,9 @@ impl Blockchain {
         &mut self,
         transaction: Transaction,
     ) -> Result<crate::mempool::InsertOutcome, StrangecoinError> {
-        if transaction.sender.is_empty() || transaction.receiver.is_empty() {
+        if transaction.sender().is_empty()
+            || transaction.receiver().is_some_and(|r| r.is_empty())
+        {
             tracing::warn!("Пустой адрес отправителя или получателя");
             return Err(StrangecoinError::SizeLimitExceeded("empty address"));
         }
@@ -366,7 +368,7 @@ impl Blockchain {
             );
             return Err(StrangecoinError::SizeLimitExceeded("transaction"));
         }
-        let account_state = self.balances.get(&transaction.sender).unwrap_or_default();
+        let account_state = self.balances.get(transaction.sender()).unwrap_or_default();
         let outcome = self.mempool.insert(transaction, &account_state)?;
         info!(
             pending_count = self.mempool.len(),
@@ -409,20 +411,23 @@ impl Blockchain {
         };
         let mut temp_state = reconstructed.to_state();
         for tx in self.mempool.transactions() {
-            let sender_balance = temp_state.get_balance(&tx.sender);
-            if sender_balance < tx.amount {
+            let required = tx.value() + tx.fee();
+            let sender_balance = temp_state.get_balance(tx.sender());
+            if sender_balance < required {
                 tracing::warn!(
-                    sender = %tx.sender,
-                    nonce = tx.nonce,
-                    required = tx.amount,
+                    sender = %tx.sender(),
+                    nonce = tx.nonce(),
+                    required,
                     available = sender_balance,
                     "Недостаточно средств в mempool"
                 );
                 return false;
             }
-            temp_state.set_balance(&tx.sender, sender_balance.saturating_sub(tx.amount));
-            let receiver_balance = temp_state.get_balance(&tx.receiver);
-            temp_state.set_balance(&tx.receiver, receiver_balance.saturating_add(tx.amount));
+            temp_state.set_balance(tx.sender(), sender_balance.saturating_sub(required));
+            if let Some(receiver) = tx.receiver() {
+                let receiver_balance = temp_state.get_balance(receiver);
+                temp_state.set_balance(receiver, receiver_balance.saturating_add(tx.value()));
+            }
         }
         let rebuilt = reconstructed.nonzero_balances();
         let stored = self.balances.nonzero_balances();
@@ -453,7 +458,7 @@ impl Blockchain {
             .lock()
             .expect("Не удалось захватить Mutex для LevelDB");
         for tx in self.mempool.transactions() {
-            let key = format!("{}:{}", tx.sender, tx.nonce).into_bytes();
+            let key = format!("{}:{}", tx.sender(), tx.nonce()).into_bytes();
             match db.get(&key) {
                 Some(_) => continue,
                 None => {
@@ -556,10 +561,11 @@ impl Blockchain {
         let mut legacy_in_chain = false;
         'outer: for block in &self.chain {
             for tx in &block.transactions {
-                for field in [&tx.sender, &tx.receiver] {
+                let fields: [&str; 2] = [tx.sender(), tx.receiver().unwrap_or("")];
+                for field in fields {
                     if crate::address::decode_address(field).is_err()
                         && !matches!(
-                            field.as_str(),
+                            field,
                             "genesis" | "coinbase"
                                 | "initial_wallet_address"
                                 | "regtest_initial_holder"

@@ -7,15 +7,12 @@ use strangecoin::{Block, BlockchainFacade, Transaction};
 // Ненулевой coinbase обязателен: state::apply_block отклоняет блоки без него,
 // а tx_root должен быть посчитан по фактическому списку транзакций.
 fn zero_reward_coinbase() -> Transaction {
-    Transaction {
-        sender: "coinbase".to_string(),
-        receiver: "miner".to_string(),
-        amount: 0,
-        nonce: 0,
-        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: true,
-    }
+    Transaction::coinbase(
+        "coinbase",
+        "miner",
+        0,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    )
 }
 
 fn create_block_with_timestamp(bc: &BlockchainFacade, timestamp: u64) -> bool {

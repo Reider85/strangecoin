@@ -239,10 +239,14 @@ impl Account {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Transaction {
-    pub sender: String,
-    pub receiver: String,
+pub struct TransferTx {
+    #[serde(rename = "sender", default)]
+    pub from: String,
+    #[serde(rename = "receiver", default)]
+    pub to: String,
     pub amount: u64,
+    #[serde(default)]
+    pub fee: u64,
     #[serde(default)]
     pub nonce: u64,
     #[serde(default)]
@@ -251,6 +255,272 @@ pub struct Transaction {
     pub signature: Vec<u8>,
     #[serde(default)]
     pub is_coinbase: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CreateTx {
+    #[serde(default)]
+    pub from: String,
+    #[serde(default)]
+    pub init_code: Vec<u8>,
+    #[serde(default)]
+    pub init_args: Vec<u8>,
+    #[serde(default)]
+    pub endowment: u64,
+    #[serde(default)]
+    pub fee: u64,
+    #[serde(default)]
+    pub nonce: u64,
+    #[serde(default)]
+    pub chain_id: u32,
+    #[serde(default)]
+    pub signature: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CallTx {
+    #[serde(default)]
+    pub from: String,
+    #[serde(default)]
+    pub to: String,
+    #[serde(default)]
+    pub data: Vec<u8>,
+    #[serde(default)]
+    pub value: u64,
+    #[serde(default)]
+    pub gas_limit: u64,
+    #[serde(default)]
+    pub fee: u64,
+    #[serde(default)]
+    pub nonce: u64,
+    #[serde(default)]
+    pub chain_id: u32,
+    #[serde(default)]
+    pub signature: Vec<u8>,
+}
+
+/// Transaction model (S1.5-P08): three variants — `Transfer` (EOA → EOA),
+/// `Create` (deploy WASM bytecode) and `Call` (invoke a contract method).
+/// Every variant carries `chain_id` (invariant #10 replay protection),
+/// `nonce` (invariant #11) and a `signature` over the canonical per-variant
+/// encoding; the call/init payload is part of the signed bytes.
+///
+/// Serde stays compatible with the Stage 0/1 flat JSON: a `Transfer`
+/// serializes to the exact legacy `{sender, receiver, amount, ...}` shape
+/// (plus the new `fee` key, defaulting to 0 on read); `Create`/`Call` use an
+/// internally tagged `{"type":"create"|"call", ...}` form. Deserialization
+/// accepts the tagged form and falls back to the legacy flat form (→ Transfer).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Transaction {
+    Transfer(TransferTx),
+    Create(CreateTx),
+    Call(CallTx),
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum TaggedTransaction {
+    Create(CreateTx),
+    Call(CallTx),
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum TransactionRepr {
+    Tagged(TaggedTransaction),
+    LegacyTransfer(TransferTx),
+}
+
+#[derive(Serialize)]
+struct TaggedCreateRef<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    #[serde(flatten)]
+    inner: &'a CreateTx,
+}
+
+#[derive(Serialize)]
+struct TaggedCallRef<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    #[serde(flatten)]
+    inner: &'a CallTx,
+}
+
+impl Serialize for Transaction {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Transaction::Transfer(tx) => tx.serialize(serializer),
+            Transaction::Create(tx) => TaggedCreateRef {
+                kind: "create",
+                inner: tx,
+            }
+            .serialize(serializer),
+            Transaction::Call(tx) => TaggedCallRef {
+                kind: "call",
+                inner: tx,
+            }
+            .serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Transaction {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match TransactionRepr::deserialize(deserializer)? {
+            TransactionRepr::Tagged(TaggedTransaction::Create(tx)) => {
+                Ok(Transaction::Create(tx))
+            }
+            TransactionRepr::Tagged(TaggedTransaction::Call(tx)) => Ok(Transaction::Call(tx)),
+            TransactionRepr::LegacyTransfer(tx) => Ok(Transaction::Transfer(tx)),
+        }
+    }
+}
+
+impl Transaction {
+    pub fn transfer(from: &str, to: &str, amount: u64, nonce: u64, chain_id: u32) -> Self {
+        Transaction::Transfer(TransferTx {
+            from: from.to_string(),
+            to: to.to_string(),
+            amount,
+            fee: 0,
+            nonce,
+            chain_id,
+            signature: Vec::new(),
+            is_coinbase: false,
+        })
+    }
+
+    pub fn coinbase(from: &str, to: &str, amount: u64, chain_id: u32) -> Self {
+        Transaction::Transfer(TransferTx {
+            from: from.to_string(),
+            to: to.to_string(),
+            amount,
+            fee: 0,
+            nonce: 0,
+            chain_id,
+            signature: Vec::new(),
+            is_coinbase: true,
+        })
+    }
+
+    pub fn create(
+        from: &str,
+        init_code: Vec<u8>,
+        init_args: Vec<u8>,
+        endowment: u64,
+        nonce: u64,
+        chain_id: u32,
+    ) -> Self {
+        Transaction::Create(CreateTx {
+            from: from.to_string(),
+            init_code,
+            init_args,
+            endowment,
+            fee: 0,
+            nonce,
+            chain_id,
+            signature: Vec::new(),
+        })
+    }
+
+    pub fn call(
+        from: &str,
+        to: &str,
+        data: Vec<u8>,
+        value: u64,
+        gas_limit: u64,
+        nonce: u64,
+        chain_id: u32,
+    ) -> Self {
+        Transaction::Call(CallTx {
+            from: from.to_string(),
+            to: to.to_string(),
+            data,
+            value,
+            gas_limit,
+            fee: 0,
+            nonce,
+            chain_id,
+            signature: Vec::new(),
+        })
+    }
+
+    pub fn sender(&self) -> &str {
+        match self {
+            Transaction::Transfer(tx) => &tx.from,
+            Transaction::Create(tx) => &tx.from,
+            Transaction::Call(tx) => &tx.from,
+        }
+    }
+
+    /// Receiver of the transferred funds. `None` for `Create` — the contract
+    /// address is derived from `(from, nonce)`, not carried in the tx.
+    pub fn receiver(&self) -> Option<&str> {
+        match self {
+            Transaction::Transfer(tx) => Some(&tx.to),
+            Transaction::Create(_) => None,
+            Transaction::Call(tx) => Some(&tx.to),
+        }
+    }
+
+    pub fn nonce(&self) -> u64 {
+        match self {
+            Transaction::Transfer(tx) => tx.nonce,
+            Transaction::Create(tx) => tx.nonce,
+            Transaction::Call(tx) => tx.nonce,
+        }
+    }
+
+    pub fn chain_id(&self) -> u32 {
+        match self {
+            Transaction::Transfer(tx) => tx.chain_id,
+            Transaction::Create(tx) => tx.chain_id,
+            Transaction::Call(tx) => tx.chain_id,
+        }
+    }
+
+    pub fn signature(&self) -> &[u8] {
+        match self {
+            Transaction::Transfer(tx) => &tx.signature,
+            Transaction::Create(tx) => &tx.signature,
+            Transaction::Call(tx) => &tx.signature,
+        }
+    }
+
+    pub fn signature_mut(&mut self) -> &mut Vec<u8> {
+        match self {
+            Transaction::Transfer(tx) => &mut tx.signature,
+            Transaction::Create(tx) => &mut tx.signature,
+            Transaction::Call(tx) => &mut tx.signature,
+        }
+    }
+
+    pub fn fee(&self) -> u64 {
+        match self {
+            Transaction::Transfer(tx) => tx.fee,
+            Transaction::Create(tx) => tx.fee,
+            Transaction::Call(tx) => tx.fee,
+        }
+    }
+
+    /// Transferred amount: `Transfer.amount`, `Create.endowment`,
+    /// `Call.value`.
+    pub fn value(&self) -> u64 {
+        match self {
+            Transaction::Transfer(tx) => tx.amount,
+            Transaction::Create(tx) => tx.endowment,
+            Transaction::Call(tx) => tx.value,
+        }
+    }
+
+    pub fn is_coinbase(&self) -> bool {
+        match self {
+            Transaction::Transfer(tx) => tx.is_coinbase,
+            Transaction::Create(_) => false,
+            Transaction::Call(_) => false,
+        }
+    }
 }
 
 /// Chain snapshot for sync channel and GUI updates

@@ -20,15 +20,13 @@ fn mining_on_regtest_low_difficulty() {
     assert_eq!(bc2.chain_len(), 2);
 
     {
-        let mut tx = Transaction {
-            sender: addr.clone(),
-            receiver: "recipient".to_string(),
-            amount: 100,
-            nonce: 1,
-            chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-            signature: Vec::new(),
-            is_coinbase: false,
-        };
+        let mut tx = Transaction::transfer(
+            &addr,
+            "recipient",
+            100,
+            1,
+            strangecoin::consensus::CHAIN_ID_REGTEST,
+        );
         sign_transaction(&mut tx, &keypairs[0].1);
         assert!(bc1.apply_tx(tx).is_ok());
 

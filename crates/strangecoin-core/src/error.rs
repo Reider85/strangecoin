@@ -52,4 +52,10 @@ pub enum CoreError {
     Bech32EncodeError(#[from] bech32::EncodeError),
     #[error("header hash mismatch: expected {expected}, got {got}")]
     HeaderHashMismatch { expected: String, got: String },
+    #[error("unsupported transaction type for this operation: {reason}")]
+    UnsupportedTxType { reason: String },
+    #[error("invalid contract deploy: {reason}")]
+    InvalidContractDeploy { reason: String },
+    #[error("invalid gas limit: {reason}")]
+    InvalidGasLimit { reason: String },
 }

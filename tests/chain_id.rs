@@ -18,15 +18,7 @@ fn signed_tx(
     chain_id: u32,
     key: &secp256k1::SecretKey,
 ) -> Transaction {
-    let mut tx = Transaction {
-        sender: sender.to_string(),
-        receiver: receiver.to_string(),
-        amount,
-        nonce,
-        chain_id,
-        signature: Vec::new(),
-        is_coinbase: false,
-    };
+    let mut tx = Transaction::transfer(sender, receiver, amount, nonce, chain_id);
     sign_transaction(&mut tx, key);
     tx
 }
@@ -84,15 +76,7 @@ fn block_with_foreign_chain_id_tx_rejected() {
     // A structurally valid block (position/hash/tx_root/target OK) whose
     // transfer carries a foreign chain_id: validate_and_apply must fail on
     // the chain_id gate before any state transition.
-    let coinbase = Transaction {
-        sender: "coinbase".to_string(),
-        receiver: addr.clone(),
-        amount: 0,
-        nonce: 0,
-        chain_id: CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: true,
-    };
+    let coinbase = Transaction::coinbase("coinbase", &addr, 0, CHAIN_ID_REGTEST);
     let mut block = strangecoin::Block {
         index: 1,
         timestamp: genesis.timestamp + 1,
@@ -168,15 +152,7 @@ fn coinbase_above_mainnet_schedule_rejected() {
         CHAIN_ID_MAINNET,
     ) + 1;
 
-    let coinbase = Transaction {
-        sender: "coinbase".to_string(),
-        receiver: addr,
-        amount: overpay,
-        nonce: 0,
-        chain_id: CHAIN_ID_MAINNET,
-        signature: Vec::new(),
-        is_coinbase: true,
-    };
+    let coinbase = Transaction::coinbase("coinbase", &addr, overpay, CHAIN_ID_MAINNET);
     let mut block = strangecoin::Block {
         index: 1,
         timestamp: genesis.timestamp + 1,

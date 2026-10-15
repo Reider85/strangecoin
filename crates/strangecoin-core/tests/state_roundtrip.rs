@@ -45,27 +45,11 @@ fn transfer_block(index: u64, txs: Vec<Transaction>) -> Block {
 }
 
 fn coinbase(receiver: &str, amount: u64) -> Transaction {
-    Transaction {
-        sender: "coinbase".to_string(),
-        receiver: receiver.to_string(),
-        amount,
-        nonce: 0,
-        chain_id: 3,
-        signature: Vec::new(),
-        is_coinbase: true,
-    }
+    Transaction::coinbase("coinbase", receiver, amount, 3)
 }
 
 fn transfer(sender: &str, receiver: &str, amount: u64, nonce: u64) -> Transaction {
-    Transaction {
-        sender: sender.to_string(),
-        receiver: receiver.to_string(),
-        amount,
-        nonce,
-        chain_id: 3,
-        signature: Vec::new(),
-        is_coinbase: false,
-    }
+    Transaction::transfer(sender, receiver, amount, nonce, 3)
 }
 
 proptest! {

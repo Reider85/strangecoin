@@ -1,25 +1,57 @@
-use crate::types::{Block, BlockHeader, Transaction};
+use crate::types::{Block, BlockHeader, CallTx, CreateTx, Transaction, TransferTx};
 use blake3;
 use hex;
 
-pub const FORMAT_VERSION: u8 = 4;
+pub const FORMAT_VERSION: u8 = 5;
+
+pub const TX_TAG_TRANSFER: u8 = 0;
+pub const TX_TAG_CREATE: u8 = 1;
+pub const TX_TAG_CALL: u8 = 2;
 
 pub fn serialize_transaction(tx: &Transaction) -> Vec<u8> {
     let mut out = Vec::new();
     out.push(FORMAT_VERSION);
-    write_string(&mut out, &tx.sender);
-    write_string(&mut out, &tx.receiver);
-    out.extend_from_slice(&tx.amount.to_be_bytes());
-    out.extend_from_slice(&tx.nonce.to_be_bytes());
-    out.extend_from_slice(&tx.chain_id.to_be_bytes());
-    out.push(tx.is_coinbase as u8);
+    match tx {
+        Transaction::Transfer(t) => {
+            out.push(TX_TAG_TRANSFER);
+            write_string(&mut out, &t.from);
+            write_string(&mut out, &t.to);
+            out.extend_from_slice(&t.amount.to_be_bytes());
+            out.extend_from_slice(&t.fee.to_be_bytes());
+            out.extend_from_slice(&t.nonce.to_be_bytes());
+            out.extend_from_slice(&t.chain_id.to_be_bytes());
+            out.push(t.is_coinbase as u8);
+        }
+        Transaction::Create(t) => {
+            out.push(TX_TAG_CREATE);
+            write_string(&mut out, &t.from);
+            write_bytes(&mut out, &t.init_code);
+            write_bytes(&mut out, &t.init_args);
+            out.extend_from_slice(&t.endowment.to_be_bytes());
+            out.extend_from_slice(&t.fee.to_be_bytes());
+            out.extend_from_slice(&t.nonce.to_be_bytes());
+            out.extend_from_slice(&t.chain_id.to_be_bytes());
+        }
+        Transaction::Call(t) => {
+            out.push(TX_TAG_CALL);
+            write_string(&mut out, &t.from);
+            write_string(&mut out, &t.to);
+            write_bytes(&mut out, &t.data);
+            out.extend_from_slice(&t.value.to_be_bytes());
+            out.extend_from_slice(&t.gas_limit.to_be_bytes());
+            out.extend_from_slice(&t.fee.to_be_bytes());
+            out.extend_from_slice(&t.nonce.to_be_bytes());
+            out.extend_from_slice(&t.chain_id.to_be_bytes());
+        }
+    }
     out
 }
 
 pub fn serialize_transaction_signed(tx: &Transaction) -> Vec<u8> {
     let mut out = serialize_transaction(tx);
-    out.extend_from_slice(&(tx.signature.len() as u32).to_be_bytes());
-    out.extend_from_slice(&tx.signature);
+    let signature = tx.signature();
+    out.extend_from_slice(&(signature.len() as u32).to_be_bytes());
+    out.extend_from_slice(signature);
     out
 }
 
@@ -196,6 +228,11 @@ fn write_string(out: &mut Vec<u8>, s: &str) {
     out.extend_from_slice(bytes);
 }
 
+fn write_bytes(out: &mut Vec<u8>, b: &[u8]) {
+    out.extend_from_slice(&(b.len() as u32).to_be_bytes());
+    out.extend_from_slice(b);
+}
+
 fn write_bytes32(out: &mut Vec<u8>, s: &str) {
     let bytes = hex::decode(s).expect("Invalid hex hash");
     assert_eq!(bytes.len(), 32, "Expected 32-byte hash");
@@ -246,6 +283,101 @@ pub fn read_string(bytes: &[u8], offset: &mut usize) -> Result<String, &'static 
     Ok(s)
 }
 
+fn read_bytes(bytes: &[u8], offset: &mut usize) -> Result<Vec<u8>, &'static str> {
+    let len = read_u32_be(bytes, offset)? as usize;
+    if *offset + len > bytes.len() {
+        return Err("Buffer too short for bytes");
+    }
+    let out = bytes[*offset..*offset + len].to_vec();
+    *offset += len;
+    Ok(out)
+}
+
+fn read_tx_tag(bytes: &[u8], offset: &mut usize) -> Result<u8, &'static str> {
+    if *offset >= bytes.len() {
+        return Err("Buffer too short for tx tag");
+    }
+    let tag = bytes[*offset];
+    *offset += 1;
+    match tag {
+        TX_TAG_TRANSFER | TX_TAG_CREATE | TX_TAG_CALL => Ok(tag),
+        _ => Err("Unknown transaction tag"),
+    }
+}
+
+fn deserialize_unsigned_body(
+    bytes: &[u8],
+    offset: &mut usize,
+) -> Result<Transaction, &'static str> {
+    let tag = read_tx_tag(bytes, offset)?;
+    match tag {
+        TX_TAG_TRANSFER => {
+            let from = read_string(bytes, offset)?;
+            let to = read_string(bytes, offset)?;
+            let amount = read_u64_be(bytes, offset)?;
+            let fee = read_u64_be(bytes, offset)?;
+            let nonce = read_u64_be(bytes, offset)?;
+            let chain_id = read_u32_be(bytes, offset)?;
+            if *offset >= bytes.len() {
+                return Err("Buffer too short for is_coinbase");
+            }
+            let is_coinbase = bytes[*offset] != 0;
+            *offset += 1;
+            Ok(Transaction::Transfer(TransferTx {
+                from,
+                to,
+                amount,
+                fee,
+                nonce,
+                chain_id,
+                signature: Vec::new(),
+                is_coinbase,
+            }))
+        }
+        TX_TAG_CREATE => {
+            let from = read_string(bytes, offset)?;
+            let init_code = read_bytes(bytes, offset)?;
+            let init_args = read_bytes(bytes, offset)?;
+            let endowment = read_u64_be(bytes, offset)?;
+            let fee = read_u64_be(bytes, offset)?;
+            let nonce = read_u64_be(bytes, offset)?;
+            let chain_id = read_u32_be(bytes, offset)?;
+            Ok(Transaction::Create(CreateTx {
+                from,
+                init_code,
+                init_args,
+                endowment,
+                fee,
+                nonce,
+                chain_id,
+                signature: Vec::new(),
+            }))
+        }
+        TX_TAG_CALL => {
+            let from = read_string(bytes, offset)?;
+            let to = read_string(bytes, offset)?;
+            let data = read_bytes(bytes, offset)?;
+            let value = read_u64_be(bytes, offset)?;
+            let gas_limit = read_u64_be(bytes, offset)?;
+            let fee = read_u64_be(bytes, offset)?;
+            let nonce = read_u64_be(bytes, offset)?;
+            let chain_id = read_u32_be(bytes, offset)?;
+            Ok(Transaction::Call(CallTx {
+                from,
+                to,
+                data,
+                value,
+                gas_limit,
+                fee,
+                nonce,
+                chain_id,
+                signature: Vec::new(),
+            }))
+        }
+        _ => Err("Unknown transaction tag"),
+    }
+}
+
 pub fn deserialize_transaction(bytes: &[u8]) -> Result<Transaction, &'static str> {
     let mut offset = 0;
 
@@ -258,22 +390,7 @@ pub fn deserialize_transaction(bytes: &[u8]) -> Result<Transaction, &'static str
         return Err("Unsupported format version");
     }
 
-    let sender = read_string(bytes, &mut offset)?;
-    let receiver = read_string(bytes, &mut offset)?;
-    let amount = read_u64_be(bytes, &mut offset)?;
-    let nonce = read_u64_be(bytes, &mut offset)?;
-    let chain_id = read_u32_be(bytes, &mut offset)?;
-    let is_coinbase = bytes.get(offset).copied().unwrap_or(0) != 0;
-
-    Ok(Transaction {
-        sender,
-        receiver,
-        amount,
-        nonce,
-        chain_id,
-        signature: Vec::new(),
-        is_coinbase,
-    })
+    deserialize_unsigned_body(bytes, &mut offset)
 }
 
 /// Full round-trip parser for [`serialize_transaction_signed`]: all fields
@@ -290,32 +407,15 @@ pub fn deserialize_transaction_signed(bytes: &[u8]) -> Result<Transaction, &'sta
         return Err("Unsupported format version");
     }
 
-    let sender = read_string(bytes, &mut offset)?;
-    let receiver = read_string(bytes, &mut offset)?;
-    let amount = read_u64_be(bytes, &mut offset)?;
-    let nonce = read_u64_be(bytes, &mut offset)?;
-    let chain_id = read_u32_be(bytes, &mut offset)?;
-    if offset >= bytes.len() {
-        return Err("Buffer too short for is_coinbase");
-    }
-    let is_coinbase = bytes[offset] != 0;
-    offset += 1;
+    let mut tx = deserialize_unsigned_body(bytes, &mut offset)?;
 
     let sig_len = read_u32_be(bytes, &mut offset)? as usize;
     if offset + sig_len != bytes.len() {
         return Err("Signature length mismatch");
     }
-    let signature = bytes[offset..].to_vec();
+    *tx.signature_mut() = bytes[offset..].to_vec();
 
-    Ok(Transaction {
-        sender,
-        receiver,
-        amount,
-        nonce,
-        chain_id,
-        signature,
-        is_coinbase,
-    })
+    Ok(tx)
 }
 
 #[cfg(test)]
@@ -323,17 +423,15 @@ mod tests {
     use super::*;
     use crate::types::{Block, Transaction};
 
+    fn sample_transfer(sender: &str) -> Transaction {
+        let mut tx = Transaction::transfer(sender, "receiver1", 100, 1, 1);
+        *tx.signature_mut() = vec![1, 2, 3, 4];
+        tx
+    }
+
     #[test]
     fn test_serialize_transaction_deterministic() {
-        let tx = Transaction {
-            sender: "sender1".to_string(),
-            receiver: "receiver1".to_string(),
-            amount: 100,
-            nonce: 1,
-            chain_id: 1,
-            signature: vec![1, 2, 3, 4],
-            is_coinbase: false,
-        };
+        let tx = sample_transfer("sender1");
         let bytes1 = serialize_transaction(&tx);
         let bytes2 = serialize_transaction(&tx);
         assert_eq!(bytes1, bytes2);
@@ -341,24 +439,8 @@ mod tests {
 
     #[test]
     fn test_serialize_transaction_different() {
-        let tx1 = Transaction {
-            sender: "sender1".to_string(),
-            receiver: "receiver1".to_string(),
-            amount: 100,
-            nonce: 1,
-            chain_id: 1,
-            signature: vec![1, 2, 3, 4],
-            is_coinbase: false,
-        };
-        let tx2 = Transaction {
-            sender: "sender2".to_string(),
-            receiver: "receiver1".to_string(),
-            amount: 100,
-            nonce: 1,
-            chain_id: 1,
-            signature: vec![1, 2, 3, 4],
-            is_coinbase: false,
-        };
+        let tx1 = sample_transfer("sender1");
+        let tx2 = sample_transfer("sender2");
         let bytes1 = serialize_transaction(&tx1);
         let bytes2 = serialize_transaction(&tx2);
         assert_ne!(bytes1, bytes2);
@@ -366,22 +448,33 @@ mod tests {
 
     #[test]
     fn test_txid_deterministic() {
-        let tx = Transaction {
-            sender: "sender1".to_string(),
-            receiver: "receiver1".to_string(),
-            amount: 100,
-            nonce: 1,
-            chain_id: 1,
-            signature: vec![
-                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-                24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
-                45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65,
-            ],
-            is_coinbase: false,
-        };
+        let mut tx = Transaction::transfer("sender1", "receiver1", 100, 1, 1);
+        *tx.signature_mut() = (1..=65).collect();
         let id1 = txid(&tx);
         let id2 = txid(&tx);
         assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn test_roundtrip_all_variants() {
+        let transfer = Transaction::transfer("sender1", "receiver1", 100, 1, 1);
+        let create = Transaction::create("sender1", vec![1, 2, 3], vec![4, 5], 50, 1, 1);
+        let call = Transaction::call("sender1", "receiver1", vec![9], 7, 100_000, 1, 1);
+        for tx in [transfer, create, call] {
+            let signed = serialize_transaction_signed(&tx);
+            let decoded = deserialize_transaction_signed(&signed).unwrap();
+            assert_eq!(decoded, tx);
+            let unsigned = serialize_transaction(&tx);
+            let decoded_u = deserialize_transaction(&unsigned).unwrap();
+            assert_eq!(decoded_u, tx);
+        }
+    }
+
+    #[test]
+    fn test_reject_unknown_tag() {
+        let mut bytes = serialize_transaction(&Transaction::transfer("a", "b", 1, 1, 1));
+        bytes[1] = 9;
+        assert!(deserialize_transaction(&bytes).is_err());
     }
 
     #[test]

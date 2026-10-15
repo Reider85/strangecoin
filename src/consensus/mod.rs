@@ -40,15 +40,7 @@ pub fn load_genesis(path: &str) -> Result<crate::Block, crate::error::Strangecoi
     let public_key = secp256k1::PublicKey::from_slice(&pk_bytes)?;
     let initial_holder_addr = crate::address::encode_address(&public_key, genesis.network_id)?;
 
-    let genesis_tx = crate::Transaction {
-        sender: "genesis".to_string(),
-        receiver: initial_holder_addr,
-        amount: genesis.initial_amount,
-        nonce: 0,
-        chain_id: genesis.chain_id,
-        signature: Vec::new(),
-        is_coinbase: true,
-    };
+    let genesis_tx = crate::Transaction::coinbase("genesis", &initial_holder_addr, genesis.initial_amount, genesis.chain_id);
 
     let target_bytes =
         hex::decode("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")?;
@@ -127,15 +119,12 @@ pub fn genesis_file_for_chain(
 pub fn regtest_genesis_block(consensus_version: u32) -> crate::Block {
     use strangecoin_core::consensus::CHAIN_ID_REGTEST;
 
-    let genesis_tx = crate::Transaction {
-        sender: "genesis".to_string(),
-        receiver: "regtest_initial_holder".to_string(),
-        amount: 1_000_000_000,
-        nonce: 0,
-        chain_id: CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: true,
-    };
+    let genesis_tx = crate::Transaction::coinbase(
+        "genesis",
+        "regtest_initial_holder",
+        1_000_000_000,
+        CHAIN_ID_REGTEST,
+    );
     let target_bytes =
         hex::decode("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
             .expect("valid target hex");

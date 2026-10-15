@@ -46,15 +46,13 @@ async fn three_subscribers_each_receive_live_node_events() {
     assert!(bc.grant_initial_balance_to_first_wallet(&alice).unwrap());
 
     // Event 1: a transaction accepted by the engine.
-    let mut transfer = Transaction {
-        sender: alice.clone(),
-        receiver: bob.clone(),
-        amount: 500,
-        nonce: 1,
-        chain_id: strangecoin::consensus::CHAIN_ID_REGTEST,
-        signature: Vec::new(),
-        is_coinbase: false,
-    };
+    let mut transfer = Transaction::transfer(
+        &alice,
+        &bob,
+        500,
+        1,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    );
     sign_transaction(&mut transfer, &keypairs[0].1);
     let txid = hex::encode(strangecoin_core::serialize::txid(&transfer));
     assert!(

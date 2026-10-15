@@ -72,10 +72,10 @@ impl Mempool {
     /// быть вытеснены вместе с ним. Пустой вектор — это не замена.
     pub fn find_replaceable(&self, tx: &Transaction) -> Vec<TxId> {
         let mut out = Vec::new();
-        if let Some(map) = self.by_sender.get(&tx.sender) {
-            if let Some(&conflict) = map.get(&tx.nonce) {
+        if let Some(map) = self.by_sender.get(tx.sender()) {
+            if let Some(&conflict) = map.get(&tx.nonce()) {
                 out.push(conflict);
-                out.extend(map.range(tx.nonce + 1..).map(|(_, id)| *id));
+                out.extend(map.range(tx.nonce() + 1..).map(|(_, id)| *id));
             }
         }
         out
@@ -93,10 +93,10 @@ impl Mempool {
 
         verify_transaction(&tx)?;
 
-        if tx.chain_id != self.chain_id {
+        if tx.chain_id() != self.chain_id {
             return Err(StrangecoinError::InvalidChainId {
                 expected: self.chain_id,
-                got: tx.chain_id,
+                got: tx.chain_id(),
             });
         }
 
@@ -150,7 +150,7 @@ impl Mempool {
         account_state: &AccountState,
         excluded: &[TxId],
     ) -> Result<(), StrangecoinError> {
-        let sender_map = self.by_sender.get(&tx.sender);
+        let sender_map = self.by_sender.get(tx.sender());
 
         let pending_count = sender_map
             .map(|m| {
@@ -162,7 +162,7 @@ impl Mempool {
         // expected = account.nonce + 1 + pending_count; правило — core
         // validate_nonce (BUG-S0-025), маппинг ошибки через From<CoreError>.
         strangecoin_core::consensus::validate_nonce(
-            tx.nonce,
+            tx.nonce(),
             account_state.nonce().saturating_add(pending_count),
         )?;
 
@@ -171,15 +171,16 @@ impl Mempool {
                 m.values()
                     .filter(|id| !excluded.contains(id))
                     .filter_map(|id| self.txs.get(id))
-                    .map(|t| t.amount)
+                    .map(|t| t.value() + t.fee())
                     .sum()
             })
             .unwrap_or(0);
         let available = account_state.balance().saturating_sub(pending_spent);
-        if tx.amount > available {
+        let required = tx.value() + tx.fee();
+        if required > available {
             return Err(StrangecoinError::InsufficientBalance {
                 available,
-                required: tx.amount,
+                required,
             });
         }
 
@@ -188,9 +189,9 @@ impl Mempool {
 
     fn store(&mut self, tx_id: TxId, tx: Transaction, generation: u32) {
         self.by_sender
-            .entry(tx.sender.clone())
+            .entry(tx.sender().to_string())
             .or_default()
-            .insert(tx.nonce, tx_id);
+            .insert(tx.nonce(), tx_id);
         self.txs.insert(tx_id, tx);
         self.generations.insert(tx_id, generation);
     }
@@ -198,10 +199,10 @@ impl Mempool {
     pub fn remove(&mut self, tx_id: &TxId) {
         self.generations.remove(tx_id);
         if let Some(tx) = self.txs.remove(tx_id) {
-            if let Some(sender_map) = self.by_sender.get_mut(&tx.sender) {
-                sender_map.remove(&tx.nonce);
+            if let Some(sender_map) = self.by_sender.get_mut(tx.sender()) {
+                sender_map.remove(&tx.nonce());
                 if sender_map.is_empty() {
-                    self.by_sender.remove(&tx.sender);
+                    self.by_sender.remove(tx.sender());
                 }
             }
         }
@@ -230,5 +231,111 @@ impl Mempool {
 
     pub fn transactions(&self) -> Vec<Transaction> {
         self.txs.values().cloned().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{generate_keypair, sign_transaction};
+    use strangecoin_core::types::Account;
+
+    const CHAIN: u32 = strangecoin_core::consensus::CHAIN_ID_REGTEST;
+
+    fn funded_account(balance: u64, nonce: u64) -> Account {
+        Account::eoa(balance, nonce)
+    }
+
+    #[test]
+    fn transfer_accepted() {
+        let (addr, key) = generate_keypair();
+        let mut pool = Mempool::new(CHAIN);
+        let mut tx = Transaction::transfer(&addr, "recipient", 100, 1, CHAIN);
+        sign_transaction(&mut tx, &key);
+        let outcome = pool.insert(tx, &funded_account(1_000, 0)).unwrap();
+        assert_eq!(outcome, InsertOutcome::Accepted);
+        assert_eq!(pool.len(), 1);
+    }
+
+    #[test]
+    fn create_accepted() {
+        let (addr, key) = generate_keypair();
+        let mut pool = Mempool::new(CHAIN);
+        let mut tx = Transaction::create(&addr, vec![0x00, 0x61, 0x73, 0x6d], Vec::new(), 0, 1, CHAIN);
+        sign_transaction(&mut tx, &key);
+        let outcome = pool.insert(tx, &funded_account(1_000, 0)).unwrap();
+        assert_eq!(outcome, InsertOutcome::Accepted);
+    }
+
+    #[test]
+    fn call_accepted_with_gas_limit() {
+        let (addr, key) = generate_keypair();
+        let mut pool = Mempool::new(CHAIN);
+        let mut tx = Transaction::call(&addr, "contract1", vec![1, 2, 3], 10, 100_000, 1, CHAIN);
+        sign_transaction(&mut tx, &key);
+        let outcome = pool.insert(tx, &funded_account(1_000, 0)).unwrap();
+        assert_eq!(outcome, InsertOutcome::Accepted);
+    }
+
+    #[test]
+    fn call_with_zero_gas_limit_rejected() {
+        let (addr, key) = generate_keypair();
+        let mut pool = Mempool::new(CHAIN);
+        let mut tx = Transaction::call(&addr, "contract1", vec![], 0, 0, 1, CHAIN);
+        sign_transaction(&mut tx, &key);
+        let err = pool.insert(tx, &funded_account(1_000, 0)).unwrap_err();
+        assert!(matches!(
+            err,
+            StrangecoinError::InvalidBlock(ref m) if m.contains("gas limit")
+        ), "{err:?}");
+    }
+
+    #[test]
+    fn create_with_empty_init_code_rejected() {
+        let (addr, key) = generate_keypair();
+        let mut pool = Mempool::new(CHAIN);
+        let mut tx = Transaction::create(&addr, Vec::new(), Vec::new(), 0, 1, CHAIN);
+        sign_transaction(&mut tx, &key);
+        let err = pool.insert(tx, &funded_account(1_000, 0)).unwrap_err();
+        assert!(matches!(
+            err,
+            StrangecoinError::InvalidBlock(ref m) if m.contains("init_code")
+        ), "{err:?}");
+    }
+
+    #[test]
+    fn replay_same_nonce_rejected() {
+        let (addr, key) = generate_keypair();
+        let mut pool = Mempool::new(CHAIN);
+        let mut tx = Transaction::transfer(&addr, "recipient", 100, 1, CHAIN);
+        sign_transaction(&mut tx, &key);
+        pool.insert(tx.clone(), &funded_account(1_000, 0)).unwrap();
+        let err = pool.insert(tx, &funded_account(1_000, 0)).unwrap_err();
+        assert!(matches!(err, StrangecoinError::DuplicateTx), "{err:?}");
+    }
+
+    #[test]
+    fn cross_chain_rejected() {
+        let (addr, key) = generate_keypair();
+        let mut pool = Mempool::new(CHAIN);
+        let mut tx = Transaction::transfer(&addr, "recipient", 100, 1, CHAIN + 1);
+        sign_transaction(&mut tx, &key);
+        let err = pool.insert(tx, &funded_account(1_000, 0)).unwrap_err();
+        assert!(matches!(err, StrangecoinError::InvalidChainId { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn create_endowment_counts_against_balance() {
+        let (addr, key) = generate_keypair();
+        let mut pool = Mempool::new(CHAIN);
+        let mut tx = Transaction::create(&addr, vec![1], Vec::new(), 900, 1, CHAIN);
+        sign_transaction(&mut tx, &key);
+        // balance 1000 >= endowment 900 — accepted.
+        pool.insert(tx, &funded_account(1_000, 0)).unwrap();
+        let mut tx2 = Transaction::create(&addr, vec![2], Vec::new(), 200, 2, CHAIN);
+        sign_transaction(&mut tx2, &key);
+        // balance 1000 - pending 900 = 100 < 200 — rejected.
+        let err = pool.insert(tx2, &funded_account(1_000, 0)).unwrap_err();
+        assert!(matches!(err, StrangecoinError::InsufficientBalance { .. }), "{err:?}");
     }
 }

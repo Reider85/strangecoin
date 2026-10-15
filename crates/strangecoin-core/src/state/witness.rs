@@ -160,16 +160,20 @@ fn build_trie(state: &State) -> SparseMerkleTrie {
 fn collect_touched_addresses(block: &Block) -> Vec<String> {
     let mut addresses = Vec::new();
     for tx in &block.transactions {
-        if tx.is_coinbase {
-            if !addresses.contains(&tx.receiver) {
-                addresses.push(tx.receiver.clone());
+        if tx.is_coinbase() {
+            if let Some(receiver) = tx.receiver() {
+                if !addresses.contains(&receiver.to_string()) {
+                    addresses.push(receiver.to_string());
+                }
             }
         } else {
-            if !addresses.contains(&tx.sender) {
-                addresses.push(tx.sender.clone());
+            if !addresses.contains(&tx.sender().to_string()) {
+                addresses.push(tx.sender().to_string());
             }
-            if !addresses.contains(&tx.receiver) {
-                addresses.push(tx.receiver.clone());
+            if let Some(receiver) = tx.receiver() {
+                if !addresses.contains(&receiver.to_string()) {
+                    addresses.push(receiver.to_string());
+                }
             }
         }
     }

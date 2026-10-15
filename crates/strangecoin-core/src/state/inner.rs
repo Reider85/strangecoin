@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::economics::emission::block_reward_at_height_for_chain;
 use crate::error::CoreError;
-use crate::types::{Account, Block, Transaction};
+use crate::types::{Account, Block, Transaction, TransferTx};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct State {
@@ -93,16 +93,24 @@ pub fn apply_block(state: &State, block: &Block, chain_id: u32) -> Result<State,
 fn apply_genesis(state: &mut State, block: &Block, chain_id: u32) -> Result<(), CoreError> {
     for tx in &block.transactions {
         validate_tx_chain_id(tx, chain_id)?;
-        credit_receiver(state, tx)?;
+        match tx {
+            Transaction::Transfer(transfer) => credit_receiver(state, transfer)?,
+            Transaction::Create(_) | Transaction::Call(_) => {
+                return Err(CoreError::UnsupportedTxType {
+                    reason: "create/call transactions are not supported until S1.5-P15"
+                        .to_string(),
+                })
+            }
+        }
     }
     Ok(())
 }
 
 fn validate_tx_chain_id(tx: &Transaction, chain_id: u32) -> Result<(), CoreError> {
-    if tx.chain_id != chain_id {
+    if tx.chain_id() != chain_id {
         return Err(CoreError::InvalidChainId {
             expected: chain_id,
-            got: tx.chain_id,
+            got: tx.chain_id(),
         });
     }
     Ok(())
@@ -116,39 +124,60 @@ fn apply_non_genesis(state: &mut State, block: &Block, chain_id: u32) -> Result<
     let total_supply = state.total_supply();
     let expected_reward = block_reward_at_height_for_chain(block.index, total_supply, chain_id);
 
-    let coinbase = block.transactions.iter().find(|tx| tx.is_coinbase).ok_or(
-        CoreError::InvalidCoinbaseAmount {
+    let coinbase = block
+        .transactions
+        .iter()
+        .find(|tx| tx.is_coinbase())
+        .ok_or(CoreError::InvalidCoinbaseAmount {
             expected: expected_reward,
             got: 0,
-        },
-    )?;
+        })?;
 
-    if coinbase.amount > expected_reward {
+    let coinbase_transfer = match coinbase {
+        Transaction::Transfer(transfer) => transfer,
+        _ => {
+            return Err(CoreError::UnsupportedTxType {
+                reason: "coinbase must be a transfer transaction".to_string(),
+            })
+        }
+    };
+
+    if coinbase_transfer.amount > expected_reward {
         return Err(CoreError::InvalidCoinbaseAmount {
             expected: expected_reward,
-            got: coinbase.amount,
+            got: coinbase_transfer.amount,
         });
     }
 
-    credit_receiver(state, coinbase)?;
+    credit_receiver(state, coinbase_transfer)?;
 
     for tx in &block.transactions {
-        if tx.is_coinbase {
+        if tx.is_coinbase() {
             continue;
         }
-        deduct_sender(state, tx)?;
-        credit_receiver(state, tx)?;
-        increment_nonce(state, tx)?;
+        match tx {
+            Transaction::Transfer(transfer) => {
+                deduct_sender(state, transfer)?;
+                credit_receiver(state, transfer)?;
+                increment_nonce(state, transfer)?;
+            }
+            Transaction::Create(_) | Transaction::Call(_) => {
+                return Err(CoreError::UnsupportedTxType {
+                    reason: "create/call transactions are not supported until S1.5-P15"
+                        .to_string(),
+                })
+            }
+        }
     }
 
     Ok(())
 }
 
-fn deduct_sender(state: &mut State, tx: &Transaction) -> Result<(), CoreError> {
-    let sender_balance = state.get_balance(&tx.sender);
+fn deduct_sender(state: &mut State, tx: &TransferTx) -> Result<(), CoreError> {
+    let sender_balance = state.get_balance(&tx.from);
     if sender_balance < tx.amount {
         return Err(CoreError::InsufficientBalance {
-            sender: tx.sender.clone(),
+            sender: tx.from.clone(),
             available: sender_balance,
             required: tx.amount,
         });
@@ -156,22 +185,22 @@ fn deduct_sender(state: &mut State, tx: &Transaction) -> Result<(), CoreError> {
     let new_balance = sender_balance
         .checked_sub(tx.amount)
         .ok_or(CoreError::StateOverflow)?;
-    state.set_balance(&tx.sender, new_balance);
+    state.set_balance(&tx.from, new_balance);
     Ok(())
 }
 
-fn credit_receiver(state: &mut State, tx: &Transaction) -> Result<(), CoreError> {
-    let receiver_balance = state.get_balance(&tx.receiver);
+fn credit_receiver(state: &mut State, tx: &TransferTx) -> Result<(), CoreError> {
+    let receiver_balance = state.get_balance(&tx.to);
     let new_balance = receiver_balance
         .checked_add(tx.amount)
         .ok_or(CoreError::StateOverflow)?;
-    state.set_balance(&tx.receiver, new_balance);
+    state.set_balance(&tx.to, new_balance);
     Ok(())
 }
 
-fn increment_nonce(state: &mut State, tx: &Transaction) -> Result<(), CoreError> {
-    let nonce = state.get_nonce(&tx.sender);
-    state.set_nonce(&tx.sender, nonce + 1);
+fn increment_nonce(state: &mut State, tx: &TransferTx) -> Result<(), CoreError> {
+    let nonce = state.get_nonce(&tx.from);
+    state.set_nonce(&tx.from, nonce + 1);
     Ok(())
 }
 
@@ -189,45 +218,63 @@ pub fn unapply_block(state: &State, block: &Block) -> Result<State, CoreError> {
 
 fn unapply_genesis(state: &mut State, block: &Block) -> Result<(), CoreError> {
     for tx in block.transactions.iter().rev() {
-        debit_receiver(state, tx)?;
+        match tx {
+            Transaction::Transfer(transfer) => debit_receiver(state, transfer)?,
+            Transaction::Create(_) | Transaction::Call(_) => {
+                return Err(CoreError::UnsupportedTxType {
+                    reason: "create/call transactions are not supported until S1.5-P15"
+                        .to_string(),
+                })
+            }
+        }
     }
     Ok(())
 }
 
 fn unapply_non_genesis(state: &mut State, block: &Block) -> Result<(), CoreError> {
     for tx in block.transactions.iter().rev() {
-        if tx.is_coinbase {
-            debit_receiver(state, tx)?;
-            continue;
+        match tx {
+            Transaction::Transfer(transfer) => {
+                if transfer.is_coinbase {
+                    debit_receiver(state, transfer)?;
+                    continue;
+                }
+                decrement_nonce(state, transfer)?;
+                debit_receiver(state, transfer)?;
+                credit_sender(state, transfer)?;
+            }
+            Transaction::Create(_) | Transaction::Call(_) => {
+                return Err(CoreError::UnsupportedTxType {
+                    reason: "create/call transactions are not supported until S1.5-P15"
+                        .to_string(),
+                })
+            }
         }
-        decrement_nonce(state, tx)?;
-        debit_receiver(state, tx)?;
-        credit_sender(state, tx)?;
     }
     Ok(())
 }
 
-fn debit_receiver(state: &mut State, tx: &Transaction) -> Result<(), CoreError> {
-    let receiver_balance = state.get_balance(&tx.receiver);
+fn debit_receiver(state: &mut State, tx: &TransferTx) -> Result<(), CoreError> {
+    let receiver_balance = state.get_balance(&tx.to);
     let new_balance = receiver_balance
         .checked_sub(tx.amount)
         .ok_or(CoreError::StateOverflow)?;
-    state.set_balance(&tx.receiver, new_balance);
+    state.set_balance(&tx.to, new_balance);
     Ok(())
 }
 
-fn credit_sender(state: &mut State, tx: &Transaction) -> Result<(), CoreError> {
-    let sender_balance = state.get_balance(&tx.sender);
+fn credit_sender(state: &mut State, tx: &TransferTx) -> Result<(), CoreError> {
+    let sender_balance = state.get_balance(&tx.from);
     let new_balance = sender_balance
         .checked_add(tx.amount)
         .ok_or(CoreError::StateOverflow)?;
-    state.set_balance(&tx.sender, new_balance);
+    state.set_balance(&tx.from, new_balance);
     Ok(())
 }
 
-fn decrement_nonce(state: &mut State, tx: &Transaction) -> Result<(), CoreError> {
-    let nonce = state.get_nonce(&tx.sender);
-    state.set_nonce(&tx.sender, nonce - 1);
+fn decrement_nonce(state: &mut State, tx: &TransferTx) -> Result<(), CoreError> {
+    let nonce = state.get_nonce(&tx.from);
+    state.set_nonce(&tx.from, nonce - 1);
     Ok(())
 }
 
@@ -248,27 +295,11 @@ mod tests {
     }
 
     fn coinbase_tx(receiver: &str, amount: u64) -> Transaction {
-        Transaction {
-            sender: "coinbase".to_string(),
-            receiver: receiver.to_string(),
-            amount,
-            nonce: 0,
-            chain_id: 3,
-            signature: Vec::new(),
-            is_coinbase: true,
-        }
+        Transaction::coinbase("coinbase", receiver, amount, 3)
     }
 
     fn transfer_tx(sender: &str, receiver: &str, amount: u64, nonce: u64) -> Transaction {
-        Transaction {
-            sender: sender.to_string(),
-            receiver: receiver.to_string(),
-            amount,
-            nonce,
-            chain_id: 3,
-            signature: Vec::new(),
-            is_coinbase: false,
-        }
+        Transaction::transfer(sender, receiver, amount, nonce, 3)
     }
 
     fn test_block(index: u64, transactions: Vec<Transaction>) -> Block {
