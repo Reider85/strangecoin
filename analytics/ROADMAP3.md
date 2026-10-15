@@ -461,8 +461,10 @@ functions, gas metering, account model, precompiles, events/logs. Реализо
 - [ ] Contract storage в Verkle Trie (test: `state.root_after(block) == block.state_root`).
 - [ ] Differential testing проходит (wasmi vs wasmtime, same result).
 - [ ] All Stage 0+1 invariants still enforced (no regressions).
-- [ ] ADR-0011: "Why WASM (wasmi) instead of RISC-V" написан.
-- [ ] ADR-0012: "Why JSON ABI for MVP instead of WIT" написан.
+- [x] ADR-0012: "Why WASM (wasmi) instead of RISC-V" написан.
+- [x] ADR-0013: "Why JSON ABI for MVP instead of WIT" написан.
+- [x] ADR-0014: "Gas metering strategy" написан.
+- [x] ADR-0015: "Precompiles list" написан.
 - [ ] `Changelog.md` обновлён: `1.5.0 — WASM smart contracts (basic)`.
 
 ### Риски
@@ -475,10 +477,10 @@ functions, gas metering, account model, precompiles, events/logs. Реализо
 
 ### ADRs required
 
-- ADR-0011: WASM (wasmi) vs RISC-V (ckb-vm)
-- ADR-0012: JSON ABI for MVP vs WIT
-- ADR-0013: Gas metering strategy (instruction counting + host-call weights)
-- ADR-0014: Precompiles list
+- ADR-0012: WASM (wasmi) vs RISC-V (ckb-vm)
+- ADR-0013: JSON ABI for MVP vs WIT
+- ADR-0014: Gas metering strategy (instruction counting + host-call weights)
+- ADR-0015: Precompiles list
 
 ---
 
@@ -558,8 +560,8 @@ nodes + addr gossip, peer scoring. Перенести сеть в `crates/strang
 - [ ] Rate limiting работает (test: spammer banned).
 - [ ] Legacy messages удалены (no backward compatibility with v0.8.6 network).
 - [ ] `crates/strangecoin-net/` создан, сеть перенесена.
-- [ ] ADR-0015: "Why Noise Protocol Framework" написан.
-- [ ] ADR-0016: "Why Erlay" написан.
+- [ ] ADR-0016: "Why Noise Protocol Framework" написан.
+- [ ] ADR-0017: "Why Erlay" написан.
 - [ ] `Changelog.md` обновлён: `2.0.0 — production-grade P2P`.
 
 ### Риски
@@ -573,10 +575,10 @@ nodes + addr gossip, peer scoring. Перенести сеть в `crates/strang
 
 ### ADRs required
 
-- ADR-0015: Noise Protocol Framework
-- ADR-0016: Erlay integration
-- ADR-0017: Peer scoring algorithm
-- ADR-0018: Rate limiting strategy
+- ADR-0016: Noise Protocol Framework
+- ADR-0017: Erlay integration
+- ADR-0018: Peer scoring algorithm
+- ADR-0019: Rate limiting strategy
 
 ---
 
@@ -644,8 +646,8 @@ nodes + addr gossip, peer scoring. Перенести сеть в `crates/strang
 - [ ] Performance: batch validation ≥10x быстрее sequential.
 - [ ] `crates/strangecoin-storage/` создан, storage перенесён.
 - [ ] All Stage 0-2 invariants still enforced.
-- [ ] ADR-0019: "Why RocksDB instead of redb" написан.
-- [ ] ADR-0020: "State pruning strategy" написан.
+- [ ] ADR-0020: "Why RocksDB instead of redb" написан.
+- [ ] ADR-0021: "State pruning strategy" написан.
 - [ ] `Changelog.md` обновлён: `3.0.0 — RocksDB + stateless + pruning`.
 
 ### Риски
@@ -659,9 +661,9 @@ nodes + addr gossip, peer scoring. Перенести сеть в `crates/strang
 
 ### ADRs required
 
-- ADR-0019: RocksDB vs redb
-- ADR-0020: State pruning strategy (EIP-4444 analog)
-- ADR-0021: Snapshot sync format
+- ADR-0020: RocksDB vs redb
+- ADR-0021: State pruning strategy (EIP-4444 analog)
+- ADR-0022: Snapshot sync format
 
 ---
 
@@ -757,8 +759,8 @@ MetaMask/WalletConnect.
 - [ ] Metrics exposed (test: `curl /metrics` returns Prometheus format).
 - [ ] `crates/strangecoin-api/`, `strangecoin-sdk/`, `strangecoin-indexer/` созданы.
 - [ ] `tools/devnet/`, `tools/explorer/`, `tools/faucet/` созданы.
-- [ ] ADR-0022: "Why JSON-RPC eth_* compatibility" написан.
-- [ ] ADR-0023: "SDK design (foundry-аналог)" написан.
+- [ ] ADR-0023: "Why JSON-RPC eth_* compatibility" написан.
+- [ ] ADR-0024: "SDK design (foundry-аналог)" написан.
 - [ ] `Changelog.md` обновлён: `4.0.0 — dev-experience ecosystem`.
 
 ### Риски
@@ -773,10 +775,10 @@ MetaMask/WalletConnect.
 
 ### ADRs required
 
-- ADR-0022: JSON-RPC eth_* compatibility
-- ADR-0023: SDK design (foundry-аналог)
-- ADR-0024: Devnet architecture (anvil-аналог)
-- ADR-0025: Indexer design (Subgraph/sqd-аналог)
+- ADR-0023: JSON-RPC eth_* compatibility
+- ADR-0024: SDK design (foundry-аналог)
+- ADR-0025: Devnet architecture (anvil-аналог)
+- ADR-0026: Indexer design (Subgraph/sqd-аналог)
 
 ---
 
@@ -854,10 +856,10 @@ staking infrastructure (placeholder для Stage 7).
 - [ ] Staking infrastructure skeleton в `core` (types defined, not active).
 - [ ] SCIP process работает (test: on-chain signaling, activation threshold).
 - [ ] All Stage 0-4 invariants still enforced.
-- [ ] ADR-0026: "Why tail emission (Monero-style)" написан.
-- [ ] ADR-0027: "Why EIP-1559 on Stage 5" написан.
-- [ ] ADR-0028: "Why threshold encryption for MEV" написан.
-- [ ] ADR-0029: "Why ERC-4337 analog for AA" написан.
+- [ ] ADR-0027: "Why tail emission (Monero-style)" написан.
+- [ ] ADR-0028: "Why EIP-1559 on Stage 5" написан.
+- [ ] ADR-0029: "Why threshold encryption for MEV" написан.
+- [ ] ADR-0030: "Why ERC-4337 analog for AA" написан.
 - [ ] `Changelog.md` обновлён: `5.0.0 — economy (tail, EIP-1559, MEV, AA)`.
 
 ### Риски
@@ -873,12 +875,12 @@ staking infrastructure (placeholder для Stage 7).
 
 ### ADRs required
 
-- ADR-0026: Tail emission (Monero-style)
-- ADR-0027: EIP-1559 on Stage 5
-- ADR-0028: Threshold encryption mempool
-- ADR-0029: ERC-4337 analog for AA
-- ADR-0030: Staking infrastructure (placeholder)
-- ADR-0031: SCIP process design
+- ADR-0027: Tail emission (Monero-style)
+- ADR-0028: EIP-1559 on Stage 5
+- ADR-0029: Threshold encryption mempool
+- ADR-0030: ERC-4337 analog for AA
+- ADR-0031: Staking infrastructure (placeholder)
+- ADR-0032: SCIP process design
 
 ---
 
@@ -951,8 +953,8 @@ staking infrastructure (placeholder для Stage 7).
 - [ ] Reproducible builds: SLSA Level 3 verified.
 - [ ] Shadow-fork: all mainnet blocks replay successfully.
 - [ ] All Stage 0-5 invariants still enforced.
-- [ ] ADR-0032: "Why TLA+ for consensus" написан.
-- [ ] ADR-0033: "Why K-framework for WASM" написан.
+- [ ] ADR-0033: "Why TLA+ for consensus" написан.
+- [ ] ADR-0034: "Why K-framework for WASM" написан.
 - [ ] `Changelog.md` обновлён: `6.0.0 — formal verification + audit`.
 
 ### Риски
@@ -967,10 +969,10 @@ staking infrastructure (placeholder для Stage 7).
 
 ### ADRs required
 
-- ADR-0032: TLA+ for consensus
-- ADR-0033: K-framework for WASM
-- ADR-0034: Audit firm selection
-- ADR-0035: Bug bounty scope
+- ADR-0033: TLA+ for consensus
+- ADR-0034: K-framework for WASM
+- ADR-0035: Audit firm selection
+- ADR-0036: Bug bounty scope
 
 ---
 
@@ -1045,9 +1047,9 @@ validator set rotation.
 - [ ] Light client update работает (test: light client syncs after PoS).
 - [ ] Staking rewards работают (test: validator + delegators paid correctly).
 - [ ] All Stage 0-6 invariants still enforced.
-- [ ] ADR-0036: "Why Casper FFG" написан.
-- [ ] ADR-0037: "Why BLS12-381" написан.
-- [ ] ADR-0038: "Validator set rotation strategy" написан.
+- [ ] ADR-0037: "Why Casper FFG" написан.
+- [ ] ADR-0038: "Why BLS12-381" написан.
+- [ ] ADR-0039: "Validator set rotation strategy" написан.
 - [ ] `Changelog.md` обновлён: `7.0.0 — PoS migration complete`.
 
 ### Риски
@@ -1064,12 +1066,12 @@ validator set rotation.
 
 ### ADRs required
 
-- ADR-0036: Casper FFG
-- ADR-0037: BLS12-381
-- ADR-0038: Validator set rotation
-- ADR-0039: Slashing conditions
-- ADR-0040: Light client protocol
-- ADR-0041: Staking rewards distribution
+- ADR-0037: Casper FFG
+- ADR-0038: BLS12-381
+- ADR-0039: Validator set rotation
+- ADR-0040: Slashing conditions
+- ADR-0041: Light client protocol
+- ADR-0042: Staking rewards distribution
 
 ---
 
@@ -1165,55 +1167,59 @@ validator set rotation.
 
 ### Stage 1.5
 
-- **ADR-0011:** WASM (wasmi) vs RISC-V (ckb-vm) (принято: WASM/wasmi).
-- **ADR-0012:** JSON ABI for MVP vs WIT (принято: JSON для MVP).
-- **ADR-0013:** Gas metering strategy.
-- **ADR-0014:** Precompiles list.
+- **ADR-0012:** WASM (wasmi) vs RISC-V (ckb-vm) (принято: WASM/wasmi `=2.0.0`; S1.5-P01).
+- **ADR-0013:** JSON ABI for MVP vs WIT (принято: JSON для MVP; S1.5-P02).
+- **ADR-0014:** Gas metering strategy (принято: instruction counting + host-call weights; S1.5-P03).
+- **ADR-0015:** Precompiles list (принято: 7 precompiles `0x01..0x07`; S1.5-P04).
+
+> Примечание по нумерации: ADR-0011 занят `0011-async-migration.md` (BUG-S0-021,
+> вышел за пределами ROADMAP3-планирования Stage 1.5); Stage 1.5 ADR сдвинуты на
+> 0012–0015, Stage 2+ — на 0016+.
 
 ### Stage 2
 
-- **ADR-0015:** Noise Protocol Framework.
-- **ADR-0016:** Erlay integration.
-- **ADR-0017:** Peer scoring algorithm.
-- **ADR-0018:** Rate limiting strategy.
+- **ADR-0016:** Noise Protocol Framework.
+- **ADR-0017:** Erlay integration.
+- **ADR-0018:** Peer scoring algorithm.
+- **ADR-0019:** Rate limiting strategy.
 
 ### Stage 3
 
-- **ADR-0019:** RocksDB vs redb (принято: RocksDB).
-- **ADR-0020:** State pruning strategy.
-- **ADR-0021:** Snapshot sync format.
+- **ADR-0020:** RocksDB vs redb (принято: RocksDB).
+- **ADR-0021:** State pruning strategy.
+- **ADR-0022:** Snapshot sync format.
 
 ### Stage 4
 
-- **ADR-0022:** JSON-RPC eth_* compatibility.
-- **ADR-0023:** SDK design.
-- **ADR-0024:** Devnet architecture.
-- **ADR-0025:** Indexer design.
+- **ADR-0023:** JSON-RPC eth_* compatibility.
+- **ADR-0024:** SDK design.
+- **ADR-0025:** Devnet architecture.
+- **ADR-0026:** Indexer design.
 
 ### Stage 5
 
-- **ADR-0026:** Tail emission (Monero-style).
-- **ADR-0027:** EIP-1559 on Stage 5.
-- **ADR-0028:** Threshold encryption mempool.
-- **ADR-0029:** ERC-4337 analog for AA.
-- **ADR-0030:** Staking infrastructure (placeholder).
-- **ADR-0031:** SCIP process design.
+- **ADR-0027:** Tail emission (Monero-style).
+- **ADR-0028:** EIP-1559 on Stage 5.
+- **ADR-0029:** Threshold encryption mempool.
+- **ADR-0030:** ERC-4337 analog for AA.
+- **ADR-0031:** Staking infrastructure (placeholder).
+- **ADR-0032:** SCIP process design.
 
 ### Stage 6
 
-- **ADR-0032:** TLA+ for consensus.
-- **ADR-0033:** K-framework for WASM.
-- **ADR-0034:** Audit firm selection.
-- **ADR-0035:** Bug bounty scope.
+- **ADR-0033:** TLA+ for consensus.
+- **ADR-0034:** K-framework for WASM.
+- **ADR-0035:** Audit firm selection.
+- **ADR-0036:** Bug bounty scope.
 
 ### Stage 7
 
-- **ADR-0036:** Casper FFG.
-- **ADR-0037:** BLS12-381.
-- **ADR-0038:** Validator set rotation.
-- **ADR-0039:** Slashing conditions.
-- **ADR-0040:** Light client protocol.
-- **ADR-0041:** Staking rewards distribution.
+- **ADR-0037:** Casper FFG.
+- **ADR-0038:** BLS12-381.
+- **ADR-0039:** Validator set rotation.
+- **ADR-0040:** Slashing conditions.
+- **ADR-0041:** Light client protocol.
+- **ADR-0042:** Staking rewards distribution.
 
 ---
 
