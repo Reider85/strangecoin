@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.1.3 — Stage 1.5 proper: gas metering + block gas limit (S1.5-P09)
+
+**Status**: In progress  
+**Date**: 2026-10-16  
+**Prompts**: S1.5-P09
+
+### Gas metering (ADR-0014) + invariant #15 first enforced
+
+- **Instruction counting** — wasmi `=2.0.0` engine runs with `Config::consume_fuel(true)`; fuel is deducted continuously per operator (1 per substantive op, 0 for Nop/Drop/control markers — wasmi 2.0 default `OperatorCost`), `gas_used = gas_limit - store_fuel`. **Wasmi 2.0 removed the `ConsumptionStrategy::RecurringBlock` API** referenced by the pre-pin pseudocode/ADR sketch — strategy note updated in `vm-wasm/src/lib.rs` doc; semantics unchanged (continuous accounting, `BASE_INSTRUCTION_GAS = 1`).
+- **Host-call weights** — `crates/strangecoin-vm-wasm/src/gas.rs`: `HostCallWeight` enum covers all 14 S1.5-P10 host functions + `MemoryGrow`, `gas()` applies ADR-0014/0015 formulas (`Secp256k1Verify=3000`, `BlsVerify=12000`, `Blake3=50+6/chunk64`, `Keccak=30+6/word32`, `Sha256=50+12/word32`, `StorageRead=200`, `StorageWrite=5000`, `Call/DelegateCall/StaticCall=700` sketch, `BlockContext=3`, `GasLeft=3`, `EmitLog=375+375/topic`, `MemoryGrow=3`); constants are SCIP-gated after mainnet freeze.
+- **`FuelGasCounter`** — implements core `GasCounter` (`spend`/`gas_left`/`gas_used`) + inherent `spend_host_call(HostCallWeight)`; pure-logic counter, unit-tested without a runtime. **`charge_host_call(caller, weight)`** — in-engine counterpart deducting from the wasmi store's single fuel counter before host work (insufficient fuel → `TrapCode::OutOfFuel` → `VmError::OutOfGas`).
+- **First host function: `sc::gas_left()`** — `crates/strangecoin-vm-wasm/src/host/` (namespace `sc`, charge 3 then return remaining fuel); registration path (`host::register` into `Linker`) established for S1.5-P10's remaining 12 functions.
+- **`BLOCK_GAS_LIMIT = 1_000_000`** — consensus constant in **core** (`strangecoin_core::vm::gas`, runtime-free) so block validation enforces it without the `vm-wasm` feature.
+- **Invariant #15 (first enforced)** — `block_executor::enforce_block_gas_limit`: `sum(CallTx.gas_limit) <= BLOCK_GAS_LIMIT` in `validate_and_apply` (full `gas_limit` is reserved up-front per ADR-0014; `Transfer`/`Create` reserve 0); new error `StrangecoinError::BlockGasLimitExceeded { total, limit }`.
+- **Tests** — `vm-wasm/tests/gas_metering.rs` (9): infinite loop → `OutOfGas` (<50 ms CI-safe; local sub-ms), 10M-iteration compute under 1M gas → `OutOfGas`, `gas_left()` returns remaining budget + decreases across probes, host-call determinism, insufficient fuel for host call → `OutOfGas`, `FuelGasCounter` spend/underflow, ADR-0014 weight table; `block_executor` unit-тесты (5): empty/transfer-only/at-limit accepted, over-limit (multi-tx + single-tx) rejected. `cargo test --workspace` green, `clippy -D warnings` green.
+
+### Not in this change
+
+- Remaining 12 host functions (crypto/storage/calls/context/logs) — S1.5-P10 (consumes `HostCallWeight` + `charge_host_call`).
+- `gas_left()` as an in-contract import is available now; full host ABI (memory pointer convention) lands with the P10 set.
+- Receipt gas accounting in `state::apply_block` (Create/Call still `UnsupportedTxType`) and miner-side block assembly limit — S1.5-P15; until then the invariant guards validation/adoption only.
+- Gas price / fee market — Stage 5.
+
+---
+
 ## 1.1.2 — Stage 1.5 proper: Tx types transfer/create/call (S1.5-P08)
 
 **Status**: In progress  

@@ -70,6 +70,8 @@ pub enum StrangecoinError {
     RbfFeerateTooLow { needed: u64, got: u64 },
     #[error("rbf replacement limit reached: max {0} sequential replacements")]
     RbfReplacementLimit(u32),
+    #[error("block gas limit exceeded: total {total}, limit {limit}")]
+    BlockGasLimitExceeded { total: u64, limit: u64 },
 }
 
 impl From<strangecoin_core::CoreError> for StrangecoinError {

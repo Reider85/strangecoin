@@ -17,7 +17,9 @@
 //! 7. transaction signatures (with the opt-in grant-block exemption);
 //! 8. state transition: coinbase emission, balances, nonces (`core::state`);
 //! 9. `state_root` commitment — mandatory after genesis (invariant #19,
-//!    SCIP-0002); zero roots only under the regtest opt-in flag.
+//!    SCIP-0002); zero roots only under the regtest opt-in flag;
+//! 10. block gas limit (invariant #15, first enforced at Stage 1.5,
+//!     ADR-0014): `sum(CallTx.gas_limit) <= BLOCK_GAS_LIMIT`.
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -188,6 +190,12 @@ pub fn validate_and_apply(
         }
     }
 
+    // Invariant #15 / ADR-0014 (S1.5-P09): the block's total gas reservation
+    // may not exceed the fixed block gas limit. Reserved gas is summed from
+    // `Call` transactions (full `gas_limit` is held up-front); transfers and
+    // creates reserve nothing.
+    enforce_block_gas_limit(&block.transactions)?;
+
     let new_state = apply_block(parent_state, block, view.chain_id)?;
 
     // Invariant #19 / SCIP-0002 (BUG-S1-002): every non-genesis block must
@@ -213,6 +221,30 @@ pub fn validate_and_apply(
     }
 
     Ok(new_state)
+}
+
+/// Invariant #15 (ADR-0014): reject blocks whose summed `Call` gas
+/// reservations exceed [`strangecoin_core::vm::BLOCK_GAS_LIMIT`].
+///
+/// `Transfer` and `Create` transactions carry no `gas_limit` and reserve
+/// nothing; actual execution metering (receipts) lands with S1.5-P15.
+pub(crate) fn enforce_block_gas_limit(
+    transactions: &[Transaction],
+) -> Result<(), StrangecoinError> {
+    let total: u64 = transactions
+        .iter()
+        .map(|tx| match tx {
+            Transaction::Call(call) => call.gas_limit,
+            Transaction::Transfer(_) | Transaction::Create(_) => 0,
+        })
+        .sum();
+    if total > strangecoin_core::vm::BLOCK_GAS_LIMIT {
+        return Err(StrangecoinError::BlockGasLimitExceeded {
+            total,
+            limit: strangecoin_core::vm::BLOCK_GAS_LIMIT,
+        });
+    }
+    Ok(())
 }
 
 fn validate_position(block: &Block, chain: &[Block]) -> Result<(), StrangecoinError> {
@@ -630,5 +662,62 @@ impl Blockchain {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use strangecoin_core::types::Transaction;
+    use strangecoin_core::vm::BLOCK_GAS_LIMIT;
+
+    use super::enforce_block_gas_limit;
+    use crate::error::StrangecoinError;
+
+    fn call_tx(gas_limit: u64) -> Transaction {
+        Transaction::call("sc1from", "sc1to", Vec::new(), 0, gas_limit, 0, 3)
+    }
+
+    #[test]
+    fn empty_block_has_no_gas_usage() {
+        assert!(enforce_block_gas_limit(&[]).is_ok());
+    }
+
+    #[test]
+    fn transfers_and_creates_reserve_no_gas() {
+        let txs = vec![
+            Transaction::transfer("sc1a", "sc1b", 10, 0, 3),
+            Transaction::create("sc1a", vec![0x00, 0x61, 0x73, 0x6d], Vec::new(), 0, 1, 3),
+        ];
+        assert!(enforce_block_gas_limit(&txs).is_ok());
+    }
+
+    #[test]
+    fn block_at_gas_limit_is_accepted() {
+        let txs = vec![
+            call_tx(BLOCK_GAS_LIMIT / 2),
+            call_tx(BLOCK_GAS_LIMIT / 2),
+        ];
+        assert!(enforce_block_gas_limit(&txs).is_ok());
+    }
+
+    #[test]
+    fn block_over_gas_limit_is_rejected() {
+        let txs = vec![
+            call_tx(BLOCK_GAS_LIMIT / 2),
+            call_tx(BLOCK_GAS_LIMIT / 2 + 1),
+        ];
+        let err = enforce_block_gas_limit(&txs).expect_err("sum exceeds limit");
+        assert!(matches!(
+            err,
+            StrangecoinError::BlockGasLimitExceeded { total, limit }
+                if total == BLOCK_GAS_LIMIT + 1 && limit == BLOCK_GAS_LIMIT
+        ));
+    }
+
+    #[test]
+    fn single_tx_over_gas_limit_is_rejected() {
+        let err =
+            enforce_block_gas_limit(&[call_tx(BLOCK_GAS_LIMIT + 1)]).expect_err("over limit");
+        assert!(matches!(err, StrangecoinError::BlockGasLimitExceeded { .. }));
     }
 }

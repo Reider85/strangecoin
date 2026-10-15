@@ -6,6 +6,6 @@ pub mod traits;
 
 pub use context::{BlockContext, ExecutionContext};
 pub use error::VmError;
-pub use gas::GasCounter;
+pub use gas::{GasCounter, BLOCK_GAS_LIMIT};
 pub use result::{ExecutionResult, Log, Receipt, TxStatus};
 pub use traits::{Opcode, VmExecutor};

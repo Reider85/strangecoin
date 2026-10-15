@@ -4,8 +4,11 @@ use strangecoin_core::vm::{ExecutionContext, ExecutionResult, Opcode, TxStatus, 
 use wasmi::{Config, Engine, Linker, Module, Store};
 
 mod error;
+pub mod gas;
+pub mod host;
 
 pub use error::WasmiError;
+pub use gas::{FuelGasCounter, HostCallWeight};
 
 /// Contract entry point invoked by [`WasmiExecutor::execute`].
 ///
@@ -15,10 +18,14 @@ const ENTRY_POINT: &str = "main";
 
 /// Wasmi-backed implementation of [`VmExecutor`] (ADR-0012).
 ///
-/// Stage 1.5 scope is structural: load a module, instantiate it with fuel
-/// metering enabled, call `main()`, report gas consumed. Host functions
-/// (S1.5-P10), host-call weights (S1.5-P09) and precompiles (S1.5-P11) land
-/// in follow-up prompts.
+/// Metering (ADR-0014): the engine runs with `Config::consume_fuel(true)` on
+/// the pinned wasmi 2.0.0 — fuel is deducted continuously as operators
+/// execute (1 per substantive operator, 0 for Nop/Drop/control markers;
+/// `BASE_INSTRUCTION_GAS = 1`). Wasmi 2.0 removed the older
+/// `ConsumptionStrategy` API the pre-pin pseudocode referenced; host-call
+/// weights are charged manually via [`gas::charge_host_call`]. Host
+/// functions register under the `sc` namespace (S1.5-P10 completes the set);
+/// precompiles land in S1.5-P11.
 #[derive(Default)]
 pub struct WasmiExecutor {
     /// Contract code registry: bech32 address -> WASM bytecode.
@@ -56,7 +63,9 @@ impl WasmiExecutor {
             .set_fuel(ctx.gas_limit)
             .map_err(|e| WasmiError::Engine(format!("set_fuel: {e}")))?;
 
-        let linker = <Linker<()>>::new(&engine);
+        let mut linker = <Linker<()>>::new(&engine);
+        host::register(&mut linker)
+            .map_err(|e| WasmiError::Engine(format!("host registration: {e}")))?;
         let instance = linker
             .instantiate_and_start(&mut store, &module)
             .map_err(|e| WasmiError::Instantiate(e.to_string()))?;
