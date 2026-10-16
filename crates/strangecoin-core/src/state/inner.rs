@@ -1,9 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::address::derive_contract_address;
 use crate::economics::emission::block_reward_at_height_for_chain;
 use crate::error::CoreError;
 use crate::serialize::txid;
+use crate::state::contract_storage::{ContractStorageMap, ContractStorageOverlay};
+use crate::state::sparse_merkle::contract_storage_root;
 use crate::types::{Account, Block, ContractAccount, Transaction, TransferTx};
 use crate::vm::{
     BlockContext, ExecutionContext, ExecutionResult, Opcode, Receipt, TxStatus, VmError, VmExecutor,
@@ -36,23 +38,39 @@ impl VmExecutor for NoVm {
     }
 }
 
-/// Post-block chain state: account balances plus the receipts of the most
-/// recently applied block (S1.5-P14, invariant #18).
+/// Pre-image of one contract storage slot write (S1.5-P15): the contract
+/// address, the slot key, and the value before the call (`None` = the key
+/// was absent). Stored per txid in [`State::storage_undo`] so `unapply`
+/// restores the exact pre-call contents.
+pub type StorageUndoEntry = (String, [u8; 32], Option<Vec<u8>>);
+
+/// Post-block chain state: account balances, per-contract storage, plus the
+/// receipts and storage undo records of the most recently applied block
+/// (S1.5-P14 invariant #18, S1.5-P15 reorg support).
 ///
-/// `receipts` is derived data — a pure function of the applied block — and is
-/// replaced wholesale on every apply and cleared on unapply. `PartialEq` and
-/// `Eq` deliberately compare **balances only**: the apply/unapply round-trip
-/// (invariant #4, on which reorg correctness rests) is defined over the
-/// account state; receipts of any height are recomputed from the chain.
+/// `receipts` and `storage_undo` are derived data — a pure function of the
+/// applied block — and are replaced wholesale on every apply and cleared on
+/// unapply. `PartialEq` compares balances **and** `contract_storage`: the
+/// apply/unapply round-trip (invariant #4, on which reorg correctness
+/// rests) must restore both; the storage contents are additionally
+/// committed by `ContractAccount.storage_root` inside the account leaves.
+/// Receipts of any height are recomputed from the chain and stay outside
+/// equality.
 #[derive(Clone, Debug, Default)]
 pub struct State {
     pub balances: HashMap<String, Account>,
+    /// Persisted contract storage keyed by contract address (S1.5-P15);
+    /// each contract's map commits to `ContractAccount.storage_root`.
+    pub contract_storage: ContractStorageMap,
     pub receipts: Vec<Receipt>,
+    /// Undo record of the tip block's `Call` transactions (S1.5-P15):
+    /// txid → pre-images of every storage slot the call wrote.
+    pub storage_undo: HashMap<[u8; 32], Vec<StorageUndoEntry>>,
 }
 
 impl PartialEq for State {
     fn eq(&self, other: &Self) -> bool {
-        self.balances == other.balances
+        self.balances == other.balances && self.contract_storage == other.contract_storage
     }
 }
 
@@ -152,6 +170,11 @@ fn apply_block_inner<V: VmExecutor>(
 ) -> Result<State, CoreError> {
     let mut new_state = state.clone();
     new_state.receipts.clear();
+    // `storage_undo` intentionally accumulates: entries are keyed by txid
+    // and consumed by `unapply_call_storage`, so a chained unapply (reorg
+    // of several tip blocks) can still find the earlier blocks' pre-images.
+    // Production never grows it — `StateCache::commit` drops the record
+    // every block and reorgs replay via `rebuild_from_chain`.
     let mut receipts: Vec<Receipt> = Vec::with_capacity(block.transactions.len());
 
     if block.index == 0 {
@@ -351,11 +374,20 @@ fn apply_create<V: VmExecutor>(
     })
 }
 
-/// Call path (S1.5-P14): execute the contract entry point through `vm`.
+/// Call path (S1.5-P14/P15): execute the contract entry point through `vm`.
 /// The value transfer is applied only on `Success`; a failed frame (revert,
 /// out-of-gas, engine error) still increments the sender nonce and produces
 /// a receipt. A call to an EOA (no contract account) is a plain value
 /// transfer with a zero-gas success receipt.
+///
+/// Contract storage (S1.5-P15): the frame sees the chain-wide storage
+/// snapshot in `ctx.storage` (reads fall through to it) and stages writes
+/// in the scoped overlay; on `Success` every contract scope of
+/// `ExecutionResult::storage_overlay` is flushed into
+/// `State.contract_storage`, each touched contract's `storage_root` is
+/// recomputed into its account record (invariant #19 extension), and the
+/// pre-images land in `State::storage_undo` for `unapply`. Failed frames
+/// discard their writes.
 fn apply_call<V: VmExecutor>(
     state: &mut State,
     block: &Block,
@@ -424,7 +456,9 @@ fn apply_call<V: VmExecutor>(
             coinbase,
             block_gas_limit: BLOCK_GAS_LIMIT,
         },
+        storage: state.contract_storage.clone(),
         storage_overlay: HashMap::new(),
+        storage_address: call.to.clone(),
         input: call.data.clone(),
     };
 
@@ -443,6 +477,10 @@ fn apply_call<V: VmExecutor>(
                 state.set_balance(&call.from, new_sender);
                 state.set_balance(&call.to, new_receiver);
             }
+            if result.status == TxStatus::Success {
+                let txid = txid(&call_tx);
+                flush_storage_writes(state, &result, txid);
+            }
             Ok(Receipt::from_execution(
                 txid(&call_tx),
                 block.index,
@@ -460,6 +498,41 @@ fn apply_call<V: VmExecutor>(
                 call.gas_limit,
             ))
         }
+    }
+}
+
+/// Flush a successful frame's staged contract storage writes into
+/// `state.contract_storage` (S1.5-P15): every contract scope whose account
+/// record is a contract gets its writes merged, its `storage_root`
+/// recomputed into the account leaf (invariant #19 extension), and its
+/// pre-images recorded under `txid` in `State::storage_undo` so `unapply`
+/// can restore the exact prior contents. Scopes without a contract account
+/// are ignored — only contracts have storage.
+fn flush_storage_writes(state: &mut State, result: &ExecutionResult, txid: [u8; 32]) {
+    let mut undo: Vec<StorageUndoEntry> = Vec::new();
+    for (address, writes) in &result.storage_overlay {
+        if writes.is_empty() {
+            continue;
+        }
+        let is_contract = state
+            .get_account(address)
+            .is_some_and(|account| account.is_contract());
+        if !is_contract {
+            continue;
+        }
+        let overlay = ContractStorageOverlay::from_writes(writes);
+        let storage = state.contract_storage.entry(address.clone()).or_default();
+        for (key, preimage) in overlay.preimages_of(storage) {
+            undo.push((address.clone(), key, preimage));
+        }
+        overlay.apply_to(storage);
+        let new_root = contract_storage_root(storage);
+        if let Some(Account::Contract(account)) = state.balances.get_mut(address) {
+            account.storage_root = new_root;
+        }
+    }
+    if !undo.is_empty() {
+        state.storage_undo.insert(txid, undo);
     }
 }
 
@@ -510,6 +583,9 @@ pub fn unapply_block(
         unapply_non_genesis(&mut new_state, block, chain_id)?;
     }
 
+    // Receipts are cleared; `storage_undo` entries of the unapplied block
+    // were consumed by `unapply_call_storage`, entries of earlier blocks
+    // stay for chained rollbacks.
     new_state.receipts.clear();
     Ok(new_state)
 }
@@ -547,6 +623,7 @@ fn unapply_non_genesis(state: &mut State, block: &Block, chain_id: u32) -> Resul
                     .ok_or(CoreError::StateOverflow)?;
                 let address = derive_contract_address(&create.from, nonce, chain_id)?;
                 state.set_account(&address, Account::default());
+                state.contract_storage.remove(&address);
                 let receiver_balance = state.get_balance(&create.from);
                 let new_balance = receiver_balance
                     .checked_add(create.endowment)
@@ -578,6 +655,7 @@ fn unapply_non_genesis(state: &mut State, block: &Block, chain_id: u32) -> Resul
                     state.set_balance(&call.to, new_callee);
                     state.set_balance(&call.from, new_sender);
                 }
+                unapply_call_storage(state, txid(tx));
             }
         }
     }
@@ -606,6 +684,46 @@ fn decrement_nonce(state: &mut State, tx: &TransferTx) -> Result<(), CoreError> 
     let nonce = state.get_nonce(&tx.from);
     state.set_nonce(&tx.from, nonce - 1);
     Ok(())
+}
+
+/// Reverse the contract storage writes of one `Call` transaction
+/// (S1.5-P15): restore every touched slot's pre-image from
+/// `State::storage_undo`, then recompute `storage_root` for each affected
+/// contract account. A contract whose storage becomes empty returns to the
+/// `[0u8; 32]` sentinel.
+fn unapply_call_storage(state: &mut State, txid: [u8; 32]) {
+    let Some(undo_entries) = state.storage_undo.remove(&txid) else {
+        return;
+    };
+    let mut touched: HashSet<String> = HashSet::new();
+    for (contract, key, preimage) in undo_entries {
+        let storage = state.contract_storage.entry(contract.clone()).or_default();
+        match preimage {
+            Some(value) => {
+                storage.insert(key, value);
+            }
+            None => {
+                storage.remove(&key);
+            }
+        }
+        touched.insert(contract);
+    }
+    for contract in touched {
+        let empty = state
+            .contract_storage
+            .get(&contract)
+            .is_some_and(HashMap::is_empty);
+        if empty {
+            state.contract_storage.remove(&contract);
+        }
+        let root = state
+            .contract_storage
+            .get(&contract)
+            .map_or([0u8; 32], contract_storage_root);
+        if let Some(Account::Contract(account)) = state.balances.get_mut(&contract) {
+            account.storage_root = root;
+        }
+    }
 }
 
 #[cfg(test)]

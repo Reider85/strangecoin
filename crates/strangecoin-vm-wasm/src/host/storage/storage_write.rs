@@ -1,11 +1,13 @@
 //! `storage_write(key_ptr, val_ptr, val_len) -> i32`.
 //!
-//! Writes `value` under the 32-byte key into the frame's storage overlay.
-//! Returns `1` on success. Refuses to run in a read-only frame (the
-//! `staticcall` context, S1.5-P10). Gas: 5000 (ADR-0014) — writes must hurt
-//! so storage spam stays expensive. The per-contract size cap
-//! (`MAX_STORAGE_PER_CONTRACT`, threat V-20) rejects a write that would push
-//! the overlay's total value bytes past 1 MB (S1.5-P13).
+//! Writes `value` under the 32-byte key into the frame's scoped contract
+//! storage overlay (S1.5-P15: keyed by `ctx.storage_address`). Returns `1`
+//! on success. Refuses to run in a read-only frame (the `staticcall`
+//! context, S1.5-P10). Gas: 5000 (ADR-0014) — writes must hurt so storage
+//! spam stays expensive. The per-contract size cap
+//! (`MAX_STORAGE_PER_CONTRACT`, threat V-20) counts the persisted snapshot
+//! plus the staged overlay: a write that would push the contract's total
+//! value bytes past 1 MB is rejected (S1.5-P13).
 
 use strangecoin_core::vm::limits::MAX_STORAGE_PER_CONTRACT;
 use strangecoin_core::vm::VmError;
@@ -41,19 +43,21 @@ fn storage_write(
             "storage_write: called from a read-only (staticcall) frame",
         ));
     }
-    // Per-contract storage cap (threat V-20): total value bytes staged for
-    // this contract must stay within MAX_STORAGE_PER_CONTRACT.
-    let replaced = state.ctx.storage_overlay.get(&key).map_or(0, Vec::len);
-    let other: usize = state
+    // Per-contract storage cap (threat V-20): persisted snapshot + staged
+    // writes for this contract must stay within MAX_STORAGE_PER_CONTRACT.
+    let address = state.ctx.storage_address.clone();
+    let persisted: usize = state
         .ctx
-        .storage_overlay
-        .values()
-        .map(Vec::len)
-        .sum::<usize>()
-        .saturating_sub(replaced);
-    if other.saturating_add(value.len()) > MAX_STORAGE_PER_CONTRACT {
+        .storage
+        .get(&address)
+        .map(|storage| storage.values().map(Vec::len).sum())
+        .unwrap_or(0);
+    let overlay = state.ctx.storage_overlay.entry(address).or_default();
+    let replaced = overlay.get(&key).map_or(0, Vec::len);
+    let staged: usize = overlay.values().map(Vec::len).sum::<usize>().saturating_sub(replaced);
+    if persisted.saturating_add(staged).saturating_add(value.len()) > MAX_STORAGE_PER_CONTRACT {
         return Err(vm_err(VmError::MaxStoragePerContract));
     }
-    state.ctx.storage_overlay.insert(key, value);
+    overlay.insert(key, value);
     Ok(1)
 }

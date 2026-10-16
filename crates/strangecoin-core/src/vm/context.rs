@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::state::ContractStorageMap;
 use crate::types::{AccountState, BlockHeader};
 
 /// Deterministic view of the block being executed.
@@ -40,9 +41,20 @@ pub struct ExecutionContext {
     /// state-mutating host functions must refuse to run while this is true.
     pub read_only: bool,
     pub block_context: BlockContext,
-    /// Contract storage writes staged by this frame, flushed to the SMT on
-    /// success (S1.5-P15), discarded on revert.
-    pub storage_overlay: HashMap<[u8; 32], Vec<u8>>,
+    /// Persisted storage snapshot of every contract on the chain
+    /// (S1.5-P15): bech32 address → slot map. Seeded by `apply_call` from
+    /// `State.contract_storage`; `storage_read` falls through to it when the
+    /// overlay has no staged write for the key.
+    pub storage: ContractStorageMap,
+    /// Contract storage writes staged per contract (S1.5-P15): address →
+    /// (slot key → value). Scoped by
+    /// [`storage_address`](Self::storage_address), flushed to
+    /// `State.contract_storage` on success, discarded on revert.
+    pub storage_overlay: ContractStorageMap,
+    /// The contract whose storage this frame reads and writes (S1.5-P15):
+    /// `callee` for `call`/`staticcall` and the top-level frame; the parent's
+    /// `storage_address` for `delegatecall` (callee code, caller's storage).
+    pub storage_address: String,
     /// Calldata of this frame: `CallTx.data` for the top-level call, or the
     /// `data` argument of a nested `call`/`staticcall`/`delegatecall`.
     /// Precompiles (S1.5-P11) read their input here; the JSON ABI (S1.5-P12)

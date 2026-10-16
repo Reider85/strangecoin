@@ -15,8 +15,9 @@ pub use error::CoreError;
 pub use serialize::{compute_receipts_root, compute_tx_root, merkle_root, serialize_receipt};
 pub use state::witness::{build_witness, verify_block_stateless, AccountProof, StateWitness};
 pub use state::{
-    apply_block, apply_block_with_vm, compute_state_root, prove_receipt, receipts_subroot,
-    root_after, unapply_block, verify_receipt_proof, State,
+    apply_block, apply_block_with_vm, compute_state_root, contract_storage_root, prove_receipt,
+    receipts_subroot, root_after, root_after_with_vm, unapply_block, verify_receipt_proof,
+    ContractStorage, ContractStorageMap, ContractStorageOverlay, State,
 };
 pub use types::{
     Account, AccountState, Block, BlockHeader, CallTx, ChainSnapshot, ContractAccount, CreateTx,

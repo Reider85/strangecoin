@@ -1,9 +1,11 @@
 //! `storage_read(key_ptr, out_ptr, out_len) -> i32`.
 //!
-//! Reads the 32-byte-keyed value from the frame's storage overlay. Returns
-//! the number of bytes written into the out-buffer; `-1` when the buffer is
-//! too small (the contract can retry with a larger one); `0` for an absent
-//! key. Gas: 200 (ADR-0014), charged before the lookup.
+//! Reads the 32-byte-keyed value from the frame's contract storage
+//! (S1.5-P15): the staged write in the frame's scoped overlay wins, then the
+//! persisted snapshot in `ctx.storage[storage_address]`. Returns the number
+//! of bytes written into the out-buffer; `-1` when the buffer is too small
+//! (the contract can retry with a larger one); `0` for an absent key.
+//! Gas: 200 (ADR-0014), charged before the lookup.
 
 use wasmi::{Caller, Linker};
 
@@ -31,7 +33,21 @@ fn storage_read(
     let key = abi::read_array32(&caller, key_ptr)?;
     let value = {
         let state = caller.data();
-        state.ctx.storage_overlay.get(&key).cloned()
+        let address = &state.ctx.storage_address;
+        state
+            .ctx
+            .storage_overlay
+            .get(address)
+            .and_then(|overlay| overlay.get(&key))
+            .cloned()
+            .or_else(|| {
+                state
+                    .ctx
+                    .storage
+                    .get(address)
+                    .and_then(|storage| storage.get(&key))
+                    .cloned()
+            })
     };
     let Some(value) = value else {
         return Ok(0);

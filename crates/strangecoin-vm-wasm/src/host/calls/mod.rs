@@ -145,10 +145,13 @@ pub(crate) fn nested_call(
                 child.caller = state.ctx.callee.clone();
                 child.callee = to.clone();
                 child.value = value;
+                child.storage_address = to.clone();
             }
             CallKind::DelegateCall => {
-                // Keep the outer caller identity and the parent's value;
-                // only the code source (`callee`) changes.
+                // Keep the outer caller identity, the parent's value and
+                // the parent's storage address (callee code on caller's
+                // storage, S1.5-P15); only the code source (`callee`)
+                // changes.
                 child.value = state.ctx.value;
                 child.callee = to.clone();
             }
@@ -156,6 +159,7 @@ pub(crate) fn nested_call(
                 child.caller = state.ctx.callee.clone();
                 child.callee = to.clone();
                 child.value = 0;
+                child.storage_address = to.clone();
             }
         }
         (

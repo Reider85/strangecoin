@@ -19,7 +19,9 @@
 //! 9. `state_root` commitment — mandatory after genesis (invariant #19,
 //!    SCIP-0002); zero roots only under the regtest opt-in flag;
 //! 10. block gas limit (invariant #15, first enforced at Stage 1.5,
-//!     ADR-0014): `sum(CallTx.gas_limit) <= BLOCK_GAS_LIMIT`.
+//!     ADR-0014): `sum(CallTx.gas_limit) <= BLOCK_GAS_LIMIT` before the
+//!     state transition, plus the post-apply `sum(receipt.gas_used)` bound
+//!     (S1.5-P15).
 
 use std::collections::HashMap;
 use std::sync::{
@@ -208,6 +210,13 @@ pub fn validate_and_apply(
 
     let new_state = apply_and_execute(parent_state, block, view)?;
 
+    // Invariant #15 (S1.5-P15): post-execution metering — the gas actually
+    // burned by the block's receipts may not exceed the limit either.
+    // Per-tx `gas_used <= gas_limit` makes this implied by the reservation
+    // check above; it is enforced explicitly so a metering bug cannot
+    // silently overshoot.
+    enforce_receipt_gas_limit(&new_state.receipts)?;
+
     // Invariant #19 / SCIP-0002 (BUG-S1-002): every non-genesis block must
     // commit to its post-state root. A zero root is tolerated only for
     // genesis or under the explicit regtest `allow_zero_state_root` opt-in.
@@ -237,7 +246,8 @@ pub fn validate_and_apply(
 /// reservations exceed [`strangecoin_core::vm::BLOCK_GAS_LIMIT`].
 ///
 /// `Transfer` and `Create` transactions carry no `gas_limit` and reserve
-/// nothing; actual execution metering (receipts) lands with S1.5-P15.
+/// nothing; actual execution metering is checked post-apply by
+/// [`enforce_receipt_gas_limit`] (S1.5-P15).
 pub(crate) fn enforce_block_gas_limit(
     transactions: &[Transaction],
 ) -> Result<(), StrangecoinError> {
@@ -248,6 +258,21 @@ pub(crate) fn enforce_block_gas_limit(
             Transaction::Transfer(_) | Transaction::Create(_) => 0,
         })
         .sum();
+    if total > strangecoin_core::vm::BLOCK_GAS_LIMIT {
+        return Err(StrangecoinError::BlockGasLimitExceeded {
+            total,
+            limit: strangecoin_core::vm::BLOCK_GAS_LIMIT,
+        });
+    }
+    Ok(())
+}
+
+/// Invariant #15 (S1.5-P15): reject blocks whose receipts burned more gas
+/// in aggregate than [`strangecoin_core::vm::BLOCK_GAS_LIMIT`].
+pub(crate) fn enforce_receipt_gas_limit(
+    receipts: &[strangecoin_core::vm::Receipt],
+) -> Result<(), StrangecoinError> {
+    let total: u64 = receipts.iter().map(|receipt| receipt.gas_used).sum();
     if total > strangecoin_core::vm::BLOCK_GAS_LIMIT {
         return Err(StrangecoinError::BlockGasLimitExceeded {
             total,
@@ -794,5 +819,33 @@ mod tests {
         let err =
             enforce_block_gas_limit(&[call_tx(BLOCK_GAS_LIMIT + 1)]).expect_err("over limit");
         assert!(matches!(err, StrangecoinError::BlockGasLimitExceeded { .. }));
+    }
+
+    fn receipt(gas_used: u64) -> strangecoin_core::vm::Receipt {
+        strangecoin_core::vm::Receipt {
+            txid: [0u8; 32],
+            gas_used,
+            logs: Vec::new(),
+            status: strangecoin_core::vm::TxStatus::Success,
+            block_height: 1,
+            tx_index: 0,
+        }
+    }
+
+    #[test]
+    fn receipt_gas_at_limit_is_accepted() {
+        let receipts = vec![receipt(BLOCK_GAS_LIMIT / 2), receipt(BLOCK_GAS_LIMIT / 2)];
+        assert!(super::enforce_receipt_gas_limit(&receipts).is_ok());
+    }
+
+    #[test]
+    fn receipt_gas_over_limit_is_rejected() {
+        let receipts = vec![receipt(BLOCK_GAS_LIMIT / 2), receipt(BLOCK_GAS_LIMIT / 2 + 1)];
+        let err = super::enforce_receipt_gas_limit(&receipts).expect_err("sum exceeds limit");
+        assert!(matches!(
+            err,
+            StrangecoinError::BlockGasLimitExceeded { total, limit }
+                if total == BLOCK_GAS_LIMIT + 1 && limit == BLOCK_GAS_LIMIT
+        ));
     }
 }

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::state::ContractStorageMap;
 use crate::vm::error::VmError;
 
 /// Terminal status of one transaction execution.
@@ -41,6 +42,11 @@ pub struct ExecutionResult {
     pub logs: Vec<Log>,
     pub status: TxStatus,
     pub return_data: Vec<u8>,
+    /// Contract storage writes staged during this execution, per contract
+    /// address (S1.5-P15): `apply_call` flushes every contract scope into
+    /// `State.contract_storage` on `Success` and discards the map on
+    /// failure. Empty for precompiles and transfer-only frames.
+    pub storage_overlay: ContractStorageMap,
 }
 
 /// Record of a transaction's execution, committed alongside the block

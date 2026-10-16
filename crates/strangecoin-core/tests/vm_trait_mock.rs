@@ -59,7 +59,11 @@ fn sample_context() -> ExecutionContext {
     accounts.insert("sc1alice".to_string(), Account::eoa(100, 1));
     accounts.insert("sc1contract".to_string(), Account::default());
     let mut storage_overlay = HashMap::new();
-    storage_overlay.insert([9u8; 32], vec![1, 2, 3]);
+    storage_overlay.insert("sc1contract".to_string(), {
+        let mut slots = HashMap::new();
+        slots.insert([9u8; 32], vec![1, 2, 3]);
+        slots
+    });
     ExecutionContext {
         block: sample_header(),
         accounts,
@@ -77,7 +81,9 @@ fn sample_context() -> ExecutionContext {
             coinbase: "sc1miner".to_string(),
             block_gas_limit: 1_000_000,
         },
+        storage: HashMap::new(),
         storage_overlay,
+        storage_address: "sc1contract".to_string(),
         input: Vec::new(),
     }
 }
@@ -95,6 +101,7 @@ fn mock_vm_success_result() {
             logs: vec![log.clone()],
             status: TxStatus::Success,
             return_data: vec![42],
+            storage_overlay: HashMap::new(),
         }),
     };
     let ctx = sample_context();
@@ -122,6 +129,7 @@ fn mock_vm_sees_full_execution_context() {
             logs: vec![],
             status: TxStatus::Success,
             return_data: vec![],
+            storage_overlay: HashMap::new(),
         }),
     };
     let ctx = sample_context();
@@ -136,7 +144,10 @@ fn mock_vm_sees_full_execution_context() {
     assert_eq!(ctx.depth, 0);
     assert!(!ctx.reentrant);
     assert_eq!(ctx.block_context.block_gas_limit, 1_000_000);
-    assert_eq!(ctx.storage_overlay[&[9u8; 32]], vec![1, 2, 3]);
+    assert_eq!(
+        ctx.storage_overlay["sc1contract"][&[9u8; 32]],
+        vec![1, 2, 3]
+    );
     let res = vm.execute(ctx).expect("ok");
     assert_eq!(res.gas_used, 0);
 }
@@ -149,6 +160,7 @@ fn gas_cost_per_opcode() {
             logs: vec![],
             status: TxStatus::Success,
             return_data: vec![],
+            storage_overlay: HashMap::new(),
         }),
     };
     assert_eq!(vm.gas_cost(Opcode::Instruction), 1);

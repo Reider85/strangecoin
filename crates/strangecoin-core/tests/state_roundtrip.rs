@@ -279,6 +279,7 @@ mod unit_tests {
                 logs: vec![],
                 status: strangecoin_core::TxStatus::Success,
                 return_data: vec![],
+                storage_overlay: std::collections::HashMap::new(),
             })
         }
 

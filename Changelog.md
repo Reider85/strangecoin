@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.1.8 — Stage 1.5 proper: contract storage в SMT + block gas limit, инварианты #15/#19 (S1.5-P15)
+
+**Status**: In progress  
+**Date**: 2026-10-16  
+**Prompts**: S1.5-P15
+
+### Contract storage в общем state trie + gas-limit enforcement
+
+- **`ContractStorage` / `ContractStorageMap` / `ContractStorageOverlay` — `core/state/contract_storage.rs` (новый)** — пер-контрактные map (32-byte slot → value); overlay — write-set кадра с `from_writes` / `preimages_of` (пре-образы для undo) / `apply_to` / `root_from` (пост-flush sub-root без мутации base). `ContractStorageMap` = address → slot map, re-export из `strangecoin_core`.
+- **`contract_storage_root(entries) — core/state/sparse_merkle.rs`** — sub-trie depth-256: key = slot key, leaf = `blake3(0x03 ‖ key ‖ value)` (доменный тег — три leaf-пространства account/receipt/storage не коллидируют); пустое хранилище → `[0;32]` (sentinel с P07, deploy-дефолт не меняется).
+- **`ExecutionContext` — scoped storage (новые поля)** — `storage: ContractStorageMap` (снапшот persisted-хранилища всего цепочки; сидируется `apply_call` из `State.contract_storage` — nested call видит свои и чужие persisted-ключи), `storage_overlay: ContractStorageMap` (записи per contract), `storage_address: String` (какой контракт читает/пишет кадр; delegatecall сохраняет адрес родителя — callee-код на storage вызывающего). `storage_read` = overlay → base fall-through; `storage_write` — cap считает persisted + staged ≤ 1 MB (threat V-20, теперь против полного контракта, не только overlay).
+- **`ExecutionResult.storage_overlay: ContractStorageMap`** — записи всех скоупов кадра возвращаются в core; precompile/transfer-пути — пустая map.
+- **`State { balances, contract_storage, receipts, storage_undo }` — `core/state/inner.rs`** — `PartialEq` сравнивает balances **и** contract_storage (round-trip инварианта #4); `storage_undo: txid → Vec<(contract, key, Option<value>)>` — derived data tip-блока для reorg. `apply_call`: сидирует `ctx.storage` → `vm.execute` → при `Success` `flush_storage_writes` флашит каждый contract-скоуп (`ContractStorageOverlay::from_writes` → `apply_to`, пересчёт `storage_root` в account record — **инвариант #19 extension**), пре-образы → undo; failed frame отбрасывает записи. `unapply_call_storage` (новый): restore пре-образов + пересчёт storage_root (пустое → sentinel). `unapply_create` удаляет storage-запись. Undo накапливается через apply (chained unapply нескольких tip-блоков); `StateCache::commit` сбрасывает его каждый блок — в продакшене не растёт.
+- **`root_after_with_vm(state, block, chain_id, allow_zero, vm)` — `core/state/mod.rs`** — mirror `root_after` через `apply_block_with_vm`: Create/Call блоки теперь валидируемы на уровне core (инвариант #19 покрывает contract storage); `root_after` (NoVm) — transfer-only, без изменений.
+- **`enforce_receipt_gas_limit` — `src/blockchain/block_executor.rs`** — пост-execution **инвариант #15**: `sum(receipt.gas_used) ≤ BLOCK_GAS_LIMIT` после `apply_and_execute` (implies reservation-проверкой P09, но ловит ошибку metering'а); `BlockGasLimitExceeded`.
+- **`StateCache` (узел)** — поле `contract_storage` прокидывается в `from_state`/`to_state`/`commit`/`replace` + `set_contract_storage`/`contract_storage()`; персист в LevelDB ключ `b"contract_storage"` (JSON-DTO `ContractStorageJson`: hex-ключи, sorted — детерминированные байты; отсутствующий ключ старых БД → пустая карта); `debug_db` + skip-list итератора учтывают новый ключ. Wire-формат (`BlockchainDeserialize`) не менялся — adopt/rebuild реконструирует storage replay'ем через VM.
+- **Nested-call скоупы** — `nested_call`: Call/Static → `storage_address = to`; DelegateCall → storage-адрес родителя; child наследует оба map, при успехе parent = child (scoped-карты — записи callee-контракта летят в его скоуп, не в родительский). Cross-contract persisted-чтения работают (весь storage в ctx).
+- **Тесты** — `core/tests/contract_storage_smt.rs` (8, новый): flush + storage_root/state-root (#19) + `root_after_with_vm` accept/reject, seeded-base persistence между блоками, unapply restore (chained, точный state root), failed call discard, EOA-скоуп игнорируется, детерминизм replay, PartialEq покрывает storage. `vm-wasm/tests/contract_storage.rs` (6, новый, wasmi e2e): write-flush + invariant #19, второй call читает persisted base, unapply roundtrip, **nested call A→B пишет в scope B** (внешний контракт не тронут), write > 1 MB cap → Failed без flush, детерминизм replay. `block_executor` unit (+2): receipt-gas limit boundary. `sparse_merkle` unit (+2): storage root sentinel/детерминизм/чувствительность; `contract_storage.rs` unit (+5). `cargo test --workspace` green, `clippy -D warnings` green.
+
+### Not in this change
+
+- Nested value-трансферы не коммитятся в `apply_call` (MVP P14, residual — S1.5-P17+).
+- Конструктор Create не исполняется (MVP P14) — S1.5-P17.
+- Клон всего `contract_storage` на каждый CallTx — O(размер хранилища); mainnet-путь — lazy state access через host functions (Stage 3+).
+- Fold `receipts_root` в глобальный `state_root` — отдельное решение (receipts хранятся как данные sub-trie, в account-леафы не fold'ятся).
+
+---
+
 ## 1.1.7 — Stage 1.5 proper: events/logs — Log + Receipt, инвариант #18 (S1.5-P14)
 
 **Status**: In progress  

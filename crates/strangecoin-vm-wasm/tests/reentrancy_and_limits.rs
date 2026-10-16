@@ -61,7 +61,9 @@ fn execution_context_at(callee: &str, gas_limit: u64, depth: u32) -> ExecutionCo
             coinbase: "sc1coinbase".to_string(),
             block_gas_limit: strangecoin_core::vm::BLOCK_GAS_LIMIT,
         },
+        storage: HashMap::new(),
         storage_overlay: HashMap::new(),
+        storage_address: callee.to_string(),
         input: Vec::new(),
     }
 }

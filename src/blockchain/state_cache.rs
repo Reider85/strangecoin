@@ -21,10 +21,16 @@ use crate::blockchain::blockchain_facade::Blockchain;
 use crate::error::StrangecoinError;
 use crate::AccountState;
 
-/// Balances/nonces cache.
+/// Balances/nonces cache plus per-contract storage (S1.5-P15).
+///
+/// `receipts` and `State::storage_undo` are derived data of the tip block
+/// and are not retained here — reorg goes through
+/// [`StateCache::rebuild_from_chain`], which replays the chain (and its
+/// contract storage) through the VM.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StateCache {
     accounts: HashMap<String, AccountState>,
+    contract_storage: strangecoin_core::state::ContractStorageMap,
 }
 
 impl StateCache {
@@ -33,20 +39,39 @@ impl StateCache {
     }
 
     pub fn from_accounts(accounts: HashMap<String, AccountState>) -> Self {
-        Self { accounts }
+        Self {
+            accounts,
+            contract_storage: strangecoin_core::state::ContractStorageMap::new(),
+        }
     }
 
     pub fn from_state(state: &State) -> Self {
         Self {
             accounts: state.balances.clone(),
+            contract_storage: state.contract_storage.clone(),
         }
     }
 
     pub fn to_state(&self) -> State {
         State {
             balances: self.accounts.clone(),
+            contract_storage: self.contract_storage.clone(),
             receipts: Vec::new(),
+            storage_undo: HashMap::new(),
         }
+    }
+
+    pub fn set_contract_storage(
+        &mut self,
+        contract_storage: strangecoin_core::state::ContractStorageMap,
+    ) {
+        self.contract_storage = contract_storage;
+    }
+
+    pub fn contract_storage(
+        &self,
+    ) -> &strangecoin_core::state::ContractStorageMap {
+        &self.contract_storage
     }
 
     // ---------------------------------------------------------------- reads
@@ -113,10 +138,12 @@ impl StateCache {
 
     pub fn commit(&mut self, state: State) {
         self.accounts = state.balances;
+        self.contract_storage = state.contract_storage;
     }
 
     pub fn replace(&mut self, other: StateCache) {
         self.accounts = other.accounts;
+        self.contract_storage = other.contract_storage;
     }
 
     pub fn invalidate(&mut self) {
@@ -196,8 +223,47 @@ impl<'a> IntoIterator for &'a StateCache {
 pub(crate) struct PersistedState {
     pub chain: Option<Vec<Block>>,
     pub balances: Option<HashMap<String, AccountState>>,
+    pub contract_storage: Option<strangecoin_core::state::ContractStorageMap>,
     pub difficulty: Option<u32>,
     pub mempool_txs: Vec<Transaction>,
+}
+
+/// JSON wire form of [`strangecoin_core::state::ContractStorageMap`]
+/// (S1.5-P15): serde_json cannot use `[u8; 32]` map keys, so slots are
+/// stored as sorted `(hex_key, value)` pairs per address; the sorted order
+/// keeps the persisted bytes deterministic.
+pub(crate) type ContractStorageJson = Vec<(String, Vec<(String, Vec<u8>)>)>;
+
+pub(crate) fn contract_storage_to_json(
+    map: &strangecoin_core::state::ContractStorageMap,
+) -> ContractStorageJson {
+    let mut out: ContractStorageJson = map
+        .iter()
+        .map(|(address, storage)| {
+            let mut slots: Vec<(String, Vec<u8>)> = storage
+                .iter()
+                .map(|(key, value)| (hex::encode(key), value.clone()))
+                .collect();
+            slots.sort_by(|a, b| a.0.cmp(&b.0));
+            (address.clone(), slots)
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+pub(crate) fn contract_storage_from_json(raw: &ContractStorageJson) -> Option<strangecoin_core::state::ContractStorageMap> {
+    let mut map = strangecoin_core::state::ContractStorageMap::new();
+    for (address, slots) in raw {
+        let mut storage = strangecoin_core::state::ContractStorage::new();
+        for (hex_key, value) in slots {
+            let bytes = hex::decode(hex_key).ok()?;
+            let key: [u8; 32] = bytes.try_into().ok()?;
+            storage.insert(key, value.clone());
+        }
+        map.insert(address.clone(), storage);
+    }
+    Some(map)
 }
 
 pub(crate) fn db_path_for_port(port: u16) -> PathBuf {
@@ -264,6 +330,9 @@ pub(crate) fn open_blockchain(port: u16, chain_id: u32) -> Blockchain {
     if let Some(balances) = loaded.balances {
         blockchain.balances = StateCache::from_accounts(balances);
     }
+    if let Some(contract_storage) = loaded.contract_storage {
+        blockchain.balances.set_contract_storage(contract_storage);
+    }
     if let Some(difficulty) = loaded.difficulty {
         blockchain.difficulty = difficulty;
     }
@@ -308,13 +377,19 @@ pub(crate) fn load_persisted_state(storage: &crate::storage::Storage) -> Persist
     let difficulty = db_guard
         .get(b"difficulty")
         .and_then(|v| serde_json::from_slice::<u32>(&v).ok());
+    // S1.5-P15: absent key (pre-storage DBs) → empty map.
+    let contract_storage = db_guard
+        .get(b"contract_storage")
+        .and_then(|v| serde_json::from_slice::<ContractStorageJson>(&v).ok())
+        .and_then(|raw| contract_storage_from_json(&raw));
 
     let mut iterator = db_guard
         .new_iter()
         .expect("Не удалось создать итератор LevelDB");
     let mut mempool_txs = Vec::new();
     while let Some((key, value)) = iterator.next() {
-        if key == b"chain" || key == b"balances" || key == b"difficulty" {
+        if key == b"chain" || key == b"balances" || key == b"difficulty" || key == b"contract_storage"
+        {
             continue;
         }
         if let Ok(transaction) = serde_json::from_slice::<Transaction>(&value) {
@@ -326,6 +401,7 @@ pub(crate) fn load_persisted_state(storage: &crate::storage::Storage) -> Persist
     PersistedState {
         chain,
         balances,
+        contract_storage,
         difficulty,
         mempool_txs,
     }
@@ -348,6 +424,8 @@ impl Blockchain {
                 debug!(value = ?serde_json::from_slice::<HashMap<String, AccountState>>(&value), "Значение (balances)");
             } else if key == b"difficulty" {
                 debug!(value = ?serde_json::from_slice::<u32>(&value), "Значение (difficulty)");
+            } else if key == b"contract_storage" {
+                debug!(value = ?serde_json::from_slice::<ContractStorageJson>(&value), "Значение (contract_storage)");
             } else {
                 debug!(value = ?serde_json::from_slice::<Transaction>(&value), "Значение (transaction)");
             }
@@ -483,6 +561,14 @@ impl Blockchain {
             .expect("Ошибка сохранения цепочки блоков");
         db.put(b"balances", &serde_json::to_vec(&self.balances).unwrap())
             .expect("Ошибка сохранения балансов");
+        db.put(
+            b"contract_storage",
+            &serde_json::to_vec(&contract_storage_to_json(
+                self.balances.contract_storage(),
+            ))
+            .unwrap(),
+        )
+        .expect("Ошибка сохранения контрактного хранилища");
         db.put(
             b"difficulty",
             &serde_json::to_vec(&self.difficulty).unwrap(),

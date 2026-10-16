@@ -32,7 +32,7 @@ const ENTRY_POINT: &str = "main";
 #[derive(Debug)]
 pub(crate) struct FrameOutcome {
     pub result: ExecutionResult,
-    pub storage_overlay: HashMap<[u8; 32], Vec<u8>>,
+    pub storage_overlay: HashMap<String, HashMap<[u8; 32], Vec<u8>>>,
     pub accounts: HashMap<String, AccountState>,
     pub logs: Vec<Log>,
     pub return_data: Vec<u8>,
@@ -112,6 +112,7 @@ impl WasmiExecutor {
                     logs: Vec::new(),
                     status: TxStatus::Success,
                     return_data: out.output,
+                    storage_overlay: HashMap::new(),
                 })
             }
             Err(PrecompileError::NotImplemented { gas_used, .. }) => {
@@ -123,6 +124,7 @@ impl WasmiExecutor {
                     logs: Vec::new(),
                     status: TxStatus::Reverted,
                     return_data: Vec::new(),
+                    storage_overlay: HashMap::new(),
                 })
             }
             Err(PrecompileError::InvalidInput(_)) => Ok(ExecutionResult {
@@ -130,6 +132,7 @@ impl WasmiExecutor {
                 logs: Vec::new(),
                 status: TxStatus::Reverted,
                 return_data: Vec::new(),
+                storage_overlay: HashMap::new(),
             }),
         }
     }
@@ -253,6 +256,7 @@ pub(crate) fn run_frame(
             logs: state.logs.clone(),
             status: TxStatus::Success,
             return_data: return_data.clone(),
+            storage_overlay: state.ctx.storage_overlay.clone(),
         },
         storage_overlay: state.ctx.storage_overlay,
         accounts: state.ctx.accounts,

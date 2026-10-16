@@ -468,6 +468,45 @@ pub fn verify_receipt_proof(root: &[u8; 32], receipt: &Receipt, proof: &[[u8; 32
     acc == *root
 }
 
+// ---------------------------------------------------------------------------
+// Contract storage sub-trie (S1.5-P15, invariant #19 extension)
+// ---------------------------------------------------------------------------
+
+/// Domain-separation tag for the contract-storage leaf preimage (S1.5-P15):
+/// account leaves start with `key_hash` (EOA) or `key_hash ‖ 0x01 …`
+/// (contract), receipt leaves with `0x02`, storage leaves with `0x03` —
+/// the three leaf spaces cannot collide.
+const STORAGE_LEAF_TAG: u8 = 0x03;
+
+fn storage_leaf_hash(key: &[u8; 32], value: &[u8]) -> [u8; 32] {
+    let mut hasher = Hasher::new();
+    hasher.update(&[STORAGE_LEAF_TAG]);
+    hasher.update(key);
+    hasher.update(value);
+    *hasher.finalize().as_bytes()
+}
+
+/// Root of one contract's storage sub-trie (S1.5-P15): key = the 32-byte
+/// slot key (itself a hash, e.g. `blake3(slot)`), leaf = domain-tagged
+/// blake3 of `0x03 ‖ key ‖ value`, internal = `blake3(left ‖ right)` —
+/// the same depth-256 construction as the account trie.
+///
+/// Empty storage commits to `[0u8; 32]`: the sentinel
+/// `ContractAccount.storage_root` carries from deploy until the first write
+/// (S1.5-P07 compatibility), not to [`SparseMerkleTrie::empty_root`].
+pub fn contract_storage_root(entries: &HashMap<[u8; 32], Vec<u8>>) -> [u8; 32] {
+    if entries.is_empty() {
+        return [0u8; 32];
+    }
+    let mut sorted: Vec<([u8; 32], [u8; 32])> = entries
+        .iter()
+        .map(|(key, value)| (*key, storage_leaf_hash(key, value)))
+        .collect();
+    sorted.sort_by_key(|(k, _)| *k);
+    let refs: Vec<(&[u8; 32], &[u8; 32])> = sorted.iter().map(|(k, v)| (k, v)).collect();
+    hash_range(&refs, 0, 0, refs.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -635,6 +674,38 @@ mod tests {
             SparseMerkleTrie::compute_root(&a1),
             SparseMerkleTrie::compute_root(&a2)
         );
+    }
+
+    /// S1.5-P15: empty storage commits to the zero sentinel, not empty_root.
+    #[test]
+    fn contract_storage_root_empty_is_zero_sentinel() {
+        assert_eq!(contract_storage_root(&HashMap::new()), [0u8; 32]);
+    }
+
+    /// S1.5-P15: storage root is deterministic, key-order independent and
+    /// sensitive to both keys and values.
+    #[test]
+    fn contract_storage_root_deterministic_and_sensitive() {
+        let mut a: HashMap<[u8; 32], Vec<u8>> = HashMap::new();
+        a.insert([1u8; 32], vec![1, 2, 3]);
+        a.insert([2u8; 32], vec![9]);
+        let mut b: HashMap<[u8; 32], Vec<u8>> = HashMap::new();
+        b.insert([2u8; 32], vec![9]);
+        b.insert([1u8; 32], vec![1, 2, 3]);
+        assert_eq!(contract_storage_root(&a), contract_storage_root(&b));
+        assert_ne!(contract_storage_root(&a), [0u8; 32]);
+
+        let mut value_changed = a.clone();
+        value_changed.insert([1u8; 32], vec![1, 2, 4]);
+        assert_ne!(
+            contract_storage_root(&a),
+            contract_storage_root(&value_changed)
+        );
+
+        let mut key_changed = a.clone();
+        key_changed.remove(&[1u8; 32]);
+        key_changed.insert([3u8; 32], vec![1, 2, 3]);
+        assert_ne!(contract_storage_root(&a), contract_storage_root(&key_changed));
     }
 
     /// S1.5-P07: prove/verify round-trip for a contract account.

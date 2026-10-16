@@ -1,6 +1,8 @@
 //! Receipt types, canonical encoding and the receipts sub-trie (S1.5-P14,
 //! invariant #18).
 
+use std::collections::HashMap;
+
 use strangecoin_core::serialize::{compute_receipts_root, serialize_receipt};
 use strangecoin_core::state::sparse_merkle::SparseMerkleTrie;
 use strangecoin_core::state::{prove_receipt, receipts_subroot, verify_receipt_proof};
@@ -32,6 +34,7 @@ fn from_execution_copies_result_fields() {
         logs: vec![sample_log()],
         status: TxStatus::Reverted,
         return_data: vec![9],
+        storage_overlay: HashMap::new(),
     };
     let receipt = Receipt::from_execution([1u8; 32], 10, 3, &result);
     assert_eq!(receipt.txid, [1u8; 32]);
