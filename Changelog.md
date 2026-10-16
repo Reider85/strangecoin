@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.1.6 — Stage 1.5 proper: reentrancy guard + limits (S1.5-P13)
+
+**Status**: In progress  
+**Date**: 2026-10-16  
+**Prompts**: S1.5-P13
+
+### Reentrancy guard (threat V-18) + execution limits (V-19/V-20, ARCHITECT3 §3.9)
+
+- **Minimal ABI stub — `crates/strangecoin-core/src/abi/mod.rs`** — `AbiEntry { name, selector, non_reentrant }` + `ContractAbi { format_version: "json-v1", entries }`; full JSON ABI encode/decode dispatch stays S1.5-P12. Registered via **`WasmiExecutor::insert_abi(address, abi)`**, shared into frames through `HostState.abis` (like `code`).
+- **Reentrancy guard** — `nested_call` computes `is_reentrant = call_stack.contains(to)` (self-call and call-back-to-outer-frame both covered) and sets `ExecutionContext.reentrant` on the child; if the target's ABI entry matching the first 4 calldata bytes carries `non_reentrant`, the host function aborts with **`VmError::ReentrancyDetected`**. Reentrancy without the flag stays legal (test: storage-guarded self-call runs to completion). Security errors **bubble through parents** instead of degrading to a generic failed child (a mid-stack violation fails the whole transaction deterministically).
+- **Typed host-error channel** — `VmHostError(VmError)` (wasmi `HostError`, `error.rs`): `call`/`storage_write` failures survive the engine round-trip via downcast in `From<wasmi::Error> for WasmiError` — exact variant, no string parsing. `From<WasmiError> for VmError` now passes `Core(inner)` through unwrapped.
+- **`max_code_size` 24 KB** — `consensus::verify_transaction` Create branch rejects `init_code.len() > MAX_CODE_SIZE` with `InvalidContractDeploy` (boundary: exactly 24 KB accepted, 24 KB + 1 rejected, both signed-tx verified).
+- **`max_storage_per_contract` 1 MB** — `storage_write` sums staged value bytes (replacing the same key is free of double-count) and aborts with **`VmError::MaxStoragePerContract`** when the next write crosses the cap (10 × 100 KB accepted, 11th rejected).
+- **`max_call_depth` 1024** — enforced at the top of `nested_call` for **all three variants** (`call`/`delegatecall`/`staticcall` share it): `depth + 1 > 1024` → **`VmError::MaxCallDepth`** before the target is touched (boundary tests at 1023/1024).
+- **`max_stack_size` + wasm recursion (wasmi config)** — `run_frame` sets `Config::set_max_stack_height(1_000_000)` and `set_max_recursion_depth(MAX_CALL_DEPTH)`; both exhaustion paths trap `StackOverflow` → **`VmError::OutOfMemory`** (runaway `(func $f (call $f))` recursion traps long before fuel runs out — asserted `OutOfMemory`, not `OutOfGas`).
+- **`max_memory_size` 1 MB (wasmi store limiter)** — `HostState.limits = StoreLimitsBuilder::memory_size(16 × 64 KiB).trap_on_grow_failure(true)` installed via `Store::limiter`: a module declaring 17 pages fails instantiation, and `memory.grow` past 16 pages traps `GrowthOperationLimited` → **`VmError::OutOfMemory`**.
+- **Core constants — `crates/strangecoin-core/src/vm/limits.rs`** (runtime-free, like `BLOCK_GAS_LIMIT`, so consensus checks need no `vm-wasm`): `MAX_CODE_SIZE`, `MAX_STORAGE_PER_CONTRACT`, `MAX_CALL_DEPTH`, `MAX_MEMORY_PAGES`/`MAX_MEMORY_BYTES`, `MAX_STACK_HEIGHT`, re-exported from `strangecoin_core::vm`.
+- **Tests** — `vm-wasm/tests/reentrancy_and_limits.rs` (13): self-call rejected/allowed×2/no-ABI, cross-contract A→B→A bubbling, depth 1023 allowed / 1024 rejected, CreateTx 24 KB boundary ×2, storage 1 MB boundary ×2, memory declaration + `memory.grow`, runaway recursion. `cargo test --workspace` green (P10's 43 host-function tests unaffected), `clippy -D warnings` green.
+
+### Not in this change
+
+- Real ABI dispatch (selector → entry point, `input` accessors) — S1.5-P12.
+- Receipts/logs persistence, SMT overlay flush — S1.5-P14/P15.
+- Consensus-gas freeze for limits — SCIP-gated after mainnet freeze (ADR-0014 policy).
+
+---
+
 ## 1.1.5 — Stage 1.5 proper: host functions — crypto + storage + calls + context + logs (S1.5-P10)
 
 **Status**: In progress  

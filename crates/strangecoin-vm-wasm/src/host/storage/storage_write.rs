@@ -4,12 +4,15 @@
 //! Returns `1` on success. Refuses to run in a read-only frame (the
 //! `staticcall` context, S1.5-P10). Gas: 5000 (ADR-0014) — writes must hurt
 //! so storage spam stays expensive. The per-contract size cap
-//! (`max_storage_per_contract`, threat V-20) lands in S1.5-P13.
+//! (`MAX_STORAGE_PER_CONTRACT`, threat V-20) rejects a write that would push
+//! the overlay's total value bytes past 1 MB (S1.5-P13).
 
+use strangecoin_core::vm::limits::MAX_STORAGE_PER_CONTRACT;
+use strangecoin_core::vm::VmError;
 use wasmi::{Caller, Linker};
 
 use crate::gas::HostCallWeight;
-use crate::host::{abi, charge, checked_u32, HostState};
+use crate::host::{abi, charge, checked_u32, vm_err, HostState};
 
 pub fn register(linker: &mut Linker<HostState>) -> Result<(), wasmi::Error> {
     linker
@@ -37,6 +40,19 @@ fn storage_write(
         return Err(wasmi::Error::new(
             "storage_write: called from a read-only (staticcall) frame",
         ));
+    }
+    // Per-contract storage cap (threat V-20): total value bytes staged for
+    // this contract must stay within MAX_STORAGE_PER_CONTRACT.
+    let replaced = state.ctx.storage_overlay.get(&key).map_or(0, Vec::len);
+    let other: usize = state
+        .ctx
+        .storage_overlay
+        .values()
+        .map(Vec::len)
+        .sum::<usize>()
+        .saturating_sub(replaced);
+    if other.saturating_add(value.len()) > MAX_STORAGE_PER_CONTRACT {
+        return Err(vm_err(VmError::MaxStoragePerContract));
     }
     state.ctx.storage_overlay.insert(key, value);
     Ok(1)

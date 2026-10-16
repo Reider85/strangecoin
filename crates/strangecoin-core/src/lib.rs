@@ -1,3 +1,4 @@
+pub mod abi;
 pub mod address;
 pub mod chain_selector;
 pub mod consensus;

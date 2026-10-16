@@ -351,6 +351,14 @@ pub fn verify_transaction(tx: &Transaction) -> Result<(), CoreError> {
                     reason: "init_code is empty".to_string(),
                 });
             }
+            if create.init_code.len() > crate::vm::limits::MAX_CODE_SIZE {
+                return Err(CoreError::InvalidContractDeploy {
+                    reason: format!(
+                        "init_code exceeds max code size of {} bytes",
+                        crate::vm::limits::MAX_CODE_SIZE
+                    ),
+                });
+            }
         }
         Transaction::Call(call) => {
             if call.gas_limit == 0 {

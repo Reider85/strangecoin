@@ -49,3 +49,12 @@ pub(crate) fn charge(
 pub(crate) fn checked_u32(value: i32, what: &str) -> Result<u32, wasmi::Error> {
     u32::try_from(value).map_err(|_| wasmi::Error::new(format!("host ABI: negative {what}")))
 }
+
+/// Wrap a typed [`VmError`] as a wasmi host error (S1.5-P13).
+///
+/// The error travels through the engine unchanged and is recovered by
+/// downcast in `From<wasmi::Error> for WasmiError`, so security failures
+/// (reentrancy, call depth, storage cap) keep their exact variant.
+pub(crate) fn vm_err(err: strangecoin_core::vm::VmError) -> wasmi::Error {
+    wasmi::Error::host(crate::error::VmHostError(err))
+}

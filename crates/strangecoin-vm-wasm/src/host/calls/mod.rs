@@ -8,9 +8,12 @@
 //! and logs back into the parent on success. On failure only gas is consumed
 //! — the parent's state is untouched (revert semantics).
 //!
+//! Security checks (S1.5-P13): the target must keep the nested frame within
+//! [`MAX_CALL_DEPTH`], and re-entering a contract already on the call stack
+//! (threat V-18) is allowed only when the target's ABI entry is not flagged
+//! `non_reentrant` — violations abort with the exact [`VmError`] variant.
 //! Nested-call semantics are VM-level; wiring the overlay into the Sparse
-//! Merkle Tree and real contract accounts is S1.5-P15. The reentrancy guard
-//! and `max_call_depth` enforcement land in S1.5-P13 on top of this module.
+//! Merkle Tree and real contract accounts is S1.5-P15.
 
 pub mod call;
 pub mod delegatecall;
@@ -21,13 +24,14 @@ use std::rc::Rc;
 
 use strangecoin_core::address::is_precompile_address;
 use strangecoin_core::types::AccountState;
+use strangecoin_core::vm::limits::MAX_CALL_DEPTH;
 use strangecoin_core::vm::{TxStatus, VmError};
 use wasmi::Caller;
 
 use crate::gas::HostCallWeight;
-use crate::host::{abi, charge, checked_u32, HostState};
+use crate::host::{abi, charge, checked_u32, vm_err, HostState};
 use crate::precompiles::{dispatch_precompile, PrecompileError};
-use crate::{run_frame, FrameOutcome};
+use crate::{run_frame, FrameOutcome, WasmiError};
 
 pub fn register(linker: &mut wasmi::Linker<HostState>) -> Result<(), wasmi::Error> {
     call::register(linker)?;
@@ -98,9 +102,33 @@ pub(crate) fn nested_call(
         .map_err(|_| wasmi::Error::new("call: target address is not UTF-8"))?;
     let data = abi::read_bytes(caller, data_ptr, data_len)?;
 
+    // Security gates (S1.5-P13): nested frames must stay within the depth
+    // budget, and re-entering a contract already on the call stack
+    // (caller == callee or an outer frame — threat V-18) is rejected when
+    // the target's ABI entry carries the `non_reentrant` flag.
+    let is_reentrant = {
+        let state = caller.data();
+        if state.ctx.depth.saturating_add(1) > MAX_CALL_DEPTH {
+            return Err(vm_err(VmError::MaxCallDepth));
+        }
+        let is_reentrant = state.call_stack.contains(&to);
+        if is_reentrant {
+            let guarded = state.abis.get(&to).is_some_and(|abi| {
+                data.get(..4)
+                    .map(|b| [b[0], b[1], b[2], b[3]])
+                    .and_then(|sel| abi.entry_by_selector(sel))
+                    .is_some_and(|entry| entry.non_reentrant)
+            });
+            if guarded {
+                return Err(vm_err(VmError::ReentrancyDetected));
+            }
+        }
+        is_reentrant
+    };
+
     // Snapshot what the child frame needs; the parent borrows end here so
     // the (potentially long) child execution does not hold the store.
-    let (mut child_ctx, gas_budget, code, child_call_stack, parent_callee) = {
+    let (mut child_ctx, gas_budget, code, abis, child_call_stack, parent_callee) = {
         let state = caller.data();
         let fuel = caller.get_fuel()?;
         let mut stack = state.call_stack.clone();
@@ -109,6 +137,7 @@ pub(crate) fn nested_call(
         child.gas_limit = fuel;
         child.gas_used = 0;
         child.depth = state.ctx.depth.saturating_add(1);
+        child.reentrant = is_reentrant;
         child.input = data.clone();
         child.read_only = state.ctx.read_only || kind == CallKind::StaticCall;
         match kind {
@@ -133,6 +162,7 @@ pub(crate) fn nested_call(
             child,
             fuel,
             Rc::clone(&state.code),
+            Rc::clone(&state.abis),
             stack,
             state.ctx.callee.clone(),
         )
@@ -156,7 +186,7 @@ pub(crate) fn nested_call(
         (status, gas_used, return_data, None, accounts, Vec::new())
     } else {
         match code.get(&to).cloned() {
-            Some(wasm) => match run_frame(&wasm, child_ctx, code, child_call_stack) {
+            Some(wasm) => match run_frame(&wasm, child_ctx, code, abis, child_call_stack) {
                 Ok(FrameOutcome {
                     result,
                     storage_overlay,
@@ -182,6 +212,14 @@ pub(crate) fn nested_call(
                     (STATUS_OK, 0, Vec::new(), None, Some(child_accounts.clone()), Vec::new())
                 }
                 Err(err) => {
+                    // Security violations (reentrancy, depth) abort the whole
+                    // transaction: surface the exact variant to the parent
+                    // instead of degrading to a generic failed child (S1.5-P13).
+                    if let WasmiError::Core(vm) = &err {
+                        if matches!(vm, VmError::ReentrancyDetected | VmError::MaxCallDepth) {
+                            return Err(vm_err(vm.clone()));
+                        }
+                    }
                     let _: VmError = err.into();
                     (STATUS_FAILED, gas_budget, Vec::new(), None, None, Vec::new())
                 }

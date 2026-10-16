@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use strangecoin_core::abi::ContractAbi;
 use strangecoin_core::address::is_precompile_address;
 use strangecoin_core::types::AccountState;
+use strangecoin_core::vm::limits::{MAX_CALL_DEPTH, MAX_STACK_HEIGHT};
 use strangecoin_core::vm::{
     ExecutionContext, ExecutionResult, Log, Opcode, TxStatus, VmExecutor,
 };
@@ -52,6 +54,10 @@ pub struct WasmiExecutor {
     /// nested frames via `Rc` (one clone per top-level execution, zero per
     /// nested call).
     code: Rc<HashMap<String, Vec<u8>>>,
+    /// Contract ABI registry: bech32 address -> [`ContractAbi`]. Consulted
+    /// by the reentrancy guard before nested calls (S1.5-P13); shared with
+    /// nested frames like `code`.
+    abis: Rc<HashMap<String, ContractAbi>>,
 }
 
 impl WasmiExecutor {
@@ -65,6 +71,14 @@ impl WasmiExecutor {
             .insert(address.to_string(), wasm);
     }
 
+    /// Register the ABI of a contract (S1.5-P13: the `non_reentrant` flag
+    /// consulted by the reentrancy guard; full dispatch arrives with
+    /// S1.5-P12).
+    pub fn insert_abi(&mut self, address: &str, abi: ContractAbi) {
+        Rc::make_mut(&mut self.abis)
+            .insert(address.to_string(), abi);
+    }
+
     /// Execute raw WASM bytecode with `ctx.gas_limit` as the fuel budget.
     pub fn execute_wasm(
         &self,
@@ -72,8 +86,14 @@ impl WasmiExecutor {
         ctx: &ExecutionContext,
     ) -> Result<ExecutionResult, WasmiError> {
         let call_stack = vec![ctx.callee.clone()];
-        run_frame(wasm, ctx.clone(), Rc::clone(&self.code), call_stack)
-            .map(|outcome| outcome.result)
+        run_frame(
+            wasm,
+            ctx.clone(),
+            Rc::clone(&self.code),
+            Rc::clone(&self.abis),
+            call_stack,
+        )
+        .map(|outcome| outcome.result)
     }
 
     /// Run the precompile at `ctx.callee` with `ctx.input` as the payload.
@@ -129,7 +149,14 @@ impl VmExecutor for WasmiExecutor {
                 address: ctx.callee.clone(),
             })?;
         let call_stack = vec![ctx.callee.clone()];
-        run_frame(wasm, ctx, Rc::clone(&self.code), call_stack).map(|outcome| outcome.result)
+        run_frame(
+            wasm,
+            ctx,
+            Rc::clone(&self.code),
+            Rc::clone(&self.abis),
+            call_stack,
+        )
+        .map(|outcome| outcome.result)
     }
 
     fn gas_cost(&self, opcode: Opcode) -> u64 {
@@ -149,21 +176,36 @@ impl VmExecutor for WasmiExecutor {
 /// [`ExecutionContext`] derived from the parent's host state. Returns the
 /// full [`FrameOutcome`] so the caller can merge storage/accounts/logs on
 /// success. `call_stack` is the active stack including this frame's callee.
+///
+/// Resource limits (S1.5-P13): the engine caps the value stack at
+/// [`MAX_STACK_HEIGHT`] bytes and wasm-internal recursion at
+/// [`MAX_CALL_DEPTH`] frames (both trap as out-of-memory); the store's
+/// resource limiter caps linear memory at `MAX_MEMORY_BYTES` and traps
+/// `memory.grow` past it.
 pub(crate) fn run_frame(
     wasm: &[u8],
     ctx: ExecutionContext,
     code: Rc<HashMap<String, Vec<u8>>>,
+    abis: Rc<HashMap<String, ContractAbi>>,
     call_stack: Vec<String>,
 ) -> Result<FrameOutcome, WasmiError> {
     let gas_limit = ctx.gas_limit;
     let mut config = Config::default();
     config.consume_fuel(true);
+    config.set_max_stack_height(MAX_STACK_HEIGHT);
+    config.set_max_recursion_depth(MAX_CALL_DEPTH as usize);
     let engine = Engine::new(&config);
 
     let module = Module::new(&engine, wasm)
         .map_err(|e| WasmiError::Engine(format!("module decode: {e}")))?;
 
-    let mut store = Store::new(&engine, HostState::new(ctx, code, call_stack));
+    let mut store = Store::new(
+        &engine,
+        HostState::new(ctx, code, abis, call_stack),
+    );
+    store.limiter(|state: &mut HostState| -> &mut dyn wasmi::ResourceLimiter {
+        &mut state.limits
+    });
     store
         .set_fuel(gas_limit)
         .map_err(|e| WasmiError::Engine(format!("set_fuel: {e}")))?;

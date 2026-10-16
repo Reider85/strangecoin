@@ -31,7 +31,10 @@ pub struct ExecutionContext {
     pub gas_limit: u64,
     pub gas_used: u64,
     pub depth: u32,
-    /// Set while inside a non-reentrant call frame (S1.5-P13).
+    /// True when this frame re-enters a contract already on the active call
+    /// stack (S1.5-P13, threat V-18). Set by the nested-call host functions;
+    /// a `non_reentrant` ABI entry turns the situation into
+    /// [`VmError::ReentrancyDetected`](crate::vm::VmError::ReentrancyDetected).
     pub reentrant: bool,
     /// Read-only frame: set by `staticcall` (S1.5-P10); `storage_write` and
     /// state-mutating host functions must refuse to run while this is true.
