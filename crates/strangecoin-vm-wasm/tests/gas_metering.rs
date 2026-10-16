@@ -59,6 +59,7 @@ fn execution_context(callee: &str, gas_limit: u64) -> ExecutionContext {
         gas_used: 0,
         depth: 0,
         reentrant: false,
+        read_only: false,
         block_context: BlockContext {
             height: 1,
             timestamp: 1_700_000_000,

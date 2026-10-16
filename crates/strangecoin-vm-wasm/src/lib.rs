@@ -1,7 +1,11 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use strangecoin_core::address::is_precompile_address;
-use strangecoin_core::vm::{ExecutionContext, ExecutionResult, Opcode, TxStatus, VmExecutor};
+use strangecoin_core::types::AccountState;
+use strangecoin_core::vm::{
+    ExecutionContext, ExecutionResult, Log, Opcode, TxStatus, VmExecutor,
+};
 use wasmi::{Config, Engine, Linker, Module, Store};
 
 mod error;
@@ -11,6 +15,7 @@ pub mod precompiles;
 
 pub use error::WasmiError;
 pub use gas::{FuelGasCounter, HostCallWeight};
+pub use host::HostState;
 pub use precompiles::{dispatch_precompile, PrecompileError, PrecompileOutput};
 
 /// Contract entry point invoked by [`WasmiExecutor::execute`].
@@ -19,24 +24,34 @@ pub use precompiles::{dispatch_precompile, PrecompileError, PrecompileOutput};
 /// (ADR-0013, S1.5-P12).
 const ENTRY_POINT: &str = "main";
 
+/// Outcome of one call frame: the [`ExecutionResult`] plus the frame's
+/// mutated working state, so a nested call can merge the child's storage
+/// overlay, accounts, and logs back into the parent on success (S1.5-P10).
+#[derive(Debug)]
+pub(crate) struct FrameOutcome {
+    pub result: ExecutionResult,
+    pub storage_overlay: HashMap<[u8; 32], Vec<u8>>,
+    pub accounts: HashMap<String, AccountState>,
+    pub logs: Vec<Log>,
+    pub return_data: Vec<u8>,
+}
+
 /// Wasmi-backed implementation of [`VmExecutor`] (ADR-0012).
 ///
 /// Metering (ADR-0014): the engine runs with `Config::consume_fuel(true)` on
 /// the pinned wasmi 2.0.0 — fuel is deducted continuously as operators
 /// execute (1 per substantive operator, 0 for Nop/Drop/control markers;
-/// `BASE_INSTRUCTION_GAS = 1`). Wasmi 2.0 removed the older
-/// `ConsumptionStrategy` API the pre-pin pseudocode referenced; host-call
-/// weights are charged manually via [`gas::charge_host_call`]. Host
-/// functions register under the `sc` namespace (S1.5-P10 completes the set);
-/// precompiles (S1.5-P11) dispatch in [`WasmiExecutor::execute`] before WASM
-/// instantiation when the callee is a reserved address `0x01..=0x07`.
+/// `BASE_INSTRUCTION_GAS = 1`). Host-call weights are charged manually via
+/// [`gas::charge_host_call`]. Host functions register under the `sc`
+/// namespace (S1.5-P10); precompiles (S1.5-P11) dispatch in
+/// [`WasmiExecutor::execute`] before WASM instantiation when the callee is a
+/// reserved address `0x01..=0x07`.
 #[derive(Default)]
 pub struct WasmiExecutor {
-    /// Contract code registry: bech32 address -> WASM bytecode.
-    ///
-    /// `AccountState` carries no code yet (`Account` model lands in S1.5-P07);
-    /// afterwards this registry moves to `code_hash` keys.
-    code: HashMap<String, Vec<u8>>,
+    /// Contract code registry: bech32 address -> WASM bytecode. Shared with
+    /// nested frames via `Rc` (one clone per top-level execution, zero per
+    /// nested call).
+    code: Rc<HashMap<String, Vec<u8>>>,
 }
 
 impl WasmiExecutor {
@@ -46,7 +61,8 @@ impl WasmiExecutor {
 
     /// Register WASM bytecode for a contract address.
     pub fn insert_code(&mut self, address: &str, wasm: Vec<u8>) {
-        self.code.insert(address.to_string(), wasm);
+        Rc::make_mut(&mut self.code)
+            .insert(address.to_string(), wasm);
     }
 
     /// Execute raw WASM bytecode with `ctx.gas_limit` as the fuel budget.
@@ -55,50 +71,9 @@ impl WasmiExecutor {
         wasm: &[u8],
         ctx: &ExecutionContext,
     ) -> Result<ExecutionResult, WasmiError> {
-        let mut config = Config::default();
-        config.consume_fuel(true);
-        let engine = Engine::new(&config);
-
-        let module = Module::new(&engine, wasm)
-            .map_err(|e| WasmiError::Engine(format!("module decode: {e}")))?;
-
-        let mut store = Store::new(&engine, ());
-        store
-            .set_fuel(ctx.gas_limit)
-            .map_err(|e| WasmiError::Engine(format!("set_fuel: {e}")))?;
-
-        let mut linker = <Linker<()>>::new(&engine);
-        host::register(&mut linker)
-            .map_err(|e| WasmiError::Engine(format!("host registration: {e}")))?;
-        let instance = linker
-            .instantiate_and_start(&mut store, &module)
-            .map_err(|e| WasmiError::Instantiate(e.to_string()))?;
-
-        let return_data = match instance.get_typed_func::<(), i32>(&store, ENTRY_POINT) {
-            Ok(func) => {
-                let value = func.call(&mut store, ()).map_err(WasmiError::from)?;
-                value.to_le_bytes().to_vec()
-            }
-            Err(_) => {
-                let func = instance
-                    .get_typed_func::<(), ()>(&store, ENTRY_POINT)
-                    .map_err(|_| WasmiError::MissingExport(ENTRY_POINT.to_string()))?;
-                func.call(&mut store, ()).map_err(WasmiError::from)?;
-                Vec::new()
-            }
-        };
-
-        let fuel_left = store
-            .get_fuel()
-            .map_err(|e| WasmiError::Engine(format!("get_fuel: {e}")))?;
-        let gas_used = ctx.gas_limit.saturating_sub(fuel_left);
-
-        Ok(ExecutionResult {
-            gas_used,
-            logs: Vec::new(),
-            status: TxStatus::Success,
-            return_data,
-        })
+        let call_stack = vec![ctx.callee.clone()];
+        run_frame(wasm, ctx.clone(), Rc::clone(&self.code), call_stack)
+            .map(|outcome| outcome.result)
     }
 
     /// Run the precompile at `ctx.callee` with `ctx.input` as the payload.
@@ -153,7 +128,8 @@ impl VmExecutor for WasmiExecutor {
             .ok_or_else(|| WasmiError::NoCode {
                 address: ctx.callee.clone(),
             })?;
-        self.execute_wasm(wasm, &ctx)
+        let call_stack = vec![ctx.callee.clone()];
+        run_frame(wasm, ctx, Rc::clone(&self.code), call_stack).map(|outcome| outcome.result)
     }
 
     fn gas_cost(&self, opcode: Opcode) -> u64 {
@@ -164,4 +140,71 @@ impl VmExecutor for WasmiExecutor {
             Opcode::Other => 1,
         }
     }
+}
+
+/// Execute one call frame in a fresh engine/store (S1.5-P10).
+///
+/// Used both by the top-level executor and by the nested-call host functions
+/// (`call`/`delegatecall`/`staticcall`), which pass a child
+/// [`ExecutionContext`] derived from the parent's host state. Returns the
+/// full [`FrameOutcome`] so the caller can merge storage/accounts/logs on
+/// success. `call_stack` is the active stack including this frame's callee.
+pub(crate) fn run_frame(
+    wasm: &[u8],
+    ctx: ExecutionContext,
+    code: Rc<HashMap<String, Vec<u8>>>,
+    call_stack: Vec<String>,
+) -> Result<FrameOutcome, WasmiError> {
+    let gas_limit = ctx.gas_limit;
+    let mut config = Config::default();
+    config.consume_fuel(true);
+    let engine = Engine::new(&config);
+
+    let module = Module::new(&engine, wasm)
+        .map_err(|e| WasmiError::Engine(format!("module decode: {e}")))?;
+
+    let mut store = Store::new(&engine, HostState::new(ctx, code, call_stack));
+    store
+        .set_fuel(gas_limit)
+        .map_err(|e| WasmiError::Engine(format!("set_fuel: {e}")))?;
+
+    let mut linker = <Linker<HostState>>::new(&engine);
+    host::register(&mut linker)
+        .map_err(|e| WasmiError::Engine(format!("host registration: {e}")))?;
+    let instance = linker
+        .instantiate_and_start(&mut store, &module)
+        .map_err(|e| WasmiError::Instantiate(e.to_string()))?;
+
+    let return_data = match instance.get_typed_func::<(), i32>(&store, ENTRY_POINT) {
+        Ok(func) => {
+            let value = func.call(&mut store, ()).map_err(WasmiError::from)?;
+            value.to_le_bytes().to_vec()
+        }
+        Err(_) => {
+            let func = instance
+                .get_typed_func::<(), ()>(&store, ENTRY_POINT)
+                .map_err(|_| WasmiError::MissingExport(ENTRY_POINT.to_string()))?;
+            func.call(&mut store, ()).map_err(WasmiError::from)?;
+            Vec::new()
+        }
+    };
+
+    let fuel_left = store
+        .get_fuel()
+        .map_err(|e| WasmiError::Engine(format!("get_fuel: {e}")))?;
+    let gas_used = gas_limit.saturating_sub(fuel_left);
+    let state = store.into_data();
+
+    Ok(FrameOutcome {
+        result: ExecutionResult {
+            gas_used,
+            logs: state.logs.clone(),
+            status: TxStatus::Success,
+            return_data: return_data.clone(),
+        },
+        storage_overlay: state.ctx.storage_overlay,
+        accounts: state.ctx.accounts,
+        logs: state.logs,
+        return_data,
+    })
 }

@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.1.5 — Stage 1.5 proper: host functions — crypto + storage + calls + context + logs (S1.5-P10)
+
+**Status**: In progress  
+**Date**: 2026-10-16  
+**Prompts**: S1.5-P10
+
+### Host functions — the full S1.5-P10 set (12 new + `gas_left` from P09 = 13)
+
+- **`crates/strangecoin-vm-wasm/src/host/`** — one module per host function, all registered under the `sc` namespace via `host::register(Linker)`, every one charges its ADR-0014 `HostCallWeight` **before** doing work and validates its memory-pointer inputs (threat V-21: a malicious module must never panic the host or read/write out of bounds):
+  - **`crypto/`** — `secp256k1_verify(pk33, hash32, sig64)` → `1/0` (malformed material = `0`, bad memory = frame abort; gas 3000), `bls_verify` (**NotImplemented until Stage 7** — charges 12000 then fails the frame, no BLS12-381 dep), `blake3`/`keccak`/`sha256` via shared `hash_host` (`(in_ptr, in_len, out_ptr)` → `1`, or `0` when the out-buffer can't fit the digest so the contract can retry; ADR-0014 length-based formulas).
+  - **`storage/`** — `storage_read(key_ptr, out_ptr, out_len)` → bytes written / `0` absent / `-1` buffer too small (gas 200); `storage_write(key_ptr, val_ptr, val_len)` → `1` (gas 5000, **refused in read-only frames**). Per-contract size cap lands in S1.5-P13; overlay wiring to the SMT in S1.5-P15.
+  - **`calls/`** — `call`/`delegatecall`/`staticcall` share `nested_call`: child `ExecutionContext` derived with `depth + 1`, `read_only` propagated (staticcall forces it), value transfer for `call` only (insufficient balance → `STATUS_FAILED` + full child-budget burn), precompile fast-path reuses ADR-0015 `dispatch_precompile` (B's `call("0x02", …)` runs sha256), merge-on-success of child storage overlay/accounts/logs (revert keeps parent state untouched), gas = 700 base + child consumption deducted from the parent's single fuel counter, return data truncated into the caller's out-buffer (full copy in `last_return_data`). ABI status codes `0/1/2` (OK/reverted/failed); target length capped at 128 bytes (V-21).
+  - **`context/`** — `block_context(out_ptr, out_len)` → `height ‖ timestamp ‖ gas_limit ‖ coinbase` LE (`-1` if the buffer is too small, gas 3 — consensus timestamp, never wall clock); `gas_left()` (P09) unchanged.
+  - **`logs/`** — `emit_log(topics_ptr, topics_count, data_ptr, data_len)` → `1`; ≤ 4 × 32-byte topics (Ethereum-style), gas `375 + 375/topic`, **refused in read-only frames**; logs ride `ExecutionResult.logs` (receipts in S1.5-P14).
+- **Memory-pointer ABI** — `host/abi.rs`: `read_bytes`/`read_array32`/`write_bytes` bounds-check every access against the current linear-memory size; a bad pointer aborts the frame with a host error (not an engine panic).
+- **`ExecutionContext` gains `read_only: bool`** (core `vm/context.rs`) — set by `staticcall` for the child frame; `storage_write`/`emit_log` gate on it.
+- **`run_frame` + `FrameOutcome`** (`vm-wasm/src/lib.rs`) — one call frame runs in a fresh engine/store and returns the result *plus* mutated working state (storage overlay, accounts, logs, return data) so nested calls merge child → parent on success; `WasmiExecutor.code` is an `Rc<HashMap>` shared into nested frames (zero copies per nested call).
+- **Tests** — `vm-wasm/tests/host_functions.rs` (42): every host function gets valid + invalid + gas coverage through real wasmi execution of WAT fixtures — blake3/keccak/sha256 known vectors (`"abc"`) + out-of-bounds out-buffer → `0` + out-of-bounds in-buffer → frame abort + OOG below weight + gas-formula deltas via `gas_left`; secp256k1 valid/tampered/garbage-key/OOG; bls NotImplemented ×3 (message, below-weight OOG, determinism); storage write→read roundtrip, absent key → `0`, small buffer → `-1`, read-only refusal, OOG; block_context height/`-1`/gas; emit_log topic+data, >4 topics abort, OOG; nested call return-data copy, EOA call, precompile reuse, insufficient balance, 3-frame depth chain propagating the grandchild's return, gas base+child and determinism; delegatecall shared overlay / EOA / gas; staticcall write-blocked / return-data / gas; too-long target rejected. Unit tests for `transfer_value` in `host/calls/mod.rs` (3). `cargo test --workspace` green, `clippy -D warnings` green.
+
+### Not in this change
+
+- Reentrancy guard, `max_call_depth`, `max_code_size`, per-contract storage cap, wasmi stack/memory limits — S1.5-P13 (minimal ABI stub for the `non_reentrant` flag ships there).
+- JSON ABI dispatch (real entry-point selection instead of `main`) — S1.5-P12.
+- Sparse Merkle overlay flush + receipts/logs into `apply_block` — S1.5-P14/P15.
+- Normative gas-cost freeze — SCIP-gated after mainnet freeze (ADR-0014/0015 policy).
+
+---
+
 ## 1.1.4 — Stage 1.5 proper: precompiles 0x01..0x07 (S1.5-P11)
 
 **Status**: In progress  

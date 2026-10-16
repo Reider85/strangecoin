@@ -33,6 +33,9 @@ pub struct ExecutionContext {
     pub depth: u32,
     /// Set while inside a non-reentrant call frame (S1.5-P13).
     pub reentrant: bool,
+    /// Read-only frame: set by `staticcall` (S1.5-P10); `storage_write` and
+    /// state-mutating host functions must refuse to run while this is true.
+    pub read_only: bool,
     pub block_context: BlockContext,
     /// Contract storage writes staged by this frame, flushed to the SMT on
     /// success (S1.5-P15), discarded on revert.

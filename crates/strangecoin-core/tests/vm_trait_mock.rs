@@ -66,6 +66,7 @@ fn sample_context() -> ExecutionContext {
         gas_used: 1_500,
         depth: 0,
         reentrant: false,
+        read_only: false,
         block_context: BlockContext {
             height: 7,
             timestamp: 1_700_000_000,
