@@ -58,4 +58,6 @@ pub enum CoreError {
     InvalidContractDeploy { reason: String },
     #[error("invalid gas limit: {reason}")]
     InvalidGasLimit { reason: String },
+    #[error("vm execution failed: {0}")]
+    VmExecution(#[from] crate::vm::VmError),
 }

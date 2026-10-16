@@ -12,6 +12,7 @@ use strangecoin::ConsensusManager;
 fn rebuild(chain: &[strangecoin::Block]) -> StateCache {
     StateCache::rebuild_from_chain(chain, now_secs(), true, false, &ConsensusManager::new(), strangecoin::consensus::CHAIN_ID_REGTEST)
         .expect("chain must rebuild")
+        .0
 }
 
 #[test]
@@ -69,7 +70,9 @@ fn unapply_block_invalidates_the_cache_on_reorg() {
     // Reorg away the tip: the cache must end up exactly where the shorter
     // chain says it should be, without re-walking the whole chain.
     let mut rolled_back = with_tip.clone();
-    rolled_back.unapply_block(&tip).expect("tip must unapply");
+    rolled_back
+        .unapply_block(&tip, strangecoin::consensus::CHAIN_ID_REGTEST)
+        .expect("tip must unapply");
 
     let without_tip = rebuild(&chain[..chain.len() - 1]);
     assert_eq!(rolled_back, without_tip);

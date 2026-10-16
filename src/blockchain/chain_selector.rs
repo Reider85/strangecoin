@@ -129,6 +129,11 @@ impl<'de> Deserialize<'de> for Blockchain {
         }
         let storage = crate::storage::Storage::new(&db_path).map_err(serde::de::Error::custom)?;
 
+        let codes = super::block_executor::codes_from_chain(
+            &chain,
+            strangecoin_core::consensus::CHAIN_ID_REGTEST,
+        );
+
         Ok(Blockchain {
             chain,
             balances: StateCache::from_accounts(balances),
@@ -140,6 +145,8 @@ impl<'de> Deserialize<'de> for Blockchain {
             total_work,
             rules: ConsensusManager::new(),
             chain_id: strangecoin_core::consensus::CHAIN_ID_REGTEST,
+            codes,
+            receipts: Vec::new(),
         })
     }
 }
@@ -172,7 +179,7 @@ pub(crate) fn try_adopt_candidate(
         return Ok(false);
     }
 
-    let rebuilt = match StateCache::rebuild_from_chain(
+    let (rebuilt, receipts) = match StateCache::rebuild_from_chain(
         &candidate_chain,
         block_executor::now_secs(),
         current.allow_grant_blocks,
@@ -180,7 +187,7 @@ pub(crate) fn try_adopt_candidate(
         &current.rules,
         current.chain_id,
     ) {
-        Ok(cache) => cache,
+        Ok(outcome) => outcome,
         Err(e) => {
             warn!(error = %e, "Candidate chain rejected: failed validation");
             return Ok(false);
@@ -223,6 +230,8 @@ pub(crate) fn try_adopt_candidate(
     current.difficulty = candidate_difficulty;
     current.total_work = strangecoin_core::consensus::cumulative_work(&current.chain);
     current.mempool = merged;
+    current.receipts = receipts;
+    current.codes = block_executor::codes_from_chain(&current.chain, current.chain_id);
     Ok(true)
 }
 

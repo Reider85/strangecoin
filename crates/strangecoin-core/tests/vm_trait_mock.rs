@@ -34,6 +34,10 @@ impl VmExecutor for MockVmExecutor {
             Opcode::Other => 5,
         }
     }
+
+    fn register_code(&mut self, _address: &str, _wasm: Vec<u8>) -> Result<(), VmError> {
+        Ok(())
+    }
 }
 
 fn sample_header() -> BlockHeader {
@@ -156,6 +160,7 @@ fn gas_cost_per_opcode() {
 #[test]
 fn receipt_carries_gas_logs_status() {
     let receipt = Receipt {
+        txid: [7u8; 32],
         gas_used: 5_000,
         logs: vec![Log {
             address: "sc1contract".to_string(),
@@ -163,10 +168,14 @@ fn receipt_carries_gas_logs_status() {
             data: vec![],
         }],
         status: TxStatus::Reverted,
+        block_height: 3,
+        tx_index: 1,
     };
     assert_eq!(receipt.gas_used, 5_000);
     assert_eq!(receipt.status, TxStatus::Reverted);
     assert_eq!(receipt.logs.len(), 1);
+    assert_eq!(receipt.block_height, 3);
+    assert_eq!(receipt.tx_index, 1);
 }
 
 struct FixedGasCounter {

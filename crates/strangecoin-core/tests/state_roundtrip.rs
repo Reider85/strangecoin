@@ -71,7 +71,7 @@ proptest! {
         let block = transfer_block(1, txs);
         let after_block = apply_block(&after_genesis, &block, CHAIN_ID_REGTEST).unwrap();
 
-        let restored = unapply_block(&after_block, &block).unwrap();
+        let restored = unapply_block(&after_block, &block, CHAIN_ID_REGTEST).unwrap();
         prop_assert_eq!(restored, after_genesis);
     }
 
@@ -107,11 +107,11 @@ proptest! {
         let b3 = transfer_block(3, txs3);
 
         if let Ok(s3) = apply_block(&s2, &b3, CHAIN_ID_REGTEST) {
-            let r2 = unapply_block(&s3, &b3).unwrap();
+            let r2 = unapply_block(&s3, &b3, CHAIN_ID_REGTEST).unwrap();
             prop_assert_eq!(&r2, &s2);
-            let r1 = unapply_block(&r2, &b2).unwrap();
+            let r1 = unapply_block(&r2, &b2, CHAIN_ID_REGTEST).unwrap();
             prop_assert_eq!(&r1, &s1);
-            let r0 = unapply_block(&r1, &b1).unwrap();
+            let r0 = unapply_block(&r1, &b1, CHAIN_ID_REGTEST).unwrap();
             prop_assert_eq!(&r0, &s0);
         }
     }
@@ -149,7 +149,7 @@ proptest! {
         let block = transfer_block(1, txs);
         let after_block = apply_block(&after_genesis, &block, CHAIN_ID_REGTEST).unwrap();
 
-        let restored = unapply_block(&after_block, &block).unwrap();
+        let restored = unapply_block(&after_block, &block, CHAIN_ID_REGTEST).unwrap();
         prop_assert_eq!(restored.get_balance("alice"), after_genesis.get_balance("alice"));
         prop_assert_eq!(restored.get_balance("bob"), after_genesis.get_balance("bob"));
         prop_assert_eq!(restored.get_nonce("alice"), after_genesis.get_nonce("alice"));
@@ -174,7 +174,7 @@ mod unit_tests {
         let state = State::new();
         let block = genesis_block(vec![coinbase("miner", 100_000)]);
         let applied = apply_block(&state, &block, CHAIN_ID_REGTEST).unwrap();
-        let restored = unapply_block(&applied, &block).unwrap();
+        let restored = unapply_block(&applied, &block, CHAIN_ID_REGTEST).unwrap();
         assert_eq!(restored, state);
     }
 
@@ -198,13 +198,13 @@ mod unit_tests {
         assert_eq!(s3.get_balance("bob"), 7500);
         assert_eq!(s3.total_supply(), 15_000);
 
-        let r3 = unapply_block(&s3, &b3).unwrap();
+        let r3 = unapply_block(&s3, &b3, CHAIN_ID_REGTEST).unwrap();
         assert_eq!(r3, s2);
-        let r2 = unapply_block(&r3, &b2).unwrap();
+        let r2 = unapply_block(&r3, &b2, CHAIN_ID_REGTEST).unwrap();
         assert_eq!(r2, s1);
-        let r1 = unapply_block(&r2, &b1).unwrap();
+        let r1 = unapply_block(&r2, &b1, CHAIN_ID_REGTEST).unwrap();
         assert_eq!(r1, s0);
-        let r0 = unapply_block(&r1, &genesis).unwrap();
+        let r0 = unapply_block(&r1, &genesis, CHAIN_ID_REGTEST).unwrap();
         assert_eq!(r0, state);
     }
 
@@ -225,9 +225,9 @@ mod unit_tests {
         let s2 = apply_block(&s1, &b2, CHAIN_ID_REGTEST).unwrap();
         assert_eq!(s2.get_nonce("alice"), 2);
 
-        let r2 = unapply_block(&s2, &b2).unwrap();
+        let r2 = unapply_block(&s2, &b2, CHAIN_ID_REGTEST).unwrap();
         assert_eq!(r2.get_nonce("alice"), 1);
-        let r1 = unapply_block(&r2, &b1).unwrap();
+        let r1 = unapply_block(&r2, &b1, CHAIN_ID_REGTEST).unwrap();
         assert_eq!(r1.get_nonce("alice"), 0);
     }
 
@@ -263,5 +263,102 @@ mod unit_tests {
         let s1 = apply_block(&s0, &block, CHAIN_ID_REGTEST).unwrap();
 
         assert_eq!(s1.get_balance("alice"), 1000);
+    }
+
+    struct SuccessVm;
+
+    impl strangecoin_core::VmExecutor for SuccessVm {
+        type Error = strangecoin_core::VmError;
+
+        fn execute(
+            &self,
+            _ctx: strangecoin_core::ExecutionContext,
+        ) -> Result<strangecoin_core::ExecutionResult, Self::Error> {
+            Ok(strangecoin_core::ExecutionResult {
+                gas_used: 42,
+                logs: vec![],
+                status: strangecoin_core::TxStatus::Success,
+                return_data: vec![],
+            })
+        }
+
+        fn gas_cost(&self, _opcode: strangecoin_core::Opcode) -> u64 {
+            1
+        }
+
+        fn register_code(
+            &mut self,
+            _address: &str,
+            _wasm: Vec<u8>,
+        ) -> Result<(), strangecoin_core::VmError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn create_call_apply_unapply_roundtrip() {
+        use strangecoin_core::state::apply_block_with_vm;
+
+        let state = make_state(vec![("alice".to_string(), 5_000)]);
+        let create = Transaction::create("alice", vec![0x00, 0x61, 0x73, 0x6d], vec![], 100, 0, 3);
+        let contract = strangecoin_core::address::derive_contract_address("alice", 0, 3).unwrap();
+        let call = Transaction::call("alice", &contract, vec![1], 10, 50_000, 1, 3);
+        let block = transfer_block(1, vec![create, call]);
+
+        let mut vm = SuccessVm;
+        let applied = apply_block_with_vm(&state, &block, CHAIN_ID_REGTEST, &mut vm).unwrap();
+        assert_eq!(applied.get_balance("alice"), 4_890);
+        assert_eq!(applied.get_balance(&contract), 110);
+        assert_eq!(applied.receipts.len(), 3);
+        assert_eq!(applied.receipts[2].gas_used, 42);
+
+        let restored = unapply_block(&applied, &block, CHAIN_ID_REGTEST).unwrap();
+        assert_eq!(restored, state);
+        assert!(restored.get_account(&contract).is_none());
+        assert!(restored.receipts.is_empty());
+    }
+
+    #[test]
+    fn failed_call_roundtrip_does_not_move_value() {
+        use strangecoin_core::state::apply_block_with_vm;
+
+        struct FailVm;
+        impl strangecoin_core::VmExecutor for FailVm {
+            type Error = strangecoin_core::VmError;
+
+            fn execute(
+                &self,
+                _ctx: strangecoin_core::ExecutionContext,
+            ) -> Result<strangecoin_core::ExecutionResult, Self::Error> {
+                Err(strangecoin_core::VmError::OutOfGas)
+            }
+
+            fn gas_cost(&self, _opcode: strangecoin_core::Opcode) -> u64 {
+                1
+            }
+
+            fn register_code(
+                &mut self,
+                _address: &str,
+                _wasm: Vec<u8>,
+            ) -> Result<(), strangecoin_core::VmError> {
+                Ok(())
+            }
+        }
+
+        let state = make_state(vec![("alice".to_string(), 5_000)]);
+        let create = Transaction::create("alice", vec![0x00, 0x61, 0x73, 0x6d], vec![], 100, 0, 3);
+        let contract = strangecoin_core::address::derive_contract_address("alice", 0, 3).unwrap();
+        let call = Transaction::call("alice", &contract, vec![], 10, 50_000, 1, 3);
+        let block = transfer_block(1, vec![create, call]);
+
+        let mut vm = FailVm;
+        let applied = apply_block_with_vm(&state, &block, CHAIN_ID_REGTEST, &mut vm).unwrap();
+        assert_eq!(applied.receipts[2].status, strangecoin_core::TxStatus::OutOfGas);
+        assert_eq!(applied.get_balance("alice"), 4_900);
+        assert_eq!(applied.get_balance(&contract), 100, "value stays on failure");
+
+        let restored = unapply_block(&applied, &block, CHAIN_ID_REGTEST).unwrap();
+        assert_eq!(restored, state);
     }
 }

@@ -162,6 +162,9 @@ impl From<strangecoin_core::CoreError> for StrangecoinError {
             strangecoin_core::CoreError::InvalidGasLimit { reason } => {
                 StrangecoinError::InvalidBlock(format!("invalid gas limit: {}", reason))
             }
+            strangecoin_core::CoreError::VmExecution(err) => {
+                StrangecoinError::InvalidBlock(format!("vm execution failed: {}", err))
+            }
         }
     }
 }

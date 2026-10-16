@@ -12,9 +12,12 @@ pub mod vm;
 
 pub use chain_selector::{ChainInfo, ChainSelector};
 pub use error::CoreError;
-pub use serialize::{compute_tx_root, merkle_root};
+pub use serialize::{compute_receipts_root, compute_tx_root, merkle_root, serialize_receipt};
 pub use state::witness::{build_witness, verify_block_stateless, AccountProof, StateWitness};
-pub use state::{apply_block, compute_state_root, root_after, unapply_block, State};
+pub use state::{
+    apply_block, apply_block_with_vm, compute_state_root, prove_receipt, receipts_subroot,
+    root_after, unapply_block, verify_receipt_proof, State,
+};
 pub use types::{
     Account, AccountState, Block, BlockHeader, CallTx, ChainSnapshot, ContractAccount, CreateTx,
     EoaAccount, Transaction, TransferTx,

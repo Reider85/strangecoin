@@ -59,6 +59,42 @@ pub fn txid(tx: &Transaction) -> [u8; 32] {
     *blake3::hash(&serialize_transaction_signed(tx)).as_bytes()
 }
 
+/// Canonical receipt encoding (S1.5-P14): the leaf preimage of the receipts
+/// sub-trie. Field order is fixed and lengths are explicit, so identical
+/// receipts always hash to the same leaf.
+pub fn serialize_receipt(receipt: &crate::vm::Receipt) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.push(FORMAT_VERSION);
+    out.extend_from_slice(&receipt.txid);
+    out.extend_from_slice(&receipt.block_height.to_be_bytes());
+    out.extend_from_slice(&receipt.tx_index.to_be_bytes());
+    out.extend_from_slice(&receipt.gas_used.to_be_bytes());
+    out.push(receipt.status.canonical_byte());
+    out.extend_from_slice(&(receipt.logs.len() as u32).to_be_bytes());
+    for log in &receipt.logs {
+        write_string(&mut out, &log.address);
+        out.extend_from_slice(&(log.topics.len() as u32).to_be_bytes());
+        for topic in &log.topics {
+            out.extend_from_slice(topic);
+        }
+        write_bytes(&mut out, &log.data);
+    }
+    out
+}
+
+/// Merkle commitment over a block's receipts (S1.5-P14): one blake3 leaf per
+/// receipt, sorted for an order-independent set commitment, folded with the
+/// same odd-node duplication rule as [`merkle_root`]. An empty receipt list
+/// commits to `[0u8; 32]`.
+pub fn compute_receipts_root(receipts: &[crate::vm::Receipt]) -> [u8; 32] {
+    let mut leaves: Vec<[u8; 32]> = receipts
+        .iter()
+        .map(|r| *blake3::hash(&serialize_receipt(r)).as_bytes())
+        .collect();
+    leaves.sort_unstable();
+    merkle_root(&leaves)
+}
+
 pub fn serialize_block_header(block: &Block) -> Vec<u8> {
     serialize_header(&block.header())
 }

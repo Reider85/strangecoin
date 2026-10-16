@@ -6,7 +6,7 @@ use strangecoin_core::address::is_precompile_address;
 use strangecoin_core::types::AccountState;
 use strangecoin_core::vm::limits::{MAX_CALL_DEPTH, MAX_STACK_HEIGHT};
 use strangecoin_core::vm::{
-    ExecutionContext, ExecutionResult, Log, Opcode, TxStatus, VmExecutor,
+    ExecutionContext, ExecutionResult, Log, Opcode, TxStatus, VmError, VmExecutor,
 };
 use wasmi::{Config, Engine, Linker, Module, Store};
 
@@ -166,6 +166,16 @@ impl VmExecutor for WasmiExecutor {
             Opcode::MemoryGrow => 3,
             Opcode::Other => 1,
         }
+    }
+
+    fn register_code(&mut self, address: &str, wasm: Vec<u8>) -> Result<(), VmError> {
+        let engine = Engine::default();
+        Module::new(&engine, &wasm).map_err(|e| VmError::HostFunctionError {
+            name: "register_code".to_string(),
+            reason: format!("invalid wasm for `{address}`: {e}"),
+        })?;
+        self.insert_code(address, wasm);
+        Ok(())
     }
 }
 

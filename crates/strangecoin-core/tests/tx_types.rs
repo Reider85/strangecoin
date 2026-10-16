@@ -336,7 +336,7 @@ fn transfer_apply_unapply_roundtrip_still_works() {
     assert_eq!(after.get_balance("alice"), 700);
     assert_eq!(after.get_balance("bob"), 300);
 
-    let restored = unapply_block(&after, &block).unwrap();
+    let restored = unapply_block(&after, &block, CHAIN_ID_REGTEST).unwrap();
     assert_eq!(restored, after_genesis);
 }
 

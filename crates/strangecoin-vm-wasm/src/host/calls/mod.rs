@@ -197,6 +197,7 @@ pub(crate) fn nested_call(
                     let status = match result.status {
                         TxStatus::Success => STATUS_OK,
                         TxStatus::Reverted => STATUS_REVERTED,
+                        TxStatus::OutOfGas | TxStatus::Failed => STATUS_FAILED,
                     };
                     (
                         status,

@@ -160,7 +160,7 @@ fn apply_unapply_roundtrip_with_contract() {
     let block = regtest_block(1, vec![transfer_tx("alice", "contract", 250, 1)]);
     let applied = apply_block(&after_genesis, &block, CHAIN_ID_REGTEST).unwrap();
 
-    let restored = unapply_block(&applied, &block).unwrap();
+    let restored = unapply_block(&applied, &block, CHAIN_ID_REGTEST).unwrap();
     assert_eq!(restored, after_genesis);
     let contract = restored.get_account("contract").unwrap().as_contract().unwrap();
     assert_eq!(contract.balance, 0);

@@ -385,6 +385,89 @@ impl SparseMerkleTrie {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Receipts sub-trie (S1.5-P14, invariant #18)
+// ---------------------------------------------------------------------------
+
+use crate::vm::Receipt;
+
+/// Domain-separation tag for the receipts-sub-trie leaf preimage (S1.5-P14).
+/// Account leaves start with `key_hash`; receipt leaves start with this tag,
+/// so the two leaf spaces cannot collide.
+const RECEIPT_LEAF_TAG: u8 = 0x02;
+
+fn receipt_leaf_hash(receipt: &Receipt) -> [u8; 32] {
+    let mut hasher = Hasher::new();
+    hasher.update(&[RECEIPT_LEAF_TAG]);
+    hasher.update(&crate::serialize::serialize_receipt(receipt));
+    *hasher.finalize().as_bytes()
+}
+
+/// Root of the receipts sub-trie for one block (S1.5-P14): key = `txid`,
+/// leaf = domain-tagged blake3 of the canonical receipt bytes. Duplicate
+/// txids (a block carrying the same transaction twice) collapse to a single
+/// leaf — the first occurrence wins, matching the idempotent commitment.
+pub fn receipts_subroot(receipts: &[Receipt]) -> [u8; 32] {
+    if receipts.is_empty() {
+        return SparseMerkleTrie::empty_root();
+    }
+    let mut sorted: Vec<([u8; 32], [u8; 32])> = Vec::with_capacity(receipts.len());
+    for receipt in receipts {
+        let key = receipt.txid;
+        if sorted.iter().any(|(k, _)| *k == key) {
+            continue;
+        }
+        sorted.push((key, receipt_leaf_hash(receipt)));
+    }
+    sorted.sort_by_key(|(k, _)| *k);
+    let refs: Vec<(&[u8; 32], &[u8; 32])> = sorted.iter().map(|(k, v)| (k, v)).collect();
+    hash_range(&refs, 0, 0, refs.len())
+}
+
+/// Sibling proof for `receipt` against [`receipts_subroot`] of `receipts`.
+/// Returns `DEPTH` (256) sibling hashes, level 0 (near root) first.
+pub fn prove_receipt(receipts: &[Receipt], txid: &[u8; 32]) -> Result<Vec<[u8; 32]>, CoreError> {
+    let receipt = receipts
+        .iter()
+        .find(|r| r.txid == *txid)
+        .ok_or(CoreError::ProofAccountMismatch)?;
+
+    let mut sorted: Vec<([u8; 32], [u8; 32])> = Vec::with_capacity(receipts.len());
+    for r in receipts {
+        let key = r.txid;
+        if sorted.iter().any(|(k, _)| *k == key) {
+            continue;
+        }
+        sorted.push((key, receipt_leaf_hash(r)));
+    }
+    sorted.sort_by_key(|(k, _)| *k);
+    let refs: Vec<(&[u8; 32], &[u8; 32])> = sorted.iter().map(|(k, v)| (k, v)).collect();
+
+    let mut proof = Vec::with_capacity(DEPTH);
+    collect_siblings(&refs, &receipt.txid, 0, 0, refs.len(), &mut proof);
+    Ok(proof)
+}
+
+/// Verify `receipt` against `root` using `proof` (invariant #18: receipts
+/// are verifiable commitments, not mutable side-channel data).
+pub fn verify_receipt_proof(root: &[u8; 32], receipt: &Receipt, proof: &[[u8; 32]]) -> bool {
+    if proof.len() != DEPTH {
+        return false;
+    }
+    let key = receipt.txid;
+    let leaf = receipt_leaf_hash(receipt);
+
+    let mut acc = leaf;
+    for i in (0..DEPTH).rev() {
+        if bit_at(&key, i) == 0 {
+            acc = hash_pair(&acc, &proof[i]);
+        } else {
+            acc = hash_pair(&proof[i], &acc);
+        }
+    }
+    acc == *root
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

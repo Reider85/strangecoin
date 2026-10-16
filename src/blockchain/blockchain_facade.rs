@@ -43,6 +43,13 @@ pub struct Blockchain {
     /// Network this node validates (BUG-S1-004): propagated from
     /// `Config.network_id`; drives genesis, rewards and tx chain_id checks.
     pub(crate) chain_id: u32,
+    /// Contract code registry (S1.5-P14): bech32 address → WASM bytecode,
+    /// reconstructed from the chain's `Create` transactions (invariant #1
+    /// style) — never trusted from the wire.
+    pub(crate) codes: HashMap<String, Vec<u8>>,
+    /// Receipts of the most recently committed block (S1.5-P14, invariant
+    /// #18): replaced wholesale on commit/adopt, never mutated in place.
+    pub(crate) receipts: Vec<strangecoin_core::vm::Receipt>,
 }
 
 impl Blockchain {
@@ -61,6 +68,7 @@ impl Blockchain {
         )
         .with_phase(self.rules.phase_at(height))
         .with_allow_zero_state_root(self.allow_zero_state_root)
+        .with_codes(&self.codes)
     }
 
     pub(crate) fn calculate_hash(&self, block: &Block) -> String {
@@ -142,6 +150,13 @@ impl BlockchainFacade {
 
     pub fn difficulty(&self) -> u32 {
         self.inner.read().expect(BLOCKCHAIN_LOCK).difficulty
+    }
+
+    /// Receipts of the most recently committed block (S1.5-P14, invariant
+    /// #18). Empty right after a restart until the next commit/adopt —
+    /// receipts are derived data, recomputed from the chain.
+    pub fn tip_receipts(&self) -> Vec<strangecoin_core::vm::Receipt> {
+        self.inner.read().expect(BLOCKCHAIN_LOCK).receipts.clone()
     }
 
     /// Network this node validates (`Config.network_id`, BUG-S1-004).

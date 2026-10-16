@@ -2,7 +2,8 @@ mod inner;
 pub mod sparse_merkle;
 pub mod witness;
 
-pub use inner::{apply_block, unapply_block, State};
+pub use inner::{apply_block, apply_block_with_vm, unapply_block, State};
+pub use sparse_merkle::{prove_receipt, receipts_subroot, verify_receipt_proof};
 
 use std::collections::HashMap;
 

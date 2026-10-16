@@ -21,6 +21,7 @@
 //! 10. block gas limit (invariant #15, first enforced at Stage 1.5,
 //!     ADR-0014): `sum(CallTx.gas_limit) <= BLOCK_GAS_LIMIT`.
 
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc, Arc,
@@ -50,6 +51,9 @@ pub struct BlockView<'a> {
     /// Network the block is validated for (BUG-S1-004): every tx must carry
     /// this `chain_id`, and the coinbase reward schedule follows it.
     pub chain_id: u32,
+    /// Contract code registry available to `Create`/`Call` execution
+    /// (S1.5-P14): address → WASM bytecode, reconstructed from the chain.
+    pub codes: Option<&'a HashMap<String, Vec<u8>>>,
 }
 
 impl<'a> BlockView<'a> {
@@ -68,6 +72,7 @@ impl<'a> BlockView<'a> {
             expected_consensus_version,
             phase: ConsensusPhase::Pow,
             chain_id,
+            codes: None,
         }
     }
 
@@ -78,6 +83,11 @@ impl<'a> BlockView<'a> {
 
     pub fn with_allow_zero_state_root(mut self, allow: bool) -> Self {
         self.allow_zero_state_root = allow;
+        self
+    }
+
+    pub fn with_codes(mut self, codes: &'a HashMap<String, Vec<u8>>) -> Self {
+        self.codes = Some(codes);
         self
     }
 
@@ -196,7 +206,7 @@ pub fn validate_and_apply(
     // creates reserve nothing.
     enforce_block_gas_limit(&block.transactions)?;
 
-    let new_state = apply_block(parent_state, block, view.chain_id)?;
+    let new_state = apply_and_execute(parent_state, block, view)?;
 
     // Invariant #19 / SCIP-0002 (BUG-S1-002): every non-genesis block must
     // commit to its post-state root. A zero root is tolerated only for
@@ -245,6 +255,67 @@ pub(crate) fn enforce_block_gas_limit(
         });
     }
     Ok(())
+}
+
+/// State transition of `block`: with the `vm-wasm` feature, `Create`/`Call`
+/// transactions execute through a wasmi executor seeded from `view.codes`
+/// (S1.5-P14) and every transaction produces a receipt; without the feature
+/// (light node) the transfer-only path rejects contract transactions.
+fn apply_and_execute(
+    parent_state: &State,
+    block: &Block,
+    view: &BlockView<'_>,
+) -> Result<State, StrangecoinError> {
+    #[cfg(feature = "vm-wasm")]
+    {
+        let mut executor = strangecoin_vm_wasm::WasmiExecutor::new();
+        if let Some(codes) = view.codes {
+            for (address, wasm) in codes {
+                executor.insert_code(address, wasm.clone());
+            }
+        }
+        Ok(strangecoin_core::state::apply_block_with_vm(
+            parent_state,
+            block,
+            view.chain_id,
+            &mut executor,
+        )?)
+    }
+    #[cfg(not(feature = "vm-wasm"))]
+    {
+        let _ = view;
+        Ok(apply_block(parent_state, block, view.chain_id)?)
+    }
+}
+
+/// Reconstruct the contract code registry from a chain's `Create`
+/// transactions (S1.5-P14, invariant #1 style): deterministic, wire-independent.
+pub(crate) fn codes_from_chain(
+    chain: &[Block],
+    chain_id: u32,
+) -> HashMap<String, Vec<u8>> {
+    let mut codes = HashMap::new();
+    for block in chain {
+        collect_block_codes(block, chain_id, &mut codes);
+    }
+    codes
+}
+
+/// Merge the `Create` codes of one block into `codes`.
+pub(crate) fn collect_block_codes(
+    block: &Block,
+    chain_id: u32,
+    codes: &mut HashMap<String, Vec<u8>>,
+) {
+    for tx in &block.transactions {
+        if let Transaction::Create(create) = tx {
+            if let Ok(address) =
+                strangecoin_core::address::derive_contract_address(&create.from, create.nonce, chain_id)
+            {
+                codes.insert(address, create.init_code.clone());
+            }
+        }
+    }
 }
 
 fn validate_position(block: &Block, chain: &[Block]) -> Result<(), StrangecoinError> {
@@ -363,6 +434,7 @@ impl Blockchain {
         match applied {
             Ok(new_state) => {
                 self.chain.push(genesis_block);
+                self.receipts = new_state.receipts.clone();
                 self.balances.commit(new_state);
                 self.total_work = strangecoin_core::consensus::cumulative_work(&self.chain);
             }
@@ -423,6 +495,7 @@ impl Blockchain {
         match applied {
             Ok(new_state) => {
                 self.chain.push(block);
+                self.receipts = new_state.receipts.clone();
                 self.balances.commit(new_state);
                 self.total_work = strangecoin_core::consensus::cumulative_work(&self.chain);
                 info!(from = "initial_wallet_address", to = %wallet_address, amount, "Создан блок первичной эмиссии");
@@ -467,7 +540,9 @@ impl Blockchain {
             let parent_state = self.balances.to_state();
             validate_and_apply(&parent_state, block, &view)?
         };
+        self.receipts = new_state.receipts.clone();
         self.balances.commit(new_state);
+        collect_block_codes(block, self.chain_id, &mut self.codes);
         for tx in &block.transactions {
             if !tx.is_coinbase() {
                 self.mempool.remove(&strangecoin_core::serialize::txid(tx));

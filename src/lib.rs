@@ -1364,6 +1364,8 @@ pub mod test_support {
             total_work: [0, 0, 0, 0],
             rules: crate::blockchain::consensus_manager::ConsensusManager::new(),
             chain_id: network_id,
+            codes: std::collections::HashMap::new(),
+            receipts: Vec::new(),
         };
         bc.create_genesis_block();
         BlockchainFacade::from_blockchain(bc)

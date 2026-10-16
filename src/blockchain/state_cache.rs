@@ -45,6 +45,7 @@ impl StateCache {
     pub fn to_state(&self) -> State {
         State {
             balances: self.accounts.clone(),
+            receipts: Vec::new(),
         }
     }
 
@@ -122,8 +123,8 @@ impl StateCache {
         self.accounts.clear();
     }
 
-    pub fn unapply_block(&mut self, block: &Block) -> Result<(), StrangecoinError> {
-        let rolled_back = unapply_block(&self.to_state(), block)?;
+    pub fn unapply_block(&mut self, block: &Block, chain_id: u32) -> Result<(), StrangecoinError> {
+        let rolled_back = unapply_block(&self.to_state(), block, chain_id)?;
         self.commit(rolled_back);
         Ok(())
     }
@@ -144,8 +145,9 @@ impl StateCache {
         allow_zero_state_root: bool,
         rules: &super::consensus_manager::ConsensusManager,
         chain_id: u32,
-    ) -> Result<Self, StrangecoinError> {
+    ) -> Result<(Self, Vec<strangecoin_core::vm::Receipt>), StrangecoinError> {
         let mut state = State::new();
+        let mut codes: HashMap<String, Vec<u8>> = HashMap::new();
         for (height, block) in chain.iter().enumerate() {
             let view = BlockView::new(
                 &chain[..height],
@@ -155,13 +157,16 @@ impl StateCache {
                 chain_id,
             )
             .with_phase(rules.phase_at(height as u64))
-            .with_allow_zero_state_root(allow_zero_state_root);
+            .with_allow_zero_state_root(allow_zero_state_root)
+            .with_codes(&codes);
             state = block_executor::validate_and_apply(&state, block, &view).map_err(|e| {
                 tracing::warn!(block_index = height, error = %e, "Rebuild stopped at an invalid block");
                 e
             })?;
+            block_executor::collect_block_codes(block, chain_id, &mut codes);
         }
-        Ok(Self::from_state(&state))
+        let receipts = state.receipts.clone();
+        Ok((Self::from_state(&state), receipts))
     }
 }
 
@@ -235,6 +240,8 @@ pub(crate) fn open_blockchain(port: u16, chain_id: u32) -> Blockchain {
         total_work: [0, 0, 0, 0],
         rules: ConsensusManager::new(),
         chain_id,
+        codes: HashMap::new(),
+        receipts: Vec::new(),
     };
     blockchain.debug_db();
 
@@ -263,6 +270,7 @@ pub(crate) fn open_blockchain(port: u16, chain_id: u32) -> Blockchain {
     blockchain.total_work = strangecoin_core::consensus::cumulative_work(&blockchain.chain);
     blockchain.migrate_initial_wallet_balance();
     blockchain.migrate_addresses_to_bech32();
+    blockchain.codes = block_executor::codes_from_chain(&blockchain.chain, chain_id);
     blockchain.save_state();
     blockchain.debug_db();
     let duration = start_time
@@ -403,7 +411,7 @@ impl Blockchain {
             &self.rules,
             self.chain_id,
         ) {
-            Ok(cache) => cache,
+            Ok((cache, _receipts)) => cache,
             Err(e) => {
                 tracing::warn!(error = %e, "Цепочка отклонена: блок не прошёл валидацию");
                 return false;
@@ -441,7 +449,7 @@ impl Blockchain {
 
     pub(crate) fn rebuild_state_cache(&mut self) -> Result<(), StrangecoinError> {
         let now = block_executor::now_secs();
-        self.balances = StateCache::rebuild_from_chain(
+        let (balances, receipts) = StateCache::rebuild_from_chain(
             &self.chain,
             now,
             self.allow_grant_blocks,
@@ -449,6 +457,9 @@ impl Blockchain {
             &self.rules,
             self.chain_id,
         )?;
+        self.balances = balances;
+        self.receipts = receipts;
+        self.codes = block_executor::codes_from_chain(&self.chain, self.chain_id);
         Ok(())
     }
 

@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.1.7 — Stage 1.5 proper: events/logs — Log + Receipt, инвариант #18 (S1.5-P14)
+
+**Status**: In progress  
+**Date**: 2026-10-16  
+**Prompts**: S1.5-P14
+
+### Receipts end-to-end: types, VM execution in `apply_block`, sub-trie
+
+- **`TxStatus` 4 варианта — `core/vm/result.rs`** — `Success | Reverted | OutOfGas | Failed` (+ `canonical_byte()` для канонического encoding); `calls/mod.rs` маппит `OutOfGas | Failed → STATUS_FAILED`.
+- **`Receipt` по спеке** — `{ txid, gas_used, logs, status, block_height, tx_index }` + `Receipt::from_execution(txid, h, i, &ExecutionResult)` и `Receipt::from_vm_error(...)` (исключительный отказ сжигает полный `gas_limit`, логов нет). Каноническое кодирование — `serialize::serialize_receipt`; порядоко-независимый commitment — `serialize::compute_receipts_root` (sorted blake3 leaves + `merkle_root`; пустой список → `[0;32]`).
+- **`VmExecutor::register_code(address, wasm) -> Result<(), VmError>`** — валидация модуля при регистрации (`Module::new`); `WasmiExecutor` имплементирует (insert + validate), `MockVmExecutor` — no-op.
+- **`State { balances, receipts }` + `apply_block_with_vm<V: VmExecutor>` — `core/state/inner.rs`**:
+  - `Create` — deploy: `derive_contract_address(from, nonce_pre, chain_id)`, endowment `sender → contract`, install `Account::Contract { code_hash: blake3(init_code), storage_root: [0;32], nonce: 1 }`, `vm.register_code`, receipt `Success gas 0` (конструктор не исполняется — MVP).
+  - `Call` — nonce++ всегда; callee-EOA → value-transfer + receipt `Success gas 0`; контракт → `ExecutionContext` (overlay ∅, input = `tx.data`) → `vm.execute`; value переводится **только при Success**; `Ok` → `from_execution`, `Err` → `from_vm_error` (OutOfBounds → `OutOfGas`).
+  - `apply_block` (без VM) — transfer-only путь, Create/Call → `UnsupportedTxType` (light-node / feature-off).
+  - `receipts` — производные данные tip-блока: ручной `PartialEq` сравнивает **только balances** (apply/unapply round-trip инварианта #4 сохраняется); `unapply_block(state, block, chain_id)` (**новый аргумент**) реверсирует Create (remove account + refund endowment) / Call (value — только если receipt Success; без receipts — по умолчанию reverse), затем `receipts.clear()`.
+- **Receipts sub-trie — `core/state/sparse_merkle.rs`** — key = `txid`, leaf = `blake3(0x02 ‖ serialize_receipt)`; `receipts_subroot`, `prove_receipt`, `verify_receipt_proof` (reuse `hash_range`/`collect_siblings`). Корень хранится как данные (верифицируемый proof'ом); fold в глобальный `state_root` — S1.5-P15 (один rebuild генезиса вместо двух).
+- **Узел** — `Blockchain.codes` (address → WASM, ре-выводится из Create-tx цепочки: `codes_from_chain`/`collect_block_codes` — invariant #1 стиль; восстанавливается при open/rebuild/adopt) и `Blockchain.receipts` (tip receipts; `BlockchainFacade::tip_receipts()`). `validate_and_apply` через feature-gated `apply_and_execute`: с `vm-wasm` — wasmi-executor из `view.codes` + `apply_block_with_vm`; без фичи — `apply_block`. `commit_block` коммитит receipts + коды; `rebuild_from_chain` возвращает `(StateCache, Vec<Receipt>)` и накапливает codes по ходу replay; `try_adopt_candidate` ре-устанавливает codes + receipts; cumulative gas_used ≤ 1M остаётся покрыт reservation-проверкой P09 (фактический gas — в receipts).
+- **Иммутабельность (#18)** — нет API мутации receipts; замена только целиком при commit/adopt/rebuild; rebuild из цепочки выигрывает при расхождении.
+- **Тесты** — `core/tests/receipts.rs` (12): from_execution/from_vm_error, canonical determinism/sensitivity, serde roundtrip, compute_receipts_root (empty/deterministic/order-independent), subroot prove/verify + tamper/wrong-proof. `core/tests/state_roundtrip.rs` (+2): Create+Call apply/unapply через mock (Success и OutOfGas), balances round-trip. `core/src/state/inner.rs` unit (+3): transfer receipts, unapply clear, PartialEq игнорирует receipts, без VM Create/Call отклоняются. `vm-wasm/tests/events_and_receipts.rs` (11): emit_log → Receipt log (address/topics/data), max_topics 4 → abort без логов, OutOfGas receipt сжигает budget, trap-after-log дискардит логи, детерминизм, **e2e `apply_block_with_vm`**: Create+Call(emit_log) в одном блоке → log-receipt + value-transfer + subroot proof; failed-call (infinite loop) → `OutOfGas`, value не двигается; unapply reverses; register_code отклоняет невалидный wasm. `tests/receipts.rs` (4, node): genesis/mined-transfer receipts в `tip_receipts`, rebuild ре-выводит идентично, receipts заменяются, не копятся. `cargo test --workspace` green, `clippy -D warnings` green.
+
+### Not in this change
+
+- Персист contract storage (`storage_root` updates, `unapply_call` для storage) — S1.5-P15.
+- Fold `receipts_root` + `storage_root` в глобальный `state_root` / `root_after` extension / rebuild генезиса — S1.5-P15.
+- Исполнение конструктора при Create — S1.5-P15/P17.
+- Selector-based ABI dispatch (`ENTRY_POINT = "main"`) — S1.5-P17.
+- Биллинг gas (списание у плательщика): gas = cap, fees как сейчас — Stage 5 fee market.
+
+---
+
 ## 1.1.6 — Stage 1.5 proper: reentrancy guard + limits (S1.5-P13)
 
 **Status**: In progress  

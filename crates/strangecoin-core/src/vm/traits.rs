@@ -14,6 +14,11 @@ pub trait VmExecutor {
     /// Gas cost of one metering unit (ADR-0014: instruction / host-call /
     /// memory-growth weights).
     fn gas_cost(&self, opcode: Opcode) -> u64;
+
+    /// Register WASM bytecode for a contract address (S1.5-P14: `Create`
+    /// installs code so a later `Call` in the same chain can execute it).
+    /// Implementations must reject bytecode the engine cannot load.
+    fn register_code(&mut self, address: &str, wasm: Vec<u8>) -> Result<(), VmError>;
 }
 
 /// Placeholder metering categories — the real instruction set is wasmi's
