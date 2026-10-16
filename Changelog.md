@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.1.4 — Stage 1.5 proper: precompiles 0x01..0x07 (S1.5-P11)
+
+**Status**: In progress  
+**Date**: 2026-10-16  
+**Prompts**: S1.5-P11
+
+### Precompiles (ADR-0015) — 7 built-in contracts at reserved addresses
+
+- **`crates/strangecoin-vm-wasm/src/precompiles/`** — dispatcher `dispatch_precompile(callee, data) -> Result<PrecompileOutput, PrecompileError>` + one module per precompile: `0x01 ecrecover` (secp256k1 recovery, 97-byte `hash‖v‖r‖s` input, 33-byte compressed pubkey or empty on recovery failure, gas 3000), `0x02 sha256` (50+12/word32), `0x03 keccak` (Keccak-256 Ethereum padding 0x01 via `tiny-keccak`, 30+6/word32), `0x04 blake3` (50+6/chunk64, same primitive as chain serialization), `0x05 ed25519_verify` (`pubkey32‖sig64‖msg`, output 32-byte 1/0, gas 2000, RFC 8032 vectors), `0x06 bls_aggregate` (**NotImplemented until Stage 7**, reverts after charging 12000), `0x07 modexp` (Ethereum-style `base_len‖exp_len‖mod_len` 3×32-BE headers, square-and-multiply over u64 limbs — no bigint dep, gas 50+50/result-byte).
+- **`WasmiExecutor::execute`** routes reserved callees to `execute_precompile` before WASM instantiation (no code lookup; precompile wins even if code were registered under `0x0N`). `ExecutionContext` gains **`input: Vec<u8>`** (calldata: `CallTx.data` top-level, nested-call `data` later) — the field WASM/ABI will read in S1.5-P12.
+- **Failure semantics (ADR-0015)** — success: declared gas; `InvalidInput` (bad length/encoding/size overflow): revert + **full call-frame gas burn**; `NotImplemented`: revert + declared gas (12000). Declared gas > `gas_limit` → `OutOfGas`. Precompiles never panic; length headers validated (checked adds) before allocation (threat V-21).
+- **Core** — `VmError::NotImplemented { feature }` (additive; used by `0x06` and future Stage 7 stubs). `strangecoin_core::address::is_precompile_address` (`0x01..0x07`, from S1.5-P08) is the single reserved-range gate.
+- **New deps (vm-wasm)** — `secp256k1 0.29 +recovery` (same pin as core), `sha2 0.10`, `blake3 1`, `tiny-keccak 2 (keccak)`, `ed25519-dalek 2`.
+- **Tests** — `vm-wasm/tests/precompiles.rs` (36): per-precompile valid/invalid/gas (ecrecover recover/tamper/bad-v/short, sha256+keccak+blake3 known vectors + gas word/chunk schedules + keccak≠NIST-SHA3, ed25519 RFC 8032 vector/tamper/short/bad-pubkey, bls NotImplemented×3, modexp 2^10 mod 1000 / 3^5 mod 13 / zero-exp / zero-mod / mod-one / padding / truncated header+body / huge length), dispatcher routing + unknown address + reserved-range cross-check with core, executor integration (sha256 CallTx-style without WASM, bls revert+12000, invalid-input full burn, OOG below declared, NoCode for non-precompile, precompile wins over registry). Drive-by: `gas_metering.rs` clippy `manual_range_contains`. `cargo test --workspace` green, `clippy -D warnings` green.
+
+### Not in this change
+
+- In-contract `call("0x0N", data)` host path — S1.5-P10 `call`/`staticcall`/`delegatecall` host functions will reuse `dispatch_precompile`.
+- Remaining 12 host functions (crypto/storage/calls/context/logs) — S1.5-P10 (incomplete: only `gas_left` shipped with P09).
+- `state::apply_block` Create/Call execution + receipt gas — S1.5-P15.
+- Normative gas-cost freeze — SCIP-gated after mainnet freeze (ADR-0014/0015 policy).
+
+---
+
 ## 1.1.3 — Stage 1.5 proper: gas metering + block gas limit (S1.5-P09)
 
 **Status**: In progress  

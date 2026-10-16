@@ -1,14 +1,17 @@
 use std::collections::HashMap;
 
+use strangecoin_core::address::is_precompile_address;
 use strangecoin_core::vm::{ExecutionContext, ExecutionResult, Opcode, TxStatus, VmExecutor};
 use wasmi::{Config, Engine, Linker, Module, Store};
 
 mod error;
 pub mod gas;
 pub mod host;
+pub mod precompiles;
 
 pub use error::WasmiError;
 pub use gas::{FuelGasCounter, HostCallWeight};
+pub use precompiles::{dispatch_precompile, PrecompileError, PrecompileOutput};
 
 /// Contract entry point invoked by [`WasmiExecutor::execute`].
 ///
@@ -25,7 +28,8 @@ const ENTRY_POINT: &str = "main";
 /// `ConsumptionStrategy` API the pre-pin pseudocode referenced; host-call
 /// weights are charged manually via [`gas::charge_host_call`]. Host
 /// functions register under the `sc` namespace (S1.5-P10 completes the set);
-/// precompiles land in S1.5-P11.
+/// precompiles (S1.5-P11) dispatch in [`WasmiExecutor::execute`] before WASM
+/// instantiation when the callee is a reserved address `0x01..=0x07`.
 #[derive(Default)]
 pub struct WasmiExecutor {
     /// Contract code registry: bech32 address -> WASM bytecode.
@@ -96,12 +100,53 @@ impl WasmiExecutor {
             return_data,
         })
     }
+
+    /// Run the precompile at `ctx.callee` with `ctx.input` as the payload.
+    ///
+    /// ADR-0015 failure semantics: success returns the declared gas;
+    /// `NotImplemented` reverts after charging the precompile's declared
+    /// gas; `InvalidInput` reverts after burning the full call-frame gas.
+    fn execute_precompile(&self, ctx: &ExecutionContext) -> Result<ExecutionResult, WasmiError> {
+        match precompiles::dispatch_precompile(&ctx.callee, &ctx.input) {
+            Ok(out) => {
+                if out.gas_used > ctx.gas_limit {
+                    return Err(WasmiError::OutOfFuel);
+                }
+                Ok(ExecutionResult {
+                    gas_used: out.gas_used,
+                    logs: Vec::new(),
+                    status: TxStatus::Success,
+                    return_data: out.output,
+                })
+            }
+            Err(PrecompileError::NotImplemented { gas_used, .. }) => {
+                if gas_used > ctx.gas_limit {
+                    return Err(WasmiError::OutOfFuel);
+                }
+                Ok(ExecutionResult {
+                    gas_used,
+                    logs: Vec::new(),
+                    status: TxStatus::Reverted,
+                    return_data: Vec::new(),
+                })
+            }
+            Err(PrecompileError::InvalidInput(_)) => Ok(ExecutionResult {
+                gas_used: ctx.gas_limit,
+                logs: Vec::new(),
+                status: TxStatus::Reverted,
+                return_data: Vec::new(),
+            }),
+        }
+    }
 }
 
 impl VmExecutor for WasmiExecutor {
     type Error = WasmiError;
 
     fn execute(&self, ctx: ExecutionContext) -> Result<ExecutionResult, Self::Error> {
+        if is_precompile_address(&ctx.callee) {
+            return self.execute_precompile(&ctx);
+        }
         let wasm = self
             .code
             .get(&ctx.callee)

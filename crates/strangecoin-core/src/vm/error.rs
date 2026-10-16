@@ -24,4 +24,6 @@ pub enum VmError {
     MaxStoragePerContract,
     #[error("gas metering inconsistency detected")]
     GasMeteringBug,
+    #[error("feature `{feature}` is not implemented yet")]
+    NotImplemented { feature: String },
 }

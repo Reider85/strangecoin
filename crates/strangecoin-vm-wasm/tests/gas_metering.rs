@@ -66,6 +66,7 @@ fn execution_context(callee: &str, gas_limit: u64) -> ExecutionContext {
             block_gas_limit: strangecoin_core::vm::BLOCK_GAS_LIMIT,
         },
         storage_overlay: HashMap::new(),
+        input: Vec::new(),
     }
 }
 
@@ -134,7 +135,7 @@ fn gas_left_decreases_across_calls() {
     // The delta covers the second call's 3-gas charge plus inter-call
     // instructions — strictly positive, bounded by the tiny probe body.
     assert!(
-        consumed >= 3 && consumed < 1_000,
+        (3..1_000).contains(&consumed),
         "unexpected consumption between probes: {consumed}"
     );
 }

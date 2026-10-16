@@ -10,3 +10,15 @@ description = "Wasmi-backed VmExecutor implementation for Strangecoin (Stage 1.5
 wasmi = "=2.0.0"
 strangecoin-core = { path = "../strangecoin-core" }
 thiserror = "1"
+# Precompiles (S1.5-P11, ADR-0015): same secp256k1 pin as strangecoin-core.
+secp256k1 = { version = "0.29", features = ["recovery"] }
+sha2 = "0.10"
+blake3 = "1"
+# Keccak-256 (Ethereum variant, padding 0x01) — not NIST SHA3 (ADR-0015).
+tiny-keccak = { version = "2", features = ["keccak"] }
+ed25519-dalek = "2"
+
+[dev-dependencies]
+hex = "0.4"
+secp256k1 = { version = "0.29", features = ["recovery"] }
+blake3 = "1"

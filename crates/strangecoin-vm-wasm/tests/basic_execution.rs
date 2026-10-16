@@ -42,6 +42,7 @@ fn execution_context(callee: &str, gas_limit: u64) -> ExecutionContext {
             block_gas_limit: 1_000_000,
         },
         storage_overlay: HashMap::new(),
+        input: Vec::new(),
     }
 }
 

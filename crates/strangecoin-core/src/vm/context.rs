@@ -37,4 +37,9 @@ pub struct ExecutionContext {
     /// Contract storage writes staged by this frame, flushed to the SMT on
     /// success (S1.5-P15), discarded on revert.
     pub storage_overlay: HashMap<[u8; 32], Vec<u8>>,
+    /// Calldata of this frame: `CallTx.data` for the top-level call, or the
+    /// `data` argument of a nested `call`/`staticcall`/`delegatecall`.
+    /// Precompiles (S1.5-P11) read their input here; the JSON ABI (S1.5-P12)
+    /// decodes it for WASM contracts.
+    pub input: Vec<u8>,
 }

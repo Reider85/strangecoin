@@ -73,6 +73,7 @@ fn sample_context() -> ExecutionContext {
             block_gas_limit: 1_000_000,
         },
         storage_overlay,
+        input: Vec::new(),
     }
 }
 
