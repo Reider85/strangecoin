@@ -117,10 +117,20 @@ jobs:
           path: coverage/tarpaulin-report.html
           retention-days: 30
 
-  fuzz-canonical-decode:
-    name: Fuzz canonical_decode (10 min)
+  fuzz:
+    name: Fuzz ${{ matrix.target }} (10 min)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # S1.5-P16: canonical decode (S1-P19) + four Stage 1.5 VM targets.
+        target:
+          - canonical_decode
+          - host_functions
+          - gas_metering
+          - storage_trie
+          - differential_wasmi_vs_wasmtime
     steps:
       - uses: actions/checkout@v4
 
@@ -135,18 +145,16 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked --version 0.13.2
 
-      # BUG-S0-023 / S1.5-P07: coverage-guided 10-minute run — the S1-P19
-      # checklist item that could not execute on the Windows dev host
-      # (no MSVC/ASan, see fuzz/README.md). A crash fails the job;
-      # repro artifacts are uploaded below.
-      - name: Run canonical_decode fuzz (600s)
-        run: cargo fuzz run canonical_decode -- -max_total_time=600 -rss_limit_mb=2560
+      # BUG-S0-023 / S1.5-P07 / S1.5-P16: coverage-guided 10-minute run per
+      # target. A crash fails the job; repro artifacts are uploaded below.
+      - name: Run ${{ matrix.target }} fuzz (600s)
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=600 -rss_limit_mb=2560
 
       - name: Upload crash artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: fuzz-canonical-decode-artifacts
+          name: fuzz-${{ matrix.target }}-artifacts
           path: fuzz/artifacts/
           retention-days: 30
           if-no-files-found: ignore

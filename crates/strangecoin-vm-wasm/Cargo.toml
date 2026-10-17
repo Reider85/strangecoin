@@ -22,3 +22,7 @@ ed25519-dalek = "2"
 hex = "0.4"
 secp256k1 = { version = "0.29", features = ["recovery"] }
 blake3 = "1"
+# Differential-testing oracle (S1.5-P16): wasmi (consensus runtime) vs
+# wasmtime (reference engine) on identical bounded modules. Dev-only — the
+# production binary never links wasmtime.
+wasmtime = "=49.0.3"

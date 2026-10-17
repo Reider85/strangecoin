@@ -9,13 +9,54 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
 
 [dependencies.strangecoin-core]
 path = "../crates/strangecoin-core"
 
+[dependencies.strangecoin-vm-wasm]
+path = "../crates/strangecoin-vm-wasm"
+
+# Differential-testing oracle (S1.5-P16): raw engines on identical import-free
+# modules; fuel semantics intentionally differ between engines, so only
+# outcome classes and return values are compared, never gas units.
+[dependencies.wasmi]
+version = "=2.0.0"
+
+[dependencies.wasmtime]
+version = "=49.0.3"
+
 [[bin]]
 name = "canonical_decode"
 path = "fuzz_targets/canonical_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "host_functions"
+path = "fuzz_targets/host_functions.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gas_metering"
+path = "fuzz_targets/gas_metering.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "storage_trie"
+path = "fuzz_targets/storage_trie.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "differential_wasmi_vs_wasmtime"
+path = "fuzz_targets/differential_wasmi_vs_wasmtime.rs"
 test = false
 doc = false
 bench = false
