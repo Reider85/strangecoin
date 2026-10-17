@@ -1,4 +1,14 @@
+// Binaries that reach into `common` only for `vm_helpers` leave the glob
+// unused; the allow keeps `clippy -D warnings` green (BUG-S1-012 pattern).
+#[allow(unused_imports)]
 pub use strangecoin::test_support::*;
+
+// S1.5-P17 VM integration helpers: compiled into every test binary that
+// declares `mod common;`, but only the `vm_*` binaries reach them — the
+// allow mirrors the existing walk_state/craft_child pattern (BUG-S1-012).
+#[allow(dead_code)]
+#[cfg(feature = "vm-wasm")]
+pub mod vm_helpers;
 
 /// Replay `prefix` from an empty state with the pure core executor — the same
 /// reconstruction `StateCache::rebuild_from_chain` performs on adoption.

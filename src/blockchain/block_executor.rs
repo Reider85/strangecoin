@@ -673,12 +673,18 @@ impl Blockchain {
 
         // BUG-S1-002 / SCIP-0002: mined blocks commit to their post-state
         // root; a zero root would now be rejected by validate_and_apply.
+        // S1.5-P17: mine through the VM-aware executor — the transfer-only
+        // path rejected mempool Create/Call transactions with
+        // UnsupportedTxType, making contract transactions unminable.
         let parent_state = self.balances.to_state();
-        let post = match apply_block(&parent_state, &block, self.chain_id) {
-            Ok(state) => state,
-            Err(e) => {
-                error!(error = %e, "Мемпул-транзакции не применимы к состоянию");
-                return None;
+        let post = {
+            let view = self.view_for(height);
+            match apply_and_execute(&parent_state, &block, &view) {
+                Ok(state) => state,
+                Err(e) => {
+                    error!(error = %e, "Мемпул-транзакции не применимы к состоянию");
+                    return None;
+                }
             }
         };
         block.state_root = compute_state_root(&post.balances);
