@@ -34,3 +34,8 @@ fuzz/target/
 # TLA+ TLC artifacts (BUG-S0-026)
 *.jar
 states/
+
+# OpenCode / tooling
+.opencode/
+.opencodeignore
+.cargo/local-registry/
