@@ -377,6 +377,10 @@ impl AbiType {
                 let len_s = &s[open + 1..s.len() - 1];
                 if !len_s.is_empty() && len_s.bytes().all(|b| b.is_ascii_digit()) {
                     let len: usize = len_s.parse().map_err(|_| invalid())?;
+                    // FixedArray length must be > 0 (S1.5-FBP01 spec, task 2).
+                    if len == 0 {
+                        return Err(invalid());
+                    }
                     return Ok(AbiType::FixedArray(
                         Box::new(AbiType::parse(elem)?),
                         len,
@@ -479,9 +483,12 @@ mod tests {
         assert!(AbiType::parse("uint7").is_err());
         assert!(AbiType::parse("uint264").is_err());
         assert!(AbiType::parse("float").is_err());
-        assert!(AbiType::parse("uint64[") .is_err());
+        assert!(AbiType::parse("uint64[").is_err());
         assert!(AbiType::parse("(bool").is_err());
         assert!(AbiType::parse("bool[0x3]").is_err());
+        // FixedArray length must be > 0 (S1.5-FBP01).
+        assert!(AbiType::parse("uint64[0]").is_err());
+        assert!(AbiType::parse("bool[0]").is_err());
     }
 
     #[test]

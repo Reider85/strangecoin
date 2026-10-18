@@ -171,6 +171,27 @@ fn roundtrip_arrays_and_tuples() {
                 ]),
             ])],
         ),
+        // Array of FixedArray: static elements inside a dynamic array
+        // (S1.5-FBP01 КГ: nested Tuple, Array of FixedArray).
+        (
+            vec![param(
+                "a",
+                AbiType::Array(Box::new(AbiType::FixedArray(
+                    Box::new(AbiType::Uint(8)),
+                    2,
+                ))),
+            )],
+            vec![AbiValue::Array(vec![
+                AbiValue::FixedArray(vec![
+                    AbiValue::uint_u64(1),
+                    AbiValue::uint_u64(2),
+                ]),
+                AbiValue::FixedArray(vec![
+                    AbiValue::uint_u64(3),
+                    AbiValue::uint_u64(4),
+                ]),
+            ])],
+        ),
         // Empty dynamic array.
         (
             vec![param("a", AbiType::Array(Box::new(AbiType::Uint(8))))],
@@ -398,4 +419,16 @@ fn decode_bool_rejects_noncanonical_word() {
         decode_args(&params, &encoded),
         Err(strangecoin_core::abi::AbiError::InvalidValue { .. })
     ));
+}
+
+#[test]
+fn parse_rejects_zero_length_fixed_array() {
+    // S1.5-FBP01: FixedArray length must be > 0.
+    assert!(AbiType::parse("uint64[0]").is_err());
+    assert!(AbiType::parse("(bool,address)[0]").is_err());
+    // len = 1 is the boundary that must stay accepted.
+    assert_eq!(
+        AbiType::parse("uint64[1]").unwrap(),
+        AbiType::FixedArray(Box::new(AbiType::Uint(64)), 1)
+    );
 }
