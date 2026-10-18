@@ -18,7 +18,7 @@
 |-----|--------|----------|
 | S1.5-FBP01 | **fixed** (2026-10-19) | S1.5-P12 gap-closure `b925f71` (2026-10-18) + residuals `10e9acc` (FixedArray len>0, array-of-fixedarray roundtrip); verification 2026-10-19: `cargo check/test/clippy -p strangecoin-core` green, `abi_roundtrip` 15/15, abi unit 7/7 |
 | S1.5-FBP02 | **fixed** (2026-10-19) | S1.5-P12 `b925f71` (selector.rs, golden vectors literal hex) + residual `eee7b7b` (`AbiEntry::selector_from_name`) |
-| S1.5-FBP03 | **open** | `const ENTRY_POINT: &str = "main"` — `vm-wasm/src/lib.rs:27` |
+| S1.5-FBP03 | **fixed** (2026-10-19) | selector dispatch в `vm-wasm/src/lib.rs` (ENTRY_POINT удалён, invoke-export try-порядок, строгий MissingExport), `sc::input_read` host function, ADR-0013/0014 amended; `basic_execution` 16/16, workspace green, clippy green |
 | S1.5-FBP04 | **open** | конструктор не исполняется — `core/src/state/inner.rs:322-323` |
 | S1.5-FBP05 | **open** | nested value-transfer не коммитится |
 | S1.5-FBP06 | **open** | `contract_storage` клонируется на каждый CallTx |
@@ -392,6 +392,25 @@ Stub `abi/mod.rs` уже имеет `AbiEntry.selector: [u8; 4]`, но без ф
 ---
 
 ### S1.5-FBP03. Selector-based dispatch в WasmiExecutor (убрать hardcoded ENTRY_POINT="main")
+
+**Статус:** fixed (2026-10-19)
+
+**Решение (2026-10-19):** `ENTRY_POINT` удалён; `run_frame` резолвит
+dispatch-таргет через `resolve_dispatch_entry` (calldata ≥ 4 →
+`entry_by_selector` в зарегистрированном ABI) и вызывает экспорт через
+`invoke_export` с try-порядком сигнатур `(i32,i32)->i32`,
+`(i32,i32)->()`, `()->i32`, `()->()` (для `()->`-стиля calldata доступен
+через новый host function `sc::input_read`, gas 3 —
+`HostCallWeight::InputRead`). Строгое MissingExport для ABI-hit без
+экспорта (контракт-баг, не fallback); TypeMismatch для неподдерживаемой
+сигнатуры. `stage_calldata` копирует `ctx.input` в хвост linear memory
+(рост при необходимости, unmetered — calldata ограничен размером tx).
+Reentrancy WAT поправлены на dual-export `main`/`guarded`
+(`reentrancy_and_limits.rs`, `tests/vm_reentrancy_attack.rs`) — nested
+вызов с селектором резолвится строго. ADR-0013 amended (calling
+convention), ADR-0014 amended (`HOST_CALL_INPUT_READ = 3`), Changelog
+1.5.1. Верификация: `basic_execution` 16/16 (8 новых), `reentrancy_and_limits`
+13/13, `cargo test --workspace` green, clippy `-D warnings` green.
 
 **Цель:** заменить hardcoded `const ENTRY_POINT: &str = "main"` в
 `crates/strangecoin-vm-wasm/src/lib.rs:27` на selector-based dispatch: calldata
