@@ -8,7 +8,7 @@ use strangecoin_core::vm::limits::{MAX_CALL_DEPTH, MAX_STACK_HEIGHT};
 use strangecoin_core::vm::{
     ExecutionContext, ExecutionResult, Log, Opcode, TxStatus, VmError, VmExecutor,
 };
-use wasmi::{Config, Engine, Linker, Module, Store};
+use wasmi::{Config, Engine, Instance, Linker, Module, Store};
 
 mod error;
 pub mod gas;
@@ -20,11 +20,14 @@ pub use gas::{FuelGasCounter, HostCallWeight};
 pub use host::HostState;
 pub use precompiles::{dispatch_precompile, PrecompileError, PrecompileOutput};
 
-/// Contract entry point invoked by [`WasmiExecutor::execute`].
-///
-/// Placeholder until the JSON ABI fixes the real calling convention
-/// (ADR-0013, S1.5-P12).
-const ENTRY_POINT: &str = "main";
+/// Legacy fallback export invoked when no ABI selector matches the calldata
+/// (S1.5-FBP03): contracts without a registered ABI, or called with fewer
+/// than 4 calldata bytes, keep the pre-ABI single-entry convention.
+const MAIN_EXPORT: &str = "main";
+
+/// Page size of WASM linear memory, used when staging calldata for
+/// selector-dispatched exports (S1.5-FBP03).
+const WASM_PAGE_BYTES: usize = 65_536;
 
 /// Outcome of one call frame: the [`ExecutionResult`] plus the frame's
 /// mutated working state, so a nested call can merge the child's storage
@@ -72,8 +75,8 @@ impl WasmiExecutor {
     }
 
     /// Register the ABI of a contract (S1.5-P13: the `non_reentrant` flag
-    /// consulted by the reentrancy guard; full dispatch arrives with
-    /// S1.5-P12).
+    /// consulted by the reentrancy guard; S1.5-FBP03: selector-based
+    /// dispatch of calldata to WASM exports).
     pub fn insert_abi(&mut self, address: &str, abi: ContractAbi) {
         Rc::make_mut(&mut self.abis)
             .insert(address.to_string(), abi);
@@ -203,6 +206,13 @@ pub(crate) fn run_frame(
     call_stack: Vec<String>,
 ) -> Result<FrameOutcome, WasmiError> {
     let gas_limit = ctx.gas_limit;
+
+    // Selector-based dispatch (S1.5-FBP03, ADR-0013 amended): calldata of
+    // at least 4 bytes is matched against the callee's registered ABI; a
+    // hit names the WASM export to invoke, a miss falls back to the legacy
+    // `main` export. Resolved before the store consumes `ctx`/`abis`.
+    let dispatch_entry = resolve_dispatch_entry(&abis, &ctx);
+
     let mut config = Config::default();
     config.consume_fuel(true);
     config.set_max_stack_height(MAX_STACK_HEIGHT);
@@ -230,18 +240,11 @@ pub(crate) fn run_frame(
         .instantiate_and_start(&mut store, &module)
         .map_err(|e| WasmiError::Instantiate(e.to_string()))?;
 
-    let return_data = match instance.get_typed_func::<(), i32>(&store, ENTRY_POINT) {
-        Ok(func) => {
-            let value = func.call(&mut store, ()).map_err(WasmiError::from)?;
-            value.to_le_bytes().to_vec()
-        }
-        Err(_) => {
-            let func = instance
-                .get_typed_func::<(), ()>(&store, ENTRY_POINT)
-                .map_err(|_| WasmiError::MissingExport(ENTRY_POINT.to_string()))?;
-            func.call(&mut store, ()).map_err(WasmiError::from)?;
-            Vec::new()
-        }
+    let return_data = match dispatch_entry {
+        // ABI hit: the contract must export the entry — a missing export is
+        // a contract bug, surfaced as `MissingExport` (no silent fallback).
+        Some(name) => invoke_export(&instance, &mut store, &name, true)?,
+        None => invoke_export(&instance, &mut store, MAIN_EXPORT, false)?,
     };
 
     let fuel_left = store
@@ -263,4 +266,101 @@ pub(crate) fn run_frame(
         logs: state.logs,
         return_data,
     })
+}
+
+/// Resolve the ABI entry a frame's calldata selects (S1.5-FBP03).
+///
+/// Returns the export name of the matched entry, or `None` when the frame
+/// has fewer than 4 calldata bytes or the callee has no registered ABI /
+/// no entry for the selector — the caller falls back to the legacy `main`
+/// export in that case.
+fn resolve_dispatch_entry(
+    abis: &HashMap<String, ContractAbi>,
+    ctx: &ExecutionContext,
+) -> Option<String> {
+    let selector: [u8; 4] = ctx.input.get(..4)?.try_into().ok()?;
+    abis.get(&ctx.callee)
+        .and_then(|abi| abi.entry_by_selector(selector))
+        .map(|entry| entry.name.clone())
+}
+
+/// Invoke `name` on `instance`, threading this frame's calldata when the
+/// export takes the `(ptr, len)` argument pair (S1.5-FBP03 calling
+/// convention, ADR-0013 amended).
+///
+/// Signature probe order: `(i32, i32) -> i32`, `(i32, i32) -> ()`,
+/// `() -> i32`, `() -> ()` — so a legacy zero-argument export can still be
+/// reached through the selector dispatch (calldata via `sc::input_read`).
+/// An absent export is [`WasmiError::MissingExport`]; an export whose
+/// signature is none of the four is [`WasmiError::TypeMismatch`].
+fn invoke_export(
+    instance: &Instance,
+    store: &mut Store<HostState>,
+    name: &str,
+    with_calldata: bool,
+) -> Result<Vec<u8>, WasmiError> {
+    let Some(func) = instance.get_func(&store, name) else {
+        return Err(WasmiError::MissingExport(name.to_string()));
+    };
+    if with_calldata {
+        if let Ok(f) = func.typed::<(i32, i32), i32>(&*store) {
+            let (ptr, len) = stage_calldata(instance, store)?;
+            let value = f.call(&mut *store, (ptr, len)).map_err(WasmiError::from)?;
+            return Ok(value.to_le_bytes().to_vec());
+        }
+        if let Ok(f) = func.typed::<(i32, i32), ()>(&*store) {
+            let (ptr, len) = stage_calldata(instance, store)?;
+            f.call(&mut *store, (ptr, len)).map_err(WasmiError::from)?;
+            return Ok(Vec::new());
+        }
+    }
+    if let Ok(f) = func.typed::<(), i32>(&*store) {
+        let value = f.call(&mut *store, ()).map_err(WasmiError::from)?;
+        return Ok(value.to_le_bytes().to_vec());
+    }
+    if let Ok(f) = func.typed::<(), ()>(&*store) {
+        f.call(&mut *store, ()).map_err(WasmiError::from)?;
+        return Ok(Vec::new());
+    }
+    Err(WasmiError::TypeMismatch(format!(
+        "export `{name}` has no supported signature"
+    )))
+}
+
+/// Copy the frame's calldata into a fresh tail of the module's linear
+/// memory; returns the `(ptr, len)` pair to pass to a `(i32, i32)` export
+/// (S1.5-FBP03).
+///
+/// The copy itself is unmetered: calldata is bounded by the transaction
+/// size already validated by consensus. A grow denied by the store's
+/// resource limiter surfaces as [`VmError::OutOfMemory`].
+fn stage_calldata(
+    instance: &Instance,
+    store: &mut Store<HostState>,
+) -> Result<(i32, i32), WasmiError> {
+    let data_len = store.data().ctx.input.len();
+    if data_len == 0 {
+        return Ok((0, 0));
+    }
+    let memory = instance.get_memory(&store, "memory").ok_or_else(|| {
+        WasmiError::Engine("host ABI: module does not export `memory`".to_string())
+    })?;
+    let old_size = memory.data_size(&store);
+    let new_size = old_size
+        .checked_add(data_len)
+        .ok_or(WasmiError::Core(VmError::OutOfMemory))?;
+    let old_pages = old_size.div_ceil(WASM_PAGE_BYTES);
+    let new_pages = new_size.div_ceil(WASM_PAGE_BYTES);
+    if new_pages > old_pages {
+        memory
+            .grow(&mut *store, (new_pages - old_pages) as u64)
+            .map_err(|_| WasmiError::Core(VmError::OutOfMemory))?;
+    }
+    let data = store.data().ctx.input.clone();
+    memory
+        .write(&mut *store, old_size, &data)
+        .map_err(|e| WasmiError::Engine(format!("calldata staging: {e}")))?;
+    let ptr = i32::try_from(old_size).map_err(|_| WasmiError::Core(VmError::OutOfMemory))?;
+    let len = i32::try_from(data_len).map_err(|_| WasmiError::Core(VmError::OutOfMemory))?;
+    Ok((ptr, len))
 }

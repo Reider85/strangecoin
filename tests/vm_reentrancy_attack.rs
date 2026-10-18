@@ -24,7 +24,9 @@ const ALICE: &str = "rsc1alice";
 /// Storage-guarded self-caller: first run writes the guard key, then
 /// re-enters itself with [`SEL`]; later frames return 0 without calling.
 /// The bech32 target (~45 bytes) lives at 64..109, so the selector sits at
-/// 160 to avoid overlapping data segments.
+/// 160 to avoid overlapping data segments. Dual-exported `main`/`guarded`
+/// so the nested call's selector dispatch (S1.5-FBP03) resolves the same
+/// function body.
 fn guarded_wat(target: &[u8]) -> String {
     let target_len = target.len();
     wat(
@@ -34,7 +36,7 @@ fn guarded_wat(target: &[u8]) -> String {
         (import "sc" "storage_read" (func $read (param i32 i32 i32) (result i32)))
         (import "sc" "storage_write" (func $write (param i32 i32 i32) (result i32)))
         (import "sc" "call" (func $call (param i32 i32 i64 i32 i32 i32 i32) (result i32)))
-        (func (export "main") (result i32)
+        (func (export "main") (export "guarded") (result i32)
           (if (i32.eqz (call $read (i32.const 0) (i32.const 128) (i32.const 32)))
             (then
               (drop (call $write (i32.const 0) (i32.const 128) (i32.const 4)))

@@ -152,7 +152,8 @@ impl ExecutionResultWrap {
 /// Contract that guards itself with storage: first run writes the key, then
 /// re-enters `target` with [`SEL`]; any later run sees the key and returns 0
 /// without calling — so an *allowed* self-call terminates instead of
-/// recursing forever.
+/// recursing forever. Dual-exported `main`/`guarded` so the nested call's
+/// selector dispatch (S1.5-FBP03) resolves the same function body.
 fn guarded_wat(target: &[u8]) -> String {
     wat(
         &[(64, target), (96, &SEL)],
@@ -160,7 +161,7 @@ fn guarded_wat(target: &[u8]) -> String {
         (import "sc" "storage_read" (func $read (param i32 i32 i32) (result i32)))
         (import "sc" "storage_write" (func $write (param i32 i32 i32) (result i32)))
         (import "sc" "call" (func $call (param i32 i32 i64 i32 i32 i32 i32) (result i32)))
-        (func (export "main") (result i32)
+        (func (export "main") (export "guarded") (result i32)
           (if (i32.eqz (call $read (i32.const 0) (i32.const 128) (i32.const 32)))
             (then
               (drop (call $write (i32.const 0) (i32.const 128) (i32.const 4)))

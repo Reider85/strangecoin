@@ -32,6 +32,8 @@ pub enum HostCallWeight {
     BlockContext,
     /// `gas_left` — 3.
     GasLeft,
+    /// `input_read` — 3 (calldata copy out of the frame context, S1.5-FBP03).
+    InputRead,
     /// `emit_log` — 375 + 375 per topic.
     EmitLog { topics: u64 },
     /// One 64KiB `memory.grow` page — 3 (ADR-0014 memory metering).
@@ -54,6 +56,7 @@ impl HostCallWeight {
             HostCallWeight::StaticCall => 700,
             HostCallWeight::BlockContext => 3,
             HostCallWeight::GasLeft => 3,
+            HostCallWeight::InputRead => 3,
             HostCallWeight::EmitLog { topics } => 375 + 375 * topics,
             HostCallWeight::MemoryGrow => 3,
         }

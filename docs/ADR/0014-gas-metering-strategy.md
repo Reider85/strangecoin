@@ -4,6 +4,10 @@
 
 Accepted (2026-10-15) — S1.5-P03
 
+Amended (2026-10-19) — S1.5-FBP03: `HOST_CALL_INPUT_READ = 3` added to the
+constants table (calldata host function of the selector-dispatch calling
+convention, ADR-0013).
+
 > **Numbering note:** reserved as ADR-0013 in `analytics/prompt-stage1.5.md`;
 > renumbered to **ADR-0014** (0011 = async migration, 0012 = WASM VM,
 > 0013 = JSON ABI). See the numbering note in ADR-0012.
@@ -71,6 +75,7 @@ Key points:
 | `HOST_CALL_BLAKE3` | 50 + 6 / 64B chunk | blake3 is fast; chunk term tracks input size |
 | `HOST_CALL_STORAGE_READ` | 200 | overlay lookup + future SMT proof verification |
 | `HOST_CALL_STORAGE_WRITE` | 5000 | SMT update + receipt/log cost; writes must hurt |
+| `HOST_CALL_INPUT_READ` | 3 | pure view of the frame's calldata (S1.5-FBP03 amend) |
 | `HOST_CALL_MEMORY_GROW` | 3 / page | 64KiB page; cheap but non-zero |
 | `BLOCK_GAS_LIMIT` | 1_000_000 | fixed anti-DoS bound per block (invariant #15) |
 

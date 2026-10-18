@@ -4,6 +4,10 @@
 
 Accepted (2026-10-15) — S1.5-P02
 
+Amended (2026-10-19) — S1.5-FBP03: calling convention for WASM exports
+(selector-based dispatch, `main()` fallback, `sc::input_read`), see the
+dedicated section below.
+
 > **Numbering note:** reserved as ADR-0012 in `analytics/prompt-stage1.5.md`;
 > renumbered to **ADR-0013** because 0012 is taken by the WASM-VM decision
 > (`docs/ADR/0012-wasm-wasmi-vs-risc-v.md`). See the numbering note there.
@@ -88,6 +92,36 @@ Key points:
 
 `state_mutability`: `"pure" | "view" | "nonpayable" | "payable"` (Ethereum
 semantics: `view`/`pure` reject state-changing calls; `payable` accepts value).
+
+## Calling convention (amended S1.5-FBP03)
+
+How calldata reaches a WASM contract's code (implemented in
+`strangecoin-vm-wasm`, `run_frame`):
+
+- **Selector-based dispatch** — when a frame carries at least 4 calldata
+  bytes and the callee has a registered `ContractAbi`, the first 4 bytes
+  are matched via `entry_by_selector`; a hit names the WASM export to
+  invoke (`entry.name`). A hit with **no matching export is a contract
+  bug** and fails the frame with `MissingExport` — no silent fallback.
+- **`main()` fallback** — no registered ABI, fewer than 4 calldata bytes,
+  or no entry for the selector: the legacy `main` export runs (pre-ABI
+  single-entry convention; backward compatible).
+- **Export signatures** — probed in order `(i32, i32) -> i32`,
+  `(i32, i32) -> ()`, `() -> i32`, `() -> ()`. The `(ptr, len)` pair
+  points at a host-staged copy of the full calldata at the tail of the
+  module's linear memory (grown as needed; the copy is unmetered because
+  calldata is bounded by the transaction size). Zero-argument exports
+  reach calldata via the `sc::input_read(out_ptr, out_len) -> i32` host
+  function (bytes written; `-1` buffer too small; `0` empty; gas 3,
+  ADR-0014). An export present but matching none of the four signatures
+  fails with `TypeMismatch`.
+- **Nested calls** — the same convention applies to every
+  `call`/`staticcall`/`delegatecall` child frame: the nested `data`
+  argument is the child frame's calldata and is dispatched identically.
+- **Constructor (future S1.5-FBP04)** — same mechanism: the `Create` tx
+  runs the WASM export named `"constructor"` with `init_args` as
+  calldata; contracts without that export keep deploy-without-init
+  semantics.
 
 ## Consequences
 

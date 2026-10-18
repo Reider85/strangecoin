@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.5.1 — vm-wasm: selector-based dispatch + `sc::input_read` (S1.5-FBP03)
+
+**Status**: Done  
+**Date**: 2026-10-19  
+**Prompts**: S1.5-FBP03 (`analytics/bugfixes-stage1.5.md`)
+
+### Calling convention: ABI dispatch вместо hardcoded `main()`
+
+- **Selector-based dispatch — `strangecoin-vm-wasm/src/lib.rs`**: `const ENTRY_POINT = "main"` удалён. Calldata ≥ 4 байт при зарегистрированном `ContractAbi` матчится через `entry_by_selector`; hit → вызов WASM-экспорта `entry.name`; miss / нет ABI / < 4 байт → fallback на `main()` (legacy). Попытки вызова по имени: `(i32,i32)->i32`, `(i32,i32)->()`, `()->i32`, `()->()` (порядок в ADR-0013 amended). Экспорт entry отсутствует → `MissingExport` (контракт-баг виден явно); сигнатура не из четырёх → `TypeMismatch`. Nested `call`/`staticcall`/`delegatecall` получают диспатч автоматически (`run_frame` общий).
+- **Копирование calldata в linear memory (`stage_calldata`)**: хост выращивает память при необходимости (лимитер → `OutOfMemory`) и кладёт полный `ctx.input` в хвост; копирование unmetered (calldata ограничен размером tx).
+- **`sc::input_read(out_ptr, out_len) -> i32` — новая host function** (`host/context/input_read.rs`): bytes written / `-1` буфер слишком мал / `0` пусто; gas 3 (`HostCallWeight::InputRead`, ADR-0014 amended). Позволяет zero-argument экспортам (`main`-стиль) читать calldata.
+- **ADR-0013 amended**: секция «Calling convention (S1.5-FBP03)». **ADR-0014 amended**: `HOST_CALL_INPUT_READ = 3`.
+- **Тесты**: `basic_execution.rs` +8 (dispatch foo/bar, fallback unknown/short calldata, `MissingExport`, `input_read` через legacy `main` и через `()`-export под селектором, staging в память, grow для 100KB calldata); reentrancy WAT dual-export `main`/`guarded` (`reentrancy_and_limits.rs`, `tests/vm_reentrancy_attack.rs`) — nested-вызов с селектором резолвится строго.
+- **Verification**: `cargo test --workspace` green; `cargo clippy --workspace --all-targets -- -D warnings` green.
+
+---
+
 ## 1.5.0 — WASM smart contracts (basic)
 
 **Status**: Released (Stage 1.5 complete)  

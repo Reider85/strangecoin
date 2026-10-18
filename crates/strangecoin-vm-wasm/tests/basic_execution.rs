@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use strangecoin_core::abi::{AbiEntry, ContractAbi};
 use strangecoin_core::types::{AccountState, BlockHeader};
 use strangecoin_core::vm::{BlockContext, ExecutionContext, Opcode, TxStatus, VmExecutor, VmError};
 use strangecoin_vm_wasm::{WasmiError, WasmiExecutor};
@@ -150,4 +151,167 @@ fn gas_cost_matches_adr_0014_sketch() {
     assert_eq!(executor.gas_cost(Opcode::HostCall), 1);
     assert_eq!(executor.gas_cost(Opcode::MemoryGrow), 3);
     assert_eq!(executor.gas_cost(Opcode::Other), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Selector-based dispatch (S1.5-FBP03)
+// ---------------------------------------------------------------------------
+
+fn execution_context_with_input(callee: &str, gas_limit: u64, input: Vec<u8>) -> ExecutionContext {
+    let mut ctx = execution_context(callee, gas_limit);
+    ctx.input = input;
+    ctx
+}
+
+fn abi_entry(name: &str) -> AbiEntry {
+    AbiEntry::new(name, AbiEntry::selector_from_name(name), false)
+}
+
+/// Two dispatchable exports plus a legacy `main`; each export ignores its
+/// arguments and returns a distinct marker.
+const TWO_FUNCS_WAT: &str = r#"(module
+    (memory (export "memory") 1)
+    (func (export "foo") (param i32 i32) (result i32) i32.const 111)
+    (func (export "bar") (param i32 i32) (result i32) i32.const 222)
+    (func (export "main") (result i32) i32.const 0))"#;
+
+fn two_funcs_executor() -> WasmiExecutor {
+    let mut executor = WasmiExecutor::new();
+    executor.insert_code("sc1contract", TWO_FUNCS_WAT.as_bytes().to_vec());
+    executor.insert_abi(
+        "sc1contract",
+        ContractAbi::new(vec![abi_entry("foo"), abi_entry("bar")]),
+    );
+    executor
+}
+
+#[test]
+fn selector_dispatch_routes_to_matched_export() {
+    let executor = two_funcs_executor();
+
+    let ctx = execution_context_with_input(
+        "sc1contract",
+        100_000,
+        AbiEntry::selector_from_name("foo").to_vec(),
+    );
+    let result = VmExecutor::execute(&executor, ctx).expect("foo dispatch");
+    assert_eq!(result.status, TxStatus::Success);
+    assert_eq!(result.return_data, 111i32.to_le_bytes());
+
+    let ctx = execution_context_with_input(
+        "sc1contract",
+        100_000,
+        AbiEntry::selector_from_name("bar").to_vec(),
+    );
+    let result = VmExecutor::execute(&executor, ctx).expect("bar dispatch");
+    assert_eq!(result.status, TxStatus::Success);
+    assert_eq!(result.return_data, 222i32.to_le_bytes());
+}
+
+#[test]
+fn selector_dispatch_unknown_selector_falls_back_to_main() {
+    let executor = two_funcs_executor();
+    let ctx = execution_context_with_input("sc1contract", 100_000, vec![0xde, 0xad, 0xbe, 0xef]);
+    let result = VmExecutor::execute(&executor, ctx).expect("fallback to main");
+    assert_eq!(result.status, TxStatus::Success);
+    assert_eq!(result.return_data, 0i32.to_le_bytes());
+}
+
+#[test]
+fn selector_dispatch_short_calldata_falls_back_to_main() {
+    let executor = two_funcs_executor();
+    let ctx = execution_context_with_input("sc1contract", 100_000, vec![0x01, 0x02]);
+    let result = VmExecutor::execute(&executor, ctx).expect("fallback to main");
+    assert_eq!(result.status, TxStatus::Success);
+    assert_eq!(result.return_data, 0i32.to_le_bytes());
+}
+
+#[test]
+fn selector_dispatch_missing_export_is_error() {
+    let mut executor = WasmiExecutor::new();
+    executor.insert_code("sc1contract", TWO_FUNCS_WAT.as_bytes().to_vec());
+    executor.insert_abi("sc1contract", ContractAbi::new(vec![abi_entry("baz")]));
+    let ctx = execution_context_with_input(
+        "sc1contract",
+        100_000,
+        AbiEntry::selector_from_name("baz").to_vec(),
+    );
+    let err = VmExecutor::execute(&executor, ctx).expect_err("entry without export must fail");
+    assert!(matches!(err, WasmiError::MissingExport(name) if name == "baz"));
+}
+
+/// Legacy zero-argument entry reachable through selector dispatch: reads
+/// the frame calldata via `sc::input_read` and returns its length.
+const INPUT_READ_WAT: &str = r#"(module
+    (import "sc" "input_read" (func $ir (param i32 i32) (result i32)))
+    (memory (export "memory") 1)
+    (func (export "main") (export "readcalldata") (result i32)
+      (call $ir (i32.const 0) (i32.const 64))))"#;
+
+#[test]
+fn input_read_exposes_calldata_to_legacy_main() {
+    let executor = WasmiExecutor::new();
+    let input = vec![7u8; 9];
+    let ctx = execution_context_with_input("sc1contract", 100_000, input.clone());
+    let result = executor
+        .execute_wasm(INPUT_READ_WAT.as_bytes(), &ctx)
+        .expect("input_read");
+    assert_eq!(result.status, TxStatus::Success);
+    assert_eq!(result.return_data, (input.len() as i32).to_le_bytes());
+}
+
+#[test]
+fn selector_dispatch_calls_zero_arg_export_with_input_read() {
+    let mut executor = WasmiExecutor::new();
+    executor.insert_code("sc1contract", INPUT_READ_WAT.as_bytes().to_vec());
+    executor.insert_abi("sc1contract", ContractAbi::new(vec![abi_entry("readcalldata")]));
+    let mut input = AbiEntry::selector_from_name("readcalldata").to_vec();
+    input.extend_from_slice(&[0xaa; 4]);
+    let ctx = execution_context_with_input("sc1contract", 100_000, input.clone());
+    let result = VmExecutor::execute(&executor, ctx).expect("dispatch to () export");
+    assert_eq!(result.status, TxStatus::Success);
+    assert_eq!(result.return_data, (input.len() as i32).to_le_bytes());
+}
+
+/// Returns the first payload byte (calldata[4]) handed over via the
+/// `(ptr, len)` argument pair — proves the host staged the bytes into
+/// linear memory; a short calldata yields -1.
+const PEEK_WAT: &str = r#"(module
+    (memory (export "memory") 1)
+    (func (export "peek") (param $ptr i32) (param $len i32) (result i32)
+      (if (i32.lt_u (local.get $len) (i32.const 5))
+        (then (return (i32.const -1))))
+      (i32.load8_u (i32.add (local.get $ptr) (i32.const 4)))))"#;
+
+fn peek_executor() -> WasmiExecutor {
+    let mut executor = WasmiExecutor::new();
+    executor.insert_code("sc1contract", PEEK_WAT.as_bytes().to_vec());
+    executor.insert_abi("sc1contract", ContractAbi::new(vec![abi_entry("peek")]));
+    executor
+}
+
+#[test]
+fn selector_dispatch_stages_calldata_into_memory() {
+    let executor = peek_executor();
+    let mut input = AbiEntry::selector_from_name("peek").to_vec();
+    input.push(0xab);
+    let ctx = execution_context_with_input("sc1contract", 100_000, input);
+    let result = VmExecutor::execute(&executor, ctx).expect("peek dispatch");
+    assert_eq!(result.status, TxStatus::Success);
+    assert_eq!(result.return_data, (0xabi32).to_le_bytes());
+}
+
+#[test]
+fn selector_dispatch_large_calldata_grows_memory() {
+    // Calldata crossing the 64 KiB page boundary: the host grows linear
+    // memory before staging (copy is unmetered — calldata is bounded by
+    // the transaction size, S1.5-FBP03). Reading past the original page
+    // only succeeds if the grow + write landed.
+    let executor = peek_executor();
+    let mut input = AbiEntry::selector_from_name("peek").to_vec();
+    input.extend_from_slice(&vec![0xabu8; 100_000]);
+    let ctx = execution_context_with_input("sc1contract", 100_000, input);
+    let result = VmExecutor::execute(&executor, ctx).expect("large calldata dispatch");
+    assert_eq!(result.status, TxStatus::Success);
+    assert_eq!(result.return_data, (0xabi32).to_le_bytes());
 }
