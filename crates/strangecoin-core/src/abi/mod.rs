@@ -64,6 +64,13 @@ impl AbiEntry {
             non_reentrant,
         }
     }
+
+    /// Selector for a parameterless function — convenience for the
+    /// S1.5-P13 reentrancy-guard layer, where callers build entries by name
+    /// (S1.5-FBP02 КГ).
+    pub fn selector_from_name(name: &str) -> [u8; 4] {
+        method_selector(name, &[])
+    }
 }
 
 /// ABI of one contract: required format version + callable entries.
@@ -516,6 +523,17 @@ mod tests {
         );
         assert_eq!(AbiType::String.static_size(), None);
         assert_eq!(AbiType::FixedArray(Box::new(AbiType::Bytes), 2).static_size(), None);
+    }
+
+    #[test]
+    fn entry_selector_from_name_matches_golden_vector() {
+        // Golden vector, same pin as tests/abi_roundtrip.rs
+        // (method_selector("totalSupply", &[])).
+        assert_eq!(AbiEntry::selector_from_name("totalSupply"), [0x1e, 0x92, 0x6a, 0x5b]);
+        assert_eq!(
+            AbiEntry::selector_from_name("totalSupply"),
+            method_selector("totalSupply", &[])
+        );
     }
 
     #[test]
