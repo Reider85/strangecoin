@@ -1,10 +1,10 @@
 # THREAT_MODEL.md — Strangecoin Threat Model (STRIDE)
 
-**Версия:** 3.0 (S1-P21)
-**Дата:** 2026-10-04
-**Статус:** Stage 1 — актуализирован в S1-P21 (Stage 0 — выполнен в D02)
-**Источник:** `analytics/ARCHITECT3.md` §6 (25 векторов атак) + `analytics/retro-stage0.md` (§4.3, §4.4, §8.2) + `analytics/prompt-stage1.md` S1-P21 (векторы Stage 1)
-**Связанные документы:** `INCIDENT_RESPONSE.md`, `ARCHITECT3.md`, `ROADMAP3.md`, `docs/stage1/INVARIANTS_ENFORCED.md`, `fuzz/README.md`
+**Версия:** 3.1 (S1.5-P18)
+**Дата:** 2026-10-17
+**Статус:** Stage 1.5 — актуализирован в S1.5-P18 (Stage 1 — S1-P21; Stage 0 — D02)
+**Источник:** `analytics/ARCHITECT3.md` §6 (25 векторов атак) + `analytics/retro-stage0.md` (§4.3, §4.4, §8.2) + `analytics/prompt-stage1.md` S1-P21 (векторы Stage 1) + `analytics/prompt-stage1.5.md` S1.5-P18 (V-18..V-21 митигации Stage 1.5)
+**Связанные документы:** `INCIDENT_RESPONSE.md`, `ARCHITECT3.md`, `ROADMAP3.md`, `docs/stage1/INVARIANTS_ENFORCED.md`, `docs/stage1.5/INVARIANTS_ENFORCED.md`, `docs/stage1.5/THREAT_MODEL_STAGE1_5.md`, `fuzz/README.md`
 
 ---
 
@@ -12,7 +12,7 @@
 
 ### 1.1 Scope
 
-Настоящий документ описывает threat model для Strangecoin (Stage 0 — v1.0.0, Stage 1 — v1.1.0-stage1).
+Настоящий документ описывает threat model для Strangecoin (Stage 0 — v1.0.0, Stage 1 — v1.1.0-stage1, Stage 1.5 — WASM smart contracts).
 Анализ охватывает следующие подсистемы:
 
 **Stage 0:**
@@ -36,6 +36,16 @@
 - **EventBus:** crossbeam multi-subscriber (BlockApplied, TxRejected, …)
 - **governance:** SCIP skeleton + activation height (инвариант №21)
 - **tokio:** async-рантайм для новых подсистем
+
+**Stage 1.5 (добавлено в S1.5-P18):**
+- **strangecoin-vm-wasm:** WasmiExecutor (wasmi 2.0), instruction-level gas metering (ADR-0014)
+- **Tx types:** transfer / create / call (S1.5-P08); account model EOA + Contract (S1.5-P07)
+- **Host functions:** 13 whitelisted (crypto/storage/calls/context/logs, S1.5-P10)
+- **Precompiles:** 7 адресов 0x01-0x07 (ecrecover/sha256/keccak/blake3/ed25519/bls NotImplemented/modexp, ADR-0015)
+- **Reentrancy guard + limits:** `non_reentrant` ABI flag, MAX_CODE_SIZE/MAX_STORAGE_PER_CONTRACT/MAX_CALL_DEPTH/MAX_MEMORY_PAGES/MAX_STACK_HEIGHT (S1.5-P13)
+- **Events/Receipts:** `Receipt { gas_used, logs, status }` на каждый tx, receipts sub-trie (S1.5-P14, инвариант #18)
+- **Contract storage:** SMT sub-trie per contract, `storage_root` в account leaf, block gas limit (S1.5-P15, инвариант #19 extension / #15)
+- **Fuzzing:** host_functions / gas_metering / storage_trie / differential wasmi-vs-wasmtime (S1.5-P16)
 
 ### 1.2 Assumptions
 
@@ -400,10 +410,13 @@ Reproducible builds + cosign signatures для верификации бинар
 | **Название** | Reentrancy (Smart Contracts) |
 | **STRIDE** | Tampering |
 | **Описание** | Контракт вызывает сам себя (или другой контракт) до завершения текущего execution. Это позволяет: (1)多次withdraw before balance update, (2) обход checks-effects-interactions pattern. |
-| **Stage 0 Mitigation** | `reentrant: bool` в `ExecutionContext`; `nonReentrant` modifier pattern; `gas_limit` enforcement. **Deferred: WASM смарт-контракты на Stage 1.5.** |
-| **Stage** | Stage 1.5 |
-| **Residual Risk** | N/A на Stage 0 (нет смарт-контрактов). |
-| **Monitoring** | N/A на Stage 0. |
+| **Stage 0 Mitigation** | Дизайн-митигация зафиксирован: `reentrant: bool` в `ExecutionContext`; `nonReentrant` modifier pattern; `gas_limit` enforcement. **Deferred: WASM смарт-контракты на Stage 1.5.** |
+| **Stage 1.5 Amendment (S1.5-P13, S1.5-P17)** | **Mitigated.** (1) Host function `call`/`delegatecall`/`staticcall` перед входом в кадр проверяет `state.call_stack.contains(&to)`; если reentry и целевой ABI entry несёт флаг `non_reentrant` → abort `VmError::ReentrancyDetected` (`vm-wasm/src/host/calls/mod.rs:108-140`). (2) Дочерний кадр получает `ctx.reentrant = is_reentrant`. (3) Reentrancy без `non_reentrant` флага легальна и завершается (MVP: guard opt-in per entry point, не глобальный запрет). (4) Depth cap `MAX_CALL_DEPTH` = 1024 ограничивает рекурсию даже без ABI-флага. |
+| **Stage** | S1.5-P13 (enforced), S1.5-P17 (e2e) |
+| **Residual Risk** | Низкий. Guard opt-in: контракт без `non_reentrant` entry может reenter сам себя — это осознанное поведение (как CALL в Ethereum), защищено только depth/gas. Продакер контракта обязан помечать money-moving entry points. Cross-contract reentrancy закрыта тем же `call_stack`. |
+| **Monitoring** | Мониторинг `ReentrancyDetected` reject-ов; spike → потенциальная атака на конкретный контракт или regression guard-а. |
+| **Код** | `crates/strangecoin-core/src/abi/mod.rs` (`AbiEntry.non_reentrant`), `core/vm/context.rs` (`reentrant: bool`), `crates/strangecoin-vm-wasm/src/host/calls/mod.rs:108-140` (call_stack + ABI lookup), `core/vm/limits.rs::MAX_CALL_DEPTH` |
+| **Тест** | vm-wasm `tests/reentrancy_and_limits.rs::self_call_with_non_reentrant_abi_is_rejected`, `::cross_contract_reentrancy_is_rejected`, `::self_call_with_non_reentrant_false_is_allowed`, `::call_depth_beyond_limit_is_rejected`; e2e `tests/vm_reentrancy_attack.rs::reentrancy_attack_end_to_end_is_rejected`, `::reentrancy_without_non_reentrant_flag_runs_and_terminates` |
 
 ---
 
@@ -415,10 +428,13 @@ Reproducible builds + cosign signatures для верификации бинар
 | **Название** | Integer Overflow (Smart Contracts) |
 | **STRIDE** | Tampering |
 | **Описание** | Переполнение в арифметике смарт-контракта. Например, `uint256 balance = 0 - 1` → massive balance. Это позволяет: (1) создать токены из ничего, (2) обойти проверки баланса. |
-| **Stage 0 Mitigation** | Checked arithmetic (Rust default); `SafeMath`-style precompiles; gas cost for arithmetic ops. **Deferred: WASM смарт-контракты на Stage 1.5.** |
-| **Stage** | Stage 1.5 |
-| **Residual Risk** | N/A на Stage 0 (нет смарт-контрактов). Rust prevents overflow в native code. |
-| **Monitoring** | N/A на Stage 0. |
+| **Stage 0 Mitigation** | Дизайн: checked arithmetic (Rust default); `SafeMath`-style precompiles; gas cost for arithmetic ops. **Deferred: WASM смарт-контракты на Stage 1.5.** |
+| **Stage 1.5 Amendment (S1.5-P11, S1.5-P13)** | **Mitigated.** (1) Host/native код — Rust checked/saturating arithmetic (нет unchecked переполнений вне wasmi-кадра; см. `storage_write` saturating-adds к cap). (2) Precompile `0x07 modexp` — бóльшая часть целочисленной криптографии выносится в audited dispatcher с checked length-полями (`huge_length_header_is_invalid`). (3) `MAX_CODE_SIZE` = 24 KB (24 * 1024) резон в `verify_transaction` для CreateTx (`consensus.rs:354`) — один deploy не может протащить неограниченный код. (4) i32/wasm-арифметика контракта детерминирована (wrap в wasm — consensus-safe, не host compromise). |
+| **Stage** | S1.5-P11 + S1.5-P13 |
+| **Residual Risk** | Низкий для host-слоя; medium для бизнес-логики контрактов (trapping-арифметика в wasm — ответственность контракт-автора, как Solidity unchecked). modexp длины ограничены gas-стоимостью. |
+| **Monitoring** | Мониторинг Failed-Receipts с переполнением/trap; fuzz-таргеты S1.5-P16 (gas_metering, storage_trie) как regression. |
+| **Код** | `core/vm/limits.rs::MAX_CODE_SIZE`, `core/consensus.rs:354` (CreateTx code check), `vm-wasm/src/precompiles/modexp.rs` (+ dispatcher), `vm-wasm/src/host/storage/storage_write.rs` (saturating to cap) |
+| **Тест** | vm-wasm `tests/reentrancy_and_limits.rs::create_code_size_at_limit_accepted`, `::create_code_size_over_limit_rejected`; `tests/precompiles.rs::modexp_*` (10: vectors, zero exponent/modulus, padding, truncated/huge header); fuzz `fuzz/fuzz_targets/gas_metering.rs` |
 
 ---
 
@@ -430,10 +446,13 @@ Reproducible builds + cosign signatures для верификации бинар
 | **Название** | Storage Exhaustion |
 | **STRIDE** | Denial of Service |
 | **Описание** | Контракт заполняет весь state, делая узел недоступным. Каждый write стоит gas, но если gas limit высокий, контракт может заполнить terabytes. |
-| **Stage 0 Mitigation** | `max_storage_per_contract`; `state_rent` (Stage 3+); gas cost for storage writes. **Deferred: WASM смарт-контракты на Stage 1.5.** |
-| **Stage** | Stage 1.5+ |
-| **Residual Risk** | N/A на Stage 0 (нет смарт-контрактов). |
-| **Monitoring** | N/A на Stage 0. |
+| **Stage 0 Mitigation** | Дизайн: `max_storage_per_contract`; `state_rent` (Stage 3+); gas cost for storage writes. **Deferred: WASM смарт-контракты на Stage 1.5.** |
+| **Stage 1.5 Amendment (S1.5-P13, S1.5-P15)** | **Mitigated (MVP).** (1) `MAX_STORAGE_PER_CONTRACT` = 1 MB (`core/vm/limits.rs:14`); `storage_write` host function считает persisted + staged + new value и отклоняет write сверх cap (`vm-wasm/src/host/storage/storage_write.rs:47-58`) → Failed-Receipt, overlay не flush-ится. (2) Block gas limit 1M (`BLOCK_GAS_LIMIT`) ограничивает количество storage-writes в блоке (каждый write — host-call weight, ADR-0014). (3) Кап per-contract, не global — глобальный рост state ограничен числом контрактов × 1 MB × block-rate. |
+| **Stage** | S1.5-P13 + S1.5-P15 |
+| **Residual Risk** | Средний. Нет state rent / global state cap: спам-деплои многих контрактов по 1 MB каждый — эвристика rate-limited только gas-ом; state-растение не стягивается (rent — Stage 3+). Storage-undo/reorg — derived, не disk-DoS. |
+| **Monitoring** | Мониторинг размера contract_storage map; alert при аномальном росте; Failed-Receipts с storage cap reject. |
+| **Код** | `core/vm/limits.rs::MAX_STORAGE_PER_CONTRACT`, `vm-wasm/src/host/storage/storage_write.rs`, `core/state/contract_storage.rs` (overlay flush), `core/vm/gas.rs::BLOCK_GAS_LIMIT` |
+| **Тест** | vm-wasm `tests/reentrancy_and_limits.rs::storage_cap_at_limit_accepted`, `::storage_cap_exceeded_rejected`; `tests/contract_storage.rs` (write > 1 MB → Failed, без flush); `tests/vm_gas_exhaustion.rs` (block gas ceiling); fuzz `fuzz/fuzz_targets/storage_trie.rs` |
 
 ---
 
@@ -445,10 +464,13 @@ Reproducible builds + cosign signatures для верификации бинар
 | **Название** | Code Injection (Malicious WASM) |
 | **STRIDE** | Tampering / Elevation of Privilege |
 | **Описание** | Загрузка вредоносного WASM-модуля, который: (1) выполняет произвольный код, (2) читает/пишет state, (3) обходит gas metering. |
-| **Stage 0 Mitigation** | wasmi sandbox (no I/O by default); host functions whitelist; gas metering prevents infinite loops. **Deferred: WASM смарт-контракты на Stage 1.5.** |
-| **Stage** | Stage 1.5 |
-| **Residual Risk** | N/A на Stage 0 (нет смарт-контрактов). |
-| **Monitoring** | N/A на Stage 0. |
+| **Stage 0 Mitigation** | Дизайн: wasmi sandbox (no I/O by default); host functions whitelist; gas metering prevents infinite loops. **Deferred: WASM смарт-контракты на Stage 1.5.** |
+| **Stage 1.5 Amendment (S1.5-P06, S1.5-P09, S1.5-P10, S1.5-P16)** | **Mitigated.** (1) wasmi 2.0 sandbox: без fs/net/env по умолчанию; линейная память ограничена `MAX_MEMORY_PAGES` = 16 (1 MiB) через StoreLimits; value stack `MAX_STACK_HEIGHT` = 1M байт; runaway recursion → детерминированный trap. (2) Host functions — whitelist из 13 функций (никакого произвольного host access; каждая — explicit import). (3) Gas metering на каждой инструкции + host-call weights (ADR-0014); OutOfGas → детерминированное сожжение полного бюджета, код не исполняется дальше. (4) Deploy-код валидируется (`register_code_rejects_invalid_wasm`), размер ≤ `MAX_CODE_SIZE`. (5) Differential testing wasmi vs wasmtime (S1.5-P16) — детерминизм исполнения. |
+| **Stage** | S1.5-P06/P09/P10/P16 |
+| **Residual Risk** | Средний-низкий. wasmi — не formally verified; возможны 0-day в самом интерпретаторе (см. fuzz-таргеты S1.5-P16 как continuous regression). Бизнес-логика контрактов (кража средств по ABI) — вне sandbox-митигаций (audit контрактов — экосистема Stage 4+). |
+| **Monitoring** | Мониторинг trap/OutOfGas rate per contract; fuzz CI (`fuzz-canonical-decode` + vm-таргеты); alert на wasmi panics (не должны случаться — crash = security bug). |
+| **Код** | `crates/strangecoin-vm-wasm/src/lib.rs` (WasmiExecutor, StoreLimits, engine config), `core/vm/limits.rs`, `vm-wasm/src/host/mod.rs` (13 imports), `core/consensus.rs:354` (MAX_CODE_SIZE), `vm-wasm/gas.rs` (instruction metering) |
+| **Тест** | vm-wasm `tests/reentrancy_and_limits.rs::memory_declaration_over_limit_rejected`, `::memory_grow_beyond_limit_traps_out_of_memory`, `::runaway_recursion_hits_stack_limit`, `::call_depth_beyond_limit_is_rejected`; `tests/events_and_receipts.rs::register_code_rejects_invalid_wasm`; `tests/gas_metering.rs`; fuzz `fuzz/fuzz_targets/{host_functions,differential_wasmi_vs_wasmtime}.rs` |
 
 ---
 
@@ -846,16 +868,31 @@ Reproducible builds + cosign signatures для верификации бинар
 | **S1-P20** | Ре-аудит 22 инвариантов (all vectors — no regressions) |
 | **S1-P21** | V-34..V-42 (документирование этого раздела) |
 
+### 6.2b Prompt → Vector Mapping (Stage 1.5, добавлено S1.5-P18)
+
+| Prompt | Векторы, которые он mitigates |
+|--------|------------------------------|
+| **S1.5-P06** | V-21 (wasmi sandbox, crate + WasmiExecutor) |
+| **S1.5-P09** | V-21 (gas metering — infinite loops), V-20 (block gas limit как глобальный ceiling) |
+| **S1.5-P10** | V-21 (host functions whitelist — 13 функций) |
+| **S1.5-P11** | V-19 (modexp precompile + checked dispatcher lengths) |
+| **S1.5-P13** | V-18 (reentrancy guard: non_reentrant + call_stack), V-19 (MAX_CODE_SIZE в verify_transaction), V-20 (MAX_STORAGE_PER_CONTRACT), V-21 (MAX_MEMORY_PAGES / MAX_STACK_HEIGHT / MAX_CALL_DEPTH) |
+| **S1.5-P14** | Инвариант #18 (Receipt на каждый tx — audit trail для VM-атак) |
+| **S1.5-P15** | Инвариант #15 (enforce_receipt_gas_limit post-execution), инвариант #19 extension (contract storage в state root), V-20 (flush только в пределах cap) |
+| **S1.5-P16** | V-21 (differential wasmi vs wasmtime), V-19/V-20 adjacent (fuzz gas_metering / storage_trie / host_functions) |
+| **S1.5-P17** | V-18 (e2e reentrancy attack rejected), V-20/V-21 (e2e gas exhaustion) |
+| **S1.5-P18** | V-18..V-21 (документирование митигаций этого раздела; regression 22 инвариантов) |
+
 ### 6.3 Coverage Matrix
 
-| STRIDE Category | Covered by Stage 0 | Covered by Stage 1 | Residual (deferred) |
-|-----------------|--------------------|--------------------|---------------------|
-| **Spoofing** | P05 (chain_id), P13 (peer limits) | S1-P14 (network_id HELLO), S1-P15 (bech32 HRP) | V-06 (long-range → Stage 7), V-24 (MITM → Stage 2) |
-| **Tampering** | P06 (serialization), P07 (txid), P08-P09 (difficulty/time) | S1-P06 (state_root), S1-P08 (tx_root), S1-P05 (consensus_version), S1-P16 (headers) | V-07 (nothing-at-stake → Stage 7), V-18-V-21 (contracts → Stage 1.5+) |
-| **Repudiation** | P07 (txid commitment) | — | — |
-| **Information Disclosure** | P04 (keystore), P15 (config) | S1-P07 (witness minimality) | V-08, V-10 (MEV → Stage 5) |
-| **Denial of Service** | P12 (size limits), P13 (rate limiting), P14 (mempool) | S1-P17 (RBF limits), S1-P18 (inbox bounded) | V-09 (censoring → Stage 7) |
-| **Elevation of Privilege** | P05 (nonce), P10 (genesis) | S1-P01 (grant flag), S1-P05 (version enforce) | V-05 (51% → monitoring), V-23 (key compromise → Stage 5 AA) |
+| STRIDE Category | Covered by Stage 0 | Covered by Stage 1 | Covered by Stage 1.5 | Residual (deferred) |
+|-----------------|--------------------|--------------------|----------------------|---------------------|
+| **Spoofing** | P05 (chain_id), P13 (peer limits) | S1-P14 (network_id HELLO), S1-P15 (bech32 HRP) | — | V-06 (long-range → Stage 7), V-24 (MITM → Stage 2) |
+| **Tampering** | P06 (serialization), P07 (txid), P08-P09 (difficulty/time) | S1-P06 (state_root), S1-P08 (tx_root), S1-P05 (consensus_version), S1-P16 (headers) | V-18 (reentrancy guard), V-19 (checked arith + modexp + MAX_CODE_SIZE), V-21 (wasmi sandbox + host whitelist + gas) | V-07 (nothing-at-stake → Stage 7) |
+| **Repudiation** | P07 (txid commitment) | — | Receipts (#18): audit trail каждого VM-call | — |
+| **Information Disclosure** | P04 (keystore), P15 (config) | S1-P07 (witness minimality) | — | V-08, V-10 (MEV → Stage 5) |
+| **Denial of Service** | P12 (size limits), P13 (rate limiting), P14 (mempool) | S1-P17 (RBF limits), S1-P18 (inbox bounded) | V-20 (storage cap 1MB + block gas limit 1M), V-21 (memory/stack/depth caps) | V-09 (censoring → Stage 7); global state growth без rent → Stage 3+ |
+| **Elevation of Privilege** | P05 (nonce), P10 (genesis) | S1-P01 (grant flag), S1-P05 (version enforce) | V-21 (sandbox: no host I/O вне whitelist) | V-05 (51% → monitoring), V-23 (key compromise → Stage 5 AA) |
 
 ### 6.4 Mitigations → Test Coverage Map
 
@@ -880,7 +917,10 @@ Reproducible builds + cosign signatures для верификации бинар
 | V-15 (Invalid blocks) | peer_manager (ban) + HeaderCache + block_executor | `tests/block_executor.rs` (reject-матрица), `tests/sync_headers.rs` (bad header не доходит до tip); ban-after-N — частично | ⚠️ частично |
 | V-16 (DNS poisoning) | config (seeds) | gap: нет теста на DNS | ⚠️ gap |
 | V-17 (Sybil) | peer_manager (limits) + rate_limiter (per-message ban) | gap: нет теста на connection limits; per-message ban покрыт `tests/rate_limit.rs` (BUG-S1-005) | ⚠️ gap (connection limits) |
-| V-18-V-21 (Contracts) | N/A (Stage 1.5+) | N/A | Deferred |
+| V-18 (Reentrancy) | vm-wasm (call_stack + `non_reentrant` ABI) + core limits | `tests/vm_reentrancy_attack.rs::reentrancy_attack_end_to_end_is_rejected`; vm-wasm `tests/reentrancy_and_limits.rs::self_call_with_non_reentrant_abi_is_rejected`, `::cross_contract_reentrancy_is_rejected` | ✅ S1.5-P13/P17 |
+| V-19 (Integer overflow) | core limits (MAX_CODE_SIZE) + precompiles (modexp) + Rust checked arith | `tests/reentrancy_and_limits.rs::create_code_size_over_limit_rejected`; `tests/precompiles.rs::modexp_*` (10) | ✅ S1.5-P11/P13 |
+| V-20 (Storage exhaustion) | vm-wasm storage_write (1MB cap) + block gas limit | `tests/reentrancy_and_limits.rs::storage_cap_at_limit_accepted`, `::storage_cap_exceeded_rejected`; `tests/vm_gas_exhaustion.rs`; `tests/contract_storage.rs` (>1MB → Failed) | ✅ S1.5-P13/P15 |
+| V-21 (Code injection) | wasmi sandbox + host whitelist + gas metering + resource limits | `tests/reentrancy_and_limits.rs::memory_*`, `::runaway_recursion_hits_stack_limit`; `tests/events_and_receipts.rs::register_code_rejects_invalid_wasm`; `tests/gas_metering.rs`; fuzz `differential_wasmi_vs_wasmtime.rs` | ✅ S1.5-P06/P09/P10/P16 |
 | V-22 (Compromised build) | CI/CD (P24) | gap: GitHub Actions run не верифицирован | ⚠️ gap (→ first v* tag) |
 | V-23 (Key compromise) | wallet (keystore) | unit-тесты wallet | ✅ Stage 0 |
 | V-24 (MITM) | N/A (Stage 2) | N/A | Deferred |
@@ -904,11 +944,12 @@ Reproducible builds + cosign signatures для верификации бинар
 | V-42 (HRP confusion) | core address (bech32) | core `src/address.rs::test_round_trip`, `::test_checksum_error`, `::test_hrp_validation`, `::test_network_id_hrp_mapping`; `tests/two_clients.rs::bech32_address_transfer`; `tests/address_migration.rs::legacy_base64_balances_migrate_to_bech32_on_open` | ✅ S1-P15 |
 
 **Итого gaps:** 5 векторов без полных тестов (V-03, V-15, V-16, V-17, V-28). Из них:
-- V-03, V-16, V-17, V-28 — требуют интеграционных/unit-тестов (не закрыты Stage 1)
+- V-03, V-16, V-17, V-28 — требуют интеграционных/unit-тестов (не закрыты Stage 1/1.5)
 - V-15 — частично закрыт reject-тестами block_executor/sync; ban-after-N остаётся gap
 - ~~V-31~~ — **closed code-side** (S1.5-P01): тест genesis без секрета в коде; residual ops (offline key) — SCIP-0001 pre-mainnet
 - ~~V-22/V-33~~ — **closed** (BUG-S1-001, 2026-10-10): первый release-run на GitHub Actions верифицирован (run 38071514479)
 - ~~V-35 zero-root вектор (3)~~ — **closed** (BUG-S1-002, 2026-10-11): zero-root opt-out удалён (SCIP-0002); mainnet/testnet обязателен commitment
+- **V-18..V-21 — closed (S1.5-P13/P17, 2026-10-17)**: reentrancy guard, storage cap, code-size cap, sandbox+limits — все с тестами (§3.7)
 - Новые V-34..V-42 — все с тестами, gaps нет
 
 ---
@@ -920,7 +961,7 @@ Reproducible builds + cosign signatures для верификации бинар
 | Risk | Deferred To | Mitigation Status | Impact |
 |------|-------------|-------------------|--------|
 | MEV (V-08, V-09, V-10) | Stage 5 | No threshold encryption | High |
-| Smart Contract Attacks (V-18-V-21) | Stage 1.5+ | No WASM contracts | N/A |
+| ~~Smart Contract Attacks (V-18-V-21)~~ | ~~Stage 1.5+~~ | **Closed S1.5-P13/P17 (2026-10-17)** — см. §3.7; residual ниже в §7.1b | N/A |
 | PoS-Specific Attacks (V-06, V-07, V-25) | Stage 7 | No PoS | N/A |
 | Network MITM (V-24) | Stage 2 | No Noise Protocol | High |
 | Account Abstraction (V-23) | Stage 5 | No social recovery | Medium |
@@ -928,6 +969,18 @@ Reproducible builds + cosign signatures для верификации бинар
 | Light client / SPV (V-36 wire) | Stage 2+ | Witness API только в ядре, не в протоколе | Medium |
 | TLA+ model: Verkle/state root/reorg | Stage 1 (spec update) | `docs/spec/README.md`: свойства state root/reorg — вне scope skeleton | Low |
 | Gossip/Noise/Erlay (усиливают V-01, V-34, V-41) | Stage 2 | Планируется | Medium |
+
+### 7.1b Stage 1.5 Residual Risks (после закрытия V-18..V-21)
+
+| Risk | Deferred To | Mitigation Status (Stage 1.5) | Impact |
+|------|-------------|-------------------------------|--------|
+| Block-STM (parallel execution) | Stage 3+ (anti-goal Stage 1.5) | Serial execution; parallel re-execution может изменить interleaving gas/receipts — требует deterministic parallelISM design | Medium |
+| Account Abstraction (social recovery, multisig по телу tx) | Stage 5 | Контракты могут мультиподписывать off-pattern, но protocol-level AA нет | Medium |
+| EIP-1559 dynamic base fee | Stage 5 | Сейчас фиксированный block gas limit + fee=0; fee-market DoS-векторы (feespiral) вне scope | Medium |
+| State rent / global state cap | Stage 3+ | Per-contract 1MB cap закрывает单体 DoS, но не спам множеством контрактов | Medium |
+| Receipts fold в header (light-client receipts) | Stage 2+ | Receipts — derived data + sub-trie proofs; не в header → light clients не могут verify receipts без full node | Low |
+| wasmi interpreter 0-days | continuous (fuzz S1.5-P16 + CI) | Differential testing wasmi vs wasmtime; fuzz-таргеты; formally verified VM — Stage 6+ (K-framework obligation) | Medium |
+| Контракт-level бизнес-логика (rug-pull, ABI misuse) | Stage 4+ (SDK, audits) | Sandbox не защищает от «легитимно злонамеренного» кода | Medium |
 
 ### 7.2 Risks Accepted (Stage 0 + Stage 1)
 
@@ -978,6 +1031,11 @@ Reproducible builds + cosign signatures для верификации бинар
 | RBF replacements per sender | Anomalous rate | Warning | Fee-war DoS (V-40) |
 | SyncEngine inbox full / drops | Recurring | Warning | Inbox flooding (V-41) |
 | Soak runner (canonical decode) | Non-zero exit / panic | Critical | Decoder regression — security issue |
+| ReentrancyDetected rejects | Spike per contract | Warning | Attack on contract or guard regression (V-18) |
+| Storage cap rejects (per contract) | Any sustained rate | Warning | Storage exhaustion attempt (V-20) |
+| OutOfGas / Failed receipt rate | Anomalous vs baseline | Warning | Malicious or broken contract (V-21); check gas weights |
+| Block gas limit rejects | Spike | Warning | Gas-limit DoS or mispriced weights (invariant #15) |
+| wasmi trap (non-OutOfGas, unexpected) | Any | Critical | Sandbox escape attempt or interpreter bug (V-21) |
 
 ### 8.2 Monitoring Tools
 
@@ -1007,19 +1065,22 @@ Reproducible builds + cosign signatures для верификации бинар
 
 ## 9. Review Checklist
 
-### 9.1 Self-review S1-P21 (по ARCHITECT3 §17, security-пункты)
+### 9.1 Self-review S1-P21 / S1.5-P18 (по ARCHITECT3 §17, security-пункты)
 
 - [x] Threat model: новые векторы Stage 1 (V-34..V-42) задокументированы, митигации добавлены (§5)
 - [x] Все 25 векторов из ARCHITECT3.md §6 покрыты (§3.1–§3.9)
 - [x] Каждый новый вектор имеет: ID, Name, STRIDE, Description, Mitigation, Stage, Residual Risk, Monitoring + Код/Тест
-- [x] Mitigations ссылаются на конкретные промпты (S1-PXX) и тесты
+- [x] Mitigations ссылаются на конкретные промпты (S1-PXX / S1.5-PXX) и тесты
 - [x] Residual risks явно отмечены (§7) — включая obligations (genesis key, first tag run, cargo-fuzz on CI)
 - [x] Monitoring plan содержит thresholds и actions для Stage 1 поверхностей (§8.1)
 - [x] Fuzz-результат S1-P19 свёрнут в Monitoring (§8.4)
 - [x] Incident response актуализирован (INCIDENT_RESPONSE.md v3.0)
 - [x] Security: fuzzing target добавлен (S1-P19); TLA+ spec — результат D02 в `docs/spec/README.md` (state root/reorg вне scope skeleton — residual §7.1)
-- [x] Все dependency vectors (V-18-V-21, V-06-V-07, V-25) помечены как deferred
-- [x] Инварианты 1-22 enforce по актуализированной таблице `docs/stage1/INVARIANTS_ENFORCED.md` (S1-P20; №19, №21 — впервые enforced)
+- [x] **S1.5-P18:** V-18..V-21 переведены из Deferred в Mitigated с Stage 1.5 Amendment + Код/Тест (§3.7)
+- [x] **S1.5-P18:** Coverage Matrix (§6.3) и Mitigations Map (§6.2b) обновлены для Stage 1.5
+- [x] **S1.5-P18:** Residual risks Stage 2+ (Block-STM, AA, EIP-1559, state rent) зафиксированы в §7.1b
+- [x] **S1.5-P18:** Monitoring plan дополнен VM-метриками (§8.1)
+- [x] Инварианты 1-22 enforce по актуализированной таблице `docs/stage1.5/INVARIANTS_ENFORCED.md` (S1.5-P18; №15, №18 — впервые enforced; №19 extension)
 
 ### 9.2 Stage 0遗留 Review Checklist (D02)
 
@@ -1040,16 +1101,19 @@ Reproducible builds + cosign signatures для верификации бинар
 |----------|---------|
 | `analytics/ARCHITECT3.md` §6 | Source: 25 threat vectors |
 | `analytics/ARCHITECT3.md` §17 | PR/threat-model review checklist |
-| `analytics/ROADMAP3.md` | Stage requirements (DoD Stage 1 №9: threat model update) |
+| `analytics/ROADMAP3.md` | Stage requirements (DoD Stage 1 №9: threat model update; Stage 1.5 — регрессия инвариантов) |
 | `analytics/prompt-stage0.md` P22 | Original creation prompt |
 | `analytics/prompt-stage1.md` D02 | Debt prompt execution |
 | `analytics/prompt-stage1.md` S1-P19 | Fuzz target + soak result |
-| `analytics/prompt-stage1.md` S1-P21 | Stage 1 threat model update (this revision) |
+| `analytics/prompt-stage1.md` S1-P21 | Stage 1 threat model update |
+| `analytics/prompt-stage1.5.md` S1.5-P18 | Stage 1.5 threat model update (this revision: V-18..V-21) |
 | `analytics/retro-stage0.md` §4.3, §4.4, §8.2 | Genesis key, Changelog lie, remediation |
 | `docs/security/INCIDENT_RESPONSE.md` | Incident response plan (v3.0, Stage 1 alert sources) |
-| `docs/stage1/INVARIANTS_ENFORCED.md` | 22 invariants re-audit (S1-P20) |
+| `docs/stage1/INVARIANTS_ENFORCED.md` | 22 invariants re-audit (S1-P20; historical Stage 1) |
+| `docs/stage1.5/INVARIANTS_ENFORCED.md` | 22 invariants Stage 1.5 (S1.5-P18: 21/1, №15/№18 enforced, №19 extension) |
+| `docs/stage1.5/THREAT_MODEL_STAGE1_5.md` | Stage 1.5 threat-модель: краткое резюме V-18..V-21 + residual |
 | `docs/spec/README.md` | TLC model checker результат (D02) |
-| `fuzz/README.md` | Fuzz target + soak run log (S1-P19) |
+| `fuzz/README.md` | Fuzz target + soak run log (S1-P19; S1.5-P16 vm-таргеты) |
 | `docs/ADR/0001-secp256k1-vs-ed25519.md` | Cryptographic decisions |
 | `docs/ADR/0002-tail-emission-vs-halving.md` | Economic decisions |
 | `docs/ADR/0003-hybrid-pow-pos.md` | Consensus decisions |
@@ -1057,6 +1121,9 @@ Reproducible builds + cosign signatures для верификации бинар
 | `docs/ADR/0007-tokio-on-stage-1.md` | Async runtime |
 | `docs/ADR/0009-events-bus.md` | EventBus (monitoring подписчики) |
 | `docs/ADR/0010-sync-engine.md` | SyncEngine inbox (V-41) |
+| `docs/ADR/0012-wasm-wasmi-vs-risc-v.md` | WASM runtime decision (V-21) |
+| `docs/ADR/0014-gas-metering-strategy.md` | Gas metering (V-20/V-21) |
+| `docs/ADR/0015-precompiles-list.md` | Precompiles (V-19 modexp) |
 
 ---
 

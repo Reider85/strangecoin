@@ -1,9 +1,9 @@
 # Stage 1 Invariants Enforced (S1-P20, rev. BUG-S0-024 / BUG-S0-025)
 
 **Document**: `docs/stage1/INVARIANTS_ENFORCED.md`  
-**Status**: Complete ✅  
+**Status**: Historical Stage 1 snapshot ✅ (для Stage 1.5 статуса — `docs/stage1.5/INVARIANTS_ENFORCED.md`, S1.5-P18: №15/№18 enforced, №19 extension)  
 **Original audit**: 2026-10-04 (S1-P20)  
-**Revision**: 2026-10-09 — BUG-S0-024/BUG-S0-031: нумерация 1:1 к `ARCHITECT3.md §5`, честные residual-статусы, битые ссылки устранены; BUG-S0-025: nonce-reject proptest закрыт; 2026-10-11 — BUG-S1-002: №19 closed (SCIP-0002), residual count обновлён; 2026-10-11 — BUG-S1-004: chain_id из Config (№6/№8/№10 enforcement обновлён: per-network genesis hash, per-tx block reject, state-machine gate), `current_chain_id()` удалён  
+**Revision**: 2026-10-09 — BUG-S0-024/BUG-S0-031: нумерация 1:1 к `ARCHITECT3.md §5`, честные residual-статусы, битые ссылки устранены; BUG-S0-025: nonce-reject proptest закрыт; 2026-10-11 — BUG-S1-002: №19 closed (SCIP-0002), residual count обновлён; 2026-10-11 — BUG-S1-004: chain_id из Config (№6/№8/№10 enforcement обновлён: per-network genesis hash, per-tx block reject, state-machine gate), `current_chain_id()` удалён; 2026-10-17 — superseded для Stage 1.5 (S1.5-P18, см. `docs/stage1.5/INVARIANTS_ENFORCED.md`)  
 **Prompt**: S1-P20 — Regression audit of 22 Stage 0 invariants after strangler migration  
 
 **Нумерация**: 1:1 с `analytics/ARCHITECT3.md` §5 (22 инварианта; эталон — строки 484-507).  
@@ -17,6 +17,8 @@
 | 🟡 Residual (enforced with known gaps) | 0 | — |
 | Deferred Stage 1.5 | 2 | 15, 18 |
 | Deferred Stage 5 | 1 | 20 |
+
+> **Stage 1.5 update (S1.5-P18, 2026-10-17):** №15 и №18 перешли Deferred → Enforced; №19 получил extension (contract storage в state root). Актуальный статус 21/0/0/1 — в `docs/stage1.5/INVARIANTS_ENFORCED.md`.
 
 ## Invariant Audit Table
 
