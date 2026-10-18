@@ -1,10 +1,41 @@
 # bugfixes-prompts2.md — Промпты для закрытия прорех Stage 1.5
 
-**Версия:** 1.0
+**Версия:** 1.1
 **Дата:** 2026-10-18
 **Источник:** аудит `analytics/prompt-stage1.5.md` (S1.5-P01..P19), `Changelog.md` (секции 1.1.1–1.1.8), `docs/stage1.5/INVARIANTS_ENFORCED.md`, `docs/stage1.5/THREAT_MODEL_STAGE1_5.md`, `crates/strangecoin-core/src/abi/mod.rs`, `crates/strangecoin-vm-wasm/src/lib.rs`, `crates/strangecoin-core/src/state/inner.rs`, `git tag -l`, `Cargo.toml`.
 **Предусловие:** 17 из 19 промптов `prompt-stage1.5.md` выполнены (S1.5-P01..P11, P13..P18). Не выполнены: **S1.5-P12** (полный JSON ABI) и **S1.5-P19** (DoD-верификация + тег `v1.5.0-stage1.5`).
 **Цель:** превратить остаточные расхождения Stage 1.5 в измеримый, трассируемый список промптов со сквозной нумерацией. Каждый промпт — самостоятельное задание для ИИ-агента, завершающееся конкретными артефактами и чек-листом КГ.
+
+---
+
+## Статус каталога (v1.1, обновлено 2026-10-19, HEAD `eee7b7b`)
+
+Каталог писался на коммите `274b6b9` (S1.5-P18), когда S1.5-P12/P19 ещё не
+были выполнены. С тех пор оба gap-closure промпта закрыты **в рамках
+`prompt-stage1.5.md`** (не FBP-коммитами). Актуальный статус:
+
+| FBP | Статус | Evidence |
+|-----|--------|----------|
+| S1.5-FBP01 | **fixed** (2026-10-19) | S1.5-P12 gap-closure `b925f71` (2026-10-18) + residuals `10e9acc` (FixedArray len>0, array-of-fixedarray roundtrip); verification 2026-10-19: `cargo check/test/clippy -p strangecoin-core` green, `abi_roundtrip` 15/15, abi unit 7/7 |
+| S1.5-FBP02 | **fixed** (2026-10-19) | S1.5-P12 `b925f71` (selector.rs, golden vectors literal hex) + residual `eee7b7b` (`AbiEntry::selector_from_name`) |
+| S1.5-FBP03 | **open** | `const ENTRY_POINT: &str = "main"` — `vm-wasm/src/lib.rs:27` |
+| S1.5-FBP04 | **open** | конструктор не исполняется — `core/src/state/inner.rs:322-323` |
+| S1.5-FBP05 | **open** | nested value-transfer не коммитится |
+| S1.5-FBP06 | **open** | `contract_storage` клонируется на каждый CallTx |
+| S1.5-FBP07 | **open** | `receipts_root` не в BlockHeader |
+| S1.5-FBP08 | **open** | regression после FBP03..FBP07 |
+| S1.5-FBP09 | **fixed** (2026-10-18) | S1.5-P19 `1f133c7` — `docs/stage1.5/STAGE1_5_SUMMARY.md` существует, 14 DoD ✅ |
+| S1.5-FBP10 | **partially fixed** (2026-10-18) | S1.5-P19 `1f133c7`: root `strangecoin`=1.5.0 ✅, AGENTS.md ✅, Changelog 1.5.0 ✅; **residual**: `strangecoin-core`=1.1.0 (ожидается 1.5.0), `strangecoin-vm-wasm`=0.1.0 (ожидается 0.2.0) |
+| S1.5-FBP11 | **partially fixed** (2026-10-18) | annotated tag `v1.5.0-stage1.5` создан и pushed на origin (`1f133c7`); **residual**: release-run verification (`REPRODUCIBLE_BUILDS.md` Actions run URL + SHA256, `STAGE1_5_SUMMARY.md` Release section) не зафиксирована — `gh` CLI отсутствует на хосте (не верифицировано + причина, retro §8.1) |
+
+Оставшийся proper work: **FBP03 → FBP04 → FBP05 → FBP06 → FBP07 → FBP08**
+(ABI-трек остался без FBP03; state-трек и regression целиком). Тег-гейт Stage
+2/3/4 уже открыт (tag pushed), но FBP03..FBP07 — функциональные прорехи,
+заявленные в Changelog 1.1.7/1.1.8 как MVP-обязательства; закрывать до
+перехода к Stage 2+.
+
+Замечания по хосту (Windows): gcc для `secp256k1-sys` — `C:\msys64\mingw64\bin`
+(добавлять в PATH для cargo-команд); `gh` CLI не установлен.
 
 ---
 
@@ -110,6 +141,12 @@ Bug-трекинг: analytics/bugfixes-stage0.md (35 багов, все закр
 
 ## 1. Карта зависимостей промптов
 
+> **Обновлено 2026-10-19:** ABI-трек (FBP01→FBP02) и Verification-трек
+> (FBP09→FBP10→FBP11) закрыты S1.5-P12/P19 (см. «Статус каталога» вверху;
+> FBP10/FBP11 — частично, residuals зафиксированы). Тег-гейт Stage 2/3/4
+> уже открыт. Остатся proper work FBP03→FBP04→FBP05→FBP06→FBP07 и
+> regression FBP08. Карта ниже приведена в исходном виде (историческая).
+
 ```
 PROPER (старт только после подтверждения коммита 274b6b9 — S1.5-P18):
 
@@ -176,6 +213,25 @@ S1.5-FBP01..S1.5-FBP07 ──▶ S1.5-FBP08 (Regression: 22 invariants + new thr
 ## 2. Список промптов
 
 ### S1.5-FBP01. Полный JSON ABI: AbiType + encode_args/decode_args
+
+**Статус:** fixed (2026-10-19)
+
+**Решение (2026-10-19):** промпт закрыт коммитом S1.5-P12 gap-closure
+`b925f71` (2026-10-18) — `core/abi/{mod,encode,decode,selector}.rs` +
+`tests/abi_roundtrip.rs`: `AbiDocument`/`AbiType` (9 variants,
+`validate_bits` 8..=256), head/tail codec (32-byte words, 4-byte BE
+offsets/lengths, canonical-offset enforcement), `AbiError` (богаче спеки:
+`UnexpectedEnd`/`TrailingData`/`NonCanonicalOffset` вместо `InvalidLength`),
+`AbiValue`. Residual-расхождения с КГ закрыты `10e9acc` (2026-10-19):
+`AbiType::parse` отклоняет `T[0]` (FixedArray len > 0, task 2 спеки),
+round-trip `Array(FixedArray(Uint8,2))` + negative `T[0]` в
+`abi_roundtrip.rs` (15/15 green, abi unit 7/7, clippy `-D warnings` green).
+Отклонения от первоначальной спеки (осознанные, задокументированы в
+`abi/mod.rs`): decl-error назван `AbiErrorDecl` (имя `AbiError` занято
+codec-ошибкой), `AbiEventParam.indexed` per-param вместо `indexed: Vec<bool>`
+в `AbiEvent`, serde `Deserialize` вместо `AbiDocument::parse(raw: &str)`
+(parsing остаётся tooling-side), `NonCanonicalOffset` строже спеки
+(только канонический layout декодируется).
 
 **Цель:** закрыть первую половину S1.5-P12 — реализовать `AbiType` enum (≥9
 variants), `AbiParam`, `AbiDocument`, `AbiValue`, и канонический
@@ -252,6 +308,20 @@ selector и dispatch — S1.5-FBP02/FBP03.
 ---
 
 ### S1.5-FBP02. method_selector blake3-based 4-byte + WIT placeholder wit-v2
+
+**Статус:** fixed (2026-10-19)
+
+**Решение (2026-10-19):** закрыт S1.5-P12 gap-closure `b925f71`:
+`core/abi/selector.rs` — `method_selector` (blake3, первые 4 байта),
+`method_signature`, golden vectors literal hex в `abi_roundtrip.rs`
+(`transfer(address,uint256)` → `[0xce,0xae,0xeb,0xc1]` и др., pattern
+BUG-S1-007); `AbiType::canonical_name` для всех variants; format-version
+gating: `"json-v1"` ok, `"wit-v2"` → `NotImplemented`, иначе →
+`UnknownFormatVersion`. Residual-КГ `AbiEntry::selector_from_name` закрыт
+`eee7b7b` (2026-10-19, golden vector `totalSupply()`). Отклонение:
+`AbiDocument::parse(raw: &str)` не реализован как метод — parsing через
+serde `Deserialize` + `check_format_version()` (ADR-0013: calldata-байты в
+core, JSON parsing tooling-side).
 
 **Цель:** закрыть вторую половину S1.5-P12 — реализовать `method_selector(name,
 params) -> [u8; 4]` (первые 4 байта `blake3("function_name(types)")`, не keccak
@@ -764,6 +834,12 @@ breaking change — TLA+ invariant).
 
 ### S1.5-FBP09. STAGE1_5_SUMMARY.md: 14 DoD критериев с ✅ + evidence
 
+**Статус:** fixed (2026-10-18) — выполнен как часть S1.5-P19 (`1f133c7`),
+без FBP-нумерации: `docs/stage1.5/STAGE1_5_SUMMARY.md` существует, 14 DoD
+критериев с evidence (см. DoD #6: P12 gap-closure зафиксирован отдельной
+строкой). Пункт «Fuzz 5 targets × 600s» — CI-side, локально не
+верифицировано (хост Windows, cargo-fuzz недоступен).
+
 **Цель:** создать `docs/stage1.5/STAGE1_5_SUMMARY.md` — аналог
 `docs/stage1/STAGE1_SUMMARY.md`, но для Stage 1.5. 14 DoD критериев из ROADMAP3
 Этап 1.5, каждый с ✅ статусом и evidence (ссылки на коммиты, тесты, файлы).
@@ -816,6 +892,16 @@ breaking change — TLA+ invariant).
 ---
 
 ### S1.5-FBP10. Версия Cargo.toml → 1.5.0 + AGENTS.md update + Changelog секция 1.5.0
+
+**Статус:** partially fixed (2026-10-18) — выполнен как часть S1.5-P19
+(`1f133c7`): root `Cargo.toml` version=1.5.0 ✅, `AGENTS.md` (Stage 1.5
+complete, key docs, architecture) ✅, `Changelog.md` секция 1.5.0 ✅.
+**Residual:** `crates/strangecoin-core/Cargo.toml` version=1.1.0 (ожидается
+1.5.0), `crates/strangecoin-vm-wasm/Cargo.toml` version=0.1.0 (ожидается
+0.2.0) — КГ «strangecoin-core version = 1.5.0 / strangecoin-vm-wasm version
+= 0.2.0» не выполнены. Не блокирует FBP03..FBP08; закрыть отдельным
+коммитом (bump пакетов + `cargo check --workspace`) до или вместе с
+FBP08 regression.
 
 **Цель:** поднять версию `Cargo.toml` с `1.1.0` до `1.5.0` (strangecoin +
 strangecoin-core); `strangecoin-vm-wasm` с `0.1.0` до `0.2.0` (semantic
@@ -887,6 +973,17 @@ complete; S1.5-P19 поднимет до 1.5.0)». После S1.5-FBP01..FBP09 
 ---
 
 ### S1.5-FBP11. Тег v1.5.0-stage1.5 (strictly после всех КГ предыдущих промптов)
+
+**Статус:** partially fixed (2026-10-18) — annotated tag `v1.5.0-stage1.5`
+создан и **pushed на origin** (tagger Reider85, target `1f133c7`, verified
+через `git ls-remote --tags origin` 2026-10-19). **Residual:** пункты КГ
+про release pipeline не зафиксированы: Actions run URL + artifact SHA256s в
+`docs/security/REPRODUCIBLE_BUILDS.md` отсутствуют, Release-секция в
+`STAGE1_5_SUMMARY.md` отсутствует, Changelog-строка «tag pushed; release
+pipeline verified» отсутствует. Причина: `gh` CLI не установлен на хосте —
+статус workflow-рана не верифицируется локально («не верифицировано +
+причина», retro §8.1). Закрыть ops-действием: проверить Actions run для тега
+и дописать артефакты (procedure BUG-S1-001 из REPRODUCIBLE_BUILDS.md).
 
 **Цель:** поставить аннотированный git tag `v1.5.0-stage1.5` — **Gate Stage
 2/3/4**: после этого Stage 2 (network crate migration) и Stage 3 (RocksDB) могут
