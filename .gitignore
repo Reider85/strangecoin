@@ -39,3 +39,4 @@ states/
 .opencode/
 .opencodeignore
 .cargo/local-registry/
+.cargo/
