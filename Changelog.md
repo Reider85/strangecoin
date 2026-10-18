@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.5.0 — WASM smart contracts (basic)
+
+**Status**: Released (Stage 1.5 complete)  
+**Date**: 2026-10-18  
+**Prompts**: S1.5-P01..S1.5-P19  
+**Gate**: annotated tag `v1.5.0-stage1.5` (Gate Stage 2/3/4)  
+**DoD evidence**: `docs/stage1.5/STAGE1_5_SUMMARY.md` (14/14 criteria; #11 — CI pending)
+
+### Агрегат Stage 1.5 proper (P01–P19)
+
+- **ADRs 0012–0015** (renumber from спековых 0011..0014; `fe1afed`): wasmi `=2.0.0` vs RISC-V; JSON ABI для MVP с WIT-миграцией через `format_version`; gas metering (instruction counting + host-call weights); precompiles list.
+- **`strangecoin-vm-wasm`** (`7e4a46e`) — wasmi-backed `VmExecutor` (default-on feature `vm-wasm`; light nodes — `--no-default-features`); core остаётся 0 I/O.
+- **Account model + tx types** (`84d786c`, `03d47ef`): `Account::{Eoa, Contract}` (code_hash, storage_root, nonce); `Transaction::{Transfer, Create, Call}` с per-variant канонической сериализацией; `MAX_CODE_SIZE`=24KB в `verify_transaction`.
+- **Gas** (`e36d401`, `9a5cdfd`): per-tx metering + host-call weights; `BLOCK_GAS_LIMIT`=1M; инвариант **#15 enforced** (pre-execution reservations + post-execution receipts burn).
+- **13 host functions** (`e7ac03b`): crypto (secp256k1_verify, bls_verify, blake3, keccak, sha256), storage (read/write), calls (call/delegatecall/staticcall), context (gas_left/block_context), logs (emit_log) — детерминированные, whitelist (V-21).
+- **7 precompiles** (`ee85331`): 0x01 ecrecover, 0x02 sha256, 0x03 keccak, 0x04 blake3, 0x05 ed25519_verify, 0x06 bls_aggregate (NotImplemented до Stage 7), 0x07 modexp.
+- **JSON ABI** (`66c5659`, gap-closure S1.5-P12): `AbiDocument`/`AbiType`, head/tail encode/decode (32-byte words, 4-byte BE offsets/lengths, canonical-offset enforcement), blake3-4B `method_selector` (golden vectors), `"wit-v2"` → NotImplemented.
+- **Reentrancy + limits** (`0be19c8`): `non_reentrant` ABI-флаг + call_stack → `ReentrancyDetected`; caps: code 24KB, storage 1MB/contract, depth 1024, memory 1MB (16 pages), stack 1M.
+- **Events/receipts** (`9007e91`): `Log`/`Receipt`/`TxStatus` на каждый tx; receipts sub-trie; инвариант **#18 enforced**.
+- **Contract storage в SMT** (`9a5cdfd`): per-contract sub-trie, `storage_root` в account leaf → глобальный `state_root` (инвариант **#19 extension**); unapply/reorg round-trip; true Verkle — Stage 3+ (ADR-0006 amended).
+- **Fuzzing** (`3f9c8b5`): 4 cargo-fuzz targets (host_functions, gas_metering, storage_trie, differential wasmi vs wasmtime) + CI jobs.
+- **Интеграционные тесты** (`6136ce4`): vm_{deploy_call, transfer_to_contract, reentrancy_attack, gas_exhaustion, precompiles_integration} end-to-end на regtest.
+- **Регрессия инвариантов** (`274b6b9`): `docs/stage1.5/INVARIANTS_ENFORCED.md` — 21 enforced + #20 deferred Stage 5; threat model v3.1 (V-18..V-21 Mitigated), `docs/stage1.5/THREAT_MODEL_STAGE1_5.md`.
+
+### Verification (2026-10-18)
+
+- `cargo test --workspace` — green (core lib 96 + abi_roundtrip 14 + vm-wasm 139 + node integration matrix).
+- `cargo clippy --workspace --all-targets -- -D warnings` — green.
+- Differential wasmi vs wasmtime (`vm-wasm/tests/differential.rs`, 13) — green; coverage-guided cargo-fuzz — CI, локально не верифицировано (Windows).
+
+### Residual (Stage 2+ / mainnet freeze)
+
+- Block-STM — Stage 3+; EIP-1559 / AA — Stage 5; WIT ABI — Stage 4+; BLS12-381 + `bls_aggregate` — Stage 7; K-framework / ZK-VM — Stage 6+.
+- Ops-gates: BUG-S1-013 (PGP-key), BUG-S1-015 (offline genesis key) — mainnet freeze.
+- Прочее: `docs/stage1.5/STAGE1_5_SUMMARY.md` §4 (constructor exec, nested value transfers, receipts fold, Verkle, TLA+ VM).
+
+---
+
 ## 1.1.8 — Stage 1.5 proper: contract storage в SMT + block gas limit, инварианты #15/#19 (S1.5-P15)
 
 **Status**: In progress  
