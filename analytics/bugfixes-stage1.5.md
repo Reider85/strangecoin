@@ -21,6 +21,7 @@
 | S1.5-FBP03 | **fixed** (2026-10-19) | selector dispatch в `vm-wasm/src/lib.rs` (ENTRY_POINT удалён, invoke-export try-порядок, строгий MissingExport), `sc::input_read` host function, ADR-0013/0014 amended; `basic_execution` 16/16, workspace green, clippy green (`f4dadda`) |
 | S1.5-FBP04 | **fixed** (2026-10-19) | конструктор исполняется: `execute_constructor` trait + `FrameEntry::Constructor` (skip до инстанцирования), `apply_create` rework (Success flush + endowment; failure = failed receipt + rollback), `unapply_create` receipt-gated; `CreateTx.gas_limit`+`constructor_params`, FORMAT_VERSION 6, genesis hashes + golden vectors перегенерированы (BUG-S1-007); ADR-0013 amended; Changelog 1.5.2; тесты vm-wasm contract_storage 10/10, vm_deploy_call 2/2, serialize_golden 19/19 (`f217314`) |
 | S1.5-FBP05 | **fixed** (2026-10-19) | nested value-transfer селтится: on-entry crediting в `run_frame` + `nested_call` (sender = `storage_address`), `ExecutionResult/Receipt.value_transfers` audit trail, `State.value_transfers_undo` (accumulating), `commit/reverse_value_transfers` (sequential, self-call mint-bug fixed); ADR-0013 amended; Changelog 1.5.3; `vm_transfer_to_contract` 3/3 (+ chain A→B→C, failed chain), `contract_storage` 11/11, workspace + clippy green |
+| S1.5-FBP06 | **fixed** (2026-10-19) | `SharedContractStorage = Arc<RwLock<ContractStorageMap>>` в `State`/`ExecutionContext` (Arc вместо Rc — Send/Sync сохранён), per-call `Arc::clone` O(1) вместо deep-clone; overlay unchanged; flush/undo in place через `write()`; ручной глубокий `State::clone` + deep-copy на границе `StateCache` (инвариант #4); ADR-0013 amended; Changelog 1.5.4; КГ-тест pointer-stability (100 CallTx × 10K keys); workspace + clippy green (`06c3444`) |
 | S1.5-FBP06 | **open** | `contract_storage` клонируется на каждый CallTx |
 | S1.5-FBP07 | **open** | `receipts_root` не в BlockHeader |
 | S1.5-FBP08 | **open** | regression после FBP03..FBP07 |
@@ -28,11 +29,11 @@
 | S1.5-FBP10 | **partially fixed** (2026-10-18) | S1.5-P19 `1f133c7`: root `strangecoin`=1.5.0 ✅, AGENTS.md ✅, Changelog 1.5.0 ✅; **residual**: `strangecoin-core`=1.1.0 (ожидается 1.5.0), `strangecoin-vm-wasm`=0.1.0 (ожидается 0.2.0) |
 | S1.5-FBP11 | **partially fixed** (2026-10-18) | annotated tag `v1.5.0-stage1.5` создан и pushed на origin (`1f133c7`); **residual**: release-run verification (`REPRODUCIBLE_BUILDS.md` Actions run URL + SHA256, `STAGE1_5_SUMMARY.md` Release section) не зафиксирована — `gh` CLI отсутствует на хосте (не верифицировано + причина, retro §8.1) |
 
-Оставшийся proper work: **FBP06 → FBP07 → FBP08** (state-трек:
-lazy storage + receipts fold + regression). Тег-гейт Stage 2/3/4
+Оставшийся proper work: **FBP07 → FBP08** (state-трек: receipts fold +
+regression). Тег-гейт Stage 2/3/4
 уже открыт (tag pushed), но
-FBP06..FBP07 — функциональные прорехи, заявленные в Changelog
-1.1.7/1.1.8 как MVP-обязательства; закрывать до перехода к Stage 2+.
+FBP07 — функциональная прореха, заявленная в Changelog
+1.1.7 как MVP-обязательство; закрывать до перехода к Stage 2+.
 
 Замечания по хосту (Windows): gcc для `secp256k1-sys` — `C:\msys64\mingw64\bin`
 (добавлять в PATH для cargo-команд); `gh` CLI не установлен.
