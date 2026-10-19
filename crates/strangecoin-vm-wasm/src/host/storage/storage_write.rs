@@ -45,10 +45,14 @@ fn storage_write(
     }
     // Per-contract storage cap (threat V-20): persisted snapshot + staged
     // writes for this contract must stay within MAX_STORAGE_PER_CONTRACT.
+    // S1.5-FBP06: the persisted snapshot is read through the shared
+    // handle under a short-lived `read()` guard.
     let address = state.ctx.storage_address.clone();
     let persisted: usize = state
         .ctx
         .storage
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&address)
         .map(|storage| storage.values().map(Vec::len).sum())
         .unwrap_or(0);

@@ -118,7 +118,7 @@ fn execution_context(callee: &str) -> ExecutionContext {
             coinbase: "sc1coinbase".to_string(),
             block_gas_limit: GAS_LIMIT,
         },
-        storage: HashMap::new(),
+        storage: Default::default(),
         storage_overlay: HashMap::new(),
         storage_address: callee.to_string(),
         input: Vec::new(),

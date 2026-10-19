@@ -1,11 +1,13 @@
 //! `storage_read(key_ptr, out_ptr, out_len) -> i32`.
 //!
 //! Reads the 32-byte-keyed value from the frame's contract storage
-//! (S1.5-P15): the staged write in the frame's scoped overlay wins, then the
-//! persisted snapshot in `ctx.storage[storage_address]`. Returns the number
-//! of bytes written into the out-buffer; `-1` when the buffer is too small
-//! (the contract can retry with a larger one); `0` for an absent key.
-//! Gas: 200 (ADR-0014), charged before the lookup.
+//! (S1.5-P15, S1.5-FBP06: the base is a shared handle — read falls
+//! through the staged write in the frame's scoped overlay to the shared
+//! persisted snapshot under a short-lived `read()` guard, zero-copy of
+//! the map). Returns the number of bytes written into the out-buffer;
+//! `-1` when the buffer is too small (the contract can retry with a
+//! larger one); `0` for an absent key. Gas: 200 (ADR-0014), charged
+//! before the lookup.
 
 use wasmi::{Caller, Linker};
 
@@ -44,6 +46,8 @@ fn storage_read(
                 state
                     .ctx
                     .storage
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .get(address)
                     .and_then(|storage| storage.get(&key))
                     .cloned()

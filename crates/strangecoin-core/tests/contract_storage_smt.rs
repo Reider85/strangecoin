@@ -2,9 +2,11 @@
 //! `storage_root`/state-root updates (invariant #19 extension) and the
 //! `unapply` restore path (invariant #4). The executor is mocked — the
 //! wasmi end-to-end path lives in `strangecoin-vm-wasm` tests.
+//! S1.5-FBP06: the persisted snapshot is a shared handle — pointer
+//! stability across calls proves the per-call setup is O(1).
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use strangecoin_core::address::derive_contract_address;
 use strangecoin_core::consensus::CHAIN_ID_REGTEST;
@@ -24,6 +26,16 @@ fn make_state(balances: Vec<(String, u64)>) -> State {
         state.set_balance(&addr, bal);
     }
     state
+}
+
+/// Read access to a state's shared contract storage (S1.5-FBP06).
+fn storage_of(
+    state: &State,
+) -> std::sync::RwLockReadGuard<'_, strangecoin_core::state::ContractStorageMap> {
+    state
+        .contract_storage
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn coinbase(receiver: &str, amount: u64) -> Transaction {
@@ -71,7 +83,12 @@ impl VmExecutor for WriteVm {
     type Error = VmError;
 
     fn execute(&self, ctx: ExecutionContext) -> Result<ExecutionResult, Self::Error> {
-        self.seen_storage.lock().unwrap().push(ctx.storage.clone());
+        self.seen_storage.lock().unwrap().push(
+            ctx.storage
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone(),
+        );
         let mut storage_overlay = HashMap::new();
         storage_overlay.insert(ctx.storage_address.clone(), self.writes.clone());
         // S1.5-FBP05: mirror the executor's top-level value settlement so
@@ -172,14 +189,21 @@ fn call_flushes_storage_and_updates_roots() {
     let applied =
         apply_block_with_vm(&after_deploy, &block, CHAIN_ID_REGTEST, &mut vm).unwrap();
 
-    assert_eq!(applied.contract_storage[&contract][&key], vec![1, 2, 3]);
-    let expected_storage_root = contract_storage_root(&applied.contract_storage[&contract]);
-    assert_ne!(expected_storage_root, [0u8; 32]);
-    let contract_account = applied.get_account(&contract).unwrap();
-    assert_eq!(
-        contract_account.as_contract().unwrap().storage_root,
-        expected_storage_root
-    );
+    {
+        let storage = storage_of(&applied);
+        assert_eq!(storage[&contract][&key], vec![1, 2, 3]);
+        let expected_storage_root = contract_storage_root(&storage[&contract]);
+        assert_ne!(expected_storage_root, [0u8; 32]);
+        assert_eq!(
+            applied
+                .get_account(&contract)
+                .unwrap()
+                .as_contract()
+                .unwrap()
+                .storage_root,
+            expected_storage_root
+        );
+    }
 
     let root_after = SparseMerkleTrie::compute_root(&applied.balances);
     assert_ne!(root_after, root_before, "storage write must change state root (invariant #19)");
@@ -256,7 +280,7 @@ fn second_call_sees_persisted_storage_from_context() {
     assert_eq!(seen[0][&contract][&key], vec![42]);
     drop(seen);
 
-    assert_eq!(after_second.contract_storage[&contract][&key], vec![43]);
+    assert_eq!(storage_of(&after_second)[&contract][&key], vec![43]);
     assert_eq!(after_second.receipts[1].gas_used, 100);
 }
 
@@ -300,7 +324,10 @@ fn unapply_restores_storage_and_storage_root() {
 
     // Roll back the tip call: contents and storage_root restored exactly.
     let restored_to_first = unapply_block(&after_second, &block3, CHAIN_ID_REGTEST).unwrap();
-    assert_eq!(restored_to_first.contract_storage[&contract][&key], vec![42]);
+    assert_eq!(
+        storage_of(&restored_to_first)[&contract][&key],
+        vec![42]
+    );
     assert_eq!(
         restored_to_first
             .get_account(&contract)
@@ -323,8 +350,7 @@ fn unapply_restores_storage_and_storage_root() {
 
     // Roll back the first storage call: storage empties to the sentinel.
     let restored_to_deploy = unapply_block(&restored_to_first, &block2, CHAIN_ID_REGTEST).unwrap();
-    assert!(restored_to_deploy
-        .contract_storage
+    assert!(storage_of(&restored_to_deploy)
         .get(&contract)
         .map(HashMap::is_empty)
         .unwrap_or(true));
@@ -341,7 +367,7 @@ fn unapply_restores_storage_and_storage_root() {
     // Roll back the deploy: account and storage entry gone.
     let restored_to_genesis = unapply_block(&restored_to_deploy, &deploy, CHAIN_ID_REGTEST).unwrap();
     assert!(restored_to_genesis.get_account(&contract).is_none());
-    assert!(!restored_to_genesis.contract_storage.contains_key(&contract));
+    assert!(!storage_of(&restored_to_genesis).contains_key(&contract));
 }
 
 #[test]
@@ -354,7 +380,7 @@ fn failed_call_discards_storage_writes() {
         apply_block_with_vm(&after_deploy, &block, CHAIN_ID_REGTEST, &mut FailVm).unwrap();
 
     assert_eq!(applied.receipts[1].status, TxStatus::OutOfGas);
-    assert!(!applied.contract_storage.contains_key(&contract));
+    assert!(!storage_of(&applied).contains_key(&contract));
     assert_eq!(
         applied
             .get_account(&contract)
@@ -404,18 +430,22 @@ fn unapply_after_failed_call_leaves_storage_untouched() {
         apply_block_with_vm(&after_ok, &fail_block, CHAIN_ID_REGTEST, &mut FailVm).unwrap();
 
     let restored = unapply_block(&after_fail, &fail_block, CHAIN_ID_REGTEST).unwrap();
-    assert_eq!(restored.contract_storage[&contract][&key], vec![9]);
+    assert_eq!(storage_of(&restored)[&contract][&key], vec![9]);
 }
 
 #[test]
 fn state_equality_covers_contract_storage() {
-    let mut a = State::new();
-    let mut b = State::new();
+    let a = State::new();
+    let b = State::new();
     assert_eq!(a, b);
     a.contract_storage
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert("sc1c".to_string(), [([1u8; 32], vec![1])].into());
     assert_ne!(a, b);
     b.contract_storage
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert("sc1c".to_string(), [([1u8; 32], vec![1])].into());
     assert_eq!(a, b);
 }
@@ -454,7 +484,7 @@ fn apply_is_deterministic_over_storage_roots() {
         SparseMerkleTrie::compute_root(&first.balances),
         SparseMerkleTrie::compute_root(&second.balances)
     );
-    assert_eq!(first.contract_storage, second.contract_storage);
+    assert_eq!(first, second);
 }
 
 #[test]
@@ -517,16 +547,121 @@ fn flush_ignores_non_contract_scopes() {
     );
     let applied =
         apply_block_with_vm(&after_deploy, &block, CHAIN_ID_REGTEST, &mut vm).unwrap();
-    assert_eq!(applied.contract_storage[&contract][&key], vec![1]);
-    assert!(
-        !applied.contract_storage.contains_key("alice"),
-        "EOA scopes must not gain storage"
-    );
+    {
+        let storage = storage_of(&applied);
+        assert_eq!(storage[&contract][&key], vec![1]);
+        assert!(
+            !storage.contains_key("alice"),
+            "EOA scopes must not gain storage"
+        );
+    }
     assert!(
         applied
             .get_account("alice")
             .unwrap()
             .as_contract()
             .is_none()
+    );
+}
+
+// --- S1.5-FBP06: lazy contract storage access ------------------------------
+
+/// КГ S1.5-FBP06: O(1) per-call setup. 100 sequential `CallTx`s against a
+/// contract with 10 000 persisted keys all receive the **same** shared
+/// storage handle (`Arc::as_ptr` stable across calls), proving the frame
+/// is seeded with `Arc::clone` and not a deep copy of the map. The frames
+/// stage no writes: the per-call flush cost is dominated by the `storage_root`
+/// recompute over the whole contract map (O(storage), incremental SMT is
+/// Stage 3+), which is outside this prompt's scope — the flush merge
+/// itself is covered by the tests above.
+#[test]
+fn lazy_storage_setup_is_pointer_stable_across_calls() {
+    const KEYS: usize = 10_000;
+    const CALLS: usize = 100;
+
+    let (after_deploy, _deploy, contract) = setup_deploy();
+
+    // Seed 10 000 persisted keys directly (bypassing the VM).
+    {
+        let mut storage_map = after_deploy
+            .contract_storage
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let slots = storage_map.entry(contract.clone()).or_default();
+        for i in 0..KEYS {
+            let mut key = [0u8; 32];
+            key[..8].copy_from_slice(&u64::try_from(i).unwrap().to_le_bytes());
+            slots.insert(key, vec![0xff]);
+        }
+    }
+
+    /// Records the `Arc::as_ptr` of `ctx.storage` per call.
+    struct PointerVm {
+        seen: Mutex<Vec<usize>>,
+    }
+
+    impl VmExecutor for PointerVm {
+        type Error = VmError;
+
+        fn execute(&self, ctx: ExecutionContext) -> Result<ExecutionResult, Self::Error> {
+            self.seen
+                .lock()
+                .unwrap()
+                .push(Arc::as_ptr(&ctx.storage) as usize);
+            Ok(ExecutionResult {
+                gas_used: 10,
+                logs: Vec::new(),
+                status: TxStatus::Success,
+                return_data: Vec::new(),
+                storage_overlay: HashMap::new(),
+                value_transfers: Vec::new(),
+            })
+        }
+
+        fn gas_cost(&self, _opcode: Opcode) -> u64 {
+            1
+        }
+
+        fn register_code(&mut self, _address: &str, _wasm: Vec<u8>) -> Result<(), VmError> {
+            Ok(())
+        }
+    }
+
+    let mut vm = PointerVm {
+        seen: Mutex::new(Vec::new()),
+    };
+
+    let txs: Vec<Transaction> = (0..CALLS)
+        .map(|i| {
+            Transaction::call(
+                "alice",
+                &contract,
+                vec![1],
+                0,
+                50_000,
+                u64::try_from(i).unwrap(),
+                3,
+            )
+        })
+        .collect();
+    let block = test_block(2, txs);
+
+    let applied =
+        apply_block_with_vm(&after_deploy, &block, CHAIN_ID_REGTEST, &mut vm).unwrap();
+
+    let seen = vm.seen.lock().unwrap();
+    assert_eq!(seen.len(), CALLS);
+    assert!(
+        seen.iter().all(|ptr| *ptr == seen[0]),
+        "every call must receive the same shared storage handle (no per-call clone)"
+    );
+    drop(seen);
+
+    let storage = storage_of(&applied);
+    let contract_storage = storage.get(&contract).expect("seeded scope present");
+    assert_eq!(
+        contract_storage.len(),
+        KEYS,
+        "no-write frames leave the persisted map untouched"
     );
 }

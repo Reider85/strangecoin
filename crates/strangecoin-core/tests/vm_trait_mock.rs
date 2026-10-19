@@ -81,7 +81,7 @@ fn sample_context() -> ExecutionContext {
             coinbase: "sc1miner".to_string(),
             block_gas_limit: 1_000_000,
         },
-        storage: HashMap::new(),
+        storage: Default::default(),
         storage_overlay,
         storage_address: "sc1contract".to_string(),
         input: Vec::new(),

@@ -121,6 +121,16 @@ fn funded_state() -> State {
     state
 }
 
+/// Read access to a state's shared contract storage (S1.5-FBP06).
+fn storage_of(
+    state: &State,
+) -> std::sync::RwLockReadGuard<'_, strangecoin_core::state::ContractStorageMap> {
+    state
+        .contract_storage
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn derive(alice_nonce: u64) -> String {
     strangecoin_core::address::derive_contract_address("sc1alice", alice_nonce, CHAIN_ID_REGTEST)
         .expect("derive address")
@@ -143,7 +153,8 @@ fn storage_write_flushes_and_moves_state_root() {
     assert_eq!(receipt.status, TxStatus::Success);
     assert!(receipt.gas_used > 0);
 
-    let storage = applied.contract_storage.get(&contract).expect("flushed");
+    let storage_map = storage_of(&applied);
+    let storage = storage_map.get(&contract).expect("flushed");
     assert_eq!(storage[&KEY_A], b"hello");
     assert!(storage[&KEY_B].is_empty(), "first call copies an absent read");
 
@@ -158,6 +169,7 @@ fn storage_write_flushes_and_moves_state_root() {
             .storage_root,
         expected_root
     );
+    drop(storage_map);
 
     let root_after = SparseMerkleTrie::compute_root(&applied.balances);
     assert_ne!(root_after, root_before, "storage flush must move state root");
@@ -209,7 +221,8 @@ fn second_call_reads_persisted_storage_from_seeded_base() {
         apply_block_with_vm(&after_first, &block2, CHAIN_ID_REGTEST, &mut vm).expect("block2");
 
     assert_eq!(after_second.receipts[1].status, TxStatus::Success);
-    let storage = after_second.contract_storage.get(&contract).expect("flushed");
+    let storage_map = storage_of(&after_second);
+    let storage = storage_map.get(&contract).expect("flushed");
     assert_eq!(storage[&KEY_A], b"hello");
     assert_eq!(
         storage[&KEY_B],
@@ -254,12 +267,15 @@ fn unapply_restores_wasmi_storage_roundtrip() {
         apply_block_with_vm(&after_first, &block2, CHAIN_ID_REGTEST, &mut vm).expect("block2")
     };
     assert_eq!(after_second.receipts[1].status, TxStatus::Success);
-    assert_eq!(after_second.contract_storage[&contract][&KEY_B], b"hello");
+    assert_eq!(
+        storage_of(&after_second)[&contract][&KEY_B],
+        b"hello"
+    );
 
     let restored_to_first = unapply_block(&after_second, &block2, CHAIN_ID_REGTEST).unwrap();
     assert_eq!(
-        restored_to_first.contract_storage.get(&contract),
-        after_first.contract_storage.get(&contract),
+        storage_of(&restored_to_first).get(&contract),
+        storage_of(&after_first).get(&contract),
         "unapply must restore the exact pre-call storage map"
     );
     assert_eq!(
@@ -321,8 +337,8 @@ fn nested_call_writes_into_callee_scope() {
         "nested call into the storage-writing callee must succeed"
     );
 
-    let callee_storage = applied
-        .contract_storage
+    let storage_map = storage_of(&applied);
+    let callee_storage = storage_map
         .get(&callee)
         .expect("callee storage flushed");
     assert_eq!(callee_storage[&KEY_A], vec![7, 7, 7]);
@@ -337,13 +353,13 @@ fn nested_call_writes_into_callee_scope() {
     );
 
     assert!(
-        applied
-            .contract_storage
+        storage_map
             .get(&caller_contract)
             .map(|storage| storage.is_empty())
             .unwrap_or(true),
         "the outer contract's own storage stays untouched"
     );
+    drop(storage_map);
     assert_eq!(
         applied
             .get_account(&caller_contract)
@@ -408,7 +424,7 @@ fn storage_write_over_cap_rejected() {
         .expect("failed write still yields a receipt");
     assert_eq!(applied.receipts[2].status, TxStatus::Failed);
     assert!(
-        !applied.contract_storage.contains_key(&contract),
+        !storage_of(&applied).contains_key(&contract),
         "capped write must not flush"
     );
 }
@@ -439,7 +455,7 @@ fn storage_roots_deterministic_across_replay() {
         SparseMerkleTrie::compute_root(&first.balances),
         SparseMerkleTrie::compute_root(&second.balances)
     );
-    assert_eq!(first.contract_storage, second.contract_storage);
+    assert_eq!(first, second);
 }
 
 // ---------------------------------------------------------------------------
@@ -500,8 +516,8 @@ fn constructor_stages_init_args_and_persists_storage() {
         receipt.gas_used
     );
 
-    let storage = applied
-        .contract_storage
+    let storage_map = storage_of(&applied);
+    let storage = storage_map
         .get(&contract)
         .expect("constructor writes must flush");
     assert_eq!(
@@ -518,6 +534,7 @@ fn constructor_stages_init_args_and_persists_storage() {
         .storage_root;
     assert_eq!(storage_root, contract_storage_root(storage));
     assert_ne!(storage_root, [0u8; 32]);
+    drop(storage_map);
 
     // Endowment moved on the successful constructor; nonce consumed.
     assert_eq!(applied.get_balance("sc1alice"), 9_900);
@@ -564,7 +581,7 @@ fn constructor_out_of_gas_rolls_back_deploy() {
         "endowment must not move on failure"
     );
     assert_eq!(applied.get_nonce("sc1alice"), 1, "nonce stays consumed");
-    assert!(!applied.contract_storage.contains_key(&contract));
+    assert!(!storage_of(&applied).contains_key(&contract));
 }
 
 #[test]
@@ -599,7 +616,7 @@ fn deploy_without_constructor_export_skips_init() {
     assert!(account.is_contract());
     assert_eq!(account.balance(), 100, "endowment moved on legacy deploy");
     assert_eq!(applied.get_balance("sc1alice"), 9_900);
-    assert!(!applied.contract_storage.contains_key(&contract));
+    assert!(!storage_of(&applied).contains_key(&contract));
 }
 
 #[test]
@@ -623,7 +640,10 @@ fn unapply_restores_constructor_deploy_roundtrip() {
         let mut vm = WasmiExecutor::new();
         apply_block_with_vm(&state, &block, CHAIN_ID_REGTEST, &mut vm).expect("deploy applies")
     };
-    assert_eq!(after.contract_storage[&contract][&KEY_A], vec![9, 9, 9]);
+    assert_eq!(
+        storage_of(&after)[&contract][&KEY_A],
+        vec![9, 9, 9]
+    );
 
     let restored = unapply_block(&after, &block, CHAIN_ID_REGTEST).expect("unapply");
     assert_eq!(
@@ -631,7 +651,7 @@ fn unapply_restores_constructor_deploy_roundtrip() {
         "unapply must reverse constructor storage and the endowment (invariant #4)"
     );
     assert!(restored.get_account(&contract).is_none());
-    assert!(!restored.contract_storage.contains_key(&contract));
+    assert!(!storage_of(&restored).contains_key(&contract));
 }
 
 /// Forwards `value` to the bech32 target at offset 0 and returns the

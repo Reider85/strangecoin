@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 
 use crate::address::derive_contract_address;
 use crate::economics::emission::block_reward_at_height_for_chain;
 use crate::error::CoreError;
 use crate::serialize::txid;
-use crate::state::contract_storage::{ContractStorageMap, ContractStorageOverlay};
+use crate::state::contract_storage::{ContractStorageOverlay, SharedContractStorage};
 use crate::state::sparse_merkle::contract_storage_root;
 use crate::types::{Account, Block, ContractAccount, Transaction, TransferTx};
 use crate::vm::{
@@ -58,12 +59,19 @@ pub type StorageUndoEntry = (String, [u8; 32], Option<Vec<u8>>);
 /// additionally committed by `ContractAccount.storage_root` inside the
 /// account leaves. Receipts of any height are recomputed from the chain and
 /// stay outside equality.
-#[derive(Clone, Debug, Default)]
+///
+/// `contract_storage` is a [`SharedContractStorage`] handle (S1.5-FBP06):
+/// call frames share it via `Arc::clone` instead of deep-copying the map
+/// per transaction. Cloning a `State` therefore **must** copy the map into
+/// a fresh `Arc` (see the manual `Clone` impl) — sharing the handle would
+/// let `apply_block`'s working copy mutate the caller's snapshot through
+/// the shared base, breaking invariant #4.
+#[derive(Debug, Default)]
 pub struct State {
     pub balances: HashMap<String, Account>,
     /// Persisted contract storage keyed by contract address (S1.5-P15);
     /// each contract's map commits to `ContractAccount.storage_root`.
-    pub contract_storage: ContractStorageMap,
+    pub contract_storage: SharedContractStorage,
     pub receipts: Vec<Receipt>,
     /// Undo record of the tip block's `Call` transactions (S1.5-P15):
     /// txid → pre-images of every storage slot the call wrote.
@@ -76,9 +84,41 @@ pub struct State {
     pub value_transfers_undo: HashMap<[u8; 32], Vec<ValueTransfer>>,
 }
 
+impl Clone for State {
+    fn clone(&self) -> Self {
+        Self {
+            balances: self.balances.clone(),
+            // S1.5-FBP06: deep-copy the storage map into a fresh Arc —
+            // sharing the handle would alias the caller's snapshot.
+            contract_storage: Arc::new(RwLock::new(
+                self.contract_storage
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone(),
+            )),
+            receipts: self.receipts.clone(),
+            storage_undo: self.storage_undo.clone(),
+            value_transfers_undo: self.value_transfers_undo.clone(),
+        }
+    }
+}
+
 impl PartialEq for State {
     fn eq(&self, other: &Self) -> bool {
-        self.balances == other.balances && self.contract_storage == other.contract_storage
+        // S1.5-FBP06: compare the shared storage through its contents
+        // (`RwLock` has no `PartialEq`).
+        let storage_eq = {
+            let a = self
+                .contract_storage
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let b = other
+                .contract_storage
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *a == *b
+        };
+        self.balances == other.balances && storage_eq
     }
 }
 
@@ -429,7 +469,7 @@ fn apply_create<V: VmExecutor>(
             coinbase,
             block_gas_limit: BLOCK_GAS_LIMIT,
         },
-        storage: state.contract_storage.clone(),
+        storage: Arc::clone(&state.contract_storage),
         storage_overlay: HashMap::new(),
         storage_address: address.clone(),
         input: create.init_args.clone(),
@@ -581,7 +621,7 @@ fn apply_call<V: VmExecutor>(
             coinbase,
             block_gas_limit: BLOCK_GAS_LIMIT,
         },
-        storage: state.contract_storage.clone(),
+        storage: Arc::clone(&state.contract_storage),
         storage_overlay: HashMap::new(),
         storage_address: call.to.clone(),
         input: call.data.clone(),
@@ -609,14 +649,20 @@ fn apply_call<V: VmExecutor>(
 }
 
 /// Flush a successful frame's staged contract storage writes into
-/// `state.contract_storage` (S1.5-P15): every contract scope whose account
-/// record is a contract gets its writes merged, its `storage_root`
-/// recomputed into the account leaf (invariant #19 extension), and its
-/// pre-images recorded under `txid` in `State::storage_undo` so `unapply`
-/// can restore the exact prior contents. Scopes without a contract account
-/// are ignored — only contracts have storage.
+/// `state.contract_storage` (S1.5-P15, S1.5-FBP06: in-place merge through
+/// the shared handle under a single `write()` guard — the base is not
+/// cloned): every contract scope whose account record is a contract gets
+/// its writes merged, its `storage_root` recomputed into the account leaf
+/// (invariant #19 extension), and its pre-images recorded under `txid` in
+/// `State::storage_undo` so `unapply` can restore the exact prior
+/// contents. Scopes without a contract account are ignored — only
+/// contracts have storage.
 fn flush_storage_writes(state: &mut State, result: &ExecutionResult, txid: [u8; 32]) {
     let mut undo: Vec<StorageUndoEntry> = Vec::new();
+    let mut storage_map = state
+        .contract_storage
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     for (address, writes) in &result.storage_overlay {
         if writes.is_empty() {
             continue;
@@ -628,7 +674,7 @@ fn flush_storage_writes(state: &mut State, result: &ExecutionResult, txid: [u8; 
             continue;
         }
         let overlay = ContractStorageOverlay::from_writes(writes);
-        let storage = state.contract_storage.entry(address.clone()).or_default();
+        let storage = storage_map.entry(address.clone()).or_default();
         for (key, preimage) in overlay.preimages_of(storage) {
             undo.push((address.clone(), key, preimage));
         }
@@ -638,6 +684,7 @@ fn flush_storage_writes(state: &mut State, result: &ExecutionResult, txid: [u8; 
             account.storage_root = new_root;
         }
     }
+    drop(storage_map);
     if !undo.is_empty() {
         state.storage_undo.insert(txid, undo);
     }
@@ -814,7 +861,11 @@ fn unapply_non_genesis(state: &mut State, block: &Block, chain_id: u32) -> Resul
                     state.value_transfers_undo.remove(&txid(tx));
                 }
                 state.set_account(&address, Account::default());
-                state.contract_storage.remove(&address);
+                state
+                    .contract_storage
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .remove(&address);
                 state.set_nonce(&create.from, nonce);
             }
             Transaction::Call(call) => {
@@ -884,14 +935,19 @@ fn decrement_nonce(state: &mut State, tx: &TransferTx) -> Result<(), CoreError> 
 /// (S1.5-P15): restore every touched slot's pre-image from
 /// `State::storage_undo`, then recompute `storage_root` for each affected
 /// contract account. A contract whose storage becomes empty returns to the
-/// `[0u8; 32]` sentinel.
+/// `[0u8; 32]` sentinel. S1.5-FBP06: operates on the shared handle under
+/// a single `write()` guard.
 fn unapply_call_storage(state: &mut State, txid: [u8; 32]) {
     let Some(undo_entries) = state.storage_undo.remove(&txid) else {
         return;
     };
     let mut touched: HashSet<String> = HashSet::new();
+    let mut storage_map = state
+        .contract_storage
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     for (contract, key, preimage) in undo_entries {
-        let storage = state.contract_storage.entry(contract.clone()).or_default();
+        let storage = storage_map.entry(contract.clone()).or_default();
         match preimage {
             Some(value) => {
                 storage.insert(key, value);
@@ -903,21 +959,20 @@ fn unapply_call_storage(state: &mut State, txid: [u8; 32]) {
         touched.insert(contract);
     }
     for contract in touched {
-        let empty = state
-            .contract_storage
+        let empty = storage_map
             .get(&contract)
             .is_some_and(HashMap::is_empty);
         if empty {
-            state.contract_storage.remove(&contract);
+            storage_map.remove(&contract);
         }
-        let root = state
-            .contract_storage
+        let root = storage_map
             .get(&contract)
             .map_or([0u8; 32], contract_storage_root);
         if let Some(Account::Contract(account)) = state.balances.get_mut(&contract) {
             account.storage_root = root;
         }
     }
+    drop(storage_map);
 }
 
 #[cfg(test)]

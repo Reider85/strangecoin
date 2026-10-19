@@ -130,8 +130,11 @@ fn deploy_call_event_receipt_storage_end_to_end() {
     );
     let stored = state
         .contract_storage
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&contract)
         .and_then(|storage| storage.get(&KEY))
+        .cloned()
         .expect("slot must be persisted");
     assert_eq!(stored, b"val!");
 
@@ -213,8 +216,11 @@ fn deploy_constructor_initializes_storage_then_call_reads_it() {
 
     let stored = state
         .contract_storage
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&contract)
         .and_then(|storage| storage.get(&INIT_KEY))
+        .cloned()
         .expect("constructor storage must persist through the full pipeline");
     assert_eq!(stored, b"init");
     let contract_acc = state

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::state::ContractStorageMap;
+use crate::state::{ContractStorageMap, SharedContractStorage};
 use crate::types::{AccountState, BlockHeader};
 
 /// Deterministic view of the block being executed.
@@ -41,11 +41,15 @@ pub struct ExecutionContext {
     /// state-mutating host functions must refuse to run while this is true.
     pub read_only: bool,
     pub block_context: BlockContext,
-    /// Persisted storage snapshot of every contract on the chain
-    /// (S1.5-P15): bech32 address → slot map. Seeded by `apply_call` from
-    /// `State.contract_storage`; `storage_read` falls through to it when the
-    /// overlay has no staged write for the key.
-    pub storage: ContractStorageMap,
+    /// Shared handle to the persisted storage of every contract on the
+    /// chain (S1.5-P15, lazy since S1.5-FBP06): bech32 address → slot
+    /// map. Seeded by `apply_call` with an `Arc::clone` of
+    /// `State.contract_storage` (O(1), no deep copy); nested frames
+    /// inherit the same handle through `ctx.clone()`. Read-only while
+    /// the VM runs — `storage_read` falls through to it under a
+    /// short-lived `read()` guard when the overlay has no staged write
+    /// for the key; flush/unapply mutate the base after execution.
+    pub storage: SharedContractStorage,
     /// Contract storage writes staged per contract (S1.5-P15): address →
     /// (slot key → value). Scoped by
     /// [`storage_address`](Self::storage_address), flushed to

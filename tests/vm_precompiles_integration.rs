@@ -86,6 +86,8 @@ fn call_precompile(precompile: &str, input: &[u8], out_len: usize) -> (Vec<u8>, 
     assert_eq!(receipt.logs[0].topics, vec![TOPIC]);
     let status = state
         .contract_storage
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&contract)
         .and_then(|storage| storage.get(&STATUS_KEY))
         .expect("status slot must be flushed")

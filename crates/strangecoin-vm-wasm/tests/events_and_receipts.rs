@@ -184,7 +184,7 @@ fn crate_context(callee: &str, gas_limit: u64) -> strangecoin_core::vm::Executio
             coinbase: "sc1coinbase".to_string(),
             block_gas_limit: strangecoin_core::vm::BLOCK_GAS_LIMIT,
         },
-        storage: HashMap::new(),
+        storage: Default::default(),
         storage_overlay: HashMap::new(),
         storage_address: callee.to_string(),
         input: Vec::new(),

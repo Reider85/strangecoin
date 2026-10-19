@@ -48,14 +48,26 @@ impl StateCache {
     pub fn from_state(state: &State) -> Self {
         Self {
             accounts: state.balances.clone(),
-            contract_storage: state.contract_storage.clone(),
+            // S1.5-FBP06: `State.contract_storage` is a shared handle —
+            // snapshot the contents into the cache's own map (never share
+            // the Arc with a live `State`).
+            contract_storage: state
+                .contract_storage
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone(),
         }
     }
 
     pub fn to_state(&self) -> State {
         State {
             balances: self.accounts.clone(),
-            contract_storage: self.contract_storage.clone(),
+            // S1.5-FBP06: fresh Arc over a deep copy — the cache's map
+            // must not alias the returned `State` (a failed mid-block
+            // apply would otherwise mutate the committed snapshot).
+            contract_storage: std::sync::Arc::new(std::sync::RwLock::new(
+                self.contract_storage.clone(),
+            )),
             receipts: Vec::new(),
             storage_undo: HashMap::new(),
             value_transfers_undo: HashMap::new(),
@@ -139,7 +151,18 @@ impl StateCache {
 
     pub fn commit(&mut self, state: State) {
         self.accounts = state.balances;
-        self.contract_storage = state.contract_storage;
+        // S1.5-FBP06: unwrap the shared handle — after `apply`/`unapply`
+        // returns, the `State` is the sole owner (typical path: O(1) move,
+        // no copy). Fall back to a content clone if another handle is
+        // still alive (defensive; should not happen in production paths).
+        self.contract_storage = std::sync::Arc::try_unwrap(state.contract_storage)
+            .map(|storage| storage.into_inner().unwrap_or_else(|p| p.into_inner()))
+            .unwrap_or_else(|shared| {
+                shared
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone()
+            });
     }
 
     pub fn replace(&mut self, other: StateCache) {

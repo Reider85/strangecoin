@@ -12,6 +12,10 @@ Amended (2026-10-19) — S1.5-FBP04: constructor calling convention
 (`"constructor"` export, `init_args` calldata, `CreateTx.gas_limit`
 budget, failed-receipt rollback), see the dedicated section below.
 
+Amended (2026-10-19) — S1.5-FBP06: lazy contract storage access
+(`SharedContractStorage` = `Arc<RwLock<ContractStorageMap>>`, per-frame
+overlay unchanged), see the dedicated section below.
+
 > **Numbering note:** reserved as ADR-0012 in `analytics/prompt-stage1.5.md`;
 > renumbered to **ADR-0013** because 0012 is taken by the WASM-VM decision
 > (`docs/ADR/0012-wasm-wasmi-vs-risc-v.md`). See the numbering note there.
@@ -207,6 +211,40 @@ defines the audit trail:
   per transfer, so a self-move (`from == to`) nets to zero (this also
   fixed a latent mint bug in the transfer-only `Call` fast path, which
   previously read both balances before writing either).
+
+## Amendment: lazy contract storage access (2026-10-19, S1.5-FBP06)
+
+`apply_call`/`apply_create` used to deep-clone the entire chain-wide
+`State.contract_storage` into `ExecutionContext.storage` on every call
+frame — O(total storage) per `CallTx` (and per nested frame via
+`ctx.clone()`), which is prohibitive once contracts accumulate
+100K+ keys. This amendment makes the persisted snapshot shared:
+
+- **Shared handle** — `State.contract_storage` and
+  `ExecutionContext.storage` are both `SharedContractStorage` =
+  `Arc<RwLock<ContractStorageMap>>`. A call frame gets an `Arc::clone`
+  (O(1)); nested frames inherit it through `ctx.clone()` at the same
+  cost. `Arc` (not `Rc<RefCell>`) keeps `State`/`ExecutionContext`
+  `Send + Sync` — required by the multi-threaded node (tokio workers,
+  facade behind `RwLock`).
+- **Read-only during execution** — the shared base is never mutated
+  while the VM runs: `storage_read` falls through the per-frame overlay
+  to the base under a short-lived `read()` guard; `storage_write` stages
+  into the overlay only. Revert semantics are unchanged — a failed
+  frame's overlay is dropped.
+- **In-place flush** — on `Success`, `flush_storage_writes` merges the
+  overlay into the shared base under a single `write()` guard and
+  recomputes each touched `storage_root` (invariant #19 extension);
+  `unapply_call_storage` restores pre-images the same way (invariant
+  #4). The lock is never held across `vm.execute`.
+- **State cloning stays deep** — `State::clone` (used per block by
+  `apply_block_inner`) copies the map into a **fresh** `Arc`, and
+  `StateCache::to_state` likewise never shares the cache's handle: a
+  failed mid-block apply must not mutate the committed snapshot through
+  the shared base.
+- **Not in this change** — iterator-based lazy reads against a real
+  KV store (Stage 3, RocksDB); the `storage_write` size-cap check still
+  sums the contract's persisted bytes per write (O(contract storage)).
 
 ## Consequences
 

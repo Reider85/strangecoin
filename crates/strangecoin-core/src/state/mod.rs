@@ -3,7 +3,9 @@ pub mod contract_storage;
 pub mod sparse_merkle;
 pub mod witness;
 
-pub use contract_storage::{ContractStorage, ContractStorageMap, ContractStorageOverlay};
+pub use contract_storage::{
+    ContractStorage, ContractStorageMap, ContractStorageOverlay, SharedContractStorage,
+};
 pub use inner::{apply_block, apply_block_with_vm, unapply_block, State};
 pub use sparse_merkle::{contract_storage_root, prove_receipt, receipts_subroot, verify_receipt_proof};
 

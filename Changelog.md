@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.5.4 — core/state: lazy contract storage access (S1.5-FBP06)
+
+**Status**: Done  
+**Date**: 2026-10-19  
+**Prompts**: S1.5-FBP06 (`analytics/bugfixes-stage1.5.md`)
+
+### Клон contract_storage на каждый CallTx убран
+
+- **Баг (Changelog 1.1.8)**: `apply_call`/`apply_create` делали deep-clone цепочного `State.contract_storage` в `ExecutionContext.storage` на каждый вызов — O(размер хранилища) на транзакцию; nested-фреймы усугубляли (`ctx.clone()` в `nested_call` клонировал карту ещё и на каждый child frame). Для контракта с 100K keys (~5MB) каждый call неприемлемо дорог.
+- **`SharedContractStorage = Arc<RwLock<ContractStorageMap>>`** (`core/state/contract_storage.rs`): новый алиас; `State.contract_storage` и `ExecutionContext.storage` — оба этого типа. Сидинг фрейма = `Arc::clone` (O(1)); nested-фреймы наследуют хэндл через `ctx.clone()` бесплатно. Выбран `Arc<RwLock>` (не `Rc<RefCell>`, как в первоначальной формулировке промпта): `State`/`ExecutionContext` остаются `Send + Sync` — обязательно для многопоточного узла (tokio-воркеры, facade за `RwLock`). Poison → `into_inner()` (детерминированное восстановление).
+- **Read-only во время исполнения**: база не мутируется, пока VM работает — `storage_read` падает через overlay в базу под кратковременным `read()`-гардом (клонируется только значение, не карта); `storage_write` стейджит в overlay как раньше, cap-check (`MAX_STORAGE_PER_CONTRACT`) читает persisted-сумму под `read()`. Revert-семантика не изменилась — overlay неудачного фрейма отбрасывается.
+- **In-place flush/undo** (`core/state/inner.rs`): `flush_storage_writes` и `unapply_call_storage` мержат/восстанавливают через один `write()`-гард на вызов (pre-images → `apply_to` → пересчёт `storage_root` внутри гарда); unapply-create `remove` — через `write()`. Лок нигде не держится через `vm.execute`.
+- **`State::clone` — ручной глубокий** (вместо derive): копия карты в **свежий** `Arc` — иначе рабочая копия `apply_block` мутила бы снапшот вызывающего через общий хэндл (ломает инвариант #4). `PartialEq` сравнивает контент через `read()` (у `RwLock` нет `PartialEq`).
+- **`StateCache`** (`src/blockchain/state_cache.rs`): `from_state` — `read().clone()` в собственную карту (никогда не делить хэндл с живым `State`); `to_state` — свежий `Arc` над deep-copy (неудачный mid-block apply не должен мутировать закоммиченный снапшот через общий базовый хэндл); `commit` — `Arc::try_unwrap` (typical path O(1), fallback content clone).
+- **КГ-тест lazy access** (`core/tests/contract_storage_smt.rs::lazy_storage_setup_is_pointer_stable_across_calls`): 100 последовательных CallTx против контракта с 10 000 persisted keys — `Arc::as_ptr(&ctx.storage)` стабилен между всеми вызовами (один и тот же хэндл, не клон). Per-call flush-cost (пересчёт `storage_root` по всей карте — O(storage)) осознанно вне скоупа: incremental SMT — Stage 3+; в тесте фреймы без записей.
+- **ADR-0013 amended**: секция «Amendment: lazy contract storage access (S1.5-FBP06)».
+- **Тесты**: новый КГ-тест выше; фикстуры ~15 файлов (core/vm-wasm tests, integration `tests/vm_*`, fuzz targets, examples) переведены на `Default::default()`/`storage_of()`-хелпер; regressions `contract_storage_smt` 9/9, vm-wasm `contract_storage` e2e, `state_cache` persist/load — зелёные.
+- **Verification**: `cargo test --workspace` green; `cargo clippy --workspace --all-targets -- -D warnings` green.
+
+### Residual (Stage 2+ / FBP07+)
+
+- `receipts_root` в BlockHeader — S1.5-FBP07; regression-каталог обновить — S1.5-FBP08.
+- Iterator-based lazy reads против KV-store — Stage 3 (RocksDB); incremental SMT (per-touched-leaf recompute) — Stage 3+; contract storage prune — Stage 3+ через SCIP.
+
+---
+
 ## 1.5.3 — vm-wasm/core: nested value-transfer settlement + receipt audit trail (S1.5-FBP05)
 
 **Status**: Done  

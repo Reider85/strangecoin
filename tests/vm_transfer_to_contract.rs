@@ -97,6 +97,8 @@ fn noop_wat() -> String {
 fn status_slot(state: &State, contract: &str) -> u8 {
     state
         .contract_storage
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(contract)
         .and_then(|storage| storage.get(&STATUS_KEY))
         .expect("status slot must be flushed")

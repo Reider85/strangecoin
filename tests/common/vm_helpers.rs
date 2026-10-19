@@ -270,7 +270,7 @@ pub fn execution_context(callee: &str, input: Vec<u8>, gas_limit: u64) -> Execut
             coinbase: "rsc1miner".to_string(),
             block_gas_limit: strangecoin_core::vm::BLOCK_GAS_LIMIT,
         },
-        storage: HashMap::new(),
+        storage: Default::default(),
         storage_overlay: HashMap::new(),
         storage_address: callee.to_string(),
         input,

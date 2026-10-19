@@ -86,7 +86,7 @@ fn execution_context(gas_limit: u64) -> ExecutionContext {
             coinbase: "sc1coinbase".to_string(),
             block_gas_limit: 1_000_000,
         },
-        storage: HashMap::new(),
+        storage: Default::default(),
         storage_overlay: HashMap::new(),
         storage_address: "sc1contract".to_string(),
         input: Vec::new(),

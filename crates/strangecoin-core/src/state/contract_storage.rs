@@ -11,6 +11,7 @@
 //! round-trip restores the exact prior contents (invariant #4, reorg support).
 
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 use super::sparse_merkle::contract_storage_root;
 
@@ -19,6 +20,17 @@ pub type ContractStorage = HashMap<[u8; 32], Vec<u8>>;
 
 /// Chain-wide contract storage: bech32 contract address → slot map.
 pub type ContractStorageMap = HashMap<String, ContractStorage>;
+
+/// Shared handle to the chain-wide contract storage (S1.5-FBP06,
+/// ADR-0013 amended): `State.contract_storage` and
+/// `ExecutionContext.storage` both hold this type, so seeding a call
+/// frame costs an `Arc::clone` (O(1)) instead of a deep copy of the
+/// whole map. `Arc<RwLock<..>>` (not `Rc<RefCell<..>>`) keeps `State`
+/// `Send + Sync` for the multi-threaded node. The base is read-only
+/// while the VM runs (writes stage into the per-frame
+/// [`ContractStorageOverlay`]); flush/unapply mutate it in place under
+/// a `write()` guard after execution completes.
+pub type SharedContractStorage = Arc<RwLock<ContractStorageMap>>;
 
 /// Write-set of one contract call (S1.5-P15): `entries[key] = Some(value)`
 /// stages a write, `None` stages a removal. Keys absent from the map are
