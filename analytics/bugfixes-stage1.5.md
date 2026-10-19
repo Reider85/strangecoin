@@ -8,7 +8,7 @@
 
 ---
 
-## Статус каталога (v1.1, обновлено 2026-10-19, HEAD `eee7b7b`)
+## Статус каталога (v1.1, обновлено 2026-10-19, HEAD `f217314`)
 
 Каталог писался на коммите `274b6b9` (S1.5-P18), когда S1.5-P12/P19 ещё не
 были выполнены. С тех пор оба gap-closure промпта закрыты **в рамках
@@ -18,8 +18,8 @@
 |-----|--------|----------|
 | S1.5-FBP01 | **fixed** (2026-10-19) | S1.5-P12 gap-closure `b925f71` (2026-10-18) + residuals `10e9acc` (FixedArray len>0, array-of-fixedarray roundtrip); verification 2026-10-19: `cargo check/test/clippy -p strangecoin-core` green, `abi_roundtrip` 15/15, abi unit 7/7 |
 | S1.5-FBP02 | **fixed** (2026-10-19) | S1.5-P12 `b925f71` (selector.rs, golden vectors literal hex) + residual `eee7b7b` (`AbiEntry::selector_from_name`) |
-| S1.5-FBP03 | **fixed** (2026-10-19) | selector dispatch в `vm-wasm/src/lib.rs` (ENTRY_POINT удалён, invoke-export try-порядок, строгий MissingExport), `sc::input_read` host function, ADR-0013/0014 amended; `basic_execution` 16/16, workspace green, clippy green |
-| S1.5-FBP04 | **open** | конструктор не исполняется — `core/src/state/inner.rs:322-323` |
+| S1.5-FBP03 | **fixed** (2026-10-19) | selector dispatch в `vm-wasm/src/lib.rs` (ENTRY_POINT удалён, invoke-export try-порядок, строгий MissingExport), `sc::input_read` host function, ADR-0013/0014 amended; `basic_execution` 16/16, workspace green, clippy green (`f4dadda`) |
+| S1.5-FBP04 | **fixed** (2026-10-19) | конструктор исполняется: `execute_constructor` trait + `FrameEntry::Constructor` (skip до инстанцирования), `apply_create` rework (Success flush + endowment; failure = failed receipt + rollback), `unapply_create` receipt-gated; `CreateTx.gas_limit`+`constructor_params`, FORMAT_VERSION 6, genesis hashes + golden vectors перегенерированы (BUG-S1-007); ADR-0013 amended; Changelog 1.5.2; тесты vm-wasm contract_storage 10/10, vm_deploy_call 2/2, serialize_golden 19/19 (`f217314`) |
 | S1.5-FBP05 | **open** | nested value-transfer не коммитится |
 | S1.5-FBP06 | **open** | `contract_storage` клонируется на каждый CallTx |
 | S1.5-FBP07 | **open** | `receipts_root` не в BlockHeader |
@@ -28,11 +28,10 @@
 | S1.5-FBP10 | **partially fixed** (2026-10-18) | S1.5-P19 `1f133c7`: root `strangecoin`=1.5.0 ✅, AGENTS.md ✅, Changelog 1.5.0 ✅; **residual**: `strangecoin-core`=1.1.0 (ожидается 1.5.0), `strangecoin-vm-wasm`=0.1.0 (ожидается 0.2.0) |
 | S1.5-FBP11 | **partially fixed** (2026-10-18) | annotated tag `v1.5.0-stage1.5` создан и pushed на origin (`1f133c7`); **residual**: release-run verification (`REPRODUCIBLE_BUILDS.md` Actions run URL + SHA256, `STAGE1_5_SUMMARY.md` Release section) не зафиксирована — `gh` CLI отсутствует на хосте (не верифицировано + причина, retro §8.1) |
 
-Оставшийся proper work: **FBP03 → FBP04 → FBP05 → FBP06 → FBP07 → FBP08**
-(ABI-трек остался без FBP03; state-трек и regression целиком). Тег-гейт Stage
-2/3/4 уже открыт (tag pushed), но FBP03..FBP07 — функциональные прорехи,
-заявленные в Changelog 1.1.7/1.1.8 как MVP-обязательства; закрывать до
-перехода к Stage 2+.
+Оставшийся proper work: **FBP05 → FBP06 → FBP07 → FBP08** (state-трек
+целиком + regression). Тег-гейт Stage 2/3/4 уже открыт (tag pushed), но
+FBP05..FBP07 — функциональные прорехи, заявленные в Changelog
+1.1.7/1.1.8 как MVP-обязательства; закрывать до перехода к Stage 2+.
 
 Замечания по хосту (Windows): gcc для `secp256k1-sys` — `C:\msys64\mingw64\bin`
 (добавлять в PATH для cargo-команд); `gh` CLI не установлен.
@@ -480,6 +479,22 @@ convention), ADR-0014 amended (`HOST_CALL_INPUT_READ = 3`), Changelog
 ---
 
 ### S1.5-FBP04. Конструктор Create: исполнение init_code с init_args
+
+**Статус:** fixed (2026-10-19)
+
+**Решение (2026-10-19):** закрыт коммитом `f217314` (см. «Статус каталога»
+вверху): `VmExecutor::execute_constructor` + `FrameEntry::Constructor`
+(skip без экспорта `"constructor"` резолвится по export-секции модуля до
+инстанцирования); `apply_create` rework (Success — flush storage +
+endowment + metered receipt; ошибка — failed-receipt rollback, nonce
+потребляется); `unapply_create` receipt-gated refund; `CreateTx.gas_limit`
++ `constructor_params` на wire (FORMAT_VERSION 6, genesis hashes + golden
+vectors перегенерированы); ADR-0013 amended; Changelog 1.5.2. Отклонения
+от спеки: бюджет конструктора — новое поле `CreateTx.gas_limit` (спека
+предполагала `create.gas_limit` уже существующим); падение конструктора —
+failed-receipt семантика (спека противоречила сама себе: «entire CreateTx
+rejected» + «Receipt: OutOfGas/Failed»); `constructor_params` на wire, но
+MVP диспатчит по имени (как и требовала спека).
 
 **Цель:** закрыть MVP-прореху из Changelog 1.1.7: «Конструктор Create не
 исполняется (MVP P14)». Реализовать исполнение конструктора при `CreateTx`:
