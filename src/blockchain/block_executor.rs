@@ -837,6 +837,7 @@ mod tests {
             status: strangecoin_core::vm::TxStatus::Success,
             block_height: 1,
             tx_index: 0,
+            value_transfers: Vec::new(),
         }
     }
 

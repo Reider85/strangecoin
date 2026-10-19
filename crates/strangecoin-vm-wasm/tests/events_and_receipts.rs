@@ -405,6 +405,7 @@ fn execution_result_logs_clone_into_receipt_without_borrow() {
         status: TxStatus::Success,
         return_data: vec![],
         storage_overlay: HashMap::new(),
+        value_transfers: Vec::new(),
     };
     let receipt = Receipt::from_execution([0u8; 32], 0, 0, &result);
     assert_eq!(receipt, Receipt::from_execution([0u8; 32], 0, 0, &result));

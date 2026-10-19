@@ -7,6 +7,8 @@
 //! pre-call contents (invariant #4). S1.5-FBP04 adds the deploy path:
 //! the `constructor` export runs with `init_args` as calldata, its
 //! writes persist on success and the whole deploy rolls back on failure.
+//! S1.5-FBP05: nested `call` value transfers settle against the frame's
+//! account view and commit to `State.balances` with a receipt/undo trail.
 
 use strangecoin_core::consensus::CHAIN_ID_REGTEST;
 use strangecoin_core::state::sparse_merkle::SparseMerkleTrie;
@@ -14,7 +16,7 @@ use strangecoin_core::state::{
     apply_block_with_vm, contract_storage_root, root_after_with_vm, unapply_block, State,
 };
 use strangecoin_core::types::{Block, Transaction};
-use strangecoin_core::vm::TxStatus;
+use strangecoin_core::vm::{TxStatus, ValueTransfer};
 use strangecoin_vm_wasm::WasmiExecutor;
 
 const KEY_A: [u8; 32] = [0x01u8; 32];
@@ -630,4 +632,103 @@ fn unapply_restores_constructor_deploy_roundtrip() {
     );
     assert!(restored.get_account(&contract).is_none());
     assert!(!restored.contract_storage.contains_key(&contract));
+}
+
+/// Forwards `value` to the bech32 target at offset 0 and returns the
+/// nested-call status (S1.5-FBP05).
+fn forward_value_wat(target: &str, value: u64) -> String {
+    let len = target.len();
+    wat(
+        &[(0, target.as_bytes())],
+        &format!(
+            r#"
+        (import "sc" "call" (func $c (param i32 i32 i64 i32 i32 i32 i32) (result i32)))
+        (func (export "main") (result i32)
+          (call $c (i32.const 0) (i32.const {len}) (i64.const {value})
+                   (i32.const 0) (i32.const 0)
+                   (i32.const 128) (i32.const 32)))"#
+        ),
+    )
+}
+
+/// S1.5-FBP05: a funded contract forwards value to another contract inside
+/// its frame — the nested transfer settles in `State.balances`, the receipt
+/// carries the commit-order trail, and `unapply` restores every balance
+/// (invariant #4).
+#[test]
+fn nested_value_transfer_settles_and_unapplies() {
+    let state = funded_state();
+    let target_wat = write_own_storage_wat();
+
+    // The forwarder WAT embeds the target's bech32 address, which derives
+    // from the creator's state nonce — deploy slot 1, known up front.
+    let target = derive(1);
+    let forwarder_wat = forward_value_wat(&target, 50);
+
+    let forwarder_create = Transaction::create(
+        "sc1alice",
+        forwarder_wat.clone().into_bytes(),
+        vec![],
+        100, // endowment: the forwarder starts funded
+        0,
+        CHAIN_ID_REGTEST,
+    );
+    let target_create = Transaction::create(
+        "sc1alice",
+        target_wat.into_bytes(),
+        vec![],
+        0,
+        1,
+        CHAIN_ID_REGTEST,
+    );
+    let forwarder = derive(0);
+    let call = Transaction::call(
+        "sc1alice",
+        &forwarder,
+        vec![],
+        10, // entry value — credited on entry, forwarded onward
+        100_000,
+        2,
+        CHAIN_ID_REGTEST,
+    );
+    let block = test_block(1, vec![forwarder_create, target_create, call]);
+
+    let mut vm = WasmiExecutor::new();
+    let applied = apply_block_with_vm(&state, &block, CHAIN_ID_REGTEST, &mut vm).expect("apply");
+
+    let receipt = &applied.receipts[3];
+    assert_eq!(receipt.status, TxStatus::Success);
+    assert_eq!(
+        applied.get_balance("sc1alice"),
+        9_890,
+        "alice pays the deploy endowment (100) and the entry value (10)"
+    );
+    assert_eq!(
+        applied.get_balance(&forwarder),
+        60,
+        "forwarder: endowment 100 + entry 10 - nested forward 50"
+    );
+    assert_eq!(applied.get_balance(&target), 50, "nested transfer settles");
+    assert_eq!(
+        receipt.value_transfers,
+        vec![
+            ValueTransfer {
+                from: "sc1alice".to_string(),
+                to: forwarder.clone(),
+                amount: 10,
+            },
+            ValueTransfer {
+                from: forwarder.clone(),
+                to: target.clone(),
+                amount: 50,
+            },
+        ]
+    );
+
+    // Invariant #4: unapply restores every balance the chain moved.
+    let restored = unapply_block(&applied, &block, CHAIN_ID_REGTEST).expect("unapply");
+    assert_eq!(restored, state);
+    assert_eq!(restored.get_balance("sc1alice"), 10_000);
+    assert!(restored.get_account(&forwarder).is_none());
+    assert!(restored.get_account(&target).is_none());
 }

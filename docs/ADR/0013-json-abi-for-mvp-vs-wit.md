@@ -163,6 +163,51 @@ Deploy-time execution of `CreateTx` (implemented in
   reverses a successful constructor (storage undo + endowment refund)
   and skips the refund for a failed receipt.
 
+## Amendment: value settlement & receipt audit trail (2026-10-19, S1.5-FBP05)
+
+Nested value transfers used to settle only at the VM level — the
+frame's account view moved the balance, but `apply_call` persisted
+just the top-level `CallTx.value`, so a `call` chain A → B → C lost
+every intermediate leg on-chain. This amendment fixes settlement and
+defines the audit trail:
+
+- **On-entry crediting** — a top-level `Call` frame's entry transfer
+  (`ctx.caller` → `ctx.callee`, `ctx.value`) settles **inside** the
+  executor before the callee's code runs (`run_frame`, `FrameEntry::
+  Selector`, `depth == 0`): the contract observes the incoming value in
+  its balance immediately and can forward it (withdraw pattern).
+  Constructor frames keep the FBP04 convention — `apply_create` credits
+  the `endowment` to the contract account before the frame starts, so
+  the constructor likewise observes its balance.
+- **Nested `call` settlement** — `nested_call` moves `value` from the
+  frame's `storage_address` account (for `delegatecall` frames that is
+  the *delegating* parent — callee code spends the parent's balance,
+  mirroring Ethereum's `address(this)`) to the callee's account view
+  before the child runs. Reverted/failed children never merge their
+  accounts back — the move is reversed implicitly. `delegatecall` and
+  `staticcall` never move value; a non-zero amount from a malicious
+  module fails the child (`STATUS_FAILED`). The reentrancy/depth gates
+  (S1.5-P13) run **before** any value transfer.
+- **Audit trail** — every settled move is recorded in commit order in
+  `ExecutionResult::value_transfers` (`ValueTransfer { from, to,
+  amount }`), mirrored into `Receipt::value_transfers`, and committed
+  to `state.balances` on `Success` by `apply_call`/`apply_create` with
+  an undo record per txid (`State::value_transfers_undo`, accumulating
+  across blocks like `State::storage_undo` so chained rollbacks of
+  non-tip blocks can reverse the trail). `unapply` reverses the list in
+  reverse commit order. Transfer-only receipts (plain `TransferTx`)
+  carry their single move; coinbase/genesis mints carry none.
+- **Receipt encoding** — `serialize_receipt` ends with the trail
+  (count + per-transfer from/to/amount). Receipts are derived data —
+  never persisted or transmitted, only recomputed from the chain — so
+  the layout change does **not** bump `FORMAT_VERSION`; the version
+  byte for the receipts domain gets locked together with the header
+  commitment (`receipts_root`, S1.5-FBP07).
+- **Settlement is sequential** — commit and reverse read live balances
+  per transfer, so a self-move (`from == to`) nets to zero (this also
+  fixed a latent mint bug in the transfer-only `Call` fast path, which
+  previously read both balances before writing either).
+
 ## Consequences
 
 ### Positive

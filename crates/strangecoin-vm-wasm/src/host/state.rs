@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use strangecoin_core::abi::ContractAbi;
-use strangecoin_core::vm::{ExecutionContext, Log};
+use strangecoin_core::vm::{ExecutionContext, Log, ValueTransfer};
 use wasmi::{StoreLimits, StoreLimitsBuilder};
 
 use strangecoin_core::vm::limits::MAX_MEMORY_BYTES;
@@ -41,6 +41,12 @@ pub struct HostState {
     /// Logs emitted by `emit_log` in this frame; merged into
     /// `ExecutionResult.logs` on success (S1.5-P14 formalizes receipts).
     pub logs: Vec<Log>,
+    /// Value moves settled during this execution, in commit order
+    /// (S1.5-FBP05): the top-level entry transfer (seeded by `run_frame`)
+    /// followed by each nested `call` transfer. A reverted/failed child
+    /// frame's moves never reach this list; on frame success it flows into
+    /// `ExecutionResult::value_transfers` for `apply_call` to commit.
+    pub value_transfers: Vec<ValueTransfer>,
     /// Resource limiter installed on the store: caps linear memory at
     /// [`MAX_MEMORY_BYTES`] (16 × 64 KiB) and traps on growth denial so
     /// `memory.grow` past the limit fails as out-of-memory (S1.5-P13).
@@ -63,6 +69,7 @@ impl HostState {
             call_stack,
             last_return_data: Vec::new(),
             logs: Vec::new(),
+            value_transfers: Vec::new(),
             limits: StoreLimitsBuilder::new()
                 .memory_size(MAX_MEMORY_BYTES)
                 .trap_on_grow_failure(true)

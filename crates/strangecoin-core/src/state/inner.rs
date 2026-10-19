@@ -8,8 +8,8 @@ use crate::state::contract_storage::{ContractStorageMap, ContractStorageOverlay}
 use crate::state::sparse_merkle::contract_storage_root;
 use crate::types::{Account, Block, ContractAccount, Transaction, TransferTx};
 use crate::vm::{
-    BlockContext, ExecutionContext, ExecutionResult, Opcode, Receipt, TxStatus, VmError, VmExecutor,
-    BLOCK_GAS_LIMIT,
+    BlockContext, ExecutionContext, ExecutionResult, Opcode, Receipt, TxStatus, ValueTransfer,
+    VmError, VmExecutor, BLOCK_GAS_LIMIT,
 };
 
 /// Executor stand-in for the transfer-only [`apply_block`] path: `Create`/
@@ -45,17 +45,19 @@ impl VmExecutor for NoVm {
 pub type StorageUndoEntry = (String, [u8; 32], Option<Vec<u8>>);
 
 /// Post-block chain state: account balances, per-contract storage, plus the
-/// receipts and storage undo records of the most recently applied block
+/// receipts and undo records of the most recently applied block
 /// (S1.5-P14 invariant #18, S1.5-P15 reorg support).
 ///
-/// `receipts` and `storage_undo` are derived data — a pure function of the
-/// applied block — and are replaced wholesale on every apply and cleared on
-/// unapply. `PartialEq` compares balances **and** `contract_storage`: the
-/// apply/unapply round-trip (invariant #4, on which reorg correctness
-/// rests) must restore both; the storage contents are additionally
-/// committed by `ContractAccount.storage_root` inside the account leaves.
-/// Receipts of any height are recomputed from the chain and stay outside
-/// equality.
+/// `receipts`, `storage_undo` and `value_transfers_undo` are derived data —
+/// a pure function of the applied block. `receipts` is replaced wholesale on
+/// every apply and cleared on unapply; the two undo maps **accumulate**
+/// (keyed by txid) so chained rollbacks of non-tip blocks still find the
+/// pre-images they need. `PartialEq` compares balances **and**
+/// `contract_storage`: the apply/unapply round-trip (invariant #4, on which
+/// reorg correctness rests) must restore both; the storage contents are
+/// additionally committed by `ContractAccount.storage_root` inside the
+/// account leaves. Receipts of any height are recomputed from the chain and
+/// stay outside equality.
 #[derive(Clone, Debug, Default)]
 pub struct State {
     pub balances: HashMap<String, Account>,
@@ -66,6 +68,12 @@ pub struct State {
     /// Undo record of the tip block's `Call` transactions (S1.5-P15):
     /// txid → pre-images of every storage slot the call wrote.
     pub storage_undo: HashMap<[u8; 32], Vec<StorageUndoEntry>>,
+    /// Undo record of every committed value move, per transaction
+    /// (S1.5-FBP05): txid → transfers in commit order. `unapply` reverses
+    /// the list in reverse order (invariant #4); the same moves are mirrored
+    /// into the transaction's `Receipt::value_transfers` for the audit
+    /// trail. Accumulates across blocks like `storage_undo`.
+    pub value_transfers_undo: HashMap<[u8; 32], Vec<ValueTransfer>>,
 }
 
 impl PartialEq for State {
@@ -187,7 +195,12 @@ fn apply_block_inner<V: VmExecutor>(
     Ok(new_state)
 }
 
-fn transfer_receipt(tx: &Transaction, block: &Block, tx_index: u32) -> Receipt {
+fn transfer_receipt(
+    tx: &Transaction,
+    block: &Block,
+    tx_index: u32,
+    value_transfers: Vec<ValueTransfer>,
+) -> Receipt {
     Receipt {
         txid: txid(tx),
         gas_used: 0,
@@ -195,6 +208,7 @@ fn transfer_receipt(tx: &Transaction, block: &Block, tx_index: u32) -> Receipt {
         status: TxStatus::Success,
         block_height: block.index,
         tx_index,
+        value_transfers,
     }
 }
 
@@ -209,7 +223,9 @@ fn apply_genesis(
         match tx {
             Transaction::Transfer(transfer) => {
                 credit_receiver(state, transfer)?;
-                receipts.push(transfer_receipt(tx, block, tx_index as u32));
+                // Genesis allocations are mints (credit-only, no payer)
+                // — no value-transfer trail (S1.5-FBP05).
+                receipts.push(transfer_receipt(tx, block, tx_index as u32, Vec::new()));
             }
             Transaction::Create(_) | Transaction::Call(_) => {
                 return Err(CoreError::UnsupportedTxType {
@@ -275,6 +291,8 @@ fn apply_non_genesis<V: VmExecutor>(
         &block.transactions[coinbase_index],
         block,
         coinbase_index as u32,
+        // Coinbase is a mint, not a move between accounts (S1.5-FBP05).
+        Vec::new(),
     ));
 
     for (tx_index, tx) in block.transactions.iter().enumerate() {
@@ -286,7 +304,16 @@ fn apply_non_genesis<V: VmExecutor>(
                 deduct_sender(state, transfer)?;
                 credit_receiver(state, transfer)?;
                 increment_nonce(state, transfer)?;
-                receipts.push(transfer_receipt(tx, block, tx_index as u32));
+                receipts.push(transfer_receipt(
+                    tx,
+                    block,
+                    tx_index as u32,
+                    vec![ValueTransfer {
+                        from: transfer.from.clone(),
+                        to: transfer.to.clone(),
+                        amount: transfer.amount,
+                    }],
+                ));
             }
             Transaction::Create(create) => match vm.as_deref_mut() {
                 None => {
@@ -325,12 +352,13 @@ fn apply_non_genesis<V: VmExecutor>(
 /// `CreateTx.gas_limit` budget; a module without that export deploys
 /// without init (legacy compat). On `Success` the staged storage writes
 /// are flushed (`storage_root` recomputed — invariant #19 extension), the
-/// `endowment` moves sender → contract, and the receipt carries the metered
-/// gas and constructor logs. On failure (out-of-gas, engine error,
-/// reverted frame) the deployment is rolled back — no account, no storage,
-/// no endowment movement — the sender nonce stays consumed, and the
-/// receipt records `OutOfGas`/`Failed` (failed-receipt semantics, mirrors
-/// `apply_call`; the block still applies).
+/// `endowment` plus every nested transfer the constructor settled are
+/// committed (S1.5-FBP05, mirrored into the receipt's `value_transfers`),
+/// and the receipt carries the metered gas and constructor logs. On failure
+/// (out-of-gas, engine error, reverted frame) the deployment is rolled back
+/// — no account, no storage, no endowment movement — the sender nonce stays
+/// consumed, and the receipt records `OutOfGas`/`Failed` (failed-receipt
+/// semantics, mirrors `apply_call`; the block still applies).
 fn apply_create<V: VmExecutor>(
     state: &mut State,
     create: &crate::types::CreateTx,
@@ -412,17 +440,30 @@ fn apply_create<V: VmExecutor>(
     match vm.execute_constructor(ctx) {
         Ok(result) if result.status == TxStatus::Success => {
             flush_storage_writes(state, &result, txid);
+            // The contract account was credited the endowment up-front (so
+            // the constructor could observe its balance); `Success` debits
+            // the sender to make the move final.
             let new_sender = state
                 .get_balance(&create.from)
                 .checked_sub(create.endowment)
                 .ok_or(CoreError::StateOverflow)?;
             state.set_balance(&create.from, new_sender);
-            Ok(Receipt::from_execution(
-                txid,
-                block.index,
-                tx_index,
-                &result,
-            ))
+            // S1.5-FBP05: commit every nested transfer the constructor
+            // settled (undo record for `unapply`); the receipt mirrors the
+            // full trail — endowment move first, then the nested chain.
+            commit_value_transfers(state, txid, &result.value_transfers)?;
+            let mut value_transfers = Vec::with_capacity(result.value_transfers.len() + 1);
+            if create.endowment > 0 {
+                value_transfers.push(ValueTransfer {
+                    from: create.from.clone(),
+                    to: address.clone(),
+                    amount: create.endowment,
+                });
+            }
+            value_transfers.extend(result.value_transfers.iter().cloned());
+            let mut receipt = Receipt::from_execution(txid, block.index, tx_index, &result);
+            receipt.value_transfers = value_transfers;
+            Ok(receipt)
         }
         Ok(result) => {
             // Defensive non-success status: roll the deployment back.
@@ -448,11 +489,19 @@ fn apply_create<V: VmExecutor>(
     }
 }
 
-/// Call path (S1.5-P14/P15): execute the contract entry point through `vm`.
-/// The value transfer is applied only on `Success`; a failed frame (revert,
-/// out-of-gas, engine error) still increments the sender nonce and produces
-/// a receipt. A call to an EOA (no contract account) is a plain value
-/// transfer with a zero-gas success receipt.
+/// Call path (S1.5-P14/P15, reworked S1.5-FBP05): execute the contract
+/// entry point through `vm`. Value settlement (ADR-0013 amended): the
+/// top-level frame's entry transfer and every nested `call` transfer settle
+/// **inside** the VM against the frame's account view — the contract sees
+/// the incoming value before its code runs (withdraw pattern) — and land in
+/// `ExecutionResult::value_transfers`. On `Success` the whole trail is
+/// committed to `state.balances` through `commit_value_transfers` (undo
+/// record in `State::value_transfers_undo`); a failed frame (revert,
+/// out-of-gas, engine error) moves nothing, still increments the sender
+/// nonce and produces a receipt. A call to an EOA (no contract account) is
+/// a plain value transfer with a zero-gas success receipt and the same
+/// trail/undo treatment. The receipt mirrors the trail
+/// (`Receipt::value_transfers`).
 ///
 /// Contract storage (S1.5-P15): the frame sees the chain-wide storage
 /// snapshot in `ctx.storage` (reads fall through to it) and stages writes
@@ -479,29 +528,31 @@ fn apply_call<V: VmExecutor>(
     }
     state.set_nonce(&call.from, state.get_nonce(&call.from) + 1);
 
+    let call_tx = Transaction::Call(call.clone());
+    let txid = txid(&call_tx);
+
     let is_contract = state
         .get_account(&call.to)
         .is_some_and(|account| account.is_contract());
     if !is_contract {
-        if call.value > 0 {
-            let new_sender = state
-                .get_balance(&call.from)
-                .checked_sub(call.value)
-                .ok_or(CoreError::StateOverflow)?;
-            let new_receiver = state
-                .get_balance(&call.to)
-                .checked_add(call.value)
-                .ok_or(CoreError::StateOverflow)?;
-            state.set_balance(&call.from, new_sender);
-            state.set_balance(&call.to, new_receiver);
-        }
+        let value_transfers = if call.value > 0 {
+            vec![ValueTransfer {
+                from: call.from.clone(),
+                to: call.to.clone(),
+                amount: call.value,
+            }]
+        } else {
+            Vec::new()
+        };
+        commit_value_transfers(state, txid, &value_transfers)?;
         return Ok(Receipt {
-            txid: txid(&Transaction::Call(call.clone())),
+            txid,
             gas_used: 0,
             logs: Vec::new(),
             status: TxStatus::Success,
             block_height: block.index,
             tx_index,
+            value_transfers,
         });
     }
 
@@ -536,36 +587,18 @@ fn apply_call<V: VmExecutor>(
         input: call.data.clone(),
     };
 
-    let call_tx = Transaction::Call(call.clone());
     match vm.execute(ctx) {
         Ok(result) => {
-            if result.status == TxStatus::Success && call.value > 0 {
-                let new_sender = state
-                    .get_balance(&call.from)
-                    .checked_sub(call.value)
-                    .ok_or(CoreError::StateOverflow)?;
-                let new_receiver = state
-                    .get_balance(&call.to)
-                    .checked_add(call.value)
-                    .ok_or(CoreError::StateOverflow)?;
-                state.set_balance(&call.from, new_sender);
-                state.set_balance(&call.to, new_receiver);
-            }
             if result.status == TxStatus::Success {
-                let txid = txid(&call_tx);
+                commit_value_transfers(state, txid, &result.value_transfers)?;
                 flush_storage_writes(state, &result, txid);
             }
-            Ok(Receipt::from_execution(
-                txid(&call_tx),
-                block.index,
-                tx_index,
-                &result,
-            ))
+            Ok(Receipt::from_execution(txid, block.index, tx_index, &result))
         }
         Err(err) => {
             let vm_error: VmError = err.into();
             Ok(Receipt::from_vm_error(
-                txid(&call_tx),
+                txid,
                 block.index,
                 tx_index,
                 &vm_error,
@@ -608,6 +641,61 @@ fn flush_storage_writes(state: &mut State, result: &ExecutionResult, txid: [u8; 
     if !undo.is_empty() {
         state.storage_undo.insert(txid, undo);
     }
+}
+
+/// Commit `transfers` to `state.balances` (S1.5-FBP05): each move deducts
+/// the payer and credits the payee with checked arithmetic, reading live
+/// balances sequentially so a self-move (`from == to`) nets to zero. The
+/// list is recorded under `txid` in [`State::value_transfers_undo`] so
+/// `unapply` can reverse it in reverse commit order (invariant #4). Empty
+/// lists write no undo record.
+fn commit_value_transfers(
+    state: &mut State,
+    txid: [u8; 32],
+    transfers: &[ValueTransfer],
+) -> Result<(), CoreError> {
+    if transfers.is_empty() {
+        return Ok(());
+    }
+    for transfer in transfers {
+        let payer = state.get_balance(&transfer.from);
+        let new_payer = payer
+            .checked_sub(transfer.amount)
+            .ok_or(CoreError::StateOverflow)?;
+        state.set_balance(&transfer.from, new_payer);
+        let payee = state.get_balance(&transfer.to);
+        let new_payee = payee
+            .checked_add(transfer.amount)
+            .ok_or(CoreError::StateOverflow)?;
+        state.set_balance(&transfer.to, new_payee);
+    }
+    state
+        .value_transfers_undo
+        .insert(txid, transfers.to_vec());
+    Ok(())
+}
+
+/// Reverse previously committed value moves (S1.5-FBP05): undo each transfer
+/// in reverse commit order — deduct the payee, credit the payer — with the
+/// same sequential live-balance reads as [`commit_value_transfers`], so
+/// self-moves stay balanced and nested chains unwind in exact mirror order.
+fn reverse_value_transfers(
+    state: &mut State,
+    transfers: &[ValueTransfer],
+) -> Result<(), CoreError> {
+    for transfer in transfers.iter().rev() {
+        let payee = state.get_balance(&transfer.to);
+        let new_payee = payee
+            .checked_sub(transfer.amount)
+            .ok_or(CoreError::StateOverflow)?;
+        state.set_balance(&transfer.to, new_payee);
+        let payer = state.get_balance(&transfer.from);
+        let new_payer = payer
+            .checked_add(transfer.amount)
+            .ok_or(CoreError::StateOverflow)?;
+        state.set_balance(&transfer.from, new_payer);
+    }
+    Ok(())
 }
 
 fn deduct_sender(state: &mut State, tx: &TransferTx) -> Result<(), CoreError> {
@@ -657,9 +745,9 @@ pub fn unapply_block(
         unapply_non_genesis(&mut new_state, block, chain_id)?;
     }
 
-    // Receipts are cleared; `storage_undo` entries of the unapplied block
-    // were consumed by `unapply_call_storage`, entries of earlier blocks
-    // stay for chained rollbacks.
+    // Receipts are cleared; `storage_undo` and `value_transfers_undo`
+    // entries of the unapplied block were consumed per txid, entries of
+    // earlier blocks stay for chained rollbacks.
     new_state.receipts.clear();
     Ok(new_state)
 }
@@ -708,15 +796,25 @@ fn unapply_non_genesis(state: &mut State, block: &Block, chain_id: u32) -> Resul
                     .map(|r| r.status == TxStatus::Success)
                     .unwrap_or(true);
                 unapply_call_storage(state, txid(tx));
-                state.set_account(&address, Account::default());
-                state.contract_storage.remove(&address);
                 if was_success {
+                    // S1.5-FBP05: reverse the constructor's nested transfers
+                    // first — they may touch the contract account, which is
+                    // removed below. The endowment refund follows; removing
+                    // the account reverts the up-front credit as a whole.
+                    if let Some(transfers) = state.value_transfers_undo.remove(&txid(tx)) {
+                        reverse_value_transfers(state, &transfers)?;
+                    }
                     let receiver_balance = state.get_balance(&create.from);
                     let new_balance = receiver_balance
                         .checked_add(create.endowment)
                         .ok_or(CoreError::StateOverflow)?;
                     state.set_balance(&create.from, new_balance);
+                } else {
+                    // Failed deploys commit nothing; drop any stray record.
+                    state.value_transfers_undo.remove(&txid(tx));
                 }
+                state.set_account(&address, Account::default());
+                state.contract_storage.remove(&address);
                 state.set_nonce(&create.from, nonce);
             }
             Transaction::Call(call) => {
@@ -731,17 +829,25 @@ fn unapply_non_genesis(state: &mut State, block: &Block, chain_id: u32) -> Resul
                     .find(|r| r.txid == txid(tx));
                 let reverse_value =
                     receipt.map(|r| r.status == TxStatus::Success).unwrap_or(true);
-                if reverse_value && call.value > 0 {
-                    let callee_balance = state.get_balance(&call.to);
-                    let new_callee = callee_balance
-                        .checked_sub(call.value)
-                        .ok_or(CoreError::StateOverflow)?;
-                    let sender_balance = state.get_balance(&call.from);
-                    let new_sender = sender_balance
-                        .checked_add(call.value)
-                        .ok_or(CoreError::StateOverflow)?;
-                    state.set_balance(&call.to, new_callee);
-                    state.set_balance(&call.from, new_sender);
+                if reverse_value {
+                    // S1.5-FBP05: the undo record carries the full committed
+                    // trail (top-level entry transfer + settled nested
+                    // transfers), reversed in reverse commit order. A call
+                    // without a record (transfer-only path written before
+                    // the trail existed, defensive) falls back to reversing
+                    // the top-level move reconstructed from the tx.
+                    if let Some(transfers) = state.value_transfers_undo.remove(&txid(tx)) {
+                        reverse_value_transfers(state, &transfers)?;
+                    } else if call.value > 0 {
+                        reverse_value_transfers(
+                            state,
+                            &[ValueTransfer {
+                                from: call.from.clone(),
+                                to: call.to.clone(),
+                                amount: call.value,
+                            }],
+                        )?;
+                    }
                 }
                 unapply_call_storage(state, txid(tx));
             }
@@ -1048,6 +1154,7 @@ mod tests {
             status: TxStatus::Success,
             block_height: 1,
             tx_index: 0,
+            value_transfers: Vec::new(),
         }];
         assert_eq!(a, b);
         b.set_balance("alice", 999);
@@ -1061,5 +1168,76 @@ mod tests {
         let block = test_block(1, vec![create]);
         let err = apply_regtest(&state, &block).unwrap_err();
         assert!(matches!(err, CoreError::UnsupportedTxType { .. }));
+    }
+
+    // --- S1.5-FBP05: value-transfer commit/reverse helpers ---------------
+
+    fn transfer(from: &str, to: &str, amount: u64) -> ValueTransfer {
+        ValueTransfer {
+            from: from.to_string(),
+            to: to.to_string(),
+            amount,
+        }
+    }
+
+    #[test]
+    fn commit_moves_balance_and_records_undo() {
+        let mut state = test_state_with_balance("alice", 1000);
+        let txid = [9u8; 32];
+        let trail = vec![transfer("alice", "bob", 400)];
+        commit_value_transfers(&mut state, txid, &trail).unwrap();
+        assert_eq!(state.get_balance("alice"), 600);
+        assert_eq!(state.get_balance("bob"), 400);
+        assert_eq!(state.value_transfers_undo.get(&txid), Some(&trail));
+
+        reverse_value_transfers(&mut state, &trail).unwrap();
+        assert_eq!(state.get_balance("alice"), 1000);
+        assert_eq!(state.get_balance("bob"), 0);
+    }
+
+    #[test]
+    fn commit_self_transfer_is_a_no_op() {
+        // Regression (S1.5-FBP05): the old read-both-then-write-both
+        // pattern minted `amount` when `from == to`.
+        let mut state = test_state_with_balance("alice", 1000);
+        let trail = vec![transfer("alice", "alice", 500)];
+        commit_value_transfers(&mut state, [1u8; 32], &trail).unwrap();
+        assert_eq!(state.get_balance("alice"), 1000);
+
+        reverse_value_transfers(&mut state, &trail).unwrap();
+        assert_eq!(state.get_balance("alice"), 1000);
+    }
+
+    #[test]
+    fn commit_rejects_insufficient_balance_atomically() {
+        let mut state = test_state_with_balance("alice", 100);
+        let err = commit_value_transfers(
+            &mut state,
+            [2u8; 32],
+            &[transfer("alice", "bob", 101)],
+        )
+        .unwrap_err();
+        assert!(matches!(err, CoreError::StateOverflow));
+        assert_eq!(state.get_balance("alice"), 100);
+        assert_eq!(state.get_balance("bob"), 0);
+        assert!(state.value_transfers_undo.is_empty());
+    }
+
+    #[test]
+    fn chained_transfers_reverse_in_mirror_order() {
+        let mut state = test_state_with_balance("a", 100);
+        state.set_balance("b", 0);
+        let txid = [3u8; 32];
+        // a → b → c: b forwards what it just received.
+        let trail = vec![transfer("a", "b", 50), transfer("b", "c", 50)];
+        commit_value_transfers(&mut state, txid, &trail).unwrap();
+        assert_eq!(state.get_balance("a"), 50);
+        assert_eq!(state.get_balance("b"), 0);
+        assert_eq!(state.get_balance("c"), 50);
+
+        reverse_value_transfers(&mut state, &trail).unwrap();
+        assert_eq!(state.get_balance("a"), 100);
+        assert_eq!(state.get_balance("b"), 0);
+        assert_eq!(state.get_balance("c"), 0);
     }
 }

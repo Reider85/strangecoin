@@ -102,6 +102,7 @@ fn mock_vm_success_result() {
             status: TxStatus::Success,
             return_data: vec![42],
             storage_overlay: HashMap::new(),
+            value_transfers: Vec::new(),
         }),
     };
     let ctx = sample_context();
@@ -130,6 +131,7 @@ fn mock_vm_sees_full_execution_context() {
             status: TxStatus::Success,
             return_data: vec![],
             storage_overlay: HashMap::new(),
+            value_transfers: Vec::new(),
         }),
     };
     let ctx = sample_context();
@@ -161,6 +163,7 @@ fn gas_cost_per_opcode() {
             status: TxStatus::Success,
             return_data: vec![],
             storage_overlay: HashMap::new(),
+            value_transfers: Vec::new(),
         }),
     };
     assert_eq!(vm.gas_cost(Opcode::Instruction), 1);
@@ -182,6 +185,7 @@ fn receipt_carries_gas_logs_status() {
         status: TxStatus::Reverted,
         block_height: 3,
         tx_index: 1,
+        value_transfers: Vec::new(),
     };
     assert_eq!(receipt.gas_used, 5_000);
     assert_eq!(receipt.status, TxStatus::Reverted);

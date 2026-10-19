@@ -35,6 +35,23 @@ pub struct Log {
     pub data: Vec<u8>,
 }
 
+/// One balance move committed during execution (S1.5-FBP05): the paying
+/// account, the receiving account, and the amount.
+///
+/// An execution's [`ExecutionResult::value_transfers`] lists every move in
+/// commit order — the top-level frame's entry transfer first, then each
+/// nested `call` transfer as it settles. `apply_call`/`apply_create` commit
+/// the list to `State` on `Success`; `unapply` reverses it in reverse order
+/// (invariant #4). The same list is mirrored into the [`Receipt`] so the
+/// audit trail is visible to light clients once receipts fold into the
+/// header (S1.5-FBP07).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ValueTransfer {
+    pub from: String,
+    pub to: String,
+    pub amount: u64,
+}
+
 /// Outcome of a single VM execution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionResult {
@@ -47,6 +64,12 @@ pub struct ExecutionResult {
     /// `State.contract_storage` on `Success` and discards the map on
     /// failure. Empty for precompiles and transfer-only frames.
     pub storage_overlay: ContractStorageMap,
+    /// Value moves settled during this execution, in commit order
+    /// (S1.5-FBP05): the top-level frame's entry transfer (when `value > 0`)
+    /// followed by every nested `call` transfer that was not reverted. A
+    /// failed frame's transfers are reversed inside the VM and never reach
+    /// this list; `apply_call` commits it to `State` only on `Success`.
+    pub value_transfers: Vec<ValueTransfer>,
 }
 
 /// Record of a transaction's execution, committed alongside the block
@@ -60,6 +83,15 @@ pub struct Receipt {
     pub status: TxStatus,
     pub block_height: u64,
     pub tx_index: u32,
+    /// Audit trail of the value moves this transaction committed, in commit
+    /// order (S1.5-FBP05): empty for failed frames, coinbase mints and
+    /// transfer-free calls; a successful `Transfer` carries its single move;
+    /// a successful `Call`/`Create` carries the entry transfer (value /
+    /// endowment) followed by every settled nested transfer. Mirrors
+    /// `ExecutionResult::value_transfers` (plus the top-level move for
+    /// transfer-only paths). `serde(default)` keeps older JSON decodable.
+    #[serde(default)]
+    pub value_transfers: Vec<ValueTransfer>,
 }
 
 impl Receipt {
@@ -77,6 +109,7 @@ impl Receipt {
             status: result.status,
             block_height,
             tx_index,
+            value_transfers: result.value_transfers.clone(),
         }
     }
 
@@ -101,6 +134,7 @@ impl Receipt {
             status,
             block_height,
             tx_index,
+            value_transfers: Vec::new(),
         }
     }
 }

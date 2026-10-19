@@ -25,5 +25,5 @@ pub use types::{
 };
 pub use vm::{
     BlockContext, ExecutionResult, ExecutionContext, GasCounter, Log, Opcode, Receipt, TxStatus,
-    VmError, VmExecutor,
+    ValueTransfer, VmError, VmExecutor,
 };

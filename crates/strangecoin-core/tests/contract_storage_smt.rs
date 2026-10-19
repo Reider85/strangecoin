@@ -74,12 +74,23 @@ impl VmExecutor for WriteVm {
         self.seen_storage.lock().unwrap().push(ctx.storage.clone());
         let mut storage_overlay = HashMap::new();
         storage_overlay.insert(ctx.storage_address.clone(), self.writes.clone());
+        // S1.5-FBP05: mirror the executor's top-level value settlement so
+        // `apply_call` commits the move on `Success`.
+        let value_transfers = (ctx.value > 0)
+            .then(|| strangecoin_core::ValueTransfer {
+                from: ctx.caller.clone(),
+                to: ctx.callee.clone(),
+                amount: ctx.value,
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
         Ok(ExecutionResult {
             gas_used: 100,
             logs: Vec::new(),
             status: TxStatus::Success,
             return_data: Vec::new(),
             storage_overlay,
+            value_transfers,
         })
     }
 
@@ -110,6 +121,7 @@ impl VmExecutor for FailVm {
             status: TxStatus::Success,
             return_data: Vec::new(),
             storage_overlay: HashMap::new(),
+            value_transfers: Vec::new(),
         })
     }
 
@@ -465,13 +477,22 @@ fn flush_ignores_non_contract_scopes() {
     }
     impl VmExecutor for ScopedVm {
         type Error = VmError;
-        fn execute(&self, _ctx: ExecutionContext) -> Result<ExecutionResult, Self::Error> {
+        fn execute(&self, ctx: ExecutionContext) -> Result<ExecutionResult, Self::Error> {
+            let value_transfers = (ctx.value > 0)
+                .then(|| strangecoin_core::ValueTransfer {
+                    from: ctx.caller.clone(),
+                    to: ctx.callee.clone(),
+                    amount: ctx.value,
+                })
+                .into_iter()
+                .collect::<Vec<_>>();
             Ok(ExecutionResult {
                 gas_used: 1,
                 logs: Vec::new(),
                 status: TxStatus::Success,
                 return_data: Vec::new(),
                 storage_overlay: self.writes.clone(),
+                value_transfers,
             })
         }
         fn gas_cost(&self, _opcode: Opcode) -> u64 {

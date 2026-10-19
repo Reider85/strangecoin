@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.5.3 — vm-wasm/core: nested value-transfer settlement + receipt audit trail (S1.5-FBP05)
+
+**Status**: Done  
+**Date**: 2026-10-19  
+**Prompts**: S1.5-FBP05 (`analytics/bugfixes-stage1.5.md`)
+
+### Nested value-трансферы коммитятся (withdraw pattern работает)
+
+- **Баг**: `nested_call` двигал value внутри VM (копия accounts фрейма), но `ExecutionResult` не несёт accounts/transfers — `apply_call` коммитил только top-level `CallTx.value`; вложенные трансферы цепочки A→B→C терялись на-chain (`tests/vm_transfer_to_contract.rs` документировал gap как known residual).
+- **On-entry crediting** (`vm-wasm/src/lib.rs::run_frame`): top-level entry transfer (`ctx.caller` → `ctx.callee`) селтится **внутри** executor до запуска кода контракта — контракт видит входящий value в балансе и может его переслать (withdraw pattern). Nested-фреймы приходят с уже закрытым трансфером от `nested_call`; конструкторы сохраняют конвенцию FBP04 (endowment кредитуется `apply_create` до старта фрейма).
+- **`nested_call`** (`vm-wasm/src/host/calls/mod.rs`): sender = `ctx.storage_address` (не `callee` — для delegatecall-фреймов value тратит баланс делегирующего контракта, mirror Ethereum `address(this)`); guard `kind != Call && value > 0` → `STATUS_FAILED` (defense-in-depth; ABI delegatecall/staticcall value не передают); reentrancy/depth-гейты (S1.5-P13) остаются **до** перевода value. На успех child-фрейма trail пополняется сначала payer→callee, затем трансферами ребенка (порядок для undo).
+- **`ExecutionResult.value_transfers` + `Receipt.value_transfers`** (`core/vm/result.rs`, новый `ValueTransfer { from, to, amount }`): commit-order audit trail; `Receipt::from_execution` зеркалит, `from_vm_error` — пусто; `#[serde(default)]` для старого JSON. `serialize_receipt` заканчивается trail (count + per-transfer) — receipts = derived data (не персистятся/не передаются), поэтому **FORMAT_VERSION НЕ бампается**; version-byte receipts-домена зафиксируется вместе с header- commitment (`receipts_root`, FBP07) — осознанное отклонение, зафиксировано в ADR-0013 amendment.
+- **`apply_call`/`apply_create`/`unapply`** (`core/state/inner.rs`): новый helper `commit_value_transfers` (per-transfer sequential checked deduct/credit + undo-запись в новое `State.value_transfers_undo` — accumulating, как `storage_undo`, обязателен для chained rollbacks: tip-receipts чистятся при unapply) и `reverse_value_transfers` (reverse commit order). `apply_call`: top-level блок перевода удалён (селтится в VM); EOA fast-path и Success-путь VM коммитят trail через helper. `apply_create`: endowment debit остаётся (up-front credit FBP04), nested-трансферы конструктора коммитятся helper'ом; receipt несёт endowment + nested. `unapply_call`/`unapply_create`: reverse undo-записи, fallback на top-level value из tx (EOA-path/legacy).
+- **Latent bug fixed**: transfer-only fast path `apply_call` при `from == to` (self-call) читал оба баланса до записей и **печатал** value; sequential commit/реверс чинит (unit-тест `commit_self_transfer_is_a_no_op`).
+- **Отклонения от спеки промпта** (задокументированы, паттерн FBP01/FBP04): audit trail — в `Receipt` (по выбору пользователя) + accumulating undo-map в `State` (нужен для chained rollbacks — одних receipts недостаточно); FORMAT_VERSION не бампается (см. ADR-0013 amendment); top-level transfer селтится в VM (`run_frame`), а не в `nested_call` (nested_call не знает о top-level фрейме) — семантика соответствует задаче промпта.
+- **ADR-0013 amended**: секция «Amendment: value settlement & receipt audit trail (S1.5-FBP05)».
+- **Тесты**: `tests/vm_transfer_to_contract.rs` переписан (+2 новых: chain A→B→C settles/unapplies с trail+undo, failed chain коммитит ничего; исправлен latent memory-layout баг WAT-фикстуры — `STATUS_KEY` перезаписывала хвост bech32-адреса в data-сегменте); `vm-wasm/tests/contract_storage.rs` +1 (nested value transfer settles + unapply roundtrip); core `inner.rs` unit +4 (commit/reverse, self-transfer no-op, insufficient atomicity, mirror-order chain); core `receipts.rs` +1 (serde default без поля) + sensitivity trail; моки (`SuccessVm`, `WriteVm`, `ScopedVm`) зеркалят top-level settlement из ctx; `SuccessVm` получил `execute_constructor`-override (default делегировал endowment в execute → двойное списание).
+- **Verification**: `cargo test --workspace` green; `cargo clippy --workspace --all-targets -- -D warnings` green.
+
+### Residual (Stage 2+ / FBP06+)
+
+- Lazy contract storage access (убрать клон `contract_storage` на CallTx) — S1.5-FBP06; `receipts_root` в BlockHeader (+ version-byte lock receipts-домена) — S1.5-FBP07; regression-каталог обновить — S1.5-FBP08.
+- Receipts prune / contract storage prune — Stage 3+; constructor fee burning — Stage 5.
+
+---
+
 ## 1.5.2 — core/state: constructor execution + CreateTx wire v6 (S1.5-FBP04)
 
 **Status**: Done  

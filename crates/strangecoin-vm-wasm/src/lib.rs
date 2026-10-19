@@ -6,7 +6,7 @@ use strangecoin_core::address::is_precompile_address;
 use strangecoin_core::types::AccountState;
 use strangecoin_core::vm::limits::{MAX_CALL_DEPTH, MAX_STACK_HEIGHT};
 use strangecoin_core::vm::{
-    ExecutionContext, ExecutionResult, Log, Opcode, TxStatus, VmError, VmExecutor,
+    ExecutionContext, ExecutionResult, Log, Opcode, TxStatus, ValueTransfer, VmError, VmExecutor,
 };
 use wasmi::{Config, Engine, ExternType, Instance, Linker, Module, Store};
 
@@ -121,7 +121,23 @@ impl WasmiExecutor {
     /// ADR-0015 failure semantics: success returns the declared gas;
     /// `NotImplemented` reverts after charging the precompile's declared
     /// gas; `InvalidInput` reverts after burning the full call-frame gas.
+    ///
+    /// S1.5-FBP05: a top-level `value > 0` is recorded in the result's
+    /// audit trail (precompiles never touch the account view; `apply_call`
+    /// commits the trail on `Success`). Reachable only when a precompile
+    /// address carries a contract account — plain precompile calls take
+    /// the transfer-only path in `apply_call`.
     fn execute_precompile(&self, ctx: &ExecutionContext) -> Result<ExecutionResult, WasmiError> {
+        let entry_transfer = || {
+            (ctx.value > 0)
+                .then(|| ValueTransfer {
+                    from: ctx.caller.clone(),
+                    to: ctx.callee.clone(),
+                    amount: ctx.value,
+                })
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
         match precompiles::dispatch_precompile(&ctx.callee, &ctx.input) {
             Ok(out) => {
                 if out.gas_used > ctx.gas_limit {
@@ -133,6 +149,7 @@ impl WasmiExecutor {
                     status: TxStatus::Success,
                     return_data: out.output,
                     storage_overlay: HashMap::new(),
+                    value_transfers: entry_transfer(),
                 })
             }
             Err(PrecompileError::NotImplemented { gas_used, .. }) => {
@@ -145,6 +162,7 @@ impl WasmiExecutor {
                     status: TxStatus::Reverted,
                     return_data: Vec::new(),
                     storage_overlay: HashMap::new(),
+                    value_transfers: Vec::new(),
                 })
             }
             Err(PrecompileError::InvalidInput(_)) => Ok(ExecutionResult {
@@ -153,6 +171,7 @@ impl WasmiExecutor {
                 status: TxStatus::Reverted,
                 return_data: Vec::new(),
                 storage_overlay: HashMap::new(),
+                value_transfers: Vec::new(),
             }),
         }
     }
@@ -239,7 +258,7 @@ impl VmExecutor for WasmiExecutor {
 /// `memory.grow` past it.
 pub(crate) fn run_frame(
     wasm: &[u8],
-    ctx: ExecutionContext,
+    mut ctx: ExecutionContext,
     code: Rc<HashMap<String, Vec<u8>>>,
     abis: Rc<HashMap<String, ContractAbi>>,
     call_stack: Vec<String>,
@@ -257,6 +276,40 @@ pub(crate) fn run_frame(
         FrameEntry::Selector => resolve_dispatch_entry(&abis, &ctx),
         FrameEntry::Constructor => None,
     };
+
+    // Top-level value settlement (S1.5-FBP05, ADR-0013 amended): the entry
+    // transfer credits the callee inside the frame's account view **before**
+    // its code runs (withdraw pattern — the contract can forward what it
+    // just received) and seeds the execution's audit trail. Nested frames
+    // arrive with their transfer already settled by `nested_call`
+    // (depth ≥ 1); constructor frames keep the FBP04 convention — the
+    // endowment is credited by `apply_create` before the frame starts.
+    let mut seeded_transfers = Vec::new();
+    if entry == FrameEntry::Selector && ctx.depth == 0 && ctx.value > 0 {
+        if !host::calls::transfer_value(&mut ctx.accounts, &ctx.caller, &ctx.callee, ctx.value) {
+            // `apply_call` pre-checks the sender; a direct `execute_wasm`
+            // caller may not. Fail the frame exceptionally, moving nothing.
+            return Ok(FrameOutcome {
+                result: ExecutionResult {
+                    gas_used: gas_limit,
+                    logs: Vec::new(),
+                    status: TxStatus::Failed,
+                    return_data: Vec::new(),
+                    storage_overlay: HashMap::new(),
+                    value_transfers: Vec::new(),
+                },
+                storage_overlay: HashMap::new(),
+                accounts: ctx.accounts,
+                logs: Vec::new(),
+                return_data: Vec::new(),
+            });
+        }
+        seeded_transfers.push(ValueTransfer {
+            from: ctx.caller.clone(),
+            to: ctx.callee.clone(),
+            amount: ctx.value,
+        });
+    }
 
     let mut config = Config::default();
     config.consume_fuel(true);
@@ -283,6 +336,7 @@ pub(crate) fn run_frame(
                 status: TxStatus::Success,
                 return_data: Vec::new(),
                 storage_overlay: HashMap::new(),
+                value_transfers: Vec::new(),
             },
             storage_overlay: HashMap::new(),
             accounts: ctx.accounts,
@@ -295,6 +349,7 @@ pub(crate) fn run_frame(
         &engine,
         HostState::new(ctx, code, abis, call_stack),
     );
+    store.data_mut().value_transfers = seeded_transfers;
     store.limiter(|state: &mut HostState| -> &mut dyn wasmi::ResourceLimiter {
         &mut state.limits
     });
@@ -333,6 +388,7 @@ pub(crate) fn run_frame(
             status: TxStatus::Success,
             return_data: return_data.clone(),
             storage_overlay: state.ctx.storage_overlay.clone(),
+            value_transfers: state.value_transfers.clone(),
         },
         storage_overlay: state.ctx.storage_overlay,
         accounts: state.ctx.accounts,

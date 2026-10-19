@@ -8,12 +8,22 @@
 //! and logs back into the parent on success. On failure only gas is consumed
 //! — the parent's state is untouched (revert semantics).
 //!
+//! Value settlement (S1.5-FBP05): a `call` with `value > 0` moves the amount
+//! from the frame's `storage_address` account to the callee **inside the
+//! child's account view** before the callee runs, and records the move in
+//! the execution's audit trail (`HostState::value_transfers`) only when the
+//! child succeeds — a reverted/failed child reverses the move implicitly by
+//! never merging its accounts. `delegatecall` and `staticcall` never move
+//! value (`staticcall`'s ABI has no value parameter at all; a non-zero
+//! amount from a malicious module fails the child).
+//!
 //! Security checks (S1.5-P13): the target must keep the nested frame within
 //! [`MAX_CALL_DEPTH`], and re-entering a contract already on the call stack
 //! (threat V-18) is allowed only when the target's ABI entry is not flagged
 //! `non_reentrant` — violations abort with the exact [`VmError`] variant.
-//! Nested-call semantics are VM-level; wiring the overlay into the Sparse
-//! Merkle Tree and real contract accounts is S1.5-P15.
+//! Both gates run **before** any value transfer. Nested-call semantics are
+//! VM-level; wiring the overlay into the Sparse Merkle Tree and real
+//! contract accounts is S1.5-P15.
 
 pub mod call;
 pub mod delegatecall;
@@ -25,7 +35,7 @@ use std::rc::Rc;
 use strangecoin_core::address::is_precompile_address;
 use strangecoin_core::types::AccountState;
 use strangecoin_core::vm::limits::MAX_CALL_DEPTH;
-use strangecoin_core::vm::{TxStatus, VmError};
+use strangecoin_core::vm::{TxStatus, ValueTransfer, VmError};
 use wasmi::Caller;
 
 use crate::gas::HostCallWeight;
@@ -128,7 +138,7 @@ pub(crate) fn nested_call(
 
     // Snapshot what the child frame needs; the parent borrows end here so
     // the (potentially long) child execution does not hold the store.
-    let (mut child_ctx, gas_budget, code, abis, child_call_stack, parent_callee) = {
+    let (mut child_ctx, gas_budget, code, abis, child_call_stack, transfer_sender) = {
         let state = caller.data();
         let fuel = caller.get_fuel()?;
         let mut stack = state.call_stack.clone();
@@ -168,78 +178,107 @@ pub(crate) fn nested_call(
             Rc::clone(&state.code),
             Rc::clone(&state.abis),
             stack,
-            state.ctx.callee.clone(),
+            // S1.5-FBP05: the payer is the account that owns the storage
+            // this frame writes — `storage_address`. For `call` frames that
+            // is the callee itself; for a `delegatecall` frame it is the
+            // delegating parent (callee code spends the parent's balance,
+            // mirroring Ethereum's `address(this)` semantics).
+            state.ctx.storage_address.clone(),
         )
     };
 
     // Value transfer (`call` only): from the executing contract to `to`.
     let mut value_ok = true;
     if kind == CallKind::Call && value > 0 {
-        value_ok = transfer_value(&mut child_ctx.accounts, &parent_callee, &to, value);
+        value_ok = transfer_value(&mut child_ctx.accounts, &transfer_sender, &to, value);
     }
     // Snapshot the (possibly value-transferred) accounts so success paths
     // that do not run WASM still merge the transfer back into the parent.
     let child_accounts = child_ctx.accounts.clone();
 
-    let (status, gas_used, return_data, overlay, accounts, logs) = if !value_ok {
-        // Insufficient balance: exceptional failure, full child budget burn.
-        (STATUS_FAILED, gas_budget, Vec::new(), None, None, Vec::new())
-    } else if is_precompile_address(&to) {
-        let (status, gas_used, return_data) = run_precompile_nested(&to, &data, gas_budget);
-        let accounts = (status == STATUS_OK).then(|| child_accounts.clone());
-        (status, gas_used, return_data, None, accounts, Vec::new())
-    } else {
-        match code.get(&to).cloned() {
-            Some(wasm) => match run_frame(
-                &wasm,
-                child_ctx,
-                code,
-                abis,
-                child_call_stack,
-                FrameEntry::Selector,
-            ) {
-                Ok(FrameOutcome {
-                    result,
-                    storage_overlay,
-                    accounts,
-                    logs,
-                    return_data,
-                }) => {
-                    let status = match result.status {
-                        TxStatus::Success => STATUS_OK,
-                        TxStatus::Reverted => STATUS_REVERTED,
-                        TxStatus::OutOfGas | TxStatus::Failed => STATUS_FAILED,
-                    };
-                    (
-                        status,
-                        result.gas_used,
-                        return_data,
-                        Some(storage_overlay),
-                        Some(accounts),
+    // `delegatecall`/`staticcall` never carry value (S1.5-FBP05): their
+    // host ABIs pass 0, and a non-zero amount from a malicious module is an
+    // exceptional child failure — defense in depth on top of the ABI.
+    let value_forbidden = kind != CallKind::Call && value > 0;
+
+    let (status, gas_used, return_data, overlay, accounts, logs, child_transfers) =
+        if !value_ok || value_forbidden {
+            // Insufficient balance / forbidden value: exceptional failure,
+            // full child budget burn.
+            (STATUS_FAILED, gas_budget, Vec::new(), None, None, Vec::new(), Vec::new())
+        } else if is_precompile_address(&to) {
+            let (status, gas_used, return_data) = run_precompile_nested(&to, &data, gas_budget);
+            let accounts = (status == STATUS_OK).then(|| child_accounts.clone());
+            (status, gas_used, return_data, None, accounts, Vec::new(), Vec::new())
+        } else {
+            match code.get(&to).cloned() {
+                Some(wasm) => match run_frame(
+                    &wasm,
+                    child_ctx,
+                    code,
+                    abis,
+                    child_call_stack,
+                    FrameEntry::Selector,
+                ) {
+                    Ok(FrameOutcome {
+                        result,
+                        storage_overlay,
+                        accounts,
                         logs,
-                    )
-                }
-                Err(crate::WasmiError::NoCode { .. }) => {
-                    // Treated as a plain EOA transfer: success, no code.
-                    (STATUS_OK, 0, Vec::new(), None, Some(child_accounts.clone()), Vec::new())
-                }
-                Err(err) => {
-                    // Security violations (reentrancy, depth) abort the whole
-                    // transaction: surface the exact variant to the parent
-                    // instead of degrading to a generic failed child (S1.5-P13).
-                    if let WasmiError::Core(vm) = &err {
-                        if matches!(vm, VmError::ReentrancyDetected | VmError::MaxCallDepth) {
-                            return Err(vm_err(vm.clone()));
-                        }
+                        return_data,
+                    }) => {
+                        let status = match result.status {
+                            TxStatus::Success => STATUS_OK,
+                            TxStatus::Reverted => STATUS_REVERTED,
+                            TxStatus::OutOfGas | TxStatus::Failed => STATUS_FAILED,
+                        };
+                        (
+                            status,
+                            result.gas_used,
+                            return_data,
+                            Some(storage_overlay),
+                            Some(accounts),
+                            logs,
+                            result.value_transfers,
+                        )
                     }
-                    let _: VmError = err.into();
-                    (STATUS_FAILED, gas_budget, Vec::new(), None, None, Vec::new())
-                }
-            },
-            // No code registered for `to`: EOA — success, empty return.
-            None => (STATUS_OK, 0, Vec::new(), None, Some(child_accounts.clone()), Vec::new()),
-        }
-    };
+                    Err(crate::WasmiError::NoCode { .. }) => {
+                        // Treated as a plain EOA transfer: success, no code.
+                        (
+                            STATUS_OK,
+                            0,
+                            Vec::new(),
+                            None,
+                            Some(child_accounts.clone()),
+                            Vec::new(),
+                            Vec::new(),
+                        )
+                    }
+                    Err(err) => {
+                        // Security violations (reentrancy, depth) abort the whole
+                        // transaction: surface the exact variant to the parent
+                        // instead of degrading to a generic failed child (S1.5-P13).
+                        if let WasmiError::Core(vm) = &err {
+                            if matches!(vm, VmError::ReentrancyDetected | VmError::MaxCallDepth) {
+                                return Err(vm_err(vm.clone()));
+                            }
+                        }
+                        let _: VmError = err.into();
+                        (STATUS_FAILED, gas_budget, Vec::new(), None, None, Vec::new(), Vec::new())
+                    }
+                },
+                // No code registered for `to`: EOA — success, empty return.
+                None => (
+                    STATUS_OK,
+                    0,
+                    Vec::new(),
+                    None,
+                    Some(child_accounts.clone()),
+                    Vec::new(),
+                    Vec::new(),
+                ),
+            }
+        };
 
     // Charge the child's gas against the parent's fuel.
     let parent_fuel = caller.get_fuel()?;
@@ -255,6 +294,18 @@ pub(crate) fn nested_call(
             state.ctx.accounts = accounts;
         }
         state.logs.extend(logs);
+        // S1.5-FBP05: settle the audit trail. The payer→callee move comes
+        // first (it happened before the child ran), then the child's own
+        // nested transfers — commit order is the reverse of what `unapply`
+        // walks back.
+        if kind == CallKind::Call && value > 0 {
+            state.value_transfers.push(ValueTransfer {
+                from: transfer_sender,
+                to,
+                amount: value,
+            });
+        }
+        state.value_transfers.extend(child_transfers);
     }
     state.last_return_data = return_data.clone();
 
@@ -284,8 +335,9 @@ fn run_precompile_nested(to: &str, data: &[u8], gas_budget: u64) -> (i32, u64, V
 }
 
 /// Move `value` from `from` to `to`. Returns `false` (and changes nothing)
-/// when `from` cannot cover the amount.
-fn transfer_value(
+/// when `from` cannot cover the amount. Sequential live-balance reads make
+/// a self-move (`from == to`) net to zero (S1.5-FBP05).
+pub(crate) fn transfer_value(
     accounts: &mut HashMap<String, AccountState>,
     from: &str,
     to: &str,

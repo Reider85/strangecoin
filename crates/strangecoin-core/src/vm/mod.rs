@@ -12,5 +12,5 @@ pub use limits::{
     MAX_CALL_DEPTH, MAX_CODE_SIZE, MAX_MEMORY_BYTES, MAX_MEMORY_PAGES, MAX_STACK_HEIGHT,
     MAX_STORAGE_PER_CONTRACT,
 };
-pub use result::{ExecutionResult, Log, Receipt, TxStatus};
+pub use result::{ExecutionResult, Log, Receipt, TxStatus, ValueTransfer};
 pub use traits::{Opcode, VmExecutor};

@@ -272,19 +272,48 @@ mod unit_tests {
 
         fn execute(
             &self,
-            _ctx: strangecoin_core::ExecutionContext,
+            ctx: strangecoin_core::ExecutionContext,
         ) -> Result<strangecoin_core::ExecutionResult, Self::Error> {
+            // S1.5-FBP05: the real executor settles the top-level value
+            // on entry and reports it in the audit trail; the mock mirrors
+            // that so `apply_call` commits the move.
+            let value_transfers = (ctx.value > 0)
+                .then(|| strangecoin_core::ValueTransfer {
+                    from: ctx.caller.clone(),
+                    to: ctx.callee.clone(),
+                    amount: ctx.value,
+                })
+                .into_iter()
+                .collect::<Vec<_>>();
             Ok(strangecoin_core::ExecutionResult {
                 gas_used: 42,
                 logs: vec![],
                 status: strangecoin_core::TxStatus::Success,
                 return_data: vec![],
                 storage_overlay: std::collections::HashMap::new(),
+                value_transfers,
             })
         }
 
         fn gas_cost(&self, _opcode: strangecoin_core::Opcode) -> u64 {
             1
+        }
+
+        /// Deploy frames keep the FBP04 convention: the endowment is
+        /// applied by `apply_create`, not reported as a VM transfer
+        /// (S1.5-FBP05).
+        fn execute_constructor(
+            &self,
+            _ctx: strangecoin_core::ExecutionContext,
+        ) -> Result<strangecoin_core::ExecutionResult, Self::Error> {
+            Ok(strangecoin_core::ExecutionResult {
+                gas_used: 0,
+                logs: Vec::new(),
+                status: strangecoin_core::TxStatus::Success,
+                return_data: Vec::new(),
+                storage_overlay: std::collections::HashMap::new(),
+                value_transfers: Vec::new(),
+            })
         }
 
         fn register_code(
@@ -346,6 +375,7 @@ mod unit_tests {
                     status: strangecoin_core::TxStatus::Success,
                     return_data: Vec::new(),
                     storage_overlay: std::collections::HashMap::new(),
+                    value_transfers: Vec::new(),
                 })
             }
 

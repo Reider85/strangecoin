@@ -58,6 +58,7 @@ impl StateCache {
             contract_storage: self.contract_storage.clone(),
             receipts: Vec::new(),
             storage_undo: HashMap::new(),
+            value_transfers_undo: HashMap::new(),
         }
     }
 

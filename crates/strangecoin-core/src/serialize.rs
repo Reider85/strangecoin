@@ -70,6 +70,13 @@ pub fn txid(tx: &Transaction) -> [u8; 32] {
 /// Canonical receipt encoding (S1.5-P14): the leaf preimage of the receipts
 /// sub-trie. Field order is fixed and lengths are explicit, so identical
 /// receipts always hash to the same leaf.
+///
+/// S1.5-FBP05: the encoding ends with the receipt's `value_transfers`
+/// (count + per-transfer from/to/amount). Receipts are derived data — never
+/// persisted or transmitted, only recomputed from the chain — so the layout
+/// change does not bump [`FORMAT_VERSION`]; the version byte for the
+/// receipts domain gets locked together with the header commitment
+/// (`receipts_root`, S1.5-FBP07).
 pub fn serialize_receipt(receipt: &crate::vm::Receipt) -> Vec<u8> {
     let mut out = Vec::new();
     out.push(FORMAT_VERSION);
@@ -86,6 +93,12 @@ pub fn serialize_receipt(receipt: &crate::vm::Receipt) -> Vec<u8> {
             out.extend_from_slice(topic);
         }
         write_bytes(&mut out, &log.data);
+    }
+    out.extend_from_slice(&(receipt.value_transfers.len() as u32).to_be_bytes());
+    for transfer in &receipt.value_transfers {
+        write_string(&mut out, &transfer.from);
+        write_string(&mut out, &transfer.to);
+        out.extend_from_slice(&transfer.amount.to_be_bytes());
     }
     out
 }

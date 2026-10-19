@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use strangecoin_core::serialize::{compute_receipts_root, serialize_receipt};
 use strangecoin_core::state::sparse_merkle::SparseMerkleTrie;
 use strangecoin_core::state::{prove_receipt, receipts_subroot, verify_receipt_proof};
-use strangecoin_core::vm::{ExecutionResult, Log, Receipt, TxStatus, VmError};
+use strangecoin_core::vm::{ExecutionResult, Log, Receipt, TxStatus, ValueTransfer, VmError};
 
 fn sample_log() -> Log {
     Log {
@@ -24,6 +24,11 @@ fn sample_receipt(txid: [u8; 32]) -> Receipt {
         status: TxStatus::Success,
         block_height: 5,
         tx_index: 1,
+        value_transfers: vec![ValueTransfer {
+            from: "alice".to_string(),
+            to: "bob".to_string(),
+            amount: 50,
+        }],
     }
 }
 
@@ -35,6 +40,11 @@ fn from_execution_copies_result_fields() {
         status: TxStatus::Reverted,
         return_data: vec![9],
         storage_overlay: HashMap::new(),
+        value_transfers: vec![ValueTransfer {
+            from: "alice".to_string(),
+            to: "bob".to_string(),
+            amount: 7,
+        }],
     };
     let receipt = Receipt::from_execution([1u8; 32], 10, 3, &result);
     assert_eq!(receipt.txid, [1u8; 32]);
@@ -43,6 +53,7 @@ fn from_execution_copies_result_fields() {
     assert_eq!(receipt.block_height, 10);
     assert_eq!(receipt.tx_index, 3);
     assert_eq!(receipt.logs, result.logs);
+    assert_eq!(receipt.value_transfers, result.value_transfers);
 }
 
 #[test]
@@ -85,6 +96,33 @@ fn canonical_encoding_is_deterministic_and_sensitive() {
     let mut d = sample_receipt([7u8; 32]);
     d.logs[0].data.push(5);
     assert_ne!(serialize_receipt(&a), serialize_receipt(&d));
+
+    // S1.5-FBP05: the value-transfer trail is part of the leaf preimage —
+    // a different amount (or an empty trail) must hash differently once
+    // the receipt lands in the receipts sub-trie.
+    let mut e = sample_receipt([7u8; 32]);
+    e.value_transfers[0].amount = 51;
+    assert_ne!(serialize_receipt(&a), serialize_receipt(&e));
+
+    let mut f = sample_receipt([7u8; 32]);
+    f.value_transfers.clear();
+    assert_ne!(serialize_receipt(&a), serialize_receipt(&f));
+}
+
+#[test]
+fn serde_default_tolerates_missing_value_transfers() {
+    // Older JSON (pre-S1.5-FBP05) has no `value_transfers` key; the field
+    // deserializes to an empty trail.
+    let mut receipt = sample_receipt([9u8; 32]);
+    receipt.value_transfers = Vec::new();
+    let mut json: serde_json::Value =
+        serde_json::to_value(&receipt).expect("serialize");
+    json.as_object_mut()
+        .expect("object")
+        .remove("value_transfers")
+        .expect("field present");
+    let back: Receipt = serde_json::from_value(json).expect("deserialize");
+    assert!(back.value_transfers.is_empty());
 }
 
 #[test]
