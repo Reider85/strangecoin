@@ -10,5 +10,5 @@
   "max_supply_pre_tail": 21000000,
   "target_block_time": 600,
   "retarget_interval": 2016,
-  "genesis_hash": "0xfcd79a70eacb830832df84ac0f5f551038eae4790531410c2a130297dd653101"
+  "genesis_hash": "0x0d400a4c50614e50ee4b33617f90e85337bb3b18c88ce7b5b92a9d89745a83cc"
 }

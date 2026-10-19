@@ -21,7 +21,10 @@
 //! 10. block gas limit (invariant #15, first enforced at Stage 1.5,
 //!     ADR-0014): `sum(CallTx.gas_limit) <= BLOCK_GAS_LIMIT` before the
 //!     state transition, plus the post-apply `sum(receipt.gas_used)` bound
-//!     (S1.5-P15).
+//!     (S1.5-P15);
+//! 11. `receipts_root` commitment (S1.5-FBP07, ADR-0016, invariant #18/#19
+//!     extension): recompute the receipts SMT root and reject on mismatch;
+//!     zero roots tolerated for genesis only.
 
 use std::collections::HashMap;
 use std::sync::{
@@ -30,7 +33,7 @@ use std::sync::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use strangecoin_core::state::{apply_block, compute_state_root, State};
+use strangecoin_core::state::{apply_block, compute_state_root, receipts_root, State};
 use strangecoin_core::types::{Block, Transaction};
 use tracing::{debug, error, info, warn};
 
@@ -239,6 +242,29 @@ pub fn validate_and_apply(
         ));
     }
 
+    // Invariant #18/#19 extension (S1.5-FBP07, ADR-0016): every block must
+    // commit to the SMT root of its receipts. A zero root is tolerated only
+    // for genesis (build-time constant; light-client proofs against the
+    // genesis header root are out of scope — genesis is trusted by pinned
+    // hash, same as its zero state_root).
+    let computed_receipts_root = receipts_root(&new_state.receipts);
+    if block.receipts_root == [0u8; 32] {
+        if block.index != 0 {
+            return Err(invalid(
+                block,
+                "receipts root is zero but a receipts commitment is required",
+            ));
+        }
+    } else if block.receipts_root != computed_receipts_root {
+        return Err(invalid(
+            block,
+            format!(
+                "receipts root mismatch: stored {:x?}, computed {:x?}",
+                block.receipts_root, computed_receipts_root
+            ),
+        ));
+    }
+
     Ok(new_state)
 }
 
@@ -442,6 +468,7 @@ impl Blockchain {
             consensus_version: self.rules.expected_version(0),
             state_root: [0u8; 32],
             tx_root: [0u8; 32],
+            receipts_root: [0u8; 32],
         };
         genesis_block.tx_root =
             strangecoin_core::serialize::compute_tx_root(&genesis_block.transactions);
@@ -500,17 +527,21 @@ impl Blockchain {
             consensus_version: self.rules.expected_version(height),
             state_root: [0u8; 32],
             tx_root: [0u8; 32],
+            receipts_root: [0u8; 32],
         };
         block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
 
         // BUG-S1-002 / SCIP-0002: grant blocks commit to their post-state
-        // root like any other block.
+        // root like any other block. S1.5-FBP07: same for the receipts root.
         let parent_state = self.balances.to_state();
         let post = apply_block(&parent_state, &block, self.chain_id).map_err(|e| {
             error!(error = %e, "Grant block transactions do not apply to the state");
         });
         match post {
-            Ok(post) => block.state_root = compute_state_root(&post.balances),
+            Ok(post) => {
+                block.state_root = compute_state_root(&post.balances);
+                block.receipts_root = receipts_root(&post.receipts);
+            }
             Err(_) => return,
         }
         block.hash = self.calculate_hash(&block);
@@ -670,6 +701,7 @@ impl Blockchain {
             consensus_version: self.rules.expected_version(height),
             state_root: [0u8; 32],
             tx_root: [0u8; 32],
+            receipts_root: [0u8; 32],
         };
         block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
 
@@ -678,6 +710,8 @@ impl Blockchain {
         // S1.5-P17: mine through the VM-aware executor — the transfer-only
         // path rejected mempool Create/Call transactions with
         // UnsupportedTxType, making contract transactions unminable.
+        // S1.5-FBP07: the header also commits to the receipts SMT root —
+        // set before the PoW loop so the sealed hash covers it.
         let parent_state = self.balances.to_state();
         let post = {
             let view = self.view_for(height);
@@ -690,6 +724,7 @@ impl Blockchain {
             }
         };
         block.state_root = compute_state_root(&post.balances);
+        block.receipts_root = receipts_root(&post.receipts);
 
         let target_bytes = hex::decode(&block.target).expect("valid target hex");
         let mut target_arr = [0u8; 32];

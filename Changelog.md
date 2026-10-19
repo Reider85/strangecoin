@@ -1,5 +1,56 @@
 # Changelog
 
+## 1.5.5 — core: receipts_root в BlockHeader (S1.5-FBP07)
+
+**Status**: Done  
+**Date**: 2026-10-20  
+**Prompts**: S1.5-FBP07 (`analytics/bugfixes-stage1.5.md`)  
+**ADR**: ADR-0016 (`docs/ADR/0016-receipts-root-in-block-header.md`)
+
+### Прореха: receipts не committed в header (Changelog 1.1.7)
+
+- **Было**: receipts-сабтри (`receipts_subroot`/`prove_receipt`/`verify_receipt_proof`, S1.5-P14) жили в derived data без consensus-commitment — light client не мог верифицировать receipt без полного state (provable только локально пересчитанным root).
+- **Стало**: `BlockHeader.receipts_root: [u8; 32]` — Ethereum-style отдельный commitment (решение (b) из спеки; fold в глобальный `state_root` отклонён — mixing concerns + слом ADR-0006 key space). Root = `receipts_subroot` (txid-keyed depth-256 SMT, proof-friendly), alias `state::receipts_root`.
+
+### Wire/format (consensus-breaking, pre-mainnet)
+
+- **FORMAT_VERSION 6 → 7**: canonical header encoding + `receipts_root` (32 байта после `state_root`), `HEADER_WIRE_LEN` 189 → 221. Бамп «locks» receipts-domain version byte, отложенный в S1.5-FBP05 (комментарий `serialize_receipt`).
+- **Genesis hashes перегенерированы** (процедура BUG-S1-007, `cargo run --example print_genesis_hashes`): mainnet `0x0d400a…83cc`, testnet `0x710d83…b270`; `EXPECTED_*_GENESIS_HASH` (core/consensus.rs) + `genesis_hash`-строки в `genesis.json`/`genesis-testnet.json`.
+- **Golden vectors перегенерированы** (`print_serialized_block`, literal hex): 5 block-векторов + 10 tx-векторов (только version byte) в `serialize_golden.rs` — 19/19.
+- **Genesis-политика**: genesis-блоки (index == 0) хранят `receipts_root = [0;32]` (build-time constant, как `state_root` — `load_genesis` не исполняет блок); tolerance только для genesis. Light-client proofs против genesis header root вне скоупа (genesis trusted by pinned hash) — задокументировано в ADR-0016.
+
+### Validation & production
+
+- **`validate_and_apply`** (src/blockchain/block_executor.rs): после state_root check — пересчёт `receipts_root(new_state.receipts)`; mismatch → `InvalidBlock`; zero → reject past genesis (независимо от `allow_zero_state_root` — флаг ослабляет только state commitment).
+- **Block production**: `mine_block_inner` и `create_grant_block` ставят реальный subroot из post-state receipts до PoW-цикла/seal; `load_genesis`/`regtest_genesis_block`/`create_genesis_block` — `[0;32]`.
+- **Core surface**: `state::receipts_root(&[Receipt])` (alias `receipts_subroot`), re-export из `lib.rs`; `root_after` не менялся (account root отдельный).
+
+### Тесты
+
+- `tests/receipts.rs` +2: light-client (`prove_receipt` + `verify_receipt_proof` против **header-committed** root, без full state; tampered receipt → false); genesis zero tolerance + grant-block commitment.
+- `tests/state_root.rs` +1: `tampered_receipts_root_is_rejected_by_the_second_node` (flip byte + reseal PoW → reject); `committed_chain`/`zero_root_chain` обновлены (real receipts_root; opt-in ослабляет только state).
+- `tests/block_executor.rs` +1: `rejects_zero_receipts_root_when_commitment_required`; helper `with_receipts_commitment`; существующие success-тесты обновлены (zero receipts root теперь reject-ится past genesis).
+- `tests/time.rs`, `tests/common/{mod,vm_helpers}.rs`: craft-хелперы ставят реальный receipts_root (`craft_child`, `commit_block`).
+- ~60 site-объявлений Block/BlockHeader дополнены полем (tests/fuzz/examples; fuzz-таргеты — source-level, сборка CI-side).
+
+### TLA+
+
+- `docs/spec/consensus.tla`: поле `receipts_root` в Block, детерминированный fold `ReceiptsRootOf(txs)` (empty → 0, mirror genesis policy), invariant `ReceiptsRootMatch` в THEOREM; `consensus.cfg`: `MaxReceiptRoot = 3`, 10 invariants.
+- **TLC PASS** (2026-10-20, tla2tools v1.7.4, JDK 21): 35,207 states / depth 6 / 10/10 invariants / 1/1 property; `ReceiptsRootMatch` покрыт на 35,207 states / 103,564 block instances (non-vacuous); state graph не вырос (receipts_root — функция txs). `docs/spec/README.md` обновлён.
+
+### Verification
+
+- `cargo test --workspace` green (включая новые тесты receipts/state_root/block_executor/time); `cargo clippy --workspace --all-targets -- -D warnings` green.
+- Fuzz-таргеты исправлены source-level; сборка cargo-fuzz — CI-side (хостовое ограничение g++/libfuzzer, прежнее).
+
+### Residual (Stage 2+)
+
+- Receipts prune (старые receipts из сабтри) — Stage 3+; incremental SMT (per-touched-leaf recompute сабтри) — Stage 3+.
+- Receipts domain FORMAT_VERSION — заперт на общей v7; будущие изменения layout receipts — SCIP после mainnet freeze.
+- Regression-прогон 22 инвариантов после FBP01..FBP07 — S1.5-FBP08.
+
+---
+
 ## 1.5.4 — core/state: lazy contract storage access (S1.5-FBP06)
 
 **Status**: Done  

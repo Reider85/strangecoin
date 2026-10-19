@@ -9,7 +9,7 @@ safety rules, designed to be model-checked end-to-end by TLC (BUG-S0-026).
   nonces, supply, time) with real transfer semantics and the emission
   schedule, plus safety invariants and a mining-liveness property.
 - `consensus.cfg` — TLC configuration (`SPECIFICATION Spec`, small constants,
-  9 invariants, 1 temporal property).
+  10 invariants, 1 temporal property).
 
 ## Model scope (bounded, deliberately small)
 
@@ -28,6 +28,7 @@ checks every property on every reachable state:
 | `TailRateNum/Den`, `BlocksPerYear` | `1/1`, `2` | tail rate ½ — makes the tail-emission branch **reachable** inside 3 blocks (block 3 mints `max(base=2, tail=3) = 3`), so `NoInflation` is checked against a live tail, not a vacuous one |
 | `MaxTime` | `2` | clock bound |
 | `MaxHash`, `MaxTarget` | `1`, `1` | PoW hash/target bound (`hash <= target`) |
+| `MaxReceiptRoot` | `3` | abstract receipts-commitment codomain (S1.5-FBP07) |
 
 What the model **does** represent:
 
@@ -41,6 +42,11 @@ What the model **does** represent:
   of `crates/strangecoin-core/src/economics/emission.rs`.
 - `supply` tracks total minted amount; `SupplyConsistency` ties it to the sum
   of all coinbases in the chain.
+- `receipts_root` on every block (S1.5-FBP07 / ADR-0016): a deterministic
+  abstract fold `ReceiptsRootOf(txs)` over the block's receipt set (one
+  receipt per tx in the model; empty commits to `0`, mirroring the genesis
+  zero-root policy). The txid-keyed SMT structure and blake3 live in Rust
+  tests; the model checks the header-commitment **discipline**.
 
 What the model does **not** represent (out of scope, verified by Rust tests
 instead):
@@ -49,6 +55,7 @@ instead):
 |----------|-------|
 | Real cryptography (secp256k1 signatures, blake3 hashing) | tested in Rust |
 | Sparse Merkle state commitment / state root | Stage 1 (Rust tests) |
+| Sparse Merkle receipts subroot structure (`receipts_subroot`, proofs) | Stage 1.5 (Rust tests) |
 | Chain reorganization | Stage 1+ |
 | Median-time-past, future-timestamp rules | Stage 1+ |
 | Network / P2P / gossip | Stage 1–2 |
@@ -70,13 +77,16 @@ instead):
 | `ChainContinuity` | invariant | `chain[i].prev_hash = chain[i-1].hash` for all i > 0 |
 | `PowValidity` | invariant | `hash <= target` for all blocks |
 | `ChainIdConsistency` | invariant | blocks and transfers carry the network `ChainId` |
+| `ReceiptsRootMatch` | invariant | every block's `receipts_root` equals the deterministic commitment of its own receipt set (S1.5-FBP07) |
 | `Liveness` | temporal (WF) | under weak fairness of `AddBlock`, the chain eventually reaches `MaxBlocks` and stays there |
 
 Unlike the pre-BUG-S0-026 skeleton, these are **not vacuous**: TLC coverage
 shows `NoDoubleSpend`/`NonceMonotonic` inner quantifiers evaluated on 84,400
 transfer pairs, `NoInflation`/`RewardAtHeight` on 103,564 block instances, and
 `AllTxSigned` on 86,072 transfers (states with non-empty `txs` exist and are
-explorated).
+explored). `ReceiptsRootMatch` is evaluated on all 35,207 states /
+103,564 block instances, with `ReceiptsRootOf`'s fold touching 86,072
+non-empty receipt sets.
 
 ## Prerequisites
 
@@ -115,13 +125,14 @@ Stuttering" even when the action is enabled). This was verified empirically
 against minimal control specs. Always use `SPECIFICATION` when the module's
 `Spec` operator contains fairness.
 
-## TLC verification results (BUG-S0-026)
+## TLC verification results (BUG-S0-026; amended S1.5-FBP07)
 
-**Run date:** 2026-10-09  
+**Run date:** 2026-10-20 (amended: `ReceiptsRootMatch` invariant added,
+S1.5-FBP07 / ADR-0016)  
 **Tool:** TLC2 Version 2.19 of 08 August 2024 (rev `5a47802`) — `tla2tools.jar`
 v1.7.4, Temurin JDK 21.0.12, Windows 11  
 **Configuration:** `consensus.cfg` (`SPECIFICATION Spec`, constants per table
-above), flags `-deadlock -workers auto -coverage 1`  
+above), flags `-deadlock -coverage 1`  
 **Result:** ✅ **PASS** — `Model checking completed. No error has been found.`
 
 ### Statistics (measured, reproducible)
@@ -136,16 +147,19 @@ above), flags `-deadlock -workers auto -coverage 1`
 | Fingerprint collision probability | 0.0 |
 | `AddBlock` firings (coverage) | 23,330 |
 | `AdvanceTime` firings (coverage) | 11,876 |
-| Wall time | ~6 s |
-| Invariants checked | 9 / 9 PASS |
+| Wall time | ~11 s |
+| Invariants checked | 10 / 10 PASS |
 | Temporal properties | 1 / 1 PASS (`Liveness`, checked on the complete state space) |
 
 ### What was checked
 
-All 9 invariants are checked on **every one of the 35,207 reachable states**;
+All 10 invariants are checked on **every one of the 35,207 reachable states**;
 `Liveness` is checked on the complete state graph under `WF_vars(AddBlock)`.
-This closes the D02 acceptance criterion ("TLC прогнан — результат в
-`docs/spec/README.md`") with a measured, reproducible run.
+The S1.5-FBP07 amendment does not grow the state graph (`receipts_root` is a
+deterministic function of the block's txs — `ReceiptsRootOf`), it adds the
+header-commitment discipline to the checked property set. This closes the D02
+acceptance criterion ("TLC прогнан — результат в `docs/spec/README.md`") with
+a measured, reproducible run.
 
 ### Superseded claim (2026-09-28)
 
@@ -169,7 +183,9 @@ always 0 — vacuous). The results above replace it.
   `hash ∈ 0..MaxHash` stands in for blake3.
 - **No state commitment:** the Sparse Merkle state root is not modeled;
   `state_root` verification lives in Rust tests (`tests/state_root.rs`,
-  core SMT proptests).
+  core SMT proptests). Same for the receipts subroot *structure*
+  (`receipts_subroot` / 256-sibling proofs — Rust tests); only the
+  header-commitment discipline (`ReceiptsRootMatch`) is in TLA+.
 - **No reorg / MTP / fees / networking** — see scope table above.
 
 ## Relationship to ARCHITECT3.md §5 invariants
@@ -183,6 +199,7 @@ always 0 — vacuous). The results above replace it.
 | 10 | Replay protection (chain_id) | `ChainIdConsistency` | bounded-checked |
 | 11 | Nonce strictly increases | `NonceMonotonic` | bounded-checked |
 | 12 | txid = commitment / no double-spend | `NoDoubleSpend` | bounded-checked |
+| 18–19 | Receipts / commitment match (S1.5-FBP07) | `ReceiptsRootMatch` | bounded-checked (abstract fold; SMT in Rust) |
 | 16–17 | P2P framing, rate limiting | N/A | network layer (Rust tests) |
 
 ## References

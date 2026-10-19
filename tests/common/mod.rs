@@ -69,6 +69,7 @@ pub fn craft_child(
             .expected_version(height),
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     };
     block.tx_root = strangecoin::serialize::compute_tx_root(&block.transactions);
     let post = strangecoin_core::state::apply_block(
@@ -78,6 +79,9 @@ pub fn craft_child(
     )
     .expect("crafted block must apply to the prefix state");
     block.state_root = strangecoin_core::state::compute_state_root(&post.balances);
+    // S1.5-FBP07: crafted blocks commit to the receipts SMT root like mined
+    // ones — validate_and_apply rejects a zero receipts_root past genesis.
+    block.receipts_root = strangecoin_core::state::receipts_root(&post.receipts);
     block.hash = hex::encode(strangecoin::serialize::block_hash(&block));
     block
 }

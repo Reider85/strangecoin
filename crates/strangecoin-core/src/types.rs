@@ -18,6 +18,10 @@ pub struct Block {
     pub state_root: [u8; 32],
     #[serde(default)]
     pub tx_root: [u8; 32],
+    /// SMT commitment over the block's receipts (S1.5-FBP07, ADR-0016):
+    /// `state::receipts_root(receipts)`. `[0u8; 32]` in genesis blocks only.
+    #[serde(default)]
+    pub receipts_root: [u8; 32],
 }
 
 /// The header half of a [`Block`]: everything the canonical header encoding
@@ -36,6 +40,9 @@ pub struct BlockHeader {
     pub consensus_version: u32,
     pub state_root: [u8; 32],
     pub tx_root: [u8; 32],
+    /// SMT commitment over the block's receipts (S1.5-FBP07, ADR-0016).
+    /// `[0u8; 32]` tolerated for `index == 0` only (genesis).
+    pub receipts_root: [u8; 32],
 }
 
 impl Block {
@@ -51,6 +58,7 @@ impl Block {
             consensus_version: self.consensus_version,
             state_root: self.state_root,
             tx_root: self.tx_root,
+            receipts_root: self.receipts_root,
         }
     }
 
@@ -67,6 +75,7 @@ impl Block {
             consensus_version: header.consensus_version,
             state_root: header.state_root,
             tx_root: header.tx_root,
+            receipts_root: header.receipts_root,
         }
     }
 }

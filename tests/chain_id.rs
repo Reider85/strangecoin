@@ -88,6 +88,7 @@ fn block_with_foreign_chain_id_tx_rejected() {
         consensus_version: strangecoin::consensus::CURRENT_CONSENSUS_VERSION,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     };
     block.tx_root = strangecoin::serialize::compute_tx_root(&block.transactions);
     block.hash = hex::encode(strangecoin::serialize::block_hash(&block));
@@ -164,6 +165,7 @@ fn coinbase_above_mainnet_schedule_rejected() {
         consensus_version: strangecoin::consensus::CURRENT_CONSENSUS_VERSION,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     };
     block.tx_root = strangecoin::serialize::compute_tx_root(&block.transactions);
     block.hash = hex::encode(strangecoin::serialize::block_hash(&block));

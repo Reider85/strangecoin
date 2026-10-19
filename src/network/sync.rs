@@ -468,6 +468,7 @@ mod tests {
             consensus_version: 1,
             state_root: [0u8; 32],
             tx_root,
+            receipts_root: [0u8; 32],
         };
         loop {
             header.hash = hex::encode(header_hash(&header));
@@ -502,6 +503,7 @@ mod tests {
             consensus_version: 1,
             state_root: [0u8; 32],
             tx_root: [1u8; 32],
+            receipts_root: [0u8; 32],
         };
         cheat.hash = hex::encode(header_hash(&cheat));
         let followed = mine_header(2, &cheat.hash, 3, &target_hex(0), [2u8; 32]);

@@ -106,3 +106,87 @@ fn receipts_are_replaced_not_accumulated() {
         "new block replaces the tip receipts"
     );
 }
+
+/// S1.5-FBP07 / ADR-0016: the mined header commits to the receipts SMT root,
+/// and a light client verifies a receipt proof against that header root —
+/// no full state, no re-execution.
+#[test]
+fn light_client_verifies_receipt_proof_against_header_root() {
+    let _dir = TestDir::new("receipts_light_client");
+    let bc = create_test_blockchain(_dir.path());
+
+    let keypairs = generate_keypairs(1);
+    let addr = keypairs[0].0.clone();
+    assert!(bc.grant_initial_balance_to_first_wallet(&addr).unwrap());
+
+    let mut tx = Transaction::transfer(
+        &addr,
+        "recipient",
+        50,
+        1,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    );
+    sign_transaction(&mut tx, &keypairs[0].1);
+    let expected_txid = strangecoin::serialize::txid(&tx);
+    bc.apply_tx(tx).expect("tx must enter the mempool");
+    mine_current(&bc);
+
+    // The header commitment equals the recomputed receipts subroot and is
+    // non-zero for a non-genesis block.
+    let tip = bc.tip().expect("chain must have a tip");
+    let receipts = bc.tip_receipts();
+    let expected_root = strangecoin_core::state::receipts_root(&receipts);
+    assert_ne!(tip.receipts_root, [0u8; 32], "mined header must commit");
+    assert_eq!(
+        tip.receipts_root, expected_root,
+        "header receipts_root must match the applied receipts"
+    );
+
+    // Light-client flow: header root + receipt + 256-sibling proof. The
+    // verifier touches no State — only the three inputs a peer would send.
+    let receipt = receipts
+        .iter()
+        .find(|r| r.txid == expected_txid)
+        .expect("transfer receipt must be collected");
+    let proof = strangecoin_core::state::prove_receipt(&receipts, &expected_txid)
+        .expect("proof for a tip receipt must exist");
+    assert!(
+        strangecoin_core::state::verify_receipt_proof(&tip.receipts_root, receipt, &proof),
+        "proof must verify against the header-committed receipts root"
+    );
+
+    // Negative: a tampered receipt (same txid, different gas) fails.
+    let mut tampered = receipt.clone();
+    tampered.gas_used += 1;
+    assert!(
+        !strangecoin_core::state::verify_receipt_proof(&tip.receipts_root, &tampered, &proof),
+        "a tampered receipt must not verify"
+    );
+}
+
+/// S1.5-FBP07: the genesis header may keep the zero receipts root (build-time
+/// constant, ADR-0016) — mined blocks past genesis may not.
+#[test]
+fn genesis_zero_receipts_root_is_tolerated_but_mined_blocks_commit() {
+    let _dir = TestDir::new("receipts_genesis_zero");
+    let bc = create_test_blockchain(_dir.path());
+
+    let genesis = bc.tip().expect("genesis must exist");
+    assert_eq!(genesis.index, 0);
+    assert_eq!(
+        genesis.receipts_root,
+        [0u8; 32],
+        "genesis header keeps the zero receipts root"
+    );
+
+    let keypairs = generate_keypairs(1);
+    let addr = keypairs[0].0.clone();
+    assert!(bc.grant_initial_balance_to_first_wallet(&addr).unwrap());
+    let grant = bc.tip().expect("grant block must exist");
+    assert_eq!(grant.index, 1);
+    assert_ne!(
+        grant.receipts_root,
+        [0u8; 32],
+        "grant block must commit to its receipts root"
+    );
+}

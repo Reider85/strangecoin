@@ -27,6 +27,7 @@ fn genesis_block(txs: Vec<Transaction>) -> Block {
         consensus_version: 1,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     }
 }
 
@@ -44,6 +45,7 @@ fn transfer_block(index: u64, txs: Vec<Transaction>, state: &State) -> Block {
         consensus_version: 1,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     };
     let post = apply_block(state, &block, CHAIN_ID_REGTEST).unwrap();
     block.state_root = SparseMerkleTrie::compute_root(&post.balances);

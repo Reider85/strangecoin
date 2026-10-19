@@ -3,12 +3,14 @@ use crate::types::{Block, BlockHeader, CallTx, CreateTx, Transaction, TransferTx
 use blake3;
 use hex;
 
-/// Wire format version. v6 (S1.5-FBP04): `Create` carries
-/// `constructor_params` (canonical type-name string) and `gas_limit`
-/// (constructor execution budget) — the shared version byte moves with
-/// every domain that embeds it (transactions, receipts, headers), so
-/// header/genesis hashes are recomputed on the bump (BUG-S1-007).
-pub const FORMAT_VERSION: u8 = 6;
+/// Wire format version. v7 (S1.5-FBP07, ADR-0016): the canonical header
+/// encoding gains `receipts_root` (32-byte SMT commitment over the block's
+/// receipts, appended after `state_root`; `HEADER_WIRE_LEN` 189 → 221). The
+/// shared version byte moves with every domain that embeds it (transactions,
+/// receipts, headers) — this also locks the receipts-domain encoding deferred
+/// in [`serialize_receipt`] (S1.5-FBP05) — so header/genesis hashes are
+/// recomputed on the bump (BUG-S1-007).
+pub const FORMAT_VERSION: u8 = 7;
 
 pub const TX_TAG_TRANSFER: u8 = 0;
 pub const TX_TAG_CREATE: u8 = 1;
@@ -74,9 +76,9 @@ pub fn txid(tx: &Transaction) -> [u8; 32] {
 /// S1.5-FBP05: the encoding ends with the receipt's `value_transfers`
 /// (count + per-transfer from/to/amount). Receipts are derived data — never
 /// persisted or transmitted, only recomputed from the chain — so the layout
-/// change does not bump [`FORMAT_VERSION`]; the version byte for the
-/// receipts domain gets locked together with the header commitment
-/// (`receipts_root`, S1.5-FBP07).
+/// change did not bump [`FORMAT_VERSION`] at the time; the version byte for
+/// the receipts domain got locked together with the header commitment
+/// (`receipts_root`, S1.5-FBP07 / FORMAT_VERSION 7).
 pub fn serialize_receipt(receipt: &crate::vm::Receipt) -> Vec<u8> {
     let mut out = Vec::new();
     out.push(FORMAT_VERSION);
@@ -136,11 +138,12 @@ pub fn serialize_header(header: &BlockHeader) -> Vec<u8> {
     out.extend_from_slice(&header.nonce.to_be_bytes());
     out.extend_from_slice(&header.consensus_version.to_be_bytes());
     out.extend_from_slice(&header.state_root);
+    out.extend_from_slice(&header.receipts_root);
     out
 }
 
 /// Byte length of [`serialize_header`] output.
-pub const HEADER_WIRE_LEN: usize = 1 + 8 + 8 + 32 + 32 + 32 + 8 + 4 + 32;
+pub const HEADER_WIRE_LEN: usize = 1 + 8 + 8 + 32 + 32 + 32 + 8 + 4 + 32 + 32;
 
 /// PoW hash of a header: `blake3(serialize_header(header))`.
 pub fn header_hash(header: &BlockHeader) -> [u8; 32] {
@@ -176,6 +179,9 @@ pub fn deserialize_header(bytes: &[u8]) -> Result<BlockHeader, &'static str> {
     let mut state_root = [0u8; 32];
     state_root.copy_from_slice(&bytes[offset..offset + 32]);
     offset += 32;
+    let mut receipts_root = [0u8; 32];
+    receipts_root.copy_from_slice(&bytes[offset..offset + 32]);
+    offset += 32;
     debug_assert_eq!(offset, HEADER_WIRE_LEN);
 
     let mut header = BlockHeader {
@@ -188,6 +194,7 @@ pub fn deserialize_header(bytes: &[u8]) -> Result<BlockHeader, &'static str> {
         consensus_version,
         state_root,
         tx_root,
+        receipts_root,
     };
     header.hash = hex::encode(header_hash(&header));
     Ok(header)
@@ -577,6 +584,7 @@ mod tests {
             consensus_version: 1,
             state_root: [0u8; 32],
             tx_root: [0u8; 32],
+            receipts_root: [0u8; 32],
         };
         let bytes1 = serialize_block_header(&block);
         let bytes2 = serialize_block_header(&block);
@@ -597,6 +605,7 @@ mod tests {
             consensus_version: 1,
             state_root: [0u8; 32],
             tx_root: [0u8; 32],
+            receipts_root: [0u8; 32],
         };
         let h1 = block_hash(&block);
         let h2 = block_hash(&block);

@@ -38,6 +38,7 @@ fn block_header() -> BlockHeader {
         consensus_version: 1,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     }
 }
 

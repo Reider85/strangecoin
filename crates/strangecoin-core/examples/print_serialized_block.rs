@@ -5,8 +5,8 @@
 //! `serialize_block` / `serialize_block_header` / `block_hash` changed
 //! silently — revert or follow the bump procedure.
 //!
-//! Last regeneration: S1.5-FBP04 — FORMAT_VERSION 5 → 6 (Create carries
-//! `constructor_params` + `gas_limit`); genesis hashes regenerated via
+//! Last regeneration: S1.5-FBP07 — FORMAT_VERSION 6 → 7 (header gains
+//! `receipts_root`, ADR-0016); genesis hashes regenerated via
 //! `examples/print_genesis_hashes.rs` in the same commit.
 
 use strangecoin_core::serialize::*;
@@ -59,6 +59,7 @@ fn block1() -> Block {
         consensus_version: 1,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     }
 }
 
@@ -75,6 +76,7 @@ fn block2() -> Block {
         consensus_version: 1,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     }
 }
 

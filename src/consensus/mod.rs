@@ -58,6 +58,7 @@ pub fn load_genesis(path: &str) -> Result<crate::Block, crate::error::Strangecoi
         consensus_version: strangecoin_core::consensus::CURRENT_CONSENSUS_VERSION,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     };
     block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
 
@@ -141,6 +142,7 @@ pub fn regtest_genesis_block(consensus_version: u32) -> crate::Block {
         consensus_version,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     };
     block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
     block.hash = hex::encode(strangecoin_core::serialize::block_hash(&block));

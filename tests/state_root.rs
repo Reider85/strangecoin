@@ -36,6 +36,12 @@ fn committed_chain(tag: &str) -> (Vec<strangecoin::Block>, strangecoin::Block, S
         [0u8; 32],
         "crafted block must commit to its state root"
     );
+    // S1.5-FBP07: the same holds for the receipts commitment past genesis.
+    assert_ne!(
+        child.receipts_root,
+        [0u8; 32],
+        "crafted block must commit to its receipts root"
+    );
     (prefix, child, alice, bob)
 }
 
@@ -89,6 +95,36 @@ fn tampered_state_root_is_rejected_by_the_second_node() {
     );
 }
 
+/// S1.5-FBP07 / ADR-0016: a block whose header commits to the wrong receipts
+/// root is rejected exactly like a wrong state_root (the opt-in flag relaxes
+/// only the state commitment).
+#[test]
+fn tampered_receipts_root_is_rejected_by_the_second_node() {
+    let dir_b = TestDir::new("sr_rcpt_reject");
+    let bc_b = create_test_blockchain(dir_b.path());
+
+    let (prefix, mut child, _, _) = committed_chain("sr_rcpt_tamper");
+    // Flip a byte of the receipts commitment and re-seal: PoW, tx_root and
+    // state_root still hold, so the receipts root is the only thing wrong.
+    child.receipts_root[0] ^= 0xff;
+    child.hash = hex::encode(strangecoin::serialize::block_hash(&child));
+
+    let mut candidate = prefix;
+    candidate.push(child);
+    let adopted = bc_b
+        .adopt_candidate(candidate, None, Vec::new(), 0)
+        .expect("rejection is a fork-choice/validation answer, not an error");
+    assert!(
+        !adopted,
+        "a wrong receipts_root must fail full validation on the second node"
+    );
+    assert_eq!(
+        bc_b.chain_len(),
+        1,
+        "rejected candidate must not touch the second node's chain"
+    );
+}
+
 /// Craft a legacy chain (genesis + grant + one zero-root child) on a fresh
 /// source node.
 fn zero_root_chain(tag: &str) -> Vec<strangecoin::Block> {
@@ -117,8 +153,19 @@ fn zero_root_chain(tag: &str) -> Vec<strangecoin::Block> {
             .expected_version(parent.index + 1),
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     };
     child.tx_root = strangecoin::serialize::compute_tx_root(&child.transactions);
+    // S1.5-FBP07: the opt-in flag relaxes only the state commitment — the
+    // receipts root stays mandatory past genesis, so the legacy-style child
+    // carries the real one while keeping state_root zero.
+    let post = strangecoin_core::state::apply_block(
+        &walk_state(&prefix),
+        &child,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    )
+    .expect("crafted child must apply to the prefix state");
+    child.receipts_root = strangecoin_core::state::receipts_root(&post.receipts);
     child.hash = hex::encode(strangecoin::serialize::block_hash(&child));
     prefix.push(child);
     prefix

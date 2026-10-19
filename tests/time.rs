@@ -28,8 +28,18 @@ fn create_block_with_timestamp(bc: &BlockchainFacade, timestamp: u64) -> bool {
         consensus_version: 1,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     };
     block.tx_root = strangecoin::serialize::compute_tx_root(&block.transactions);
+    // S1.5-FBP07: validate_chain enforces the receipts commitment even under
+    // the zero state_root opt-in, so the crafted block carries the real one.
+    let post = strangecoin_core::state::apply_block(
+        &walk_state(&bc.chain_snapshot()),
+        &block,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    )
+    .expect("crafted block must apply");
+    block.receipts_root = strangecoin_core::state::receipts_root(&post.receipts);
     block.hash = bc.calculate_hash(&block);
     bc.push_block_unchecked(block);
     bc.validate_chain()
@@ -85,8 +95,19 @@ fn reject_block_before_mtp() {
             consensus_version: 1,
             state_root: [0u8; 32],
             tx_root: [0u8; 32],
+            receipts_root: [0u8; 32],
         };
         block.tx_root = strangecoin::serialize::compute_tx_root(&block.transactions);
+        // S1.5-FBP07: same receipts commitment as in
+        // `create_block_with_timestamp` — the later validate_chain call
+        // enforces it on every block.
+        let post = strangecoin_core::state::apply_block(
+            &walk_state(&bc.chain_snapshot()),
+            &block,
+            strangecoin::consensus::CHAIN_ID_REGTEST,
+        )
+        .expect("crafted block must apply");
+        block.receipts_root = strangecoin_core::state::receipts_root(&post.receipts);
         block.hash = bc.calculate_hash(&block);
         bc.push_block_unchecked(block);
     }

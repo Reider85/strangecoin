@@ -116,6 +116,7 @@ pub fn genesis_grant(funded: &str, amount: u64) -> Block {
         consensus_version: CURRENT_CONSENSUS_VERSION,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     })
 }
 
@@ -154,6 +155,7 @@ pub fn child_block(parent: &Block, mut transactions: Vec<Transaction>) -> Block 
         consensus_version: CURRENT_CONSENSUS_VERSION,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     }
 }
 
@@ -181,6 +183,9 @@ pub fn commit_block(
         .expect("block must apply at the state level");
     block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
     block.state_root = compute_state_root(&post.balances);
+    // S1.5-FBP07: commit to the receipts SMT root before sealing — the full
+    // validate_and_apply pipeline rejects a zero receipts_root past genesis.
+    block.receipts_root = strangecoin_core::state::receipts_root(&post.receipts);
     block.hash = hex::encode(strangecoin::serialize::block_hash(&block));
 
     let view = BlockView::new(
@@ -224,6 +229,7 @@ pub fn core_block(index: u64, transactions: Vec<Transaction>) -> Block {
         consensus_version: CURRENT_CONSENSUS_VERSION,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     }
 }
 
@@ -254,6 +260,7 @@ pub fn execution_context(callee: &str, input: Vec<u8>, gas_limit: u64) -> Execut
             consensus_version: CURRENT_CONSENSUS_VERSION,
             state_root: [0u8; 32],
             tx_root: [0u8; 32],
+            receipts_root: [0u8; 32],
         },
         accounts,
         caller: "rsc1probe".to_string(),

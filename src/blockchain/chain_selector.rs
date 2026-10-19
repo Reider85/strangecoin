@@ -253,6 +253,7 @@ mod tests {
             consensus_version: 1,
             state_root: [0u8; 32],
             tx_root: [0u8; 32],
+            receipts_root: [0u8; 32],
         };
         assert!(chain_has_tx(std::slice::from_ref(&block), &tx));
         let other = Transaction::transfer("a", "b", 2, 0, 3);
@@ -273,6 +274,7 @@ mod tests {
             consensus_version: 1,
             state_root: [0u8; 32],
             tx_root: [0u8; 32],
+            receipts_root: [0u8; 32],
         };
         let chain = vec![mk(0, &h64('a')), mk(1, &h64('b')), mk(2, &h64('c'))];
         let headers = headers_from_height(&chain, 1, 10);

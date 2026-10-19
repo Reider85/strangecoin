@@ -23,7 +23,8 @@ CONSTANTS
     BlocksPerYear,
     MaxTime,
     MaxHash,
-    MaxTarget
+    MaxTarget,
+    MaxReceiptRoot
 
 \* ---------- Types ----------
 
@@ -47,7 +48,8 @@ Block == [
     hash: 0..MaxHash,
     target: 1..MaxTarget,
     coinbase_amount: 0..(InitialReward * MaxBlocks),
-    chain_id: {ChainId}
+    chain_id: {ChainId},
+    receipts_root: 0..MaxReceiptRoot
 ]
 
 VARIABLES chain, balances, nonces, time, supply
@@ -129,6 +131,30 @@ ChainIdConsistency ==
         \A k \in DOMAIN chain[i].txs:
             chain[i].txs[k].chain_id = ChainId
 
+\* ---------- Receipts commitment (S1.5-FBP07 / ADR-0016) ----------
+\* Abstract deterministic fold over a block's receipts. In the wire
+\* implementation receipts_root is the txid-keyed SMT root of the block's
+\* receipts (state::receipts_subroot); the SMT structure and blake3 live in
+\* Rust tests, while the TLA+ model checks the header-commitment discipline:
+\* every block's receipts_root equals the deterministic commitment of its
+\* own receipt set (here: its txs — one receipt per tx in the model), and
+\* an empty receipt set commits to 0 (genesis zero-root policy, ADR-0016).
+
+RECURSIVE TxFold(_, _)
+TxFold(acc, txs) ==
+    IF txs = <<>> THEN acc
+    ELSE TxFold(
+        (acc * 7 + txs[1].amount * 3 + txs[1].nonce) % MaxReceiptRoot,
+        SubSeq(txs, 2, Len(txs)))
+
+ReceiptsRootOf(txs) ==
+    IF txs = <<>> THEN 0 ELSE 1 + TxFold(0, txs)
+
+\* Every block commits to the deterministic commitment of its own receipts
+ReceiptsRootMatch ==
+    \A i \in DOMAIN chain:
+        chain[i].receipts_root = ReceiptsRootOf(chain[i].txs)
+
 \* ---------- State transitions ----------
 
 ApplicableTx(tx) ==
@@ -158,7 +184,8 @@ AddBlock ==
             hash |-> hash_val,
             target |-> target_val,
             coinbase_amount |-> reward,
-            chain_id |-> ChainId
+            chain_id |-> ChainId,
+            receipts_root |-> ReceiptsRootOf(txs)
         ] IN
         /\ hash_val <= target_val
         /\ \A k \in DOMAIN txs: ApplicableTx(txs[k])
@@ -204,6 +231,7 @@ THEOREM Spec => [](
     /\ ChainContinuity
     /\ PowValidity
     /\ ChainIdConsistency
+    /\ ReceiptsRootMatch
 )
 
 =============================================================================

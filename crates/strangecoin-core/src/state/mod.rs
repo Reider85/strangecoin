@@ -84,3 +84,14 @@ fn root_after_inner(
 pub fn compute_state_root(accounts: &HashMap<String, AccountState>) -> [u8; 32] {
     SparseMerkleTrie::compute_root(accounts)
 }
+
+/// Header commitment over a block's receipts (S1.5-FBP07, ADR-0016): alias
+/// of [`receipts_subroot`] — the txid-keyed depth-256 SMT, so a 256-sibling
+/// [`prove_receipt`] witness verifies against the header-committed root
+/// without full state.
+///
+/// The empty-list value is the SMT empty-subtree sentinel (non-zero); genesis
+/// headers store `[0u8; 32]` instead (build-time constant, see ADR-0016).
+pub fn receipts_root(receipts: &[crate::vm::Receipt]) -> [u8; 32] {
+    receipts_subroot(receipts)
+}

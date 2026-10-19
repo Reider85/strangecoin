@@ -353,6 +353,7 @@ mod tests {
             consensus_version: 1,
             state_root: [3u8; 32],
             tx_root: [7u8; 32],
+            receipts_root: [0u8; 32],
         };
         // The decoder recomputes the hash from the canonical encoding — the
         // sample must carry the same derived value to compare equal.

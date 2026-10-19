@@ -59,6 +59,21 @@ fn seal(mut block: Block) -> Block {
     rehash(block)
 }
 
+/// S1.5-FBP07: attach the real receipts commitment and re-seal — the full
+/// validation pipeline rejects a zero `receipts_root` past genesis, so tests
+/// that expect success must commit like `mine_block_inner` does.
+fn with_receipts_commitment(parent_state: &State, block: Block) -> Block {
+    let post = apply_block(
+        parent_state,
+        &block,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    )
+    .expect("block must apply at the state level");
+    let mut block = block;
+    block.receipts_root = strangecoin_core::state::receipts_root(&post.receipts);
+    rehash(block)
+}
+
 fn genesis_with(target: &str, funded: &str) -> Block {
     seal(Block {
         index: 0,
@@ -71,6 +86,7 @@ fn genesis_with(target: &str, funded: &str) -> Block {
         consensus_version: CURRENT_CONSENSUS_VERSION,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     })
 }
 
@@ -86,6 +102,7 @@ fn child_of(parent: &Block, transactions: Vec<Transaction>, timestamp: u64) -> B
         consensus_version: CURRENT_CONSENSUS_VERSION,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     })
 }
 
@@ -123,6 +140,7 @@ fn valid_block_is_applied_to_parent_state() {
     sign_transaction(&mut tx, &alice_sk);
 
     let block = child_of(&genesis, vec![coinbase("miner", 0), tx], 600);
+    let block = with_receipts_commitment(&parent_state, block);
     let view = view(std::slice::from_ref(&genesis), false);
     let state = validate_and_apply(&parent_state, &block, &view).expect("valid block must apply");
 
@@ -273,6 +291,7 @@ fn accepts_the_target_computed_at_a_retarget_height() {
     let block = child_of(&genesis, vec![coinbase("miner", 0)], 600);
     assert_eq!(block.target, genesis.target);
     assert_eq!(1 % RETARGET_INTERVAL, 1);
+    let block = with_receipts_commitment(&parent_state, block);
     let view = view(std::slice::from_ref(&genesis), false);
     validate_and_apply(&parent_state, &block, &view).expect("inherited target is valid");
 }
@@ -366,6 +385,8 @@ fn accepts_state_root_matching_the_applied_state() {
 
     let mut committed = block;
     committed.state_root = root;
+    // S1.5-FBP07: the receipts commitment is mandatory past genesis too.
+    committed.receipts_root = strangecoin_core::state::receipts_root(&post.receipts);
     let committed = rehash(committed);
 
     let view = view(std::slice::from_ref(&genesis), false);
@@ -398,11 +419,57 @@ fn rejects_zero_state_root_when_commitment_required() {
     }
 }
 
+/// S1.5-FBP07 / ADR-0016: the receipts commitment is mandatory past genesis —
+/// the zero value is tolerated for `index == 0` only, independently of the
+/// state-root opt-in flag.
+#[test]
+fn rejects_zero_receipts_root_when_commitment_required() {
+    let (genesis, parent_state) = fixture();
+    let block = child_of(&genesis, vec![coinbase("miner", 0)], 600);
+    // Real state commitment, zero receipts commitment: the state check passes
+    // and the receipts check is the one that must fire.
+    let post = apply_block(
+        &parent_state,
+        &block,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    )
+    .expect("block applies");
+    let mut block = block;
+    block.state_root = compute_state_root(&post.balances);
+    let block = rehash(block);
+    assert_eq!(
+        block.receipts_root,
+        [0u8; 32],
+        "fixture must carry a zero receipts_root"
+    );
+
+    let view = view(std::slice::from_ref(&genesis), false);
+    let err = validate_and_apply(&parent_state, &block, &view)
+        .expect_err("a zero receipts_root must be rejected when a commitment is required");
+    match err {
+        StrangecoinError::InvalidBlock(msg) => {
+            assert!(msg.contains("receipts commitment"), "{msg}")
+        }
+        other => panic!("expected InvalidBlock, got {other:?}"),
+    }
+}
+
 #[test]
 fn accepts_zero_state_root_with_opt_in_flag() {
     // The same legacy block is tolerated under the explicit regtest opt-in.
+    // S1.5-FBP07: the opt-in relaxes only the state commitment — the receipts
+    // root stays mandatory past genesis, so the block carries the real one.
     let (genesis, parent_state) = fixture();
     let block = child_of(&genesis, vec![coinbase("miner", 0)], 600);
+    let post = apply_block(
+        &parent_state,
+        &block,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    )
+    .expect("block applies");
+    let mut block = block;
+    block.receipts_root = strangecoin_core::state::receipts_root(&post.receipts);
+    let block = rehash(block);
 
     let legacy = BlockView::new(
         std::slice::from_ref(&genesis),
@@ -429,6 +496,7 @@ fn grant_block_needs_the_opt_in_flag() {
         consensus_version: CURRENT_CONSENSUS_VERSION,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     });
     // The transfer away from the genesis address cannot be signed: that address
     // has no key. It is only valid while allow_grant_blocks is on, at height 1.
@@ -440,6 +508,12 @@ fn grant_block_needs_the_opt_in_flag() {
         ],
         600,
     );
+    // S1.5-FBP07: the receipts commitment is attached once; the signature
+    // check runs before the receipts check, so the rejection below still
+    // surfaces InvalidSignature.
+    let genesis_state = validate_and_apply(&State::new(), &genesis, &view(&[], true))
+        .expect("genesis must apply");
+    let grant = with_receipts_commitment(&genesis_state, grant);
 
     let err = apply_block_on(&genesis, &grant, false)
         .expect_err("grant block must be rejected while the flag is off");
@@ -532,6 +606,7 @@ fn accepts_block_under_both_size_limits() {
         "fixture must be under MAX_BLOCK_SIZE, got {block_size}"
     );
 
+    let block = with_receipts_commitment(&parent_state, block);
     let view = view(std::slice::from_ref(&genesis), false);
     let state = validate_and_apply(&parent_state, &block, &view)
         .expect("a block within both size limits must be accepted");

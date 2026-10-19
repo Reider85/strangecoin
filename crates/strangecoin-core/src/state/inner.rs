@@ -1018,6 +1018,7 @@ mod tests {
             consensus_version: 1,
             state_root: [0u8; 32],
             tx_root: [0u8; 32],
+            receipts_root: [0u8; 32],
         }
     }
 
@@ -1082,6 +1083,7 @@ mod tests {
             consensus_version: 1,
             state_root: [0u8; 32],
             tx_root: [0u8; 32],
+            receipts_root: [0u8; 32],
         };
         let new_state = apply_regtest(&state, &block).unwrap();
         assert_eq!(new_state.get_balance("miner"), 0);

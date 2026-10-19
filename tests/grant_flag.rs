@@ -75,6 +75,7 @@ fn block1_rejects_over_emission_when_disabled() {
         consensus_version: 1,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     };
     block.tx_root = strangecoin::serialize::compute_tx_root(&block.transactions);
     block.hash = hex::encode(strangecoin::serialize::block_hash(&block));
@@ -120,6 +121,7 @@ fn magic_string_sender_rejected_in_normal_block() {
         consensus_version: 1,
         state_root: [0u8; 32],
         tx_root: [0u8; 32],
+        receipts_root: [0u8; 32],
     };
     block.tx_root = strangecoin::serialize::compute_tx_root(&block.transactions);
     block.hash = hex::encode(strangecoin::serialize::block_hash(&block));
