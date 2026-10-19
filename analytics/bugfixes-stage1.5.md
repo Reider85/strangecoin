@@ -22,18 +22,17 @@
 | S1.5-FBP04 | **fixed** (2026-10-19) | конструктор исполняется: `execute_constructor` trait + `FrameEntry::Constructor` (skip до инстанцирования), `apply_create` rework (Success flush + endowment; failure = failed receipt + rollback), `unapply_create` receipt-gated; `CreateTx.gas_limit`+`constructor_params`, FORMAT_VERSION 6, genesis hashes + golden vectors перегенерированы (BUG-S1-007); ADR-0013 amended; Changelog 1.5.2; тесты vm-wasm contract_storage 10/10, vm_deploy_call 2/2, serialize_golden 19/19 (`f217314`) |
 | S1.5-FBP05 | **fixed** (2026-10-19) | nested value-transfer селтится: on-entry crediting в `run_frame` + `nested_call` (sender = `storage_address`), `ExecutionResult/Receipt.value_transfers` audit trail, `State.value_transfers_undo` (accumulating), `commit/reverse_value_transfers` (sequential, self-call mint-bug fixed); ADR-0013 amended; Changelog 1.5.3; `vm_transfer_to_contract` 3/3 (+ chain A→B→C, failed chain), `contract_storage` 11/11, workspace + clippy green |
 | S1.5-FBP06 | **fixed** (2026-10-19) | `SharedContractStorage = Arc<RwLock<ContractStorageMap>>` в `State`/`ExecutionContext` (Arc вместо Rc — Send/Sync сохранён), per-call `Arc::clone` O(1) вместо deep-clone; overlay unchanged; flush/undo in place через `write()`; ручной глубокий `State::clone` + deep-copy на границе `StateCache` (инвариант #4); ADR-0013 amended; Changelog 1.5.4; КГ-тест pointer-stability (100 CallTx × 10K keys); workspace + clippy green (`06c3444`) |
-| S1.5-FBP06 | **open** | `contract_storage` клонируется на каждый CallTx |
-| S1.5-FBP07 | **open** | `receipts_root` не в BlockHeader |
+| S1.5-FBP07 | **fixed** (2026-10-20) | `BlockHeader.receipts_root` + FORMAT_VERSION 7 (HEADER_WIRE_LEN 221), validate в `validate_and_apply` (zero tolerance — genesis only), set в mine/grant; ADR-0016; genesis hashes + golden vectors перегенерированы (BUG-S1-007); TLA+ `ReceiptsRootMatch` TLC PASS 35,207 states 10/10; Changelog 1.5.5; `tests/receipts.rs` light-client proof + `tests/state_root.rs` tamper + `tests/block_executor.rs` zero/mismatch; workspace + clippy green |
 | S1.5-FBP08 | **open** | regression после FBP03..FBP07 |
 | S1.5-FBP09 | **fixed** (2026-10-18) | S1.5-P19 `1f133c7` — `docs/stage1.5/STAGE1_5_SUMMARY.md` существует, 14 DoD ✅ |
 | S1.5-FBP10 | **partially fixed** (2026-10-18) | S1.5-P19 `1f133c7`: root `strangecoin`=1.5.0 ✅, AGENTS.md ✅, Changelog 1.5.0 ✅; **residual**: `strangecoin-core`=1.1.0 (ожидается 1.5.0), `strangecoin-vm-wasm`=0.1.0 (ожидается 0.2.0) |
 | S1.5-FBP11 | **partially fixed** (2026-10-18) | annotated tag `v1.5.0-stage1.5` создан и pushed на origin (`1f133c7`); **residual**: release-run verification (`REPRODUCIBLE_BUILDS.md` Actions run URL + SHA256, `STAGE1_5_SUMMARY.md` Release section) не зафиксирована — `gh` CLI отсутствует на хосте (не верифицировано + причина, retro §8.1) |
 
-Оставшийся proper work: **FBP07 → FBP08** (state-трек: receipts fold +
-regression). Тег-гейт Stage 2/3/4
-уже открыт (tag pushed), но
-FBP07 — функциональная прореха, заявленная в Changelog
-1.1.7 как MVP-обязательство; закрывать до перехода к Stage 2+.
+Оставшийся proper work: **FBP08** (regression 22 инвариантов + new threats
+после FBP01..FBP07). Тег-гейт Stage 2/3/4
+уже открыт (tag pushed);
+FBP07 (функциональная прореха Changelog 1.1.7) закрыт 2026-10-20 —
+до перехода к Stage 2+ остаётся только regression-промпт FBP08.
 
 Замечания по хосту (Windows): gcc для `secp256k1-sys` — `C:\msys64\mingw64\bin`
 (добавлять в PATH для cargo-команд); `gh` CLI не установлен.
@@ -746,6 +745,31 @@ Stage 1.5 можно сделать intermediate решение: `Rc<RefCell<Con
 ---
 
 ### S1.5-FBP07. Receipts fold в глобальный state_root (light-client receipts требуют fold в header)
+
+**Статус:** fixed (2026-10-20)
+
+**Решение (2026-10-20):** вариант (b) из спеки — `BlockHeader.receipts_root:
+[u8; 32]` (ADR-0016), commitment = `receipts_subroot` (txid-keyed SMT,
+proof-friendly; alias `state::receipts_root`), **не** fold в глобальный
+`state_root` (mixing concerns + слом ADR-0006 key space) и **не**
+`compute_receipts_root` (flat merkle, proof-unfriendly). FORMAT_VERSION
+6→7 (HEADER_WIRE_LEN 189→221; locks receipts-domain version byte,
+отложенный FBP05) → genesis hashes (mainnet `0x0d400a…83cc`, testnet
+`0x710d83…b270`) + golden vectors перегенерированы (BUG-S1-007).
+Validation: `validate_and_apply` — после state_root check; zero tolerance
+только `index == 0` (genesis хранит `[0;32]` — build-time constant,
+`load_genesis` не исполняет блок; `allow_zero_state_root` ослабляет только
+state). Set: `mine_block_inner`/`create_grant_block` — реальный subroot из
+post.receipts до seal/PoW. Тесты: light-client proof против header root
+(`tests/receipts.rs`), tamper/zero reject (`tests/state_root.rs`,
+`tests/block_executor.rs`), craft-хелперы (`craft_child`/`commit_block`/
+`with_receipts_commitment`/`time.rs`) ставят реальный root; ~60 literals
+дополнены полем (fuzz — source-level, CI-side). TLA+: `ReceiptsRootMatch`
+(abstract fold `ReceiptsRootOf`, empty→0), TLC PASS 35,207 states,
+10/10 invariants (README обновлён). Changelog 1.5.5. Отклонения от спеки:
+fold-вариант (a) отклонён (спека сама рекомендовала (b)); TLA+ инвариант —
+abstract fold, не SMT (структура — Rust-тесты, честно задокументировано в
+README residual). Verification: workspace + clippy green.
 
 **Цель:** закрыть MVP-прореху из Changelog 1.1.7: «Fold `receipts_root` + ... в
 глобальный `state_root` / `root_after` extension / rebuild генезиса — S1.5-P15.»
