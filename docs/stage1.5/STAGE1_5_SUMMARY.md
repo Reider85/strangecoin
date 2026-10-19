@@ -89,7 +89,7 @@
 | 8 | **Ops-gate** BUG-S1-013: PGP-key offline keygen + keyservers + Immunefi | mainnet freeze (human ops) | `bugfixes-stage1.md`; doc-side closed, ops остаётся |
 | 9 | **Ops-gate** BUG-S1-015: offline genesis key air-gapped keygen → vault → genesis rebuild | mainnet freeze (human ops) | tooling closed (`examples/generate_offline_genesis_key.rs`), ops остаётся |
 | 10 | CI-верификация: первый прогон 4 новых fuzz targets + `fuzz-canonical-decode` на GitHub Actions | CI | Stage 1 §6.2 precedent; jobs существуют |
-| 11 | Конструктор Create-транзакции не исполняется (deploy = install code + endowment; init-args не выполняются) | Stage 4+ (SDK) | MVP-решение P14/P15; residual зафиксирован в Changelog 1.1.7/1.1.8 |
+| 11 | ~~Конструктор Create-транзакции не исполняется~~ — **закрыт post-release S1.5-FBP04** (2026-10-19): экспорт `"constructor"` исполняется с `init_args` как calldata; `CreateTx.gas_limit` + `constructor_params` на wire (FORMAT_VERSION 6); failed-receipt rollback. Residual: constructor fee burning (Stage 5), ABI-driven selector (Stage 4 SDK) | ~~Stage 4+ (SDK)~~ done (S1.5-FBP04) | Changelog 1.5.2; ADR-0013 amended |
 | 12 | Nested value-трансферы в `apply_call` не коммитятся (P14 MVP residual) | Stage 4+ | Changelog 1.1.8 «Not in this change» |
 | 13 | Receipts fold в header / light-client receipts | Stage 2+ | THREAT_MODEL_STAGE1_5 §2 |
 | 14 | True Verkle/KZG state trie | Stage 3+ | ADR-0006 amended (BUG-S0-011); Stage 1.5 — SMT extension |

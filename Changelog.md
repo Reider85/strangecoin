@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.5.2 — core/state: constructor execution + CreateTx wire v6 (S1.5-FBP04)
+
+**Status**: Done  
+**Date**: 2026-10-19  
+**Prompts**: S1.5-FBP04 (`analytics/bugfixes-stage1.5.md`)
+
+### Конструктор Create исполняется при деплое
+
+- **`VmExecutor::execute_constructor` — новая trait-метода** (`core/vm/traits.rs`, default → `execute`): state-слой больше не зависит от того, как рантайм отличает конструктор от вызова. `WasmiExecutor` переопределяет: `run_frame` с `FrameEntry::Constructor` — экспорт `"constructor"` (сигнатуры те же, что у call-диспатча; calldata = `init_args`, staged `(ptr, len)` + `sc::input_read`). Модуль **без** экспорта `"constructor"`: skip-путь резолвится по export-секции модуля **до** инстанцирования — legacy-модули (включая oversized memory, которую лимитер отверг бы при instantiate) продолжают деплоиться без init, `gas_used = 0`.
+- **`apply_create` — полный rework** (`core/state/inner.rs`): после `register_code` исполняется конструктор с `gas_limit = CreateTx.gas_limit`. `Success` → flush `storage_overlay` в `State.contract_storage` (пересчёт `storage_root`, инвариант #19 extension) + перенос `endowment` sender → contract + receipt с фактическим `gas_used` и логами. Ошибка (`OutOfGas`/`Failed`) → **failed-receipt семантика** (зеркало `apply_call`; блок применяется): деплой откатывается целиком (нет аккаунта, нет storage, endowment не двигается), nonce потребляется, receipt = `Receipt::from_vm_error(.., create.gas_limit)`.
+- **`unapply_create`**: refund endowment **только при Success-receipt** (как `unapply_call`; отсутствие receipt = success), `unapply_call_storage` для записей конструктора, удаление аккаунта, nonce--. Инвариант #4 (round-trip) покрывает constructor-деплой и failed-деплой.
+- **`CreateTx`: новые поля `gas_limit: u64` + `constructor_params: Vec<AbiParam>`** (`core/types.rs`, serde defaults; `AbiType`/`AbiParam` + `Hash`). `constructor_params` — зарезервировано под будущий ABI-driven selector (MVP диспатчит по имени); на wire — canonical-имена типов через запятую. `Transaction::create` сохраняет сигнатуру (gas 0, params пусто — legacy); новый `Transaction::create_with(...)`.
+- **FORMAT_VERSION 5 → 6** (`core/serialize.rs`): тело Create несёт `constructor_params` + `gas_limit`; общий version-byte двигает и заголовки/receipts — `EXPECTED_GENESIS_HASH` / `EXPECTED_TESTNET_GENESIS_HASH` пересчитаны (`examples/print_genesis_hashes.rs`, procedure BUG-S1-007); golden vectors перегенерированы (`examples/print_serialized_block.rs`, `tests/serialize_golden.rs` 19/19 + новый кейс `create_with` params). Старые data-dir несовместимы (mainnet не запущен — допустимо).
+- **Consensus/block-gas**: `verify_transaction` (Create) — `gas_limit ≤ BLOCK_GAS_LIMIT` (0 разрешён — legacy); `enforce_block_gas_limit` резервирует `create.gas_limit` (инвариант #15; helper-default 0 → существующие сценарии не меняются).
+- **ADR-0013 amended**: секция «Amendment: constructor convention (S1.5-FBP04)».
+- **Тесты**: `vm-wasm/tests/contract_storage.rs` +4 (constructor стейджит `init_args` в storage + endowment/nonce; OutOfGas → rollback без аккаунта/endowment; legacy-без-конструктора → gas 0; unapply round-trip); `tests/vm_deploy_call.rs` +1 component-level (constructor пишет initial supply → call читает); `serialize_golden.rs` +1 (wire v6 с params/gas); `tx_types.rs` +1 (gas_limit > BLOCK_GAS_LIMIT → `InvalidGasLimit`); моки `FailVm` (`contract_storage_smt.rs`, `state_roundtrip.rs`) получили `execute_constructor`-override — deploy succeeds, calls fail.
+- **Verification**: `cargo test --workspace` green; `cargo clippy --workspace --all-targets -- -D warnings` green.
+
+### Residual (Stage 2+ / FBP05+)
+
+- Nested value-трансферы в `apply_call` — S1.5-FBP05; lazy contract storage — S1.5-FBP06; `receipts_root` в BlockHeader — S1.5-FBP07.
+- Constructor fee burning — Stage 5 fee market (сейчас gas = cap, fees = 0); `constructor_params` → ABI-driven selector — Stage 4 SDK.
+
+---
+
 ## 1.5.1 — vm-wasm: selector-based dispatch + `sc::input_read` (S1.5-FBP03)
 
 **Status**: Done  

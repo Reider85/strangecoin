@@ -113,6 +113,28 @@ fn verify_create_signed_ok() {
     verify_transaction(&tx).expect("valid signed create must verify");
 }
 
+/// S1.5-FBP04: the constructor budget is capped by the block gas limit;
+/// `0` stays legal (legacy deploy without init).
+#[test]
+fn verify_create_rejects_gas_limit_over_block_limit() {
+    let (addr, sk) = keypair();
+    let mut tx = Transaction::create_with(
+        &addr,
+        vec![0x00, 0x61, 0x73, 0x6d],
+        vec![],
+        vec![],
+        0,
+        strangecoin_core::vm::BLOCK_GAS_LIMIT + 1,
+        1,
+        CHAIN_ID_REGTEST,
+    );
+    sign(&mut tx, &sk);
+    assert!(matches!(
+        verify_transaction(&tx),
+        Err(CoreError::InvalidGasLimit { .. })
+    ));
+}
+
 #[test]
 fn verify_call_signed_ok() {
     let (addr, sk) = keypair();
@@ -362,13 +384,17 @@ fn variant_structs_are_constructible() {
         from: "a".into(),
         init_code: vec![1],
         init_args: vec![2],
+        constructor_params: vec![],
         endowment: 3,
+        gas_limit: 7,
         fee: 4,
         nonce: 5,
         chain_id: 6,
         signature: vec![],
     };
     assert_eq!(c.endowment, 3);
+    assert_eq!(c.gas_limit, 7);
+    assert!(c.constructor_params.is_empty());
 
     let k = CallTx {
         from: "a".into(),

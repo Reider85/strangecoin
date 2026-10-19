@@ -8,7 +8,7 @@ use strangecoin_core::vm::limits::{MAX_CALL_DEPTH, MAX_STACK_HEIGHT};
 use strangecoin_core::vm::{
     ExecutionContext, ExecutionResult, Log, Opcode, TxStatus, VmError, VmExecutor,
 };
-use wasmi::{Config, Engine, Instance, Linker, Module, Store};
+use wasmi::{Config, Engine, ExternType, Instance, Linker, Module, Store};
 
 mod error;
 pub mod gas;
@@ -25,9 +25,25 @@ pub use precompiles::{dispatch_precompile, PrecompileError, PrecompileOutput};
 /// than 4 calldata bytes, keep the pre-ABI single-entry convention.
 const MAIN_EXPORT: &str = "main";
 
+/// Deploy-time export invoked by [`FrameEntry::Constructor`]
+/// (S1.5-FBP04, ADR-0013 amended): absent = legacy deploy without init.
+const CONSTRUCTOR_EXPORT: &str = "constructor";
+
 /// Page size of WASM linear memory, used when staging calldata for
 /// selector-dispatched exports (S1.5-FBP03).
 const WASM_PAGE_BYTES: usize = 65_536;
+
+/// Which export a frame invokes (S1.5-FBP03/FBP04, ADR-0013 amended).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FrameEntry {
+    /// Calldata selector dispatch with `main()` fallback — every `Call`
+    /// frame and nested `call`/`staticcall`/`delegatecall` child.
+    Selector,
+    /// Deploy constructors: invoke the `"constructor"` export with the
+    /// `init_args` calldata; a module without that export skips init
+    /// (legacy compat, Success with the instantiation fuel only).
+    Constructor,
+}
 
 /// Outcome of one call frame: the [`ExecutionResult`] plus the frame's
 /// mutated working state, so a nested call can merge the child's storage
@@ -95,6 +111,7 @@ impl WasmiExecutor {
             Rc::clone(&self.code),
             Rc::clone(&self.abis),
             call_stack,
+            FrameEntry::Selector,
         )
         .map(|outcome| outcome.result)
     }
@@ -161,6 +178,26 @@ impl VmExecutor for WasmiExecutor {
             Rc::clone(&self.code),
             Rc::clone(&self.abis),
             call_stack,
+            FrameEntry::Selector,
+        )
+        .map(|outcome| outcome.result)
+    }
+
+    fn execute_constructor(&self, ctx: ExecutionContext) -> Result<ExecutionResult, Self::Error> {
+        let wasm = self
+            .code
+            .get(&ctx.callee)
+            .ok_or_else(|| WasmiError::NoCode {
+                address: ctx.callee.clone(),
+            })?;
+        let call_stack = vec![ctx.callee.clone()];
+        run_frame(
+            wasm,
+            ctx,
+            Rc::clone(&self.code),
+            Rc::clone(&self.abis),
+            call_stack,
+            FrameEntry::Constructor,
         )
         .map(|outcome| outcome.result)
     }
@@ -192,6 +229,8 @@ impl VmExecutor for WasmiExecutor {
 /// [`ExecutionContext`] derived from the parent's host state. Returns the
 /// full [`FrameOutcome`] so the caller can merge storage/accounts/logs on
 /// success. `call_stack` is the active stack including this frame's callee.
+/// `entry` selects the export-resolution strategy (S1.5-FBP03 selector
+/// dispatch vs S1.5-FBP04 constructor; ADR-0013 amended).
 ///
 /// Resource limits (S1.5-P13): the engine caps the value stack at
 /// [`MAX_STACK_HEIGHT`] bytes and wasm-internal recursion at
@@ -204,6 +243,7 @@ pub(crate) fn run_frame(
     code: Rc<HashMap<String, Vec<u8>>>,
     abis: Rc<HashMap<String, ContractAbi>>,
     call_stack: Vec<String>,
+    entry: FrameEntry,
 ) -> Result<FrameOutcome, WasmiError> {
     let gas_limit = ctx.gas_limit;
 
@@ -211,7 +251,12 @@ pub(crate) fn run_frame(
     // at least 4 bytes is matched against the callee's registered ABI; a
     // hit names the WASM export to invoke, a miss falls back to the legacy
     // `main` export. Resolved before the store consumes `ctx`/`abis`.
-    let dispatch_entry = resolve_dispatch_entry(&abis, &ctx);
+    // Constructor frames resolve after instantiation (export presence
+    // check, S1.5-FBP04).
+    let dispatch_entry = match entry {
+        FrameEntry::Selector => resolve_dispatch_entry(&abis, &ctx),
+        FrameEntry::Constructor => None,
+    };
 
     let mut config = Config::default();
     config.consume_fuel(true);
@@ -221,6 +266,30 @@ pub(crate) fn run_frame(
 
     let module = Module::new(&engine, wasm)
         .map_err(|e| WasmiError::Engine(format!("module decode: {e}")))?;
+
+    // Constructor without an init export (S1.5-FBP04): skip before
+    // instantiation — legacy modules (including oversized memories the
+    // resource limiter would deny at instantiate time) keep the
+    // deploy-without-init semantics, and the skip burns no fuel.
+    if entry == FrameEntry::Constructor
+        && !module.exports().any(|export| {
+            export.name() == CONSTRUCTOR_EXPORT && matches!(export.ty(), ExternType::Func(_))
+        })
+    {
+        return Ok(FrameOutcome {
+            result: ExecutionResult {
+                gas_used: 0,
+                logs: Vec::new(),
+                status: TxStatus::Success,
+                return_data: Vec::new(),
+                storage_overlay: HashMap::new(),
+            },
+            storage_overlay: HashMap::new(),
+            accounts: ctx.accounts,
+            logs: Vec::new(),
+            return_data: Vec::new(),
+        });
+    }
 
     let mut store = Store::new(
         &engine,
@@ -240,11 +309,15 @@ pub(crate) fn run_frame(
         .instantiate_and_start(&mut store, &module)
         .map_err(|e| WasmiError::Instantiate(e.to_string()))?;
 
-    let return_data = match dispatch_entry {
-        // ABI hit: the contract must export the entry — a missing export is
-        // a contract bug, surfaced as `MissingExport` (no silent fallback).
-        Some(name) => invoke_export(&instance, &mut store, &name, true)?,
-        None => invoke_export(&instance, &mut store, MAIN_EXPORT, false)?,
+    let return_data = match entry {
+        FrameEntry::Selector => match dispatch_entry {
+            // ABI hit: the contract must export the entry — a missing export is
+            // a contract bug, surfaced as `MissingExport` (no silent fallback).
+            Some(name) => invoke_export(&instance, &mut store, &name, true)?,
+            None => invoke_export(&instance, &mut store, MAIN_EXPORT, false)?,
+        },
+        // The module-level check above guarantees the export exists.
+        FrameEntry::Constructor => invoke_export(&instance, &mut store, CONSTRUCTOR_EXPORT, true)?,
     };
 
     let fuel_left = store

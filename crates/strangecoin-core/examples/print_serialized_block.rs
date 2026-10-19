@@ -4,9 +4,13 @@
 //! deliberate `FORMAT_VERSION` bump + ADR. Any unplanned diff here means
 //! `serialize_block` / `serialize_block_header` / `block_hash` changed
 //! silently — revert or follow the bump procedure.
+//!
+//! Last regeneration: S1.5-FBP04 — FORMAT_VERSION 5 → 6 (Create carries
+//! `constructor_params` + `gas_limit`); genesis hashes regenerated via
+//! `examples/print_genesis_hashes.rs` in the same commit.
 
 use strangecoin_core::serialize::*;
-use strangecoin_core::types::{Block, CallTx, CreateTx, Transaction, TransferTx};
+use strangecoin_core::types::{Block, CallTx, Transaction, TransferTx};
 
 fn tx1() -> Transaction {
     Transaction::Transfer(TransferTx {
@@ -78,16 +82,7 @@ fn main() {
     let b1 = block1();
     let b2 = block2();
 
-    let create = Transaction::Create(CreateTx {
-        from: "sender1".to_string(),
-        init_code: vec![1, 2, 3],
-        init_args: vec![4, 5],
-        endowment: 50,
-        fee: 0,
-        nonce: 1,
-        chain_id: 1,
-        signature: Vec::new(),
-    });
+    let create = Transaction::create("sender1", vec![1, 2, 3], vec![4, 5], 50, 1, 1);
     let call = Transaction::Call(CallTx {
         from: "sender1".to_string(),
         to: "receiver1".to_string(),

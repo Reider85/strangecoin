@@ -31,7 +31,7 @@ use wasmi::Caller;
 use crate::gas::HostCallWeight;
 use crate::host::{abi, charge, checked_u32, vm_err, HostState};
 use crate::precompiles::{dispatch_precompile, PrecompileError};
-use crate::{run_frame, FrameOutcome, WasmiError};
+use crate::{run_frame, FrameEntry, FrameOutcome, WasmiError};
 
 pub fn register(linker: &mut wasmi::Linker<HostState>) -> Result<(), wasmi::Error> {
     call::register(linker)?;
@@ -190,7 +190,14 @@ pub(crate) fn nested_call(
         (status, gas_used, return_data, None, accounts, Vec::new())
     } else {
         match code.get(&to).cloned() {
-            Some(wasm) => match run_frame(&wasm, child_ctx, code, abis, child_call_stack) {
+            Some(wasm) => match run_frame(
+                &wasm,
+                child_ctx,
+                code,
+                abis,
+                child_call_stack,
+                FrameEntry::Selector,
+            ) {
                 Ok(FrameOutcome {
                     result,
                     storage_overlay,

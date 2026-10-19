@@ -204,8 +204,8 @@ pub fn validate_and_apply(
 
     // Invariant #15 / ADR-0014 (S1.5-P09): the block's total gas reservation
     // may not exceed the fixed block gas limit. Reserved gas is summed from
-    // `Call` transactions (full `gas_limit` is held up-front); transfers and
-    // creates reserve nothing.
+    // `Call` transactions (full `gas_limit` is held up-front) and `Create`
+    // constructor budgets (S1.5-FBP04); transfers reserve nothing.
     enforce_block_gas_limit(&block.transactions)?;
 
     let new_state = apply_and_execute(parent_state, block, view)?;
@@ -242,12 +242,13 @@ pub fn validate_and_apply(
     Ok(new_state)
 }
 
-/// Invariant #15 (ADR-0014): reject blocks whose summed `Call` gas
-/// reservations exceed [`strangecoin_core::vm::BLOCK_GAS_LIMIT`].
+/// Invariant #15 (ADR-0014): reject blocks whose summed gas reservations
+/// exceed [`strangecoin_core::vm::BLOCK_GAS_LIMIT`].
 ///
-/// `Transfer` and `Create` transactions carry no `gas_limit` and reserve
-/// nothing; actual execution metering is checked post-apply by
-/// [`enforce_receipt_gas_limit`] (S1.5-P15).
+/// `Call` reserves its full `gas_limit` up-front; `Create` reserves its
+/// constructor budget since S1.5-FBP04 (`gas_limit = 0` legacy deploys
+/// reserve nothing); `Transfer` carries no gas. Actual execution metering
+/// is checked post-apply by [`enforce_receipt_gas_limit`] (S1.5-P15).
 pub(crate) fn enforce_block_gas_limit(
     transactions: &[Transaction],
 ) -> Result<(), StrangecoinError> {
@@ -255,7 +256,8 @@ pub(crate) fn enforce_block_gas_limit(
         .iter()
         .map(|tx| match tx {
             Transaction::Call(call) => call.gas_limit,
-            Transaction::Transfer(_) | Transaction::Create(_) => 0,
+            Transaction::Create(create) => create.gas_limit,
+            Transaction::Transfer(_) => 0,
         })
         .sum();
     if total > strangecoin_core::vm::BLOCK_GAS_LIMIT {

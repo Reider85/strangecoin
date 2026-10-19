@@ -20,6 +20,7 @@ use strangecoin_core::types::Transaction;
 use strangecoin_core::vm::TxStatus;
 
 const KEY: [u8; 32] = [0x01u8; 32];
+const INIT_KEY: [u8; 32] = [0x07u8; 32];
 const TOPIC: [u8; 32] = [0xaau8; 32];
 
 /// Storage-writing, event-emitting contract that returns 42.
@@ -157,5 +158,96 @@ fn deploy_call_event_receipt_storage_end_to_end() {
     assert_eq!(
         i32::from_le_bytes(result.return_data[..4].try_into().unwrap()),
         42
+    );
+}
+
+/// Constructor writes an "initial supply" under `INIT_KEY`; `main` reads
+/// it back and returns the byte count (S1.5-FBP04 end-to-end deploy-init).
+fn constructor_init_supply_wat() -> String {
+    wat(
+        &[(0, &INIT_KEY), (32, b"init")],
+        r#"
+        (import "sc" "storage_write" (func $w (param i32 i32 i32) (result i32)))
+        (import "sc" "storage_read" (func $r (param i32 i32 i32) (result i32)))
+        (func (export "constructor") (param i32 i32) (result i32)
+          (drop (call $w (i32.const 0) (i32.const 32) (i32.const 4)))
+          (i32.const 0))
+        (func (export "main") (result i32)
+          (call $r (i32.const 0) (i32.const 128) (i32.const 32)))"#,
+    )
+}
+
+#[test]
+fn deploy_constructor_initializes_storage_then_call_reads_it() {
+    let (alice, alice_sk) = keypair();
+    let (mut chain, mut state) = init_chain(&alice, 10_000);
+    let mut codes: HashMap<String, Vec<u8>> = HashMap::new();
+
+    // --- Block 1: deploy with a constructor budget ------------------------
+    let init_code = constructor_init_supply_wat().into_bytes();
+    let create = sign(
+        Transaction::create_with(
+            &alice,
+            init_code.clone(),
+            vec![],
+            vec![],
+            100,
+            200_000,
+            0,
+            CHAIN_ID_REGTEST,
+        ),
+        &alice_sk,
+    );
+    let contract = derive(&alice, 0);
+    let create_block = child_block(chain.last().unwrap(), vec![create]);
+    state = commit_block(&mut chain, &state, create_block, &codes);
+    codes.insert(contract.clone(), init_code.clone());
+
+    let create_receipt = &state.receipts[1];
+    assert_eq!(create_receipt.status, TxStatus::Success);
+    assert!(
+        create_receipt.gas_used > 0 && create_receipt.gas_used <= 200_000,
+        "constructor is metered within the create budget, got {}",
+        create_receipt.gas_used
+    );
+
+    let stored = state
+        .contract_storage
+        .get(&contract)
+        .and_then(|storage| storage.get(&INIT_KEY))
+        .expect("constructor storage must persist through the full pipeline");
+    assert_eq!(stored, b"init");
+    let contract_acc = state
+        .get_account(&contract)
+        .unwrap()
+        .as_contract()
+        .unwrap();
+    assert_ne!(contract_acc.storage_root, [0u8; 32]);
+    assert_eq!(contract_acc.balance, 100, "endowment moved on Success");
+    assert_eq!(state.get_balance(&alice), 9_900);
+
+    // --- Block 2: call `main` (empty calldata -> legacy fallback) ---------
+    let call = sign(
+        Transaction::call(&alice, &contract, vec![], 0, 200_000, 1, CHAIN_ID_REGTEST),
+        &alice_sk,
+    );
+    let call_block = child_block(chain.last().unwrap(), vec![call]);
+    state = commit_block(&mut chain, &state, call_block, &codes);
+    assert_eq!(state.receipts[1].status, TxStatus::Success);
+
+    // The read path returns the 4-byte length written by the constructor
+    // (seed the probe context with the persisted storage snapshot).
+    let wasm = String::from_utf8(init_code.clone()).expect("wat is utf-8");
+    let vm = strangecoin_vm_wasm::WasmiExecutor::new();
+    let mut probe = execution_context(&contract, vec![], 200_000);
+    probe.storage = state.contract_storage.clone();
+    let result = vm
+        .execute_wasm(wasm.as_bytes(), &probe)
+        .expect("deployed module must run");
+    assert_eq!(result.status, TxStatus::Success);
+    assert_eq!(
+        i32::from_le_bytes(result.return_data[..4].try_into().unwrap()),
+        4,
+        "main reads the constructor-initialized slot"
     );
 }

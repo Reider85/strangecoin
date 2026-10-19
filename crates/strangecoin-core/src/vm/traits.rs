@@ -11,6 +11,16 @@ pub trait VmExecutor {
 
     fn execute(&self, ctx: ExecutionContext) -> Result<ExecutionResult, Self::Error>;
 
+    /// Execute a deploy's constructor frame (S1.5-FBP04, ADR-0013 amended):
+    /// `ctx.input` carries the `CreateTx.init_args` calldata and
+    /// `ctx.gas_limit` the `CreateTx.gas_limit` budget. The default
+    /// delegates to [`execute`](Self::execute); runtimes that distinguish
+    /// constructors (wasmi: invoke the `"constructor"` export, skip when
+    /// absent) override it.
+    fn execute_constructor(&self, ctx: ExecutionContext) -> Result<ExecutionResult, Self::Error> {
+        self.execute(ctx)
+    }
+
     /// Gas cost of one metering unit (ADR-0014: instruction / host-call /
     /// memory-growth weights).
     fn gas_cost(&self, opcode: Opcode) -> u64;

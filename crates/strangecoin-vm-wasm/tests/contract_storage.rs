@@ -1,9 +1,12 @@
-//! Contract storage end-to-end through wasmi (S1.5-P15): `storage_write`
-//! flushes into `State.contract_storage`, `ContractAccount.storage_root`
-//! and the global state root move with it (invariant #19 extension),
-//! `storage_read` falls through to the persisted snapshot seeded by
-//! `apply_call`, nested calls write into their own contract scope, and
-//! `unapply_block` restores the exact pre-call contents (invariant #4).
+//! Contract storage end-to-end through wasmi (S1.5-P15, extended
+//! S1.5-FBP04): `storage_write` flushes into `State.contract_storage`,
+//! `ContractAccount.storage_root` and the global state root move with it
+//! (invariant #19 extension), `storage_read` falls through to the
+//! persisted snapshot seeded by `apply_call`, nested calls write into
+//! their own contract scope, and `unapply_block` restores the exact
+//! pre-call contents (invariant #4). S1.5-FBP04 adds the deploy path:
+//! the `constructor` export runs with `init_args` as calldata, its
+//! writes persist on success and the whole deploy rolls back on failure.
 
 use strangecoin_core::consensus::CHAIN_ID_REGTEST;
 use strangecoin_core::state::sparse_merkle::SparseMerkleTrie;
@@ -435,4 +438,196 @@ fn storage_roots_deterministic_across_replay() {
         SparseMerkleTrie::compute_root(&second.balances)
     );
     assert_eq!(first.contract_storage, second.contract_storage);
+}
+
+// ---------------------------------------------------------------------------
+// Constructor execution (S1.5-FBP04)
+// ---------------------------------------------------------------------------
+
+/// Stores the frame calldata (`init_args`, staged by the executor as the
+/// `(ptr, len)` argument pair) under `KEY_A` from the `constructor`
+/// export — proves deploy-time execution, calldata staging and the
+/// storage flush in one module.
+fn constructor_init_args_wat() -> String {
+    wat(
+        &[(0, &KEY_A)],
+        r#"
+        (import "sc" "storage_write" (func $w (param i32 i32 i32) (result i32)))
+        (func (export "constructor") (param $ptr i32) (param $len i32) (result i32)
+          (drop (call $w (i32.const 0) (local.get $ptr) (local.get $len)))
+          (local.get $len))"#,
+    )
+}
+
+/// Infinite-looping `constructor` — burns the whole create budget.
+fn constructor_loop_wat() -> String {
+    wat(
+        &[],
+        r#"
+        (func (export "constructor") (param i32 i32)
+          (loop $l (br $l)))"#,
+    )
+}
+
+#[test]
+fn constructor_stages_init_args_and_persists_storage() {
+    let state = funded_state();
+    let wasm = constructor_init_args_wat();
+    let create = Transaction::create_with(
+        "sc1alice",
+        wasm.into_bytes(),
+        vec![9, 9, 9],
+        vec![],
+        100,
+        100_000,
+        0,
+        CHAIN_ID_REGTEST,
+    );
+    let contract = derive(0);
+    let block = test_block(1, vec![create]);
+
+    let mut vm = WasmiExecutor::new();
+    let applied =
+        apply_block_with_vm(&state, &block, CHAIN_ID_REGTEST, &mut vm).expect("deploy applies");
+
+    let receipt = &applied.receipts[1];
+    assert_eq!(receipt.status, TxStatus::Success);
+    assert!(
+        receipt.gas_used > 0 && receipt.gas_used <= 100_000,
+        "constructor fuel is metered within the create budget, got {}",
+        receipt.gas_used
+    );
+
+    let storage = applied
+        .contract_storage
+        .get(&contract)
+        .expect("constructor writes must flush");
+    assert_eq!(
+        storage[&KEY_A],
+        vec![9, 9, 9],
+        "init_args staged as constructor calldata landed in storage"
+    );
+
+    let storage_root = applied
+        .get_account(&contract)
+        .unwrap()
+        .as_contract()
+        .unwrap()
+        .storage_root;
+    assert_eq!(storage_root, contract_storage_root(storage));
+    assert_ne!(storage_root, [0u8; 32]);
+
+    // Endowment moved on the successful constructor; nonce consumed.
+    assert_eq!(applied.get_balance("sc1alice"), 9_900);
+    assert_eq!(applied.get_balance(&contract), 100);
+    assert_eq!(applied.get_nonce("sc1alice"), 1);
+}
+
+#[test]
+fn constructor_out_of_gas_rolls_back_deploy() {
+    let state = funded_state();
+    let wasm = constructor_loop_wat();
+    let create = Transaction::create_with(
+        "sc1alice",
+        wasm.into_bytes(),
+        vec![],
+        vec![],
+        100,
+        50_000,
+        0,
+        CHAIN_ID_REGTEST,
+    );
+    let contract = derive(0);
+    let block = test_block(1, vec![create]);
+
+    let mut vm = WasmiExecutor::new();
+    let applied = apply_block_with_vm(&state, &block, CHAIN_ID_REGTEST, &mut vm)
+        .expect("failed constructor still yields a receipt");
+
+    let receipt = &applied.receipts[1];
+    assert_eq!(receipt.status, TxStatus::OutOfGas);
+    assert_eq!(
+        receipt.gas_used, 50_000,
+        "OutOfGas burns the full create budget"
+    );
+
+    assert!(
+        applied.get_account(&contract).is_none(),
+        "failed constructor must not install the account"
+    );
+    assert_eq!(applied.get_balance(&contract), 0);
+    assert_eq!(
+        applied.get_balance("sc1alice"),
+        10_000,
+        "endowment must not move on failure"
+    );
+    assert_eq!(applied.get_nonce("sc1alice"), 1, "nonce stays consumed");
+    assert!(!applied.contract_storage.contains_key(&contract));
+}
+
+#[test]
+fn deploy_without_constructor_export_skips_init() {
+    let state = funded_state();
+    let wasm = read_write_wat(); // exports `main` only
+    let create = Transaction::create_with(
+        "sc1alice",
+        wasm.into_bytes(),
+        vec![],
+        vec![],
+        100,
+        100_000,
+        0,
+        CHAIN_ID_REGTEST,
+    );
+    let contract = derive(0);
+    let block = test_block(1, vec![create]);
+
+    let mut vm = WasmiExecutor::new();
+    let applied =
+        apply_block_with_vm(&state, &block, CHAIN_ID_REGTEST, &mut vm).expect("legacy deploy");
+
+    let receipt = &applied.receipts[1];
+    assert_eq!(receipt.status, TxStatus::Success);
+    assert_eq!(
+        receipt.gas_used, 0,
+        "skip path burns no fuel (no instantiation)"
+    );
+
+    let account = applied.get_account(&contract).expect("account installed");
+    assert!(account.is_contract());
+    assert_eq!(account.balance(), 100, "endowment moved on legacy deploy");
+    assert_eq!(applied.get_balance("sc1alice"), 9_900);
+    assert!(!applied.contract_storage.contains_key(&contract));
+}
+
+#[test]
+fn unapply_restores_constructor_deploy_roundtrip() {
+    let state = funded_state();
+    let wasm = constructor_init_args_wat();
+    let create = Transaction::create_with(
+        "sc1alice",
+        wasm.into_bytes(),
+        vec![9, 9, 9],
+        vec![],
+        100,
+        100_000,
+        0,
+        CHAIN_ID_REGTEST,
+    );
+    let contract = derive(0);
+    let block = test_block(1, vec![create]);
+
+    let after = {
+        let mut vm = WasmiExecutor::new();
+        apply_block_with_vm(&state, &block, CHAIN_ID_REGTEST, &mut vm).expect("deploy applies")
+    };
+    assert_eq!(after.contract_storage[&contract][&KEY_A], vec![9, 9, 9]);
+
+    let restored = unapply_block(&after, &block, CHAIN_ID_REGTEST).expect("unapply");
+    assert_eq!(
+        restored, state,
+        "unapply must reverse constructor storage and the endowment (invariant #4)"
+    );
+    assert!(restored.get_account(&contract).is_none());
+    assert!(!restored.contract_storage.contains_key(&contract));
 }

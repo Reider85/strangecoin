@@ -296,8 +296,7 @@ fn apply_non_genesis<V: VmExecutor>(
                     })
                 }
                 Some(vm) => {
-                    let receipt =
-                        apply_create(state, create, chain_id, vm, block.index, tx_index as u32)?;
+                    let receipt = apply_create(state, create, chain_id, vm, block, tx_index as u32)?;
                     receipts.push(receipt);
                 }
             },
@@ -318,16 +317,26 @@ fn apply_non_genesis<V: VmExecutor>(
     Ok(())
 }
 
-/// Deploy path (S1.5-P14): install the contract account and register its
-/// code with the executor. The constructor export is not executed (MVP —
-/// S1.5-P17 exercises the deployed entry point directly); `init_args` are
-/// carried in the signed tx for forward compatibility.
+/// Deploy path (S1.5-P14, extended S1.5-FBP04): install the contract
+/// account, register its code, then execute the constructor frame.
+///
+/// Constructor convention (ADR-0013 amended): the runtime invokes the WASM
+/// export `"constructor"` with `init_args` as calldata under the
+/// `CreateTx.gas_limit` budget; a module without that export deploys
+/// without init (legacy compat). On `Success` the staged storage writes
+/// are flushed (`storage_root` recomputed — invariant #19 extension), the
+/// `endowment` moves sender → contract, and the receipt carries the metered
+/// gas and constructor logs. On failure (out-of-gas, engine error,
+/// reverted frame) the deployment is rolled back — no account, no storage,
+/// no endowment movement — the sender nonce stays consumed, and the
+/// receipt records `OutOfGas`/`Failed` (failed-receipt semantics, mirrors
+/// `apply_call`; the block still applies).
 fn apply_create<V: VmExecutor>(
     state: &mut State,
     create: &crate::types::CreateTx,
     chain_id: u32,
     vm: &mut V,
-    block_height: u64,
+    block: &Block,
     tx_index: u32,
 ) -> Result<Receipt, CoreError> {
     let sender_nonce = state.get_nonce(&create.from);
@@ -349,8 +358,11 @@ fn apply_create<V: VmExecutor>(
             required: create.endowment,
         });
     }
-    state.set_balance(&create.from, sender_balance - create.endowment);
 
+    // The endowment is credited to the contract account up-front (the
+    // constructor may observe its own balance through the accounts view)
+    // but only debited from the sender on `Success` — a failed frame
+    // leaves both sides untouched.
     let code_hash = *blake3::hash(&create.init_code).as_bytes();
     state.set_account(
         &address,
@@ -364,14 +376,76 @@ fn apply_create<V: VmExecutor>(
     state.set_nonce(&create.from, sender_nonce + 1);
     vm.register_code(&address, create.init_code.clone())?;
 
-    Ok(Receipt {
-        txid: txid(&Transaction::Create(create.clone())),
+    let coinbase = block
+        .transactions
+        .iter()
+        .find(|tx| tx.is_coinbase())
+        .and_then(|tx| tx.receiver())
+        .unwrap_or_default()
+        .to_string();
+
+    let ctx = ExecutionContext {
+        block: block.header(),
+        accounts: state.balances.clone(),
+        caller: create.from.clone(),
+        callee: address.clone(),
+        value: create.endowment,
+        gas_limit: create.gas_limit,
         gas_used: 0,
-        logs: Vec::new(),
-        status: TxStatus::Success,
-        block_height,
-        tx_index,
-    })
+        depth: 0,
+        reentrant: false,
+        read_only: false,
+        block_context: BlockContext {
+            height: block.index,
+            timestamp: block.timestamp,
+            coinbase,
+            block_gas_limit: BLOCK_GAS_LIMIT,
+        },
+        storage: state.contract_storage.clone(),
+        storage_overlay: HashMap::new(),
+        storage_address: address.clone(),
+        input: create.init_args.clone(),
+    };
+
+    let create_tx = Transaction::Create(create.clone());
+    let txid = txid(&create_tx);
+    match vm.execute_constructor(ctx) {
+        Ok(result) if result.status == TxStatus::Success => {
+            flush_storage_writes(state, &result, txid);
+            let new_sender = state
+                .get_balance(&create.from)
+                .checked_sub(create.endowment)
+                .ok_or(CoreError::StateOverflow)?;
+            state.set_balance(&create.from, new_sender);
+            Ok(Receipt::from_execution(
+                txid,
+                block.index,
+                tx_index,
+                &result,
+            ))
+        }
+        Ok(result) => {
+            // Defensive non-success status: roll the deployment back.
+            state.set_account(&address, Account::default());
+            Ok(Receipt::from_execution(
+                txid,
+                block.index,
+                tx_index,
+                &result,
+            ))
+        }
+        Err(err) => {
+            let vm_error: VmError = err.into();
+            state.set_account(&address, Account::default());
+            Ok(Receipt::from_vm_error(
+                txid,
+                block.index,
+                tx_index,
+                &vm_error,
+                create.gas_limit,
+            ))
+        }
+    }
 }
 
 /// Call path (S1.5-P14/P15): execute the contract entry point through `vm`.
@@ -622,13 +696,27 @@ fn unapply_non_genesis(state: &mut State, block: &Block, chain_id: u32) -> Resul
                     .checked_sub(1)
                     .ok_or(CoreError::StateOverflow)?;
                 let address = derive_contract_address(&create.from, nonce, chain_id)?;
+                // S1.5-FBP04: the endowment only moved on a successful
+                // constructor — mirror that here (missing receipt defaults
+                // to success, like `unapply_call`). Failed deploys left no
+                // account and no storage; the removes are no-ops then.
+                let receipt = state
+                    .receipts
+                    .iter()
+                    .find(|r| r.txid == txid(tx));
+                let was_success = receipt
+                    .map(|r| r.status == TxStatus::Success)
+                    .unwrap_or(true);
+                unapply_call_storage(state, txid(tx));
                 state.set_account(&address, Account::default());
                 state.contract_storage.remove(&address);
-                let receiver_balance = state.get_balance(&create.from);
-                let new_balance = receiver_balance
-                    .checked_add(create.endowment)
-                    .ok_or(CoreError::StateOverflow)?;
-                state.set_balance(&create.from, new_balance);
+                if was_success {
+                    let receiver_balance = state.get_balance(&create.from);
+                    let new_balance = receiver_balance
+                        .checked_add(create.endowment)
+                        .ok_or(CoreError::StateOverflow)?;
+                    state.set_balance(&create.from, new_balance);
+                }
                 state.set_nonce(&create.from, nonce);
             }
             Transaction::Call(call) => {

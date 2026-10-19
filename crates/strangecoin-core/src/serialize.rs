@@ -1,8 +1,14 @@
+use crate::abi::AbiParam;
 use crate::types::{Block, BlockHeader, CallTx, CreateTx, Transaction, TransferTx};
 use blake3;
 use hex;
 
-pub const FORMAT_VERSION: u8 = 5;
+/// Wire format version. v6 (S1.5-FBP04): `Create` carries
+/// `constructor_params` (canonical type-name string) and `gas_limit`
+/// (constructor execution budget) — the shared version byte moves with
+/// every domain that embeds it (transactions, receipts, headers), so
+/// header/genesis hashes are recomputed on the bump (BUG-S1-007).
+pub const FORMAT_VERSION: u8 = 6;
 
 pub const TX_TAG_TRANSFER: u8 = 0;
 pub const TX_TAG_CREATE: u8 = 1;
@@ -27,7 +33,9 @@ pub fn serialize_transaction(tx: &Transaction) -> Vec<u8> {
             write_string(&mut out, &t.from);
             write_bytes(&mut out, &t.init_code);
             write_bytes(&mut out, &t.init_args);
+            write_string(&mut out, &encode_constructor_params(&t.constructor_params));
             out.extend_from_slice(&t.endowment.to_be_bytes());
+            out.extend_from_slice(&t.gas_limit.to_be_bytes());
             out.extend_from_slice(&t.fee.to_be_bytes());
             out.extend_from_slice(&t.nonce.to_be_bytes());
             out.extend_from_slice(&t.chain_id.to_be_bytes());
@@ -275,6 +283,30 @@ fn write_bytes32(out: &mut Vec<u8>, s: &str) {
     out.extend_from_slice(&bytes);
 }
 
+/// Canonical wire form of `CreateTx.constructor_params` (S1.5-FBP04):
+/// the comma-joined canonical type names; an empty parameter list is the
+/// empty string.
+fn encode_constructor_params(params: &[AbiParam]) -> String {
+    params
+        .iter()
+        .map(|p| p.param_type.canonical_name())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn decode_constructor_params(raw: &str) -> Result<Vec<AbiParam>, &'static str> {
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+    raw.split(',')
+        .map(|name| {
+            let param_type =
+                crate::abi::AbiType::parse(name).map_err(|_| "Invalid constructor_params type")?;
+            Ok(AbiParam::new("", param_type))
+        })
+        .collect()
+}
+
 pub fn read_u32_be(bytes: &[u8], offset: &mut usize) -> Result<u32, &'static str> {
     if *offset + 4 > bytes.len() {
         return Err("Buffer too short for u32");
@@ -374,7 +406,10 @@ fn deserialize_unsigned_body(
             let from = read_string(bytes, offset)?;
             let init_code = read_bytes(bytes, offset)?;
             let init_args = read_bytes(bytes, offset)?;
+            let constructor_params_raw = read_string(bytes, offset)?;
+            let constructor_params = decode_constructor_params(&constructor_params_raw)?;
             let endowment = read_u64_be(bytes, offset)?;
+            let gas_limit = read_u64_be(bytes, offset)?;
             let fee = read_u64_be(bytes, offset)?;
             let nonce = read_u64_be(bytes, offset)?;
             let chain_id = read_u32_be(bytes, offset)?;
@@ -382,7 +417,9 @@ fn deserialize_unsigned_body(
                 from,
                 init_code,
                 init_args,
+                constructor_params,
                 endowment,
+                gas_limit,
                 fee,
                 nonce,
                 chain_id,

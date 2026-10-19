@@ -1,4 +1,4 @@
-﻿//! Golden vectors for canonical serialization (FORMAT_VERSION = 5).
+//! Golden vectors for canonical serialization (FORMAT_VERSION = 6).
 //!
 //! BUG-S1-007: any change to `serialize_block`, `serialize_block_header`, or
 //! `block_hash` must fail these tests. To land such a change: bump
@@ -7,11 +7,17 @@
 //! update the vectors here in the same commit. Do not "fix" a failing test
 //! by copying the new output into the literals without that procedure.
 //!
-//! S1.5-P08: FORMAT_VERSION 4 в†’ 5 вЂ” Transaction became a per-variant enum
+//! S1.5-P08: FORMAT_VERSION 4 -> 5 — Transaction became a per-variant enum
 //! (Transfer/Create/Call); `fee` is part of the signed payload of every
 //! variant. The full bump (including EXPECTED_*_GENESIS_HASH regeneration)
 //! is recorded in the P08 commit and Changelog.
+//!
+//! S1.5-FBP04: FORMAT_VERSION 5 -> 6 — `Create` carries `constructor_params`
+//! (canonical type-name string; empty = no params) and `gas_limit`
+//! (constructor budget). The shared version byte also moves headers and
+//! receipts, so genesis hashes were regenerated in the same commit.
 
+use strangecoin_core::abi::{AbiParam, AbiType};
 use strangecoin_core::serialize::*;
 use strangecoin_core::types::{Block, CallTx, CreateTx, Transaction, TransferTx};
 
@@ -51,13 +57,13 @@ fn tx3() -> Transaction {
 
 #[test]
 fn test_golden_tx1_unsigned() {
-    let expected = hex::decode("05000000000773656e64657231000000097265636569766572310000000000000064000000000000000000000000000000010000000100").unwrap();
+    let expected = hex::decode("06000000000773656e64657231000000097265636569766572310000000000000064000000000000000000000000000000010000000100").unwrap();
     assert_eq!(serialize_transaction(&tx1()), expected);
 }
 
 #[test]
 fn test_golden_tx1_signed() {
-    let expected = hex::decode("05000000000773656e64657231000000097265636569766572310000000000000064000000000000000000000000000000010000000100000000410102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f4041").unwrap();
+    let expected = hex::decode("06000000000773656e64657231000000097265636569766572310000000000000064000000000000000000000000000000010000000100000000410102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f4041").unwrap();
     assert_eq!(serialize_transaction_signed(&tx1()), expected);
 }
 
@@ -72,7 +78,7 @@ fn test_golden_tx1_txid() {
 #[test]
 fn test_golden_tx2_unsigned() {
     let expected =
-        hex::decode("050000000000000000066d696e657231000000012a05f200000000000000000000000000000000000000000101")
+        hex::decode("060000000000000000066d696e657231000000012a05f200000000000000000000000000000000000000000101")
             .unwrap();
     assert_eq!(serialize_transaction(&tx2()), expected);
 }
@@ -80,7 +86,7 @@ fn test_golden_tx2_unsigned() {
 #[test]
 fn test_golden_tx2_signed() {
     let expected = hex::decode(
-        "050000000000000000066d696e657231000000012a05f20000000000000000000000000000000000000000010100000000",
+        "060000000000000000066d696e657231000000012a05f20000000000000000000000000000000000000000010100000000",
     )
     .unwrap();
     assert_eq!(serialize_transaction_signed(&tx2()), expected);
@@ -97,14 +103,14 @@ fn test_golden_tx2_txid() {
 #[test]
 fn test_golden_tx3_unsigned() {
     let expected =
-        hex::decode("050000000005616c69636500000003626f6200000000000f423f0000000000000000000000000000002a0000000300")
+        hex::decode("060000000005616c69636500000003626f6200000000000f423f0000000000000000000000000000002a0000000300")
             .unwrap();
     assert_eq!(serialize_transaction(&tx3()), expected);
 }
 
 #[test]
 fn test_golden_tx3_signed() {
-    let expected = hex::decode("050000000005616c69636500000003626f6200000000000f423f0000000000000000000000000000002a000000030000000041aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+    let expected = hex::decode("060000000005616c69636500000003626f6200000000000f423f0000000000000000000000000000002a000000030000000041aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
     assert_eq!(serialize_transaction_signed(&tx3()), expected);
 }
 
@@ -122,14 +128,16 @@ fn test_golden_create_unsigned() {
         from: "sender1".to_string(),
         init_code: vec![1, 2, 3],
         init_args: vec![4, 5],
+        constructor_params: Vec::new(),
         endowment: 50,
+        gas_limit: 0,
         fee: 0,
         nonce: 1,
         chain_id: 1,
         signature: Vec::new(),
     });
     let expected =
-        hex::decode("05010000000773656e646572310000000301020300000002040500000000000000320000000000000000000000000000000100000001")
+        hex::decode("06010000000773656e646572310000000301020300000002040500000000000000000000003200000000000000000000000000000000000000000000000100000001")
             .unwrap();
     assert_eq!(serialize_transaction(&tx), expected);
 }
@@ -140,16 +148,58 @@ fn test_golden_create_signed() {
         from: "sender1".to_string(),
         init_code: vec![1, 2, 3],
         init_args: vec![4, 5],
+        constructor_params: Vec::new(),
         endowment: 50,
+        gas_limit: 0,
         fee: 0,
         nonce: 1,
         chain_id: 1,
         signature: Vec::new(),
     });
     let expected =
-        hex::decode("05010000000773656e64657231000000030102030000000204050000000000000032000000000000000000000000000000010000000100000000")
+        hex::decode("06010000000773656e64657231000000030102030000000204050000000000000000000000320000000000000000000000000000000000000000000000010000000100000000")
             .unwrap();
     assert_eq!(serialize_transaction_signed(&tx), expected);
+}
+
+/// S1.5-FBP04: the new Create fields land on the wire —
+/// `constructor_params` as the comma-joined canonical type names and
+/// `gas_limit` as a u64 after `endowment`.
+#[test]
+fn test_golden_create_with_params_unsigned() {
+    let tx = Transaction::create_with(
+        "sender1",
+        vec![1, 2, 3],
+        vec![4, 5],
+        vec![
+            AbiParam::new("", AbiType::Uint(256)),
+            AbiParam::new("", AbiType::Address),
+        ],
+        50,
+        100_000,
+        1,
+        1,
+    );
+    let expected =
+        hex::decode("06010000000773656e64657231000000030102030000000204050000000f75696e743235362c61646472657373000000000000003200000000000186a00000000000000000000000000000000100000001")
+            .unwrap();
+    assert_eq!(serialize_transaction(&tx), expected);
+
+    // Round-trip: the decoder recovers params and budget.
+    let decoded = deserialize_transaction(&expected).expect("v6 create decodes");
+    match decoded {
+        Transaction::Create(create) => {
+            assert_eq!(create.gas_limit, 100_000);
+            assert_eq!(
+                create.constructor_params,
+                vec![
+                    AbiParam::new("", AbiType::Uint(256)),
+                    AbiParam::new("", AbiType::Address),
+                ]
+            );
+        }
+        other => panic!("expected Create, got {other:?}"),
+    }
 }
 
 #[test]
@@ -166,7 +216,7 @@ fn test_golden_call_unsigned() {
         signature: Vec::new(),
     });
     let expected =
-        hex::decode("05020000000773656e64657231000000097265636569766572310000000109000000000000000700000000000186a00000000000000000000000000000000100000001")
+        hex::decode("06020000000773656e64657231000000097265636569766572310000000109000000000000000700000000000186a00000000000000000000000000000000100000001")
             .unwrap();
     assert_eq!(serialize_transaction(&tx), expected);
 }
@@ -185,7 +235,7 @@ fn test_golden_call_signed() {
         signature: Vec::new(),
     });
     let expected =
-        hex::decode("05020000000773656e64657231000000097265636569766572310000000109000000000000000700000000000186a0000000000000000000000000000000010000000100000000")
+        hex::decode("06020000000773656e64657231000000097265636569766572310000000109000000000000000700000000000186a0000000000000000000000000000000010000000100000000")
             .unwrap();
     assert_eq!(serialize_transaction_signed(&tx), expected);
 }
@@ -211,7 +261,7 @@ fn test_golden_block1_hash() {
     assert_ne!(h1, [0u8; 32], "genesis block hash must not be zero");
     assert_eq!(
         hex::encode(h1),
-        "7eb07d552900e0b78c9f4ad363f7f3765dc6b3f6455f92ed2d79374b54ee1dc3",
+        "ce426d203ec83a578061826aa1fe34bc8b851260bb19554641821dc8aa658cc1",
         "golden block_hash(block1) changed"
     );
 }
@@ -233,7 +283,7 @@ fn test_golden_block1() {
     };
     let serialized = serialize_block(&block1);
     let actual_hex = hex::encode(&serialized);
-    let expected_hex = "050000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000";
+    let expected_hex = "060000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000";
     assert_eq!(actual_hex, expected_hex);
 }
 
@@ -254,7 +304,7 @@ fn test_golden_block2_header() {
     };
     let serialized = serialize_block_header(&block2);
     let actual_hex = hex::encode(&serialized);
-    let expected_hex = "05000000000000000100000000499602d211111111111111111111111111111111111111111111111111111111111111110000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000002a000000010000000000000000000000000000000000000000000000000000000000000000";
+    let expected_hex = "06000000000000000100000000499602d211111111111111111111111111111111111111111111111111111111111111110000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000002a000000010000000000000000000000000000000000000000000000000000000000000000";
     assert_eq!(actual_hex, expected_hex);
 }
 
@@ -279,7 +329,7 @@ fn test_golden_block2_hash() {
     assert_ne!(h1, [0u8; 32], "block hash must not be zero");
     assert_eq!(
         hex::encode(h1),
-        "d8f8a37375b93fcb079c6a11cdce3028ba0d4f29835f29594fc855e98c9198cd",
+        "8860cb97a49a054339b64f6fde7a4bebf0f865518e2909d222fc1d1b5c6f3e5d",
         "golden block_hash(block2) changed"
     );
 }
@@ -301,6 +351,6 @@ fn test_golden_block2() {
     };
     let serialized = serialize_block(&block2);
     let actual_hex = hex::encode(&serialized);
-    let expected_hex = "05000000000000000100000000499602d211111111111111111111111111111111111111111111111111111111111111110000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000002a000000010000000000000000000000000000000000000000000000000000000000000000000000020000007c05000000000773656e64657231000000097265636569766572310000000000000064000000000000000000000000000000010000000100000000410102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404100000031050000000000000000066d696e657231000000012a05f20000000000000000000000000000000000000000010100000000";
+    let expected_hex = "06000000000000000100000000499602d211111111111111111111111111111111111111111111111111111111111111110000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000002a000000010000000000000000000000000000000000000000000000000000000000000000000000020000007c06000000000773656e64657231000000097265636569766572310000000000000064000000000000000000000000000000010000000100000000410102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404100000031060000000000000000066d696e657231000000012a05f20000000000000000000000000000000000000000010100000000";
     assert_eq!(actual_hex, expected_hex);
 }

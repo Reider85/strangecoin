@@ -8,6 +8,10 @@ Amended (2026-10-19) — S1.5-FBP03: calling convention for WASM exports
 (selector-based dispatch, `main()` fallback, `sc::input_read`), see the
 dedicated section below.
 
+Amended (2026-10-19) — S1.5-FBP04: constructor calling convention
+(`"constructor"` export, `init_args` calldata, `CreateTx.gas_limit`
+budget, failed-receipt rollback), see the dedicated section below.
+
 > **Numbering note:** reserved as ADR-0012 in `analytics/prompt-stage1.5.md`;
 > renumbered to **ADR-0013** because 0012 is taken by the WASM-VM decision
 > (`docs/ADR/0012-wasm-wasmi-vs-risc-v.md`). See the numbering note there.
@@ -118,10 +122,46 @@ How calldata reaches a WASM contract's code (implemented in
 - **Nested calls** — the same convention applies to every
   `call`/`staticcall`/`delegatecall` child frame: the nested `data`
   argument is the child frame's calldata and is dispatched identically.
-- **Constructor (future S1.5-FBP04)** — same mechanism: the `Create` tx
-  runs the WASM export named `"constructor"` with `init_args` as
-  calldata; contracts without that export keep deploy-without-init
-  semantics.
+- **Constructor** — the `Create` tx runs the WASM export named
+  `"constructor"` with `init_args` as calldata; contracts without that
+  export keep deploy-without-init semantics. Finalized by the
+  S1.5-FBP04 amendment below.
+
+## Amendment: constructor convention (2026-10-19, S1.5-FBP04)
+
+Deploy-time execution of `CreateTx` (implemented in
+`strangecoin-vm-wasm::WasmiExecutor::execute_constructor` +
+`strangecoin-core::state::apply_create`):
+
+- **Invocation** — the runtime invokes the WASM export named
+  `"constructor"`; `CreateTx.init_args` is the calldata, staged exactly
+  like a call frame's (`(ptr, len)` argument pair, `sc::input_read`
+  reachability). The MVP resolves the export **by name**;
+  `CreateTx.constructor_params` (declared types of `init_args`) is on
+  the wire for a future ABI-driven selector (`method_selector(
+  "constructor", &constructor_params)`) but is not consulted yet.
+- **Budget** — `CreateTx.gas_limit` (S1.5-FBP04 wire field) is the
+  constructor frame's fuel; `0` means "no init budget" and is legal for
+  legacy deploys. Consensus caps it at `BLOCK_GAS_LIMIT` in
+  `verify_transaction`, and `enforce_block_gas_limit` reserves it like a
+  `Call` gas limit.
+- **Skip before instantiation** — a module that does not export a
+  `constructor` function deploys without init: the runtime checks the
+  module's export section *before* instantiation (so legacy modules —
+  including ones whose declared memory the resource limiter would deny
+  at instantiate time — keep deploying) and reports `Success` with
+  `gas_used = 0`.
+- **Success** — staged storage writes flush to
+  `State.contract_storage`, the touched `storage_root`s recompute
+  (invariant #19 extension), the `endowment` moves sender → contract,
+  and the receipt carries the metered gas and constructor logs.
+- **Failure** — failed-receipt semantics (mirrors `apply_call`; the
+  block still applies): the deployment rolls back completely (no
+  account, no storage, no endowment movement), the sender nonce stays
+  consumed, and the receipt records `OutOfGas` (gas burned =
+  `gas_limit`) or `Failed` via `Receipt::from_vm_error`. `unapply`
+  reverses a successful constructor (storage undo + endowment refund)
+  and skips the refund for a failed receipt.
 
 ## Consequences
 

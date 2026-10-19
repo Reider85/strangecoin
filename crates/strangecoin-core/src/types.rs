@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use crate::abi::AbiParam;
 use crate::consensus::U256;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -265,8 +266,18 @@ pub struct CreateTx {
     pub init_code: Vec<u8>,
     #[serde(default)]
     pub init_args: Vec<u8>,
+    /// Declared types of `init_args` (S1.5-FBP04): reserved for the
+    /// future ABI-driven constructor selector; the MVP invokes the
+    /// `constructor` export by name. Canonically encoded as the
+    /// comma-joined canonical type names (empty = no params).
+    #[serde(default)]
+    pub constructor_params: Vec<AbiParam>,
     #[serde(default)]
     pub endowment: u64,
+    /// Constructor execution budget (S1.5-FBP04): fuel for the
+    /// `constructor` export; `0` = legacy deploy without init execution.
+    #[serde(default)]
+    pub gas_limit: u64,
     #[serde(default)]
     pub fee: u64,
     #[serde(default)]
@@ -404,6 +415,9 @@ impl Transaction {
         })
     }
 
+    /// Legacy-shape deploy (S1.5-FBP04): `gas_limit = 0` (no constructor
+    /// execution budget), empty `constructor_params`. Modules without a
+    /// `constructor` export deploy exactly as before.
     pub fn create(
         from: &str,
         init_code: Vec<u8>,
@@ -416,7 +430,36 @@ impl Transaction {
             from: from.to_string(),
             init_code,
             init_args,
+            constructor_params: Vec::new(),
             endowment,
+            gas_limit: 0,
+            fee: 0,
+            nonce,
+            chain_id,
+            signature: Vec::new(),
+        })
+    }
+
+    /// Full-shape deploy (S1.5-FBP04): explicit constructor budget and
+    /// declared `init_args` types.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_with(
+        from: &str,
+        init_code: Vec<u8>,
+        init_args: Vec<u8>,
+        constructor_params: Vec<AbiParam>,
+        endowment: u64,
+        gas_limit: u64,
+        nonce: u64,
+        chain_id: u32,
+    ) -> Self {
+        Transaction::Create(CreateTx {
+            from: from.to_string(),
+            init_code,
+            init_args,
+            constructor_params,
+            endowment,
+            gas_limit,
             fee: 0,
             nonce,
             chain_id,

@@ -124,7 +124,7 @@ pub enum AbiError {
 }
 
 /// One callable/observable entry parameter.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AbiParam {
     pub name: String,
     #[serde(rename = "type")]
@@ -290,7 +290,7 @@ impl AbiValue {
 }
 
 /// A contract ABI type (canonical string form, serde as string).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AbiType {
     /// `uintN`, N ∈ {8, 16, …, 256}.
     Uint(u16),

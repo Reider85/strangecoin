@@ -359,6 +359,18 @@ pub fn verify_transaction(tx: &Transaction) -> Result<(), CoreError> {
                     ),
                 });
             }
+            // S1.5-FBP04: the constructor budget must fit the block limit.
+            // `0` stays legal — legacy deploys of modules without a
+            // `constructor` export reserve and burn nothing.
+            if create.gas_limit > crate::vm::BLOCK_GAS_LIMIT {
+                return Err(CoreError::InvalidGasLimit {
+                    reason: format!(
+                        "create gas_limit {} exceeds block gas limit {}",
+                        create.gas_limit,
+                        crate::vm::BLOCK_GAS_LIMIT
+                    ),
+                });
+            }
         }
         Transaction::Call(call) => {
             if call.gas_limit == 0 {
@@ -380,17 +392,22 @@ pub fn verify_transaction(tx: &Transaction) -> Result<(), CoreError> {
 /// Hash of the mainnet genesis block built from `genesis.json`.
 /// S1.5-P08: regenerated after the FORMAT_VERSION 5 transaction encoding bump
 /// (Transaction enum: transfer/create/call; fee in the signed payload).
+/// S1.5-FBP04: regenerated after the FORMAT_VERSION 6 bump (Create carries
+/// `constructor_params` + `gas_limit`; the shared version byte moves
+/// headers, so the genesis hash moves with it).
 pub const EXPECTED_GENESIS_HASH: [u8; 32] = [
-    0xfc, 0xd7, 0x9a, 0x70, 0xea, 0xcb, 0x83, 0x08, 0x32, 0xdf, 0x84, 0xac, 0x0f, 0x5f, 0x55, 0x10,
-    0x38, 0xea, 0xe4, 0x79, 0x05, 0x31, 0x41, 0x0c, 0x2a, 0x13, 0x02, 0x97, 0xdd, 0x65, 0x31, 0x01,
+    0xad, 0x53, 0x14, 0x97, 0x86, 0xb5, 0x0d, 0x3b, 0x77, 0xb5, 0x50, 0x2a,
+    0x5b, 0x01, 0xa1, 0xd9, 0x63, 0x85, 0x7c, 0x6c, 0xef, 0x0e, 0x9b, 0xf7,
+    0x45, 0x84, 0xa3, 0x00, 0x0e, 0x55, 0xc4, 0x20,
 ];
 
 /// Hash of the testnet genesis block built from `genesis-testnet.json`
 /// (BUG-S1-004). The testnet initial holder may reuse the burned testnet
 /// pubkey (SCIP-0001 §2: burned-key material is testnet/regtest-only).
 pub const EXPECTED_TESTNET_GENESIS_HASH: [u8; 32] = [
-    0x23, 0xdd, 0xe7, 0xb1, 0x4f, 0x81, 0x09, 0x70, 0x21, 0x67, 0x39, 0x3f, 0xb1, 0x3e, 0xbf, 0xb1,
-    0xdd, 0xe8, 0xec, 0x37, 0xf6, 0xe9, 0x65, 0xaa, 0x17, 0x9f, 0x60, 0xba, 0xf2, 0xb8, 0xcf, 0x89,
+    0x3c, 0x66, 0x72, 0x56, 0x4c, 0x93, 0x44, 0x64, 0x93, 0x14, 0xaa, 0xb9,
+    0x16, 0x00, 0xec, 0xb1, 0xed, 0x0c, 0x84, 0x56, 0x0c, 0x08, 0x68, 0xb7,
+    0x3e, 0x0c, 0x52, 0x76, 0x40, 0x32, 0xf2, 0xe0,
 ];
 
 pub fn validate_tx_root(block: &Block) -> Result<(), CoreError> {

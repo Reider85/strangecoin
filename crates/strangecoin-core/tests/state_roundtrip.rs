@@ -334,6 +334,21 @@ mod unit_tests {
                 Err(strangecoin_core::VmError::OutOfGas)
             }
 
+            /// Deploy still succeeds (S1.5-FBP04): only `Call` frames fail —
+            /// the scenario needs an installed contract whose call errors.
+            fn execute_constructor(
+                &self,
+                _ctx: strangecoin_core::ExecutionContext,
+            ) -> Result<strangecoin_core::ExecutionResult, Self::Error> {
+                Ok(strangecoin_core::ExecutionResult {
+                    gas_used: 0,
+                    logs: Vec::new(),
+                    status: strangecoin_core::TxStatus::Success,
+                    return_data: Vec::new(),
+                    storage_overlay: std::collections::HashMap::new(),
+                })
+            }
+
             fn gas_cost(&self, _opcode: strangecoin_core::Opcode) -> u64 {
                 1
             }

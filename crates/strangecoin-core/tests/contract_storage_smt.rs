@@ -101,6 +101,18 @@ impl VmExecutor for FailVm {
         Err(VmError::OutOfGas)
     }
 
+    /// Deploy still succeeds (S1.5-FBP04): only `Call` frames fail — the
+    /// scenarios below need an installed contract whose calls error out.
+    fn execute_constructor(&self, _ctx: ExecutionContext) -> Result<ExecutionResult, Self::Error> {
+        Ok(ExecutionResult {
+            gas_used: 0,
+            logs: Vec::new(),
+            status: TxStatus::Success,
+            return_data: Vec::new(),
+            storage_overlay: HashMap::new(),
+        })
+    }
+
     fn gas_cost(&self, _opcode: Opcode) -> u64 {
         1
     }
