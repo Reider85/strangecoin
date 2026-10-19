@@ -20,7 +20,7 @@
 | S1.5-FBP02 | **fixed** (2026-10-19) | S1.5-P12 `b925f71` (selector.rs, golden vectors literal hex) + residual `eee7b7b` (`AbiEntry::selector_from_name`) |
 | S1.5-FBP03 | **fixed** (2026-10-19) | selector dispatch в `vm-wasm/src/lib.rs` (ENTRY_POINT удалён, invoke-export try-порядок, строгий MissingExport), `sc::input_read` host function, ADR-0013/0014 amended; `basic_execution` 16/16, workspace green, clippy green (`f4dadda`) |
 | S1.5-FBP04 | **fixed** (2026-10-19) | конструктор исполняется: `execute_constructor` trait + `FrameEntry::Constructor` (skip до инстанцирования), `apply_create` rework (Success flush + endowment; failure = failed receipt + rollback), `unapply_create` receipt-gated; `CreateTx.gas_limit`+`constructor_params`, FORMAT_VERSION 6, genesis hashes + golden vectors перегенерированы (BUG-S1-007); ADR-0013 amended; Changelog 1.5.2; тесты vm-wasm contract_storage 10/10, vm_deploy_call 2/2, serialize_golden 19/19 (`f217314`) |
-| S1.5-FBP05 | **open** | nested value-transfer не коммитится |
+| S1.5-FBP05 | **fixed** (2026-10-19) | nested value-transfer селтится: on-entry crediting в `run_frame` + `nested_call` (sender = `storage_address`), `ExecutionResult/Receipt.value_transfers` audit trail, `State.value_transfers_undo` (accumulating), `commit/reverse_value_transfers` (sequential, self-call mint-bug fixed); ADR-0013 amended; Changelog 1.5.3; `vm_transfer_to_contract` 3/3 (+ chain A→B→C, failed chain), `contract_storage` 11/11, workspace + clippy green |
 | S1.5-FBP06 | **open** | `contract_storage` клонируется на каждый CallTx |
 | S1.5-FBP07 | **open** | `receipts_root` не в BlockHeader |
 | S1.5-FBP08 | **open** | regression после FBP03..FBP07 |
@@ -28,9 +28,10 @@
 | S1.5-FBP10 | **partially fixed** (2026-10-18) | S1.5-P19 `1f133c7`: root `strangecoin`=1.5.0 ✅, AGENTS.md ✅, Changelog 1.5.0 ✅; **residual**: `strangecoin-core`=1.1.0 (ожидается 1.5.0), `strangecoin-vm-wasm`=0.1.0 (ожидается 0.2.0) |
 | S1.5-FBP11 | **partially fixed** (2026-10-18) | annotated tag `v1.5.0-stage1.5` создан и pushed на origin (`1f133c7`); **residual**: release-run verification (`REPRODUCIBLE_BUILDS.md` Actions run URL + SHA256, `STAGE1_5_SUMMARY.md` Release section) не зафиксирована — `gh` CLI отсутствует на хосте (не верифицировано + причина, retro §8.1) |
 
-Оставшийся proper work: **FBP05 → FBP06 → FBP07 → FBP08** (state-трек
-целиком + regression). Тег-гейт Stage 2/3/4 уже открыт (tag pushed), но
-FBP05..FBP07 — функциональные прорехи, заявленные в Changelog
+Оставшийся proper work: **FBP06 → FBP07 → FBP08** (state-трек:
+lazy storage + receipts fold + regression). Тег-гейт Stage 2/3/4
+уже открыт (tag pushed), но
+FBP06..FBP07 — функциональные прорехи, заявленные в Changelog
 1.1.7/1.1.8 как MVP-обязательства; закрывать до перехода к Stage 2+.
 
 Замечания по хосту (Windows): gcc для `secp256k1-sys` — `C:\msys64\mingw64\bin`
@@ -580,6 +581,32 @@ selector-based dispatch — конструктор это тоже функци�
 ---
 
 ### S1.5-FBP05. Nested value-transfer: коммит value в apply_call для chain call→call
+
+**Статус:** fixed (2026-10-19)
+
+**Решение (2026-10-19):** закрыт коммитом S1.5-FBP05 (Changelog 1.5.3,
+ADR-0013 amended — «value settlement & receipt audit trail»). Суть бага:
+`nested_call` уже двигал value в копии accounts фрейма, но `ExecutionResult`
+не несёт accounts/transfers — `apply_call` коммитил только top-level
+`CallTx.value`, вложенные трансферы терялись. Реализация: on-entry
+crediting top-level entry transfer в `run_frame` (контракт видит входящее
+value до запуска кода — withdraw pattern); `nested_call` sender =
+`ctx.storage_address` (delegatecall-фреймы тратят баланс делегирующего
+контракта), guard value>0 для non-Call kinds → STATUS_FAILED; audit trail
+`ExecutionResult.value_transfers` → `Receipt.value_transfers` (canonical
+encoding, serde default; FORMAT_VERSION не бампается — receipts derived
+data, version-byte за FBP07) + `State.value_transfers_undo` (accumulating,
+нужен для chained rollbacks — расширка Receipt дополнена undo-map'ом по
+тем же причинам, по которым накапливается `storage_undo`); `commit_value_transfers`/`reverse_value_transfers`
+(sequential checked — заодно fixed latent self-call mint-bug fast path);
+`apply_call`/`apply_create`/`unapply_*` переключены на helper. Отклонения:
+trail в Receipt + undo-map (не только receipts, как в тексте промпта —
+chained rollbacks иначе теряли данные); top-level transfer селтится в
+`run_frame`, не в `nested_call`. Тесты: `vm_transfer_to_contract` переписан
++2 (chain A→B→C settles/unapplies; failed chain — ничего не коммитится) +
+исправлен memory-layout баг WAT-фикстуры (STATUS_KEY перезаписывала хвост
+bech32-адреса); `vm-wasm contract_storage` +1; core unit +4; workspace +
+clippy green.
 
 **Цель:** закрыть MVP-прореху из Changelog 1.1.7: «Nested value-трансферы не
 коммитятся в `apply_call` (MVP P14, residual — S1.5-P17+).» Сейчас value
