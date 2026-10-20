@@ -24,7 +24,7 @@
 | S1.5-FBP06 | **fixed** (2026-10-19) | `SharedContractStorage = Arc<RwLock<ContractStorageMap>>` в `State`/`ExecutionContext` (Arc вместо Rc — Send/Sync сохранён), per-call `Arc::clone` O(1) вместо deep-clone; overlay unchanged; flush/undo in place через `write()`; ручной глубокий `State::clone` + deep-copy на границе `StateCache` (инвариант #4); ADR-0013 amended; Changelog 1.5.4; КГ-тест pointer-stability (100 CallTx × 10K keys); workspace + clippy green (`06c3444`) |
 | S1.5-FBP07 | **fixed** (2026-10-20) | `BlockHeader.receipts_root` + FORMAT_VERSION 7 (HEADER_WIRE_LEN 221), validate в `validate_and_apply` (zero tolerance — genesis only), set в mine/grant; ADR-0016; genesis hashes + golden vectors перегенерированы (BUG-S1-007); TLA+ `ReceiptsRootMatch` TLC PASS 35,207 states 10/10; Changelog 1.5.5; `tests/receipts.rs` light-client proof + `tests/state_root.rs` tamper + `tests/block_executor.rs` zero/mismatch; workspace + clippy green |
 | S1.5-FBP08 | **fixed** (2026-10-20) | `docs/stage1.5/INVARIANTS_ENFORCED.md` re-audit 22/22 enforced (extensions #4/#5/#8/#11/#15/#18/#19, #20 degenerate), `THREAT_MODEL_STAGE1_5.md` §2 residuals V-18/V-19/V-21 (порядок гейтов до value transfer verified `mod.rs:118-193`; dispatch miss→main + strict MissingExport `lib.rs:275-414`; constructor gas `Create.gas_limit` `block_executor.rs:278-285`), новый `RESIDUAL_RISKS_STAGE2_PLUS.md` (constructor gas burning Stage 5, receipts/contract prune Stage 3+ SCIP); workspace + clippy + soak (402,672 inputs, 0 panics) green; fuzz 5×600s — CI-side, локально не верифицировано + причина (Windows) (`768fc99`) |
-| S1.5-FBP09 | **fixed** (2026-10-18) | S1.5-P19 `1f133c7` — `docs/stage1.5/STAGE1_5_SUMMARY.md` существует, 14 DoD ✅ |
+| S1.5-FBP09 | **fixed** (2026-10-18; refresh 2026-10-20) | S1.5-P19 `1f133c7` — `docs/stage1.5/STAGE1_5_SUMMARY.md` существует, 14 DoD ✅; drift-sync `100a388` (2026-10-20): DoD #2 14 host funcs, #4 wire v6/v7, #6 финальный ABI (FBP01/02), #7 strict MissingExport, #10 Arc storage (FBP06), #12 22/22 (FBP08), §2 FBP01..08, §4 residuals #12/#13 → done (FBP05/FBP07), §4.1 anti-goals 16/16 подтверждены нереализованными; workspace + clippy green |
 | S1.5-FBP10 | **partially fixed** (2026-10-18) | S1.5-P19 `1f133c7`: root `strangecoin`=1.5.0 ✅, AGENTS.md ✅, Changelog 1.5.0 ✅; **residual**: `strangecoin-core`=1.1.0 (ожидается 1.5.0), `strangecoin-vm-wasm`=0.1.0 (ожидается 0.2.0) |
 | S1.5-FBP11 | **partially fixed** (2026-10-18) | annotated tag `v1.5.0-stage1.5` создан и pushed на origin (`1f133c7`); **residual**: release-run verification (`REPRODUCIBLE_BUILDS.md` Actions run URL + SHA256, `STAGE1_5_SUMMARY.md` Release section) не зафиксирована — `gh` CLI отсутствует на хосте (не верифицировано + причина, retro §8.1) |
 
@@ -943,11 +943,15 @@ breaking change — TLA+ invariant).
 
 ### S1.5-FBP09. STAGE1_5_SUMMARY.md: 14 DoD критериев с ✅ + evidence
 
-**Статус:** fixed (2026-10-18) — выполнен как часть S1.5-P19 (`1f133c7`),
+**Статус:** fixed (2026-10-18; refresh 2026-10-20 `100a388`) — выполнен как часть S1.5-P19 (`1f133c7`),
 без FBP-нумерации: `docs/stage1.5/STAGE1_5_SUMMARY.md` существует, 14 DoD
 критериев с evidence (см. DoD #6: P12 gap-closure зафиксирован отдельной
 строкой). Пункт «Fuzz 5 targets × 600s» — CI-side, локально не
-верифицировано (хост Windows, cargo-fuzz недоступен).
+верифицировано (хост Windows, cargo-fuzz недоступен). Refresh `100a388`
+(2026-10-20): drift-sync относительно S1.5-FBP01..FBP08 — DoD #2/#4/#6/#7/#10/#12
+актуализированы, §2 дополнен строками FBP01..FBP08, §4 residuals #12/#13 помечены
+done (FBP05/FBP07), §4.1 anti-goals 16/16 подтверждены нереализованными; workspace +
+clippy green.
 
 **Цель:** создать `docs/stage1.5/STAGE1_5_SUMMARY.md` — аналог
 `docs/stage1/STAGE1_SUMMARY.md`, но для Stage 1.5. 14 DoD критериев из ROADMAP3
