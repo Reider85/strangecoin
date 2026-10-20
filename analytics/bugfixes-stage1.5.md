@@ -1,14 +1,14 @@
 # bugfixes-prompts2.md — Промпты для закрытия прорех Stage 1.5
 
-**Версия:** 1.1
-**Дата:** 2026-10-18
+**Версия:** 1.2
+**Дата:** 2026-10-20
 **Источник:** аудит `analytics/prompt-stage1.5.md` (S1.5-P01..P19), `Changelog.md` (секции 1.1.1–1.1.8), `docs/stage1.5/INVARIANTS_ENFORCED.md`, `docs/stage1.5/THREAT_MODEL_STAGE1_5.md`, `crates/strangecoin-core/src/abi/mod.rs`, `crates/strangecoin-vm-wasm/src/lib.rs`, `crates/strangecoin-core/src/state/inner.rs`, `git tag -l`, `Cargo.toml`.
 **Предусловие:** 17 из 19 промптов `prompt-stage1.5.md` выполнены (S1.5-P01..P11, P13..P18). Не выполнены: **S1.5-P12** (полный JSON ABI) и **S1.5-P19** (DoD-верификация + тег `v1.5.0-stage1.5`).
 **Цель:** превратить остаточные расхождения Stage 1.5 в измеримый, трассируемый список промптов со сквозной нумерацией. Каждый промпт — самостоятельное задание для ИИ-агента, завершающееся конкретными артефактами и чек-листом КГ.
 
 ---
 
-## Статус каталога (v1.1, обновлено 2026-10-19, HEAD `f217314`)
+## Статус каталога (v1.2, обновлено 2026-10-20)
 
 Каталог писался на коммите `274b6b9` (S1.5-P18), когда S1.5-P12/P19 ещё не
 были выполнены. С тех пор оба gap-closure промпта закрыты **в рамках
@@ -26,13 +26,12 @@
 | S1.5-FBP08 | **fixed** (2026-10-20) | `docs/stage1.5/INVARIANTS_ENFORCED.md` re-audit 22/22 enforced (extensions #4/#5/#8/#11/#15/#18/#19, #20 degenerate), `THREAT_MODEL_STAGE1_5.md` §2 residuals V-18/V-19/V-21 (порядок гейтов до value transfer verified `mod.rs:118-193`; dispatch miss→main + strict MissingExport `lib.rs:275-414`; constructor gas `Create.gas_limit` `block_executor.rs:278-285`), новый `RESIDUAL_RISKS_STAGE2_PLUS.md` (constructor gas burning Stage 5, receipts/contract prune Stage 3+ SCIP); workspace + clippy + soak (402,672 inputs, 0 panics) green; fuzz 5×600s — CI-side, локально не верифицировано + причина (Windows) (`768fc99`) |
 | S1.5-FBP09 | **fixed** (2026-10-18; refresh 2026-10-20) | S1.5-P19 `1f133c7` — `docs/stage1.5/STAGE1_5_SUMMARY.md` существует, 14 DoD ✅; drift-sync `100a388` (2026-10-20): DoD #2 14 host funcs, #4 wire v6/v7, #6 финальный ABI (FBP01/02), #7 strict MissingExport, #10 Arc storage (FBP06), #12 22/22 (FBP08), §2 FBP01..08, §4 residuals #12/#13 → done (FBP05/FBP07), §4.1 anti-goals 16/16 подтверждены нереализованными; workspace + clippy green |
 | S1.5-FBP10 | **fixed** (2026-10-20) | residual закрыт `3826a44` (2026-10-20): `strangecoin-core` 1.1.0→1.5.0, `strangecoin-vm-wasm` 0.1.0→0.2.0, `Cargo.lock` + `fuzz/Cargo.lock` синхронизированы; root 1.5.0/AGENTS.md/Changelog 1.5.0 — ранее `1f133c7`; verification 2026-10-20: `cargo check/test/clippy --workspace` green (core v1.5.0, vm-wasm v0.2.0) |
-| S1.5-FBP11 | **partially fixed** (2026-10-18) | annotated tag `v1.5.0-stage1.5` создан и pushed на origin (`1f133c7`); **residual**: release-run verification (`REPRODUCIBLE_BUILDS.md` Actions run URL + SHA256, `STAGE1_5_SUMMARY.md` Release section) не зафиксирована — `gh` CLI отсутствует на хосте (не верифицировано + причина, retro §8.1) |
+| S1.5-FBP11 | **fixed** (2026-10-18; residual closed 2026-10-20) | annotated tag `v1.5.0-stage1.5` создан и pushed на origin (`1f133c7`); residual закрыт 2026-10-20: release-run verified через GitHub REST API (run 39110855701, success 13/13 jobs, 26 assets, SHA256SUMS сверен) — Actions run URL + SHA256 в `REPRODUCIBLE_BUILDS.md` §Verified Release Runs, Release section в `STAGE1_5_SUMMARY.md` §6, Changelog 1.5.6; cosign/slsa local blob verify — не верифицировано + причина (tools не установлены на Windows-хосте, verify commands зафиксированы) |
 
-Оставшийся proper work: **нет** — FBP08 (regression 22 инвариантов + new
-threats после FBP01..FBP07) закрыт 2026-10-20 (`768fc99`). Тег-гейт Stage
-2/3/4 открыт (tag pushed); FBP07 (функциональная прореха Changelog 1.1.7)
-закрыт 2026-10-20; FBP10 (versions крейтов) закрыт 2026-10-20 (`3826a44`).
-Остаток FBP11 — partial (release-run verification — ops, `gh` CLI).
+Оставшийся proper work: **нет** — все 11 промптов закрыты
+(FBP08 — 2026-10-20 `768fc99`; FBP10 — 2026-10-20 `3826a44`; FBP11
+residual — 2026-10-20). Тег-гейт Stage 2/3/4 открыт (tag pushed +
+release pipeline verified, run 39110855701).
 
 Замечания по хосту (Windows): gcc для `secp256k1-sys` — `C:\msys64\mingw64\bin`
 (добавлять в PATH для cargo-команд); `gh` CLI не установлен.
@@ -1085,16 +1084,19 @@ complete; S1.5-P19 поднимет до 1.5.0)». После S1.5-FBP01..FBP09 
 
 ### S1.5-FBP11. Тег v1.5.0-stage1.5 (strictly после всех КГ предыдущих промптов)
 
-**Статус:** partially fixed (2026-10-18) — annotated tag `v1.5.0-stage1.5`
-создан и **pushed на origin** (tagger Reider85, target `1f133c7`, verified
-через `git ls-remote --tags origin` 2026-10-19). **Residual:** пункты КГ
-про release pipeline не зафиксированы: Actions run URL + artifact SHA256s в
-`docs/security/REPRODUCIBLE_BUILDS.md` отсутствуют, Release-секция в
-`STAGE1_5_SUMMARY.md` отсутствует, Changelog-строка «tag pushed; release
-pipeline verified» отсутствует. Причина: `gh` CLI не установлен на хосте —
-статус workflow-рана не верифицируется локально («не верифицировано +
-причина», retro §8.1). Закрыть ops-действием: проверить Actions run для тега
-и дописать артефакты (procedure BUG-S1-001 из REPRODUCIBLE_BUILDS.md).
+**Статус:** fixed (2026-10-20) — annotated tag `v1.5.0-stage1.5` создан и
+pushed на origin (2026-10-18, target `1f133c7`, tagger Reider85, verified
+через `git ls-remote --tags origin`); release-run verification (residual)
+закрыт 2026-10-20: GitHub REST API (без `gh` CLI) подтвердил run
+[39110855701](https://github.com/Reider85/strangecoin/actions/runs/39110855701)
+— success, 13/13 jobs (6 matrix + aggregate + sign + SLSA ×4 + Create
+Release); release с 26 assets опубликован, `SHA256SUMS.txt` сверен.
+Actions run URL + SHA256 зафиксированы в `docs/security/REPRODUCIBLE_BUILDS.md`
+§Verified Release Runs (procedure BUG-S1-001); Release section +
+verify-команды — в `docs/stage1.5/STAGE1_5_SUMMARY.md` §6; Changelog 1.5.6.
+Independent cosign/SLSA blob verification — не верифицировано локально +
+причина (`cosign`/`slsa-verifier`/`gh` не установлены на Windows-хосте);
+verify commands зафиксированы для независимого повтора.
 
 **Цель:** поставить аннотированный git tag `v1.5.0-stage1.5` — **Gate Stage
 2/3/4**: после этого Stage 2 (network crate migration) и Stage 3 (RocksDB) могут

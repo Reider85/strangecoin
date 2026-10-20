@@ -97,6 +97,29 @@ slsa-verifier verify-artifact \
    ```
    Output: `Verified build using builder "https://github.com/slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@refs/tags/v2.1.0" at commit a830c51f74ea407ff5e5b2507773928a6f1ac2f2` — `PASSED` (exit 0).
 
+### v1.5.0-stage1.5 (2026-10-18) — Stage 1.5 gate release (S1.5-FBP11)
+
+- **Workflow run:** https://github.com/Reider85/strangecoin/actions/runs/39110855701
+- **Result:** green on all jobs — 13/13: 6 matrix builds (linux x86_64/aarch64, macOS x86_64/aarch64, windows x86_64/aarch64) + `aggregate-hashes` + `sign` + `SLSA Provenance` (detect-env/generator/upload-assets/final) + `Create Release`. Verified via GitHub REST API (`/repos/Reider85/strangecoin/actions/runs/39110855701/jobs`) on 2026-10-20.
+- **Release:** https://github.com/Reider85/strangecoin/releases/tag/v1.5.0-stage1.5 — 26 assets: 6 binaries, 6 `.sha256`, 6 `.cosign`, 6 `.cosign.pem`, `SHA256SUMS.txt`, `multiple.intoto.jsonl` (SLSA L3 provenance). Published 2026-10-18T08:19:51Z.
+- **Tag commit:** `1f133c7e1910ac870050d6fc0da0b37d3b5338df` (annotated tag, tagger Reider85; verified pushed via `git ls-remote --tags origin`).
+
+**Published SHA256 (`SHA256SUMS.txt`):**
+
+| Artifact | SHA256 |
+|---|---|
+| strangecoin-linux-aarch64 | `50cbe4ce7ec15a0bcdf4fc00e8993f71ccd41554abd884e10f797aa8ad3ff54a` |
+| strangecoin-linux-x86_64 | `01ed5b88c7da29e680bc4ac3784149abc914cb6428a5b1bc9820834fa93a857b` |
+| strangecoin-macos-aarch64 | `1f1cf898aaecfb97d6b2f0c5da08bd22ee430b80b801dfc5805e03409e9e5cd7` |
+| strangecoin-macos-x86_64 | `c5d396f38c60dd7704e22ade95a0055bf549ba416186af25e3f225e52c7f1b53` |
+| strangecoin-windows-aarch64.exe | `5fd480d082688fcb7444ba49f2f29ee13478abc464e773d1bbc7fe3616cddd4e` |
+| strangecoin-windows-x86_64.exe | `dd7530c5295771dd1284361d4a92c1dd58ec74a871cab2eef8661f5539c09ea7` |
+
+**Independent verification status (2026-10-20):**
+
+1. Workflow-run status + job conclusions + published asset inventory + `SHA256SUMS.txt` contents — **verified** via unauthenticated GitHub REST API (`gh` CLI not installed on this Windows host; REST API used instead).
+2. `cosign verify-blob` + `slsa-verifier verify-artifact` — **not verified locally + reason**: `cosign`, `slsa-verifier`, and `gh` are not installed on the Windows verification host. Pipeline-level cosign/SLSA jobs were green in the same run. Reproduce independently with the commands in §«Verifying a Release» above, substituting `v<VERSION>` = `v1.5.0-stage1.5` (certificate identity: `https://github.com/Reider85/strangecoin/.github/workflows/release.yml@refs/tags/v1.5.0-stage1.5`).
+
 ## Building Locally (Reproducibility Check)
 
 To verify that a locally built binary matches the release:

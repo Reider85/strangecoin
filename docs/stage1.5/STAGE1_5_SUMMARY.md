@@ -3,9 +3,9 @@
 **Document**: `docs/stage1.5/STAGE1_5_SUMMARY.md`
 **Status**: Complete ✅
 **Date**: 2026-10-18
-**Refreshed**: 2026-10-20 (S1.5-FBP09 drift sync после S1.5-FBP01..FBP08)
+**Refreshed**: 2026-10-20 (S1.5-FBP09 drift sync + S1.5-FBP11 release verification)
 **Prompt**: S1.5-P19 — Definition of Done verification for Stage 1.5 (WASM smart contracts)
-**Prompt refs**: S1.5-P01..P19 + S1.5-FBP01..FBP08 (`analytics/bugfixes-stage1.5.md`)
+**Prompt refs**: S1.5-P01..P19 + S1.5-FBP01..FBP11 (`analytics/bugfixes-stage1.5.md`)
 **Gate**: Tag `v1.5.0-stage1.5` (Gate Stage 2/3/4; Stage 4 требует Stage 1.5 завершённым)
 **Predecessor**: Tag `v1.1.0-stage1` (S1-P22)
 
@@ -30,7 +30,7 @@
 | 13 | ADR-0012..0015 написаны | `docs/ADR/0012-wasm-wasmi-vs-risc-v.md`, `0013-json-abi-for-mvp-vs-wit.md`, `0014-gas-metering-strategy.md`, `0015-precompiles-list.md` (S1.5-P01..P04) | ✅ | **Renumber**: спека промпта называла их 0011..0014; 0011 занят async-migration, Stage 1.5 ADR сдвинуты на 0012..0015 (ROADMAP3 поправлен в `fe1afed`) |
 | 14 | `Changelog.md` обновлён: `1.5.0 — WASM smart contracts (basic)` | Секция `## 1.5.0 — WASM smart contracts (basic)` (этот коммит); промежуточные секции 1.1.1–1.1.8 сохранены как история по-промптовых поставок | ✅ | нет |
 
-Плюс обязательство для Stage 2+: тег `v1.5.0-stage1.5` — **Gate Stage 2/3/4** (мягкая зависимость для Stage 2, жёсткая для Stage 4).
+Плюс обязательство для Stage 2+: тег `v1.5.0-stage1.5` — **Gate Stage 2/3/4** (мягкая зависимость для Stage 2, жёсткая для Stage 4). Тег поставлен и release pipeline verified — §6 (S1.5-FBP11, 2026-10-20); gate открыт.
 
 ---
 
@@ -147,3 +147,25 @@ Ops-gates (№8, №9) **не блокируют Stage 1.5** (regtest/devnet sco
 4. **Gas constants**: hardcoded по ADR-0014/0015; до mainnet freeze правки — прямым коммитом с обновлением ADR; после — SCIP + activation height.
 5. **«Done» только через этот DoD-промпт** (retro §8.1): тег `v1.5.0-stage1.5` поставлен после прохождения КГ S1.5-P19; Stage 2/3/4 gate открыт.
 6. **ECONOMICS.md §2.6** (Stage 1.5+): завершение Stage 1.5 открывает канал «разработка контрактов под ключ» / SDK-интеграции — не код-задача, зафиксировано как экономическое основание.
+
+---
+
+## 6. Release (S1.5-FBP11, verified 2026-10-20)
+
+- **Tag**: annotated `v1.5.0-stage1.5` → commit `1f133c7e1910ac870050d6fc0da0b37d3b5338df` (tagger Reider85; pushed to origin, verified via `git ls-remote --tags origin`).
+- **Release**: https://github.com/Reider85/strangecoin/releases/tag/v1.5.0-stage1.5 — published 2026-10-18, 26 assets (6 binaries, 6 `.sha256`, 6 `.cosign`, 6 `.cosign.pem`, `SHA256SUMS.txt`, `multiple.intoto.jsonl` SLSA L3).
+- **Workflow run**: https://github.com/Reider85/strangecoin/actions/runs/39110855701 — **success, 13/13 jobs** (6 matrix builds + `aggregate-hashes` + `sign` + `SLSA Provenance` ×4 + `Create Release`). Verified via GitHub REST API 2026-10-20 (`gh` CLI not installed on host; REST used instead).
+- **SHA256**: 6 published checksums зафиксированы в `docs/security/REPRODUCIBLE_BUILDS.md` §Verified Release Runs (v1.5.0-stage1.5).
+- **Independent cosign/SLSA blob verification**: не верифицировано локально + причина — `cosign`/`slsa-verifier`/`gh` не установлены на Windows-хосте; pipeline-level jobs (`sign`, `SLSA Provenance`) green в том же ране. Verify commands (procedure BUG-S1-001):
+  ```bash
+  cosign verify-blob --signature strangecoin-windows-x86_64.exe.cosign \
+    --certificate strangecoin-windows-x86_64.exe.cosign.pem \
+    --certificate-identity "https://github.com/Reider85/strangecoin/.github/workflows/release.yml@refs/tags/v1.5.0-stage1.5" \
+    --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+    strangecoin-windows-x86_64.exe
+
+  slsa-verifier verify-artifact strangecoin-windows-x86_64.exe \
+    --provenance-path multiple.intoto.jsonl \
+    --source-uri github.com/Reider85/strangecoin \
+    --source-tag v1.5.0-stage1.5
+  ```

@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.5.6 — release: tag v1.5.0-stage1.5 + release pipeline verified (S1.5-FBP11)
+
+**Status**: Done  
+**Date**: 2026-10-20  
+**Prompts**: S1.5-FBP11 (`analytics/bugfixes-stage1.5.md`)
+
+### Тег Stage 2/3/4 gate + верификация release-run
+
+- **Tag**: annotated `v1.5.0-stage1.5` → `1f133c7` (создан и pushed 2026-10-18, tagger Reider85; verified через `git ls-remote --tags origin`). **Gate Stage 2 (network crate) / Stage 3 (RocksDB) / Stage 4 (dev-experience) открыт.**
+- **Release pipeline verified** (2026-10-20, residual FBP11 закрыт): workflow run https://github.com/Reider85/strangecoin/actions/runs/39110855701 — **success, 13/13 jobs** (6 matrix builds linux/macos/windows × x86_64/aarch64 + `aggregate-hashes` + `sign` + `SLSA Provenance` ×4 + `Create Release`); release https://github.com/Reider85/strangecoin/releases/tag/v1.5.0-stage1.5 — 26 assets (6 бинарей, 6 `.sha256`, 6 `.cosign`, 6 `.cosign.pem`, `SHA256SUMS.txt`, `multiple.intoto.jsonl` SLSA L3).
+- **Фиксация артефактов**: Actions run URL + 6 published SHA256 записаны в `docs/security/REPRODUCIBLE_BUILDS.md` §Verified Release Runs (procedure BUG-S1-001); Release section + verify-команды (`cosign verify-blob`, `slsa-verifier`) — в `docs/stage1.5/STAGE1_5_SUMMARY.md` §6.
+- **Верификация через GitHub REST API** (публичный unauthenticated; `gh` CLI не установлен на хосте): run status/conclusions, job list, release inventory, `SHA256SUMS.txt` — сверены 2026-10-20.
+- **Independent cosign/SLSA blob verification** — не верифицировано локально + причина: `cosign`/`slsa-verifier`/`gh` не установлены на Windows-хосте; pipeline-level `sign`/`SLSA Provenance` jobs green в том же ране. Verify commands зафиксированы в REPRODUCIBLE_BUILDS.md и STAGE1_5_SUMMARY.md §6.
+
+---
+
 ## 1.5.5 — core: receipts_root в BlockHeader (S1.5-FBP07)
 
 **Status**: Done  
