@@ -23,16 +23,16 @@
 | S1.5-FBP05 | **fixed** (2026-10-19) | nested value-transfer селтится: on-entry crediting в `run_frame` + `nested_call` (sender = `storage_address`), `ExecutionResult/Receipt.value_transfers` audit trail, `State.value_transfers_undo` (accumulating), `commit/reverse_value_transfers` (sequential, self-call mint-bug fixed); ADR-0013 amended; Changelog 1.5.3; `vm_transfer_to_contract` 3/3 (+ chain A→B→C, failed chain), `contract_storage` 11/11, workspace + clippy green |
 | S1.5-FBP06 | **fixed** (2026-10-19) | `SharedContractStorage = Arc<RwLock<ContractStorageMap>>` в `State`/`ExecutionContext` (Arc вместо Rc — Send/Sync сохранён), per-call `Arc::clone` O(1) вместо deep-clone; overlay unchanged; flush/undo in place через `write()`; ручной глубокий `State::clone` + deep-copy на границе `StateCache` (инвариант #4); ADR-0013 amended; Changelog 1.5.4; КГ-тест pointer-stability (100 CallTx × 10K keys); workspace + clippy green (`06c3444`) |
 | S1.5-FBP07 | **fixed** (2026-10-20) | `BlockHeader.receipts_root` + FORMAT_VERSION 7 (HEADER_WIRE_LEN 221), validate в `validate_and_apply` (zero tolerance — genesis only), set в mine/grant; ADR-0016; genesis hashes + golden vectors перегенерированы (BUG-S1-007); TLA+ `ReceiptsRootMatch` TLC PASS 35,207 states 10/10; Changelog 1.5.5; `tests/receipts.rs` light-client proof + `tests/state_root.rs` tamper + `tests/block_executor.rs` zero/mismatch; workspace + clippy green |
-| S1.5-FBP08 | **open** | regression после FBP03..FBP07 |
+| S1.5-FBP08 | **fixed** (2026-10-20) | `docs/stage1.5/INVARIANTS_ENFORCED.md` re-audit 22/22 enforced (extensions #4/#5/#8/#11/#15/#18/#19, #20 degenerate), `THREAT_MODEL_STAGE1_5.md` §2 residuals V-18/V-19/V-21 (порядок гейтов до value transfer verified `mod.rs:118-193`; dispatch miss→main + strict MissingExport `lib.rs:275-414`; constructor gas `Create.gas_limit` `block_executor.rs:278-285`), новый `RESIDUAL_RISKS_STAGE2_PLUS.md` (constructor gas burning Stage 5, receipts/contract prune Stage 3+ SCIP); workspace + clippy + soak (402,672 inputs, 0 panics) green; fuzz 5×600s — CI-side, локально не верифицировано + причина (Windows) (`768fc99`) |
 | S1.5-FBP09 | **fixed** (2026-10-18) | S1.5-P19 `1f133c7` — `docs/stage1.5/STAGE1_5_SUMMARY.md` существует, 14 DoD ✅ |
 | S1.5-FBP10 | **partially fixed** (2026-10-18) | S1.5-P19 `1f133c7`: root `strangecoin`=1.5.0 ✅, AGENTS.md ✅, Changelog 1.5.0 ✅; **residual**: `strangecoin-core`=1.1.0 (ожидается 1.5.0), `strangecoin-vm-wasm`=0.1.0 (ожидается 0.2.0) |
 | S1.5-FBP11 | **partially fixed** (2026-10-18) | annotated tag `v1.5.0-stage1.5` создан и pushed на origin (`1f133c7`); **residual**: release-run verification (`REPRODUCIBLE_BUILDS.md` Actions run URL + SHA256, `STAGE1_5_SUMMARY.md` Release section) не зафиксирована — `gh` CLI отсутствует на хосте (не верифицировано + причина, retro §8.1) |
 
-Оставшийся proper work: **FBP08** (regression 22 инвариантов + new threats
-после FBP01..FBP07). Тег-гейт Stage 2/3/4
-уже открыт (tag pushed);
-FBP07 (функциональная прореха Changelog 1.1.7) закрыт 2026-10-20 —
-до перехода к Stage 2+ остаётся только regression-промпт FBP08.
+Оставшийся proper work: **нет** — FBP08 (regression 22 инвариантов + new
+threats после FBP01..FBP07) закрыт 2026-10-20 (`768fc99`). Тег-гейт Stage
+2/3/4 открыт (tag pushed); FBP07 (функциональная прореха Changelog 1.1.7)
+закрыт 2026-10-20. Остатки FBP10/FBP11 — partial (versions крейтов,
+release-run verification — ops).
 
 Замечания по хосту (Windows): gcc для `secp256k1-sys` — `C:\msys64\mingw64\bin`
 (добавлять в PATH для cargo-команд); `gh` CLI не установлен.
@@ -853,6 +853,29 @@ change (но Stage 1.5 mainnet ещё не запущен, прямая прав
 ---
 
 ### S1.5-FBP08. Regression: 22 инвариантов + new threats для ABI/конструктора/nested value
+
+**Статус:** fixed (2026-10-20)
+
+**Решение (2026-10-20):** закрыт коммитом `768fc99` (Changelog-секции не
+требуется — docs-only, прецедент P18-аудита). `INVARIANTS_ENFORCED.md` —
+re-audit 22/22 enforced, no regressions: extensions #4 (constructor +
+nested value undo chain: `value_transfers_undo`, receipt-gated
+`unapply_create`, Arc deep-copy StateCache), #5 (header canonical v7),
+#8 (genesis rebuild), #11 (constructor nonce++), #15 (`Create.gas_limit`
+в `enforce_block_gas_limit`), #18 (`receipts_root` в header + light-client
+proofs + value_transfers trail), #19 (`receipts_root` validation +
+TLA+ `ReceiptsRootMatch`); #20 — enforced degenerate (fee=0 → сплит
+тривиально; gas через #15; fee market Stage 5). `THREAT_MODEL_STAGE1_5.md`
+§2 — residuals V-18 (гейты до value transfer, `mod.rs:118-193`),
+V-19 (constructor init_code: sandbox + MAX_CODE_SIZE + gas metering),
+V-21 (dispatch miss→main, strict MissingExport, `lib.rs:275-414`).
+Новый `RESIDUAL_RISKS_STAGE2_PLUS.md` (constructor gas burning Stage 5;
+receipts/contract prune Stage 3+ SCIP; cross-refs). Верификация:
+workspace suite green, clippy `-D warnings` green, soak 402,672 inputs
+0 panics; fuzz 5×600s — CI-side, локально не верифицировано + причина
+(хост Windows, cargo-fuzz недоступен — прецедент FBP07/FBP09).
+Отклонения от спеки: status summary — 22/22 enforced (per решение
+владельца; #20 — degenerate-форма, не настоящий fee market).
 
 **Цель:** обновить `docs/stage1.5/INVARIANTS_ENFORCED.md` и
 `docs/stage1.5/THREAT_MODEL_STAGE1_5.md` после S1.5-FBP01..FBP07. Проверить, что
