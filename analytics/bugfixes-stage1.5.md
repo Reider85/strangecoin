@@ -25,14 +25,14 @@
 | S1.5-FBP07 | **fixed** (2026-10-20) | `BlockHeader.receipts_root` + FORMAT_VERSION 7 (HEADER_WIRE_LEN 221), validate в `validate_and_apply` (zero tolerance — genesis only), set в mine/grant; ADR-0016; genesis hashes + golden vectors перегенерированы (BUG-S1-007); TLA+ `ReceiptsRootMatch` TLC PASS 35,207 states 10/10; Changelog 1.5.5; `tests/receipts.rs` light-client proof + `tests/state_root.rs` tamper + `tests/block_executor.rs` zero/mismatch; workspace + clippy green |
 | S1.5-FBP08 | **fixed** (2026-10-20) | `docs/stage1.5/INVARIANTS_ENFORCED.md` re-audit 22/22 enforced (extensions #4/#5/#8/#11/#15/#18/#19, #20 degenerate), `THREAT_MODEL_STAGE1_5.md` §2 residuals V-18/V-19/V-21 (порядок гейтов до value transfer verified `mod.rs:118-193`; dispatch miss→main + strict MissingExport `lib.rs:275-414`; constructor gas `Create.gas_limit` `block_executor.rs:278-285`), новый `RESIDUAL_RISKS_STAGE2_PLUS.md` (constructor gas burning Stage 5, receipts/contract prune Stage 3+ SCIP); workspace + clippy + soak (402,672 inputs, 0 panics) green; fuzz 5×600s — CI-side, локально не верифицировано + причина (Windows) (`768fc99`) |
 | S1.5-FBP09 | **fixed** (2026-10-18; refresh 2026-10-20) | S1.5-P19 `1f133c7` — `docs/stage1.5/STAGE1_5_SUMMARY.md` существует, 14 DoD ✅; drift-sync `100a388` (2026-10-20): DoD #2 14 host funcs, #4 wire v6/v7, #6 финальный ABI (FBP01/02), #7 strict MissingExport, #10 Arc storage (FBP06), #12 22/22 (FBP08), §2 FBP01..08, §4 residuals #12/#13 → done (FBP05/FBP07), §4.1 anti-goals 16/16 подтверждены нереализованными; workspace + clippy green |
-| S1.5-FBP10 | **partially fixed** (2026-10-18) | S1.5-P19 `1f133c7`: root `strangecoin`=1.5.0 ✅, AGENTS.md ✅, Changelog 1.5.0 ✅; **residual**: `strangecoin-core`=1.1.0 (ожидается 1.5.0), `strangecoin-vm-wasm`=0.1.0 (ожидается 0.2.0) |
+| S1.5-FBP10 | **fixed** (2026-10-20) | residual закрыт `3826a44` (2026-10-20): `strangecoin-core` 1.1.0→1.5.0, `strangecoin-vm-wasm` 0.1.0→0.2.0, `Cargo.lock` + `fuzz/Cargo.lock` синхронизированы; root 1.5.0/AGENTS.md/Changelog 1.5.0 — ранее `1f133c7`; verification 2026-10-20: `cargo check/test/clippy --workspace` green (core v1.5.0, vm-wasm v0.2.0) |
 | S1.5-FBP11 | **partially fixed** (2026-10-18) | annotated tag `v1.5.0-stage1.5` создан и pushed на origin (`1f133c7`); **residual**: release-run verification (`REPRODUCIBLE_BUILDS.md` Actions run URL + SHA256, `STAGE1_5_SUMMARY.md` Release section) не зафиксирована — `gh` CLI отсутствует на хосте (не верифицировано + причина, retro §8.1) |
 
 Оставшийся proper work: **нет** — FBP08 (regression 22 инвариантов + new
 threats после FBP01..FBP07) закрыт 2026-10-20 (`768fc99`). Тег-гейт Stage
 2/3/4 открыт (tag pushed); FBP07 (функциональная прореха Changelog 1.1.7)
-закрыт 2026-10-20. Остатки FBP10/FBP11 — partial (versions крейтов,
-release-run verification — ops).
+закрыт 2026-10-20; FBP10 (versions крейтов) закрыт 2026-10-20 (`3826a44`).
+Остаток FBP11 — partial (release-run verification — ops, `gh` CLI).
 
 Замечания по хосту (Windows): gcc для `secp256k1-sys` — `C:\msys64\mingw64\bin`
 (добавлять в PATH для cargo-команд); `gh` CLI не установлен.
@@ -1006,15 +1006,13 @@ clippy green.
 
 ### S1.5-FBP10. Версия Cargo.toml → 1.5.0 + AGENTS.md update + Changelog секция 1.5.0
 
-**Статус:** partially fixed (2026-10-18) — выполнен как часть S1.5-P19
-(`1f133c7`): root `Cargo.toml` version=1.5.0 ✅, `AGENTS.md` (Stage 1.5
-complete, key docs, architecture) ✅, `Changelog.md` секция 1.5.0 ✅.
-**Residual:** `crates/strangecoin-core/Cargo.toml` version=1.1.0 (ожидается
-1.5.0), `crates/strangecoin-vm-wasm/Cargo.toml` version=0.1.0 (ожидается
-0.2.0) — КГ «strangecoin-core version = 1.5.0 / strangecoin-vm-wasm version
-= 0.2.0» не выполнены. Не блокирует FBP03..FBP08; закрыть отдельным
-коммитом (bump пакетов + `cargo check --workspace`) до или вместе с
-FBP08 regression.
+**Статус:** fixed (2026-10-20) — большая часть выполнена S1.5-P19
+(`1f133c7`): root `Cargo.toml` version=1.5.0 ✅, `AGENTS.md` ✅,
+`Changelog.md` секция 1.5.0 ✅. Residual (версии крейтов) закрыт коммитом
+`3826a44` (2026-10-20): `crates/strangecoin-core/Cargo.toml` 1.1.0→1.5.0,
+`crates/strangecoin-vm-wasm/Cargo.toml` 0.1.0→0.2.0, `Cargo.lock` +
+`fuzz/Cargo.lock` синхронизированы; `cargo check/test/clippy --workspace`
+green с новыми версиями.
 
 **Цель:** поднять версию `Cargo.toml` с `1.1.0` до `1.5.0` (strangecoin +
 strangecoin-core); `strangecoin-vm-wasm` с `0.1.0` до `0.2.0` (semantic
