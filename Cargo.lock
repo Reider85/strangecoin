@@ -3574,6 +3574,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strangecoin-core",
+ "strangecoin-net",
  "strangecoin-vm-wasm",
  "thiserror 1.0.69",
  "tokio",
@@ -3598,6 +3599,19 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "strangecoin-net"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "hex",
+ "serde",
+ "strangecoin-core",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 # AGENTS.md — Strangecoin Developer Guide
 
-> **NOTE — Stage 2 target state.** Этот файл описывает целевое состояние AGENTS.md на период Stage 2 (после коммита S2-P01 и до тега `v2.0.0-stage2`). Согласно правилу FBP10 из retro §8.1 (`prompt-stage2.md` §6.5), отдельные секции Stage 2 добавляются инкрементально — только в тех же коммитах, где уже существуют соответствующие артефакты (см. §Forbidden Updates). До S2-P01 Stage 2 секции в этом файле **не активны** в репозитории; они служат спецификацией того, что должно быть добавлено по мере выполнения промптов.
+> **NOTE — Stage 2 in progress.** Этот файл ведётся инкрементально по правилу FBP10 из retro §8.1 (`prompt-stage2.md` §6.5): Stage 2 секции добавляются только в тех же коммитах, где уже существуют соответствующие артефакты (см. §Forbidden Updates). Секции §Active Stage, §Stage 2 Dependency Map, §Stage 2 Pin Policy, §Stage 2 Determinism Checklist, §Stage 2 Pitfalls **активны** (артефакты S2-P01..S2-P05 существуют: ADR-0020..0023 + `crates/strangecoin-net/` scaffolding).
 
 ## Project Overview
 
@@ -16,13 +16,13 @@ Strangecoin — Rust cryptocurrency (**v1.5.0**, edition 2021): PoW blockchain �
 
 **Status**: in progress (precondition verified — tag `v1.5.0-stage1.5` confirmed on origin commit `1f133c7`; `bugfixes-stage1.5.md` v1.2 verified 11/11 fixed, см. `prompt-stage2.md` §0.1).
 
-**Next prompt**: S2-P01 (ADR-0020: Noise Protocol Framework) — параллельно с S2-P02/S2-P03/S2-P04 после tag gate.
+**Next prompt**: S2-P06 (миграция `src/network/*` → `crates/strangecoin-net/`, strangler pattern) — гейты открыты (tag gate + ADR-0020..0023 + scaffolding выполнены).
 
-**Prompts done**: 0 / 24 (S2-P01..S2-P24).
+**Prompts done**: 5 / 24 (S2-P01..S2-P05).
 
 **Track status** (см. §Stage 2 Dependency Map ниже для деталей):
-- [ ] ADRs track: S2-P01 / S2-P02 / S2-P03 / S2-P04 — **параллельны** после tag gate, гейт для всех proper промптов
-- [ ] Crate track: S2-P05 (scaffolding) → S2-P06 (migration) — последовательно
+- [x] ADRs track: S2-P01 (ADR-0020) / S2-P02 (ADR-0021) / S2-P03 (ADR-0022) / S2-P04 (ADR-0023) — done
+- [x] Crate track: S2-P05 (scaffolding `crates/strangecoin-net/` + workspace member + feature `net` default-on) — done; → S2-P06 (migration) next
 - [ ] Noise track: S2-P07 (handshake) → S2-P08 (transport) → S2-P09 (Ed25519 auth) — последовательно
 - [ ] Peer track: S2-P10 (HELLO) → S2-P11 (discovery) → S2-P12 (peer mgmt) — последовательно
 - [ ] Gossip track: S2-P13 (INV) → S2-P14 (compact blocks) → S2-P15 (Erlay) — последовательно
@@ -161,9 +161,9 @@ cargo run --example canonical_decode_soak   # fuzz smoke (fallback; cargo-fuzz v
 ## Running the Node
 
 ```bash
-# Headless (gui feature off by default; net feature default-on после S2-P05)
+# Headless runtime (net + vm-wasm default-on; gui default-on после S2-P05 — бинарь включает GUI-код)
 STRANGECOIN_WALLET_PASSWORD=xxx cargo run -- --headless
-# GUI client (requires --features gui)
+# GUI client (feature gui входит в default после S2-P05; --no-default-features + --features gui для точечной сборки)
 cargo run --features gui
 ```
 
@@ -208,21 +208,21 @@ crates/strangecoin-vm-wasm/src/  # wasmi runtime (feature vm-wasm, default-on)
 ├── host/             # 13 host functions: crypto/ storage/ calls/ context/ logs/
 └── precompiles/      # 0x01..0x07 (bls_aggregate NotImplemented until Stage 7)
 
-# FORTHCOMING (S2-P05 creates, S2-P06+S2-P07..S2-P20 populate):
+# EXISTING skeleton (S2-P05 created: lib.rs, error.rs, 9 stub modules, tests/, README;
+# populated by S2-P06 + S2-P07..S2-P20):
 crates/strangecoin-net/src/      # network runtime (feature net, default-on после S2-P05)
-├── lib.rs            # NetworkHandle, NetworkConfig
-├── mod.rs            # orchestrator (replaces src/network/mod.rs after S2-P06)
-├── protocol.rs       # Message enum + framing (encrypt_frame/decrypt_frame after S2-P08)
+├── lib.rs            # pub mod declarations + NetError re-export (S2-P05); NetworkHandle/NetworkConfig — later
+├── error.rs          # NetError: Handshake/Transport/Peer/Protocol/RateLimit + From<io::Error> (snow From в S2-P07)
+├── protocol.rs       # stub → Message enum + framing (migrated S2-P06; encrypt_frame/decrypt_frame after S2-P08)
 ├── protocol/hello.rs # HELLO message + capabilities negotiation (S2-P10)
-├── noise/            # handshake.rs (S2-P07), transport.rs (S2-P08), auth.rs (S2-P09)
-├── discovery/        # seeds.rs, dnssec.rs, addr_gossip.rs (S2-P11)
-├── peer/             # store.rs, manager.rs, pool.rs (S2-P12), scoring.rs (S2-P17)
-├── gossip/           # inv.rs, get_data.rs, broadcast.rs (S2-P13), compact_blocks.rs (S2-P14), erlay/ (S2-P15)
-├── rate_limiter.rs   # rewrite: token bucket + per-message caps (S2-P16)
-├── sync.rs           # migrated from src/network/sync.rs (S2-P06)
-├── sync_engine.rs    # migrated from src/network/sync_engine.rs (S2-P06)
-├── shadow/           # replay.rs, compare.rs (S2-P20, optional)
-└── error.rs          # NetworkError
+├── noise.rs          # stub → handshake (S2-P07), transport (S2-P08), auth (S2-P09)
+├── discovery.rs      # stub → seeds.rs, dnssec.rs, addr_gossip.rs (S2-P11)
+├── peer.rs           # stub → store.rs, manager.rs, pool.rs (S2-P12), scoring.rs (S2-P17)
+├── gossip.rs         # stub → inv.rs, get_data.rs, broadcast.rs (S2-P13), compact_blocks.rs (S2-P14), erlay/ (S2-P15)
+├── rate_limiter.rs   # stub → migrated S2-P06, rewrite: token bucket + per-message caps (S2-P16)
+├── sync.rs           # stub → migrated from src/network/sync.rs (S2-P06)
+├── sync_engine.rs    # stub → migrated from src/network/sync_engine.rs (S2-P06)
+└── shadow.rs         # stub → replay.rs, compare.rs (S2-P20, optional)
 
 src/                  # node monolith (orchestrator)
 ├── lib.rs            # Node, mining, P2P orchestration (imports strangecoin-net after S2-P06)
@@ -384,12 +384,15 @@ src/                  # node monolith (orchestrator)
 | `docs/spec/consensus.tla` | TLA+ baseline (35,207 states PASS, 10 invariants incl. ReceiptsRootMatch); Stage 2 НЕ расширяет TLA+ для network (residual risk) |
 | `docs/ADR/0012..0015` | Stage 1.5 architecture decisions (wasmi, JSON ABI, gas, precompiles) |
 | `docs/ADR/0016-receipts-root-in-block-header.md` | **Занятый ADR-0016 слот** (Stage 1.5 FBP07) — Stage 2 ADRs переименованы на 0020..0023 (см. §Stage 2 DoD Quick Reference критерий 11) |
-| **FORTHCOMING**: `docs/ADR/0020..0023` | Stage 2 ADRs (Noise, Erlay, Peer scoring, Rate limiting) — S2-P01..S2-P04 |
+| `docs/ADR/0020-noise-protocol-framework.md` | **S2-P01 done** — Noise Framework (XX handshake, snow crate) |
+| `docs/ADR/0021-erlay-integration.md` | **S2-P02 done** — Erlay (mincut reconciliation + fallback) |
+| `docs/ADR/0022-peer-scoring-algorithm.md` | **S2-P03 done** — peer scoring (weighted sum, ban state machine) |
+| `docs/ADR/0023-rate-limiting-strategy.md` | **S2-P04 done** — rate limiting (token bucket per peer, ban on exceed) |
 | **FORTHCOMING**: `docs/stage2/STAGE2_SUMMARY.md` | 12 DoD критериев с evidence — S2-P24 |
 | **FORTHCOMING**: `docs/stage2/{INVARIANTS_ENFORCED,THREAT_MODEL_STAGE2,RESIDUAL_RISKS_STAGE3_PLUS}.md` | S2-P23 |
 | `crates/strangecoin-vm-wasm/src/lib.rs` | WasmiExecutor (runtime entry point) |
 | `crates/strangecoin-core/src/abi/` | JSON ABI codec (encode/decode/selector) |
-| **FORTHCOMING**: `crates/strangecoin-net/src/lib.rs` | NetworkHandle entry point — S2-P05 |
+| `crates/strangecoin-net/src/lib.rs` | Network crate skeleton (S2-P05) — entry point, populate в S2-P06..S2-P20 |
 | `genesis.json` | Genesis block definition |
 
 ---
@@ -398,7 +401,8 @@ src/                  # node monolith (orchestrator)
 
 - **Windows paths**: Use `C:\projects\strangecoin` not `/c/projects/strangecoin`
 - **PowerShell**: Use `;` not `&&` for command chaining
-- **GUI**: feature `gui` is defined; default build is headless
+- **dlltool / windows-gnu raw-dylib**: host toolchain `x86_64-pc-windows-gnu` не содержит `as.exe` в self-contained, а `dlltool` из rustup-тулчейна не может запустить `as` (CreateProcess падает из-за кириллического профиля `C:\Users\ЗС`). Рабочее решение для сборки raw-dylib крейтов (windows-sys 0.61, parking_lot): добавить `C:\msys64\mingw64\bin` в PATH сессии перед cargo (dlltool+as из MSYS2). НЕ добавлять `target/dlltool-shim` (закрытый as.exe ломает cc-rs: gcc не может запустить as → exit 1 без stderr). CI (ubuntu) не затронут
+- **GUI**: feature `gui` is defined; default-on после S2-P05 (по спеке промпта; headless-режим — `-- --headless` runtime-флаг)
 - **cargo-fuzz**: not runnable on this Windows host — use `cargo run --example canonical_decode_soak`; coverage-guided runs live in CI jobs `fuzz-canonical-decode` + Stage 1.5 VM targets + Stage 2 network targets (push/PR)
 - **tracing only** (no println!) — структура: `tracing::info!(target = "net::noise", peer_id = %id, "handshake completed")`
 - **Network test isolation**: `NETWORK_TEST_LOCK` + `network.json` next to test exe

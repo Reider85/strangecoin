@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/strangecoin-core", "crates/strangecoin-vm-wasm"]
+members = [".", "crates/strangecoin-core", "crates/strangecoin-vm-wasm", "crates/strangecoin-net"]
 resolver = "2"
 
 [package]
@@ -10,6 +10,8 @@ edition = "2021"
 [dependencies]
 strangecoin-core = { path = "crates/strangecoin-core" }
 strangecoin-vm-wasm = { path = "crates/strangecoin-vm-wasm", optional = true }
+# Stage 2 network crate (S2-P05); populated by S2-P06..S2-P20.
+strangecoin-net = { path = "crates/strangecoin-net", version = "0.1.0", optional = true }
 ctrlc = "3.4"
 rusty-leveldb = "4.0.0"
 uuid = { version = "1.17.0", features = ["v4"] }
@@ -67,9 +69,13 @@ tokio = { version = "1", features = [
 ] }
 
 [features]
-# vm-wasm is default-on (regtest/devnet builds); light nodes build with
-# --no-default-features.
-default = ["vm-wasm"]
+# net is default-on (Stage 2, S2-P05): the node participates in P2P by
+# default; --no-default-features light-node builds are a Stage 4+ concern.
+# vm-wasm is default-on (regtest/devnet builds).
+# gui is default-on per S2-P05 spec (operator desktop client; headless via
+# --no-default-features + selective re-enable).
+default = ["net", "vm-wasm", "gui"]
+net = ["dep:strangecoin-net"]
 vm-wasm = ["dep:strangecoin-vm-wasm"]
 gui = ["dep:eframe", "dep:winapi"]
 
