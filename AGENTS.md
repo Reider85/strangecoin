@@ -145,14 +145,37 @@ Stage 2 закрывает следующие угрозы из `docs/security/T
 
 ## Build & Test Commands
 
+**Windows host preamble (обязателен в КАЖДОМ shell-вызове перед cargo):**
+
+```powershell
+$env:PATH = "C:\msys64\mingw64\bin;$env:PATH"; cargo <...>
+```
+
+- PATH живёт в рамках одного shell-процесса — префикс добавляется **в том же вызове**, что и cargo (иначе: `error calling dlltool 'dlltool.exe': program not found` на windows-gnu raw-dylib крейтах — windows-sys 0.61, parking_lot — либо молчаливый `gcc exit 1` с пустым stderr в cc-rs build scripts: blake3, secp256k1-sys, wasmtime, eframe).
+- msys64 даёт рабочую пару `dlltool.exe` + `as.exe` (rustup self-contained содержит dlltool БЕЗ as, а dlltool из тулчейна не может запустить as из-за кириллического профиля `C:\Users\ЗС` — CreateProcess падает).
+- **Запрещено** ставить shim-директории (напр. `target/dlltool-shim`) в PATH перед msys64 — подменённый `as.exe` без своих DLL ломает cc-rs **молча** (gcc exit 1, пустой stderr, сборка падает без внятной ошибки).
+- **Запрещено** выставлять `CC_*` / `AR_*` / `CFLAGS` env-vars в сессии — cc-rs делает `rerun-if-env-changed`, это инвалидирует fingerprint'ы ВСЕХ C-build scripts → многоминутная пересборка secp256k1-sys (precomputed_ecmult), blake3, wasmtime, eframe.
+
 ```bash
 cargo check                      # fast typecheck
 cargo test --workspace           # all tests (workspace)
 cargo clippy --all-targets -- -D warnings
 cargo build
-cargo build --release
+cargo build --release            # ≈30 мин cold с default features (gui+eframe+LTO) — только если требует КГ
 cargo run --example canonical_decode_soak   # fuzz smoke (fallback; cargo-fuzz via CI job fuzz-canonical-decode)
 ```
+
+**Стандартный цикл промпта** (Development Workflow §5): ровно команды из КГ промпта + `cargo test --workspace`. НЕ добавлять сверх КГ `cargo build --release` / repo-wide fmt / повторные полные прогоны без запроса — измеренные затраты на S2-P05: release cold ≈30 мин, полный `cargo test --workspace` ≈10–12 мин, clippy ≈1 мин, check ≈2–4 мин.
+
+**Тайминг-бюджет (измерено, S2-P05, тёплый кэш unless noted):**
+
+| Команда | Время |
+|---------|-------|
+| `cargo check --workspace` | 2–4 мин (после fmt — полная перепроверка) |
+| `cargo clippy --all-targets -- -D warnings` | ≈1 мин |
+| `cargo test --workspace` | ≈10–12 мин (network tests: 193с + 292с) |
+| `cargo build --release` | ≈30 мин cold (первый с gui-default: eframe+wgpu+LTO); далее инкрементально + LTO |
+| `cargo fmt --all -- --check` | секунды (см. §Common Gotchas про fmt drift) |
 
 После S2-P21 (fuzzing harness): 4 новых network fuzz targets — `noise_handshake`, `gossip_inv`, `compact_blocks_fill_up`, `erlay_reconciliation` (каждый 600s в CI matrix ubuntu-latest, cargo-fuzz 0.13.2). После S2-P22: 6 новых integration test files — `tests/net_{noise_handshake,gossip,compact_blocks,erlay,peer_scoring,rate_limit_integration}.rs` + `tests/common/net_helpers.rs`.
 
@@ -340,7 +363,7 @@ src/                  # node monolith (orchestrator)
 2. Stage 1 prompts: `analytics/prompt-stage1.md` (done, S1-P01–S1-P22)
 3. Stage 1.5 prompts: `analytics/prompt-stage1.5.md` (done, S1.5-P01–S1.5-P19; P12 gap closed 2026-10-18)
 4. **Stage 2 prompts: `analytics/prompt-stage2.md`** (active, S2-P01–S2-P24, 24 промпта, precondition verified — tag `v1.5.0-stage1.5` confirmed + bugfixes-stage1.5.md 11/11 fixed)
-5. Each prompt: implement → `cargo check` → `cargo test --workspace` → verify КГ (критерии готовности) → commit
+5. Each prompt: Windows host preamble (PATH, см. §Build & Test Commands) → implement → ровно команды из КГ промпта + `cargo test --workspace` → verify КГ (критерии готовности) → commit. НЕ расширять верификацию без запроса (release ≈30 мин, повторные полные прогоны ≈10–12 мин каждый — измерено на S2-P05)
 6. **Do not commit unless explicitly asked**
 7. **ADR before code** that changes architecture; Changelog only after artifacts exist (FBP10 rule, see §Forbidden Updates)
 8. **§0 «Общий контекст» блок** из `prompt-stage2.md` — НЕ дублировать в каждом промпте; AGENTS.md уже содержит эквивалентную информацию (§Project Overview + §Active Stage + §Stage 2 Dependency Map + §Key Constraints). Промпты Stage 2 содержат только prompt-specific блок (Цель / Контекст / Задачи / Артефакты / КГ / Коммит) — экономия ~3K токенов на промпт × 24 = ~70K токенов.
@@ -401,7 +424,9 @@ src/                  # node monolith (orchestrator)
 
 - **Windows paths**: Use `C:\projects\strangecoin` not `/c/projects/strangecoin`
 - **PowerShell**: Use `;` not `&&` for command chaining
-- **dlltool / windows-gnu raw-dylib**: host toolchain `x86_64-pc-windows-gnu` не содержит `as.exe` в self-contained, а `dlltool` из rustup-тулчейна не может запустить `as` (CreateProcess падает из-за кириллического профиля `C:\Users\ЗС`). Рабочее решение для сборки raw-dylib крейтов (windows-sys 0.61, parking_lot): добавить `C:\msys64\mingw64\bin` в PATH сессии перед cargo (dlltool+as из MSYS2). НЕ добавлять `target/dlltool-shim` (закрытый as.exe ломает cc-rs: gcc не может запустить as → exit 1 без stderr). CI (ubuntu) не затронут
+- **dlltool / windows-gnu raw-dylib**: host toolchain `x86_64-pc-windows-gnu` не содержит `as.exe` в self-contained, а `dlltool` из rustup-тулчейна не может запустить `as` (CreateProcess падает из-за кириллического профиля `C:\Users\ЗС`). Рабочее решение — **Windows host preamble** в §Build & Test Commands (`C:\msys64\mingw64\bin` первым в PATH того же вызова, что и cargo). НЕ добавлять `target/dlltool-shim` (закрытый as.exe ломает cc-rs: gcc exit 1 без stderr); НЕ выставлять `CC_*`/`AR_*` env-vars (инвалидация всех C-build fingerprints). CI (ubuntu) не затронут
+- **fmt drift (закрыт [S2-P05] style-коммитом)**: до S2-P05 repo-wide `cargo fmt --all -- --check` давал ~300 pre-existing diff'ов (~80 файлов core+src+tests) — дрейф накопился ранее и не был от правок промпта. Закрыто: `cargo fmt --all` принят rustfmt 1.9.0 (gnu), 1.10.0 (= CI stable канал, msvc-тулчейн) и nightly — 0 diff каждым. Если дрейф появится снова (смена rustfmt-канала) — повторить `cargo fmt --all` отдельным style-коммитом; сверять только тронутые файлы (`cargo fmt -p <crate> -- --check`), полный fmt-прогон секунды. CI beta-канал и статус CI-джоб локально **неверифицируемы** (нет `gh` CLI на хосте)
+- **Пайплайн-обрыв в PowerShell**: `cargo test ... | Select-String ... | Select-Object -First N` убивает cargo после N совпадений (exit -1, тесты не дорабатывают). Полный прогон: перенаправлять в файл (`... | Out-File target\test.log`) и фильтровать файл после завершения
 - **GUI**: feature `gui` is defined; default-on после S2-P05 (по спеке промпта; headless-режим — `-- --headless` runtime-флаг)
 - **cargo-fuzz**: not runnable on this Windows host — use `cargo run --example canonical_decode_soak`; coverage-guided runs live in CI jobs `fuzz-canonical-decode` + Stage 1.5 VM targets + Stage 2 network targets (push/PR)
 - **tracing only** (no println!) — структура: `tracing::info!(target = "net::noise", peer_id = %id, "handshake completed")`
