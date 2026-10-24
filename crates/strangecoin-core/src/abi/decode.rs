@@ -22,10 +22,17 @@ pub fn decode_args(params: &[super::AbiParam], data: &[u8]) -> Result<Vec<AbiVal
 }
 
 /// Decode one tuple; returns the values and the number of bytes consumed.
-pub(crate) fn decode_tuple(types: &[&AbiType], data: &[u8]) -> Result<(Vec<AbiValue>, usize), AbiError> {
+pub(crate) fn decode_tuple(
+    types: &[&AbiType],
+    data: &[u8],
+) -> Result<(Vec<AbiValue>, usize), AbiError> {
     let mut head_len = 0usize;
     for t in types {
-        head_len += if t.is_dynamic() { 4 } else { t.static_size().unwrap_or(0) };
+        head_len += if t.is_dynamic() {
+            4
+        } else {
+            t.static_size().unwrap_or(0)
+        };
     }
     if data.len() < head_len {
         return Err(AbiError::UnexpectedEnd(data.len()));
@@ -71,7 +78,11 @@ fn decode_static(t: &AbiType, data: &[u8]) -> Result<(AbiValue, usize), AbiError
             // Sign-extend to the full 256-bit word so decode(encode(v)) == v.
             let keep = (*bits / 8) as usize;
             if keep < 32 {
-                let fill = if raw[32 - keep] & 0x80 != 0 { 0xff } else { 0x00 };
+                let fill = if raw[32 - keep] & 0x80 != 0 {
+                    0xff
+                } else {
+                    0x00
+                };
                 for b in &mut raw[..32 - keep] {
                     *b = fill;
                 }
@@ -112,7 +123,9 @@ fn decode_dynamic_body(t: &AbiType, data: &[u8]) -> Result<(AbiValue, usize), Ab
     match t {
         AbiType::Bytes => {
             let len = read_u32(data, 0)? as usize;
-            let end = 4usize.checked_add(len).ok_or(AbiError::UnexpectedEnd(data.len()))?;
+            let end = 4usize
+                .checked_add(len)
+                .ok_or(AbiError::UnexpectedEnd(data.len()))?;
             if end > data.len() {
                 return Err(AbiError::UnexpectedEnd(data.len()));
             }
@@ -120,7 +133,9 @@ fn decode_dynamic_body(t: &AbiType, data: &[u8]) -> Result<(AbiValue, usize), Ab
         }
         AbiType::String => {
             let len = read_u32(data, 0)? as usize;
-            let end = 4usize.checked_add(len).ok_or(AbiError::UnexpectedEnd(data.len()))?;
+            let end = 4usize
+                .checked_add(len)
+                .ok_or(AbiError::UnexpectedEnd(data.len()))?;
             if end > data.len() {
                 return Err(AbiError::UnexpectedEnd(data.len()));
             }
@@ -166,7 +181,9 @@ fn read_word(data: &[u8]) -> Result<[u8; 32], AbiError> {
 
 fn read_u32(data: &[u8], at: usize) -> Result<u32, AbiError> {
     let end = at + 4;
-    let slice = data.get(at..end).ok_or(AbiError::UnexpectedEnd(data.len()))?;
+    let slice = data
+        .get(at..end)
+        .ok_or(AbiError::UnexpectedEnd(data.len()))?;
     let mut b = [0u8; 4];
     b.copy_from_slice(slice);
     Ok(u32::from_be_bytes(b))

@@ -8,12 +8,10 @@ mod common;
 
 use std::collections::HashMap;
 
-use common::vm_helpers::{
-    child_block, commit_block, derive, init_chain, keypair, seal, sign,
-};
+use common::vm_helpers::{child_block, commit_block, derive, init_chain, keypair, seal, sign};
 use strangecoin::blockchain::block_executor::{now_secs, validate_and_apply, BlockView};
-use strangecoin::error::StrangecoinError;
 use strangecoin::consensus::CURRENT_CONSENSUS_VERSION;
+use strangecoin::error::StrangecoinError;
 use strangecoin_core::consensus::CHAIN_ID_REGTEST;
 use strangecoin_core::types::Transaction;
 use strangecoin_core::vm::{TxStatus, BLOCK_GAS_LIMIT};
@@ -45,15 +43,7 @@ fn call_tx_out_of_gas_burns_full_budget_and_keeps_value() {
 
     // Call with a 100k budget: the loop is halted by fuel metering.
     let call = sign(
-        Transaction::call(
-            &alice,
-            &contract,
-            vec![],
-            25,
-            100_000,
-            1,
-            CHAIN_ID_REGTEST,
-        ),
+        Transaction::call(&alice, &contract, vec![], 25, 100_000, 1, CHAIN_ID_REGTEST),
         &alice_sk,
     );
     let call_block = child_block(chain.last().unwrap(), vec![call]);

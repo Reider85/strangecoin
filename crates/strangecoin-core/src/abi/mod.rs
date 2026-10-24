@@ -388,10 +388,7 @@ impl AbiType {
                     if len == 0 {
                         return Err(invalid());
                     }
-                    return Ok(AbiType::FixedArray(
-                        Box::new(AbiType::parse(elem)?),
-                        len,
-                    ));
+                    return Ok(AbiType::FixedArray(Box::new(AbiType::parse(elem)?), len));
                 }
             }
             return Err(invalid());
@@ -522,14 +519,20 @@ mod tests {
             Some(64)
         );
         assert_eq!(AbiType::String.static_size(), None);
-        assert_eq!(AbiType::FixedArray(Box::new(AbiType::Bytes), 2).static_size(), None);
+        assert_eq!(
+            AbiType::FixedArray(Box::new(AbiType::Bytes), 2).static_size(),
+            None
+        );
     }
 
     #[test]
     fn entry_selector_from_name_matches_golden_vector() {
         // Golden vector, same pin as tests/abi_roundtrip.rs
         // (method_selector("totalSupply", &[])).
-        assert_eq!(AbiEntry::selector_from_name("totalSupply"), [0x1e, 0x92, 0x6a, 0x5b]);
+        assert_eq!(
+            AbiEntry::selector_from_name("totalSupply"),
+            [0x1e, 0x92, 0x6a, 0x5b]
+        );
         assert_eq!(
             AbiEntry::selector_from_name("totalSupply"),
             method_selector("totalSupply", &[])
@@ -575,6 +578,9 @@ mod tests {
         let doc = AbiDocument::new("Token", vec![f]);
         assert!(doc.function_by_name("transfer").is_some());
         assert!(doc.function_by_name("approve").is_none());
-        assert_eq!(doc.function_by_selector(sel).map(|f| f.name.as_str()), Some("transfer"));
+        assert_eq!(
+            doc.function_by_selector(sel).map(|f| f.name.as_str()),
+            Some("transfer")
+        );
     }
 }

@@ -93,9 +93,7 @@ fn wat_pages(pages: u32, segments: &[(u32, &[u8])], body: &str) -> String {
     }
     let mut out = String::from("(module ");
     out.push_str(&imports);
-    out.push_str(&format!(
-        "(memory (export \"memory\") {pages})"
-    ));
+    out.push_str(&format!("(memory (export \"memory\") {pages})"));
     for (offset, bytes) in segments {
         out.push_str(&format!(
             "(data (i32.const {offset}) \"{}\")",
@@ -284,8 +282,8 @@ fn keypair() -> (String, SecretKey) {
     sk_bytes[0] = 42;
     let sk = SecretKey::from_slice(&sk_bytes).expect("valid secret key");
     let pk = secp256k1::PublicKey::from_secret_key(&secp, &sk);
-    let addr = strangecoin_core::address::encode_address(&pk, CHAIN_ID_REGTEST)
-        .expect("encode address");
+    let addr =
+        strangecoin_core::address::encode_address(&pk, CHAIN_ID_REGTEST).expect("encode address");
     (addr, sk)
 }
 

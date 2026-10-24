@@ -90,16 +90,11 @@ impl HeaderCache {
         let mut accepted = 0usize;
         for header in batch {
             if validate_header_pow(header).is_err() {
-                warn!(
-                    index = header.index,
-                    "Dropping header: PoW check failed"
-                );
+                warn!(index = header.index, "Dropping header: PoW check failed");
                 break;
             }
             let linked = match &prev {
-                Some((hash, index)) => {
-                    header.previous_hash == *hash && header.index == *index + 1
-                }
+                Some((hash, index)) => header.previous_hash == *hash && header.index == *index + 1,
                 None => {
                     header.index == 0
                         || self.by_hash.contains_key(&header.previous_hash)
@@ -158,10 +153,7 @@ pub fn plan_best_branch(local_chain: &[Block], cache: &HeaderCache) -> Option<Br
     let local_genesis_hash = local_chain[0].hash.clone();
 
     // Tips: header hashes nobody in the cache points at as a parent.
-    let parents: HashSet<&str> = cache
-        .headers()
-        .map(|h| h.previous_hash.as_str())
-        .collect();
+    let parents: HashSet<&str> = cache.headers().map(|h| h.previous_hash.as_str()).collect();
     let tips: Vec<&BlockHeader> = cache
         .headers()
         .filter(|h| !parents.contains(h.hash.as_str()))
@@ -282,9 +274,12 @@ pub async fn sync_headers_first(
     let mut stream = timeout(SYNC_CONNECT_TIMEOUT, tokio::net::TcpStream::connect(&addr))
         .await
         .map_err(|_| timeout_error())??;
-    timeout(SYNC_IO_TIMEOUT, stream.write_all(&protocol::encode_hello(network_id)))
-        .await
-        .map_err(|_| timeout_error())??;
+    timeout(
+        SYNC_IO_TIMEOUT,
+        stream.write_all(&protocol::encode_hello(network_id)),
+    )
+    .await
+    .map_err(|_| timeout_error())??;
 
     // Local view taken once: this round plans against one consistent snapshot.
     let local_hashes: HashSet<String> = local_chain.iter().map(|b| b.hash.clone()).collect();
@@ -346,10 +341,9 @@ pub async fn sync_headers_first(
         }
         let mut requested: Vec<[u8; 32]> = Vec::with_capacity(chunk.len());
         for header in chunk {
-            let bytes =
-                hex::decode(&header.hash).map_err(|_| StrangecoinError::InvalidBlock(
-                    "headers-first: non-hex header hash".to_string(),
-                ))?;
+            let bytes = hex::decode(&header.hash).map_err(|_| {
+                StrangecoinError::InvalidBlock("headers-first: non-hex header hash".to_string())
+            })?;
             let arr: [u8; 32] = bytes.try_into().map_err(|_| {
                 StrangecoinError::InvalidBlock("headers-first: bad header hash".to_string())
             })?;
@@ -537,13 +531,16 @@ mod tests {
         let mut cache = HeaderCache::new();
         let locals = HashSet::new();
         let accepted = cache.ingest(
-            &[genesis.clone(), next.clone(), broken.clone(), bad_pow, after_bad],
+            &[
+                genesis.clone(),
+                next.clone(),
+                broken.clone(),
+                bad_pow,
+                after_bad,
+            ],
             &locals,
         );
-        assert_eq!(
-            accepted, 2,
-            "ingestion must stop at the first bad header"
-        );
+        assert_eq!(accepted, 2, "ingestion must stop at the first bad header");
         assert_eq!(cache.len(), 2);
         assert!(cache.get(&genesis.hash).is_some());
         assert!(cache.get(&next.hash).is_some());

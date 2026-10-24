@@ -4,7 +4,7 @@
 //! Input: arbitrary bytes. Output: 32-byte digest.
 //! Gas: 50 + 6 per 64-byte chunk (`HostCallWeight::Blake3`).
 
-use super::{PrecompileError, PrecompileOutput, hash_gas};
+use super::{hash_gas, PrecompileError, PrecompileOutput};
 use crate::gas::HostCallWeight;
 
 pub fn run(data: &[u8]) -> Result<PrecompileOutput, PrecompileError> {

@@ -81,7 +81,11 @@ fn call_precompile(precompile: &str, input: &[u8], out_len: usize) -> (Vec<u8>, 
     state = commit_block(&mut chain, &state, call_block, &codes);
 
     let receipt = &state.receipts[1];
-    assert_eq!(receipt.status, TxStatus::Success, "outer frame must succeed");
+    assert_eq!(
+        receipt.status,
+        TxStatus::Success,
+        "outer frame must succeed"
+    );
     assert_eq!(receipt.logs.len(), 1);
     assert_eq!(receipt.logs[0].topics, vec![TOPIC]);
     let status = state
@@ -113,10 +117,8 @@ fn ecrecover_input_ok() -> (Vec<u8>, Vec<u8>) {
 }
 
 fn ed25519_valid_input() -> Vec<u8> {
-    let pk = hex::decode(
-        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
-    )
-    .expect("rfc8032 pk");
+    let pk = hex::decode("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+        .expect("rfc8032 pk");
     let sig = hex::decode(
         "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
     )

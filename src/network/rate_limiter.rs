@@ -315,14 +315,18 @@ mod tests {
         let addr = test_addr(18087);
 
         for _ in 0..30 {
-            limiter.check_class(addr, MessageClass::ChainGossip).unwrap();
+            limiter
+                .check_class(addr, MessageClass::ChainGossip)
+                .unwrap();
         }
 
         sleep(Duration::from_millis(1100));
 
         // A fresh window starts with cleared per-class counters.
         for _ in 0..30 {
-            limiter.check_class(addr, MessageClass::ChainGossip).unwrap();
+            limiter
+                .check_class(addr, MessageClass::ChainGossip)
+                .unwrap();
         }
     }
 

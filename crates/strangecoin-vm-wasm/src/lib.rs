@@ -86,16 +86,14 @@ impl WasmiExecutor {
 
     /// Register WASM bytecode for a contract address.
     pub fn insert_code(&mut self, address: &str, wasm: Vec<u8>) {
-        Rc::make_mut(&mut self.code)
-            .insert(address.to_string(), wasm);
+        Rc::make_mut(&mut self.code).insert(address.to_string(), wasm);
     }
 
     /// Register the ABI of a contract (S1.5-P13: the `non_reentrant` flag
     /// consulted by the reentrancy guard; S1.5-FBP03: selector-based
     /// dispatch of calldata to WASM exports).
     pub fn insert_abi(&mut self, address: &str, abi: ContractAbi) {
-        Rc::make_mut(&mut self.abis)
-            .insert(address.to_string(), abi);
+        Rc::make_mut(&mut self.abis).insert(address.to_string(), abi);
     }
 
     /// Execute raw WASM bytecode with `ctx.gas_limit` as the fuel budget.
@@ -345,14 +343,9 @@ pub(crate) fn run_frame(
         });
     }
 
-    let mut store = Store::new(
-        &engine,
-        HostState::new(ctx, code, abis, call_stack),
-    );
+    let mut store = Store::new(&engine, HostState::new(ctx, code, abis, call_stack));
     store.data_mut().value_transfers = seeded_transfers;
-    store.limiter(|state: &mut HostState| -> &mut dyn wasmi::ResourceLimiter {
-        &mut state.limits
-    });
+    store.limiter(|state: &mut HostState| -> &mut dyn wasmi::ResourceLimiter { &mut state.limits });
     store
         .set_fuel(gas_limit)
         .map_err(|e| WasmiError::Engine(format!("set_fuel: {e}")))?;

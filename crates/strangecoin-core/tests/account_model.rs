@@ -163,7 +163,11 @@ fn apply_unapply_roundtrip_with_contract() {
 
     let restored = unapply_block(&applied, &block, CHAIN_ID_REGTEST).unwrap();
     assert_eq!(restored, after_genesis);
-    let contract = restored.get_account("contract").unwrap().as_contract().unwrap();
+    let contract = restored
+        .get_account("contract")
+        .unwrap()
+        .as_contract()
+        .unwrap();
     assert_eq!(contract.balance, 0);
     assert_eq!(contract.code_hash, CODE_HASH);
 }

@@ -1,5 +1,5 @@
-mod inner;
 pub mod contract_storage;
+mod inner;
 pub mod sparse_merkle;
 pub mod witness;
 
@@ -7,7 +7,9 @@ pub use contract_storage::{
     ContractStorage, ContractStorageMap, ContractStorageOverlay, SharedContractStorage,
 };
 pub use inner::{apply_block, apply_block_with_vm, unapply_block, State};
-pub use sparse_merkle::{contract_storage_root, prove_receipt, receipts_subroot, verify_receipt_proof};
+pub use sparse_merkle::{
+    contract_storage_root, prove_receipt, receipts_subroot, verify_receipt_proof,
+};
 
 use std::collections::HashMap;
 
@@ -57,10 +59,7 @@ fn root_after_inner(
     state: &State,
     block: &crate::types::Block,
     allow_zero_state_root: bool,
-    apply: impl FnOnce(
-        &State,
-        &crate::types::Block,
-    ) -> Result<State, crate::error::CoreError>,
+    apply: impl FnOnce(&State, &crate::types::Block) -> Result<State, crate::error::CoreError>,
 ) -> Result<[u8; 32], crate::error::CoreError> {
     let new_state = apply(state, block)?;
     let computed = SparseMerkleTrie::compute_root(&new_state.balances);

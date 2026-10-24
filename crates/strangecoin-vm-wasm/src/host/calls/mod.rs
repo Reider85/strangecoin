@@ -205,11 +205,27 @@ pub(crate) fn nested_call(
         if !value_ok || value_forbidden {
             // Insufficient balance / forbidden value: exceptional failure,
             // full child budget burn.
-            (STATUS_FAILED, gas_budget, Vec::new(), None, None, Vec::new(), Vec::new())
+            (
+                STATUS_FAILED,
+                gas_budget,
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+                Vec::new(),
+            )
         } else if is_precompile_address(&to) {
             let (status, gas_used, return_data) = run_precompile_nested(&to, &data, gas_budget);
             let accounts = (status == STATUS_OK).then(|| child_accounts.clone());
-            (status, gas_used, return_data, None, accounts, Vec::new(), Vec::new())
+            (
+                status,
+                gas_used,
+                return_data,
+                None,
+                accounts,
+                Vec::new(),
+                Vec::new(),
+            )
         } else {
             match code.get(&to).cloned() {
                 Some(wasm) => match run_frame(
@@ -264,7 +280,15 @@ pub(crate) fn nested_call(
                             }
                         }
                         let _: VmError = err.into();
-                        (STATUS_FAILED, gas_budget, Vec::new(), None, None, Vec::new(), Vec::new())
+                        (
+                            STATUS_FAILED,
+                            gas_budget,
+                            Vec::new(),
+                            None,
+                            None,
+                            Vec::new(),
+                            Vec::new(),
+                        )
                     }
                 },
                 // No code registered for `to`: EOA — success, empty return.
@@ -350,9 +374,7 @@ pub(crate) fn transfer_value(
     if let Some(acc) = accounts.get_mut(from) {
         acc.set_balance(from_balance - value);
     }
-    let recipient = accounts
-        .entry(to.to_string())
-        .or_default();
+    let recipient = accounts.entry(to.to_string()).or_default();
     recipient.set_balance(recipient.balance().saturating_add(value));
     true
 }

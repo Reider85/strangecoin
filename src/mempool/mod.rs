@@ -2,9 +2,7 @@ use crate::consensus::verify_transaction;
 use crate::error::StrangecoinError;
 use crate::{AccountState, Transaction};
 use std::collections::{BTreeMap, HashMap};
-use strangecoin_core::consensus::{
-    MAX_RBF_REPLACEMENTS, RBF_BPS_DENOMINATOR, RBF_MIN_DELTA_BPS,
-};
+use strangecoin_core::consensus::{MAX_RBF_REPLACEMENTS, RBF_BPS_DENOMINATOR, RBF_MIN_DELTA_BPS};
 use strangecoin_core::serialize::{serialize_transaction_signed, txid};
 
 pub const MAX_PENDING_TXS: usize = 10_000;
@@ -153,11 +151,7 @@ impl Mempool {
         let sender_map = self.by_sender.get(tx.sender());
 
         let pending_count = sender_map
-            .map(|m| {
-                m.values()
-                    .filter(|id| !excluded.contains(id))
-                    .count() as u64
-            })
+            .map(|m| m.values().filter(|id| !excluded.contains(id)).count() as u64)
             .unwrap_or(0);
         // expected = account.nonce + 1 + pending_count; правило — core
         // validate_nonce (BUG-S0-025), маппинг ошибки через From<CoreError>.
@@ -261,7 +255,8 @@ mod tests {
     fn create_accepted() {
         let (addr, key) = generate_keypair();
         let mut pool = Mempool::new(CHAIN);
-        let mut tx = Transaction::create(&addr, vec![0x00, 0x61, 0x73, 0x6d], Vec::new(), 0, 1, CHAIN);
+        let mut tx =
+            Transaction::create(&addr, vec![0x00, 0x61, 0x73, 0x6d], Vec::new(), 0, 1, CHAIN);
         sign_transaction(&mut tx, &key);
         let outcome = pool.insert(tx, &funded_account(1_000, 0)).unwrap();
         assert_eq!(outcome, InsertOutcome::Accepted);
@@ -284,10 +279,13 @@ mod tests {
         let mut tx = Transaction::call(&addr, "contract1", vec![], 0, 0, 1, CHAIN);
         sign_transaction(&mut tx, &key);
         let err = pool.insert(tx, &funded_account(1_000, 0)).unwrap_err();
-        assert!(matches!(
-            err,
-            StrangecoinError::InvalidBlock(ref m) if m.contains("gas limit")
-        ), "{err:?}");
+        assert!(
+            matches!(
+                err,
+                StrangecoinError::InvalidBlock(ref m) if m.contains("gas limit")
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -297,10 +295,13 @@ mod tests {
         let mut tx = Transaction::create(&addr, Vec::new(), Vec::new(), 0, 1, CHAIN);
         sign_transaction(&mut tx, &key);
         let err = pool.insert(tx, &funded_account(1_000, 0)).unwrap_err();
-        assert!(matches!(
-            err,
-            StrangecoinError::InvalidBlock(ref m) if m.contains("init_code")
-        ), "{err:?}");
+        assert!(
+            matches!(
+                err,
+                StrangecoinError::InvalidBlock(ref m) if m.contains("init_code")
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -321,7 +322,10 @@ mod tests {
         let mut tx = Transaction::transfer(&addr, "recipient", 100, 1, CHAIN + 1);
         sign_transaction(&mut tx, &key);
         let err = pool.insert(tx, &funded_account(1_000, 0)).unwrap_err();
-        assert!(matches!(err, StrangecoinError::InvalidChainId { .. }), "{err:?}");
+        assert!(
+            matches!(err, StrangecoinError::InvalidChainId { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -336,6 +340,9 @@ mod tests {
         sign_transaction(&mut tx2, &key);
         // balance 1000 - pending 900 = 100 < 200 — rejected.
         let err = pool.insert(tx2, &funded_account(1_000, 0)).unwrap_err();
-        assert!(matches!(err, StrangecoinError::InsufficientBalance { .. }), "{err:?}");
+        assert!(
+            matches!(err, StrangecoinError::InsufficientBalance { .. }),
+            "{err:?}"
+        );
     }
 }

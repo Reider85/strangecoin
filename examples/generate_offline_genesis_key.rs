@@ -54,10 +54,7 @@ fn main() {
     let privkey_hex = hex::encode(secret_key.secret_bytes());
     match args.first() {
         Some(path) => {
-            let file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path);
+            let file = OpenOptions::new().write(true).create_new(true).open(path);
             let mut file = match file {
                 Ok(f) => f,
                 Err(e) => {

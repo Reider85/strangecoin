@@ -55,10 +55,9 @@ fn transfer_block(index: u64, txs: Vec<Transaction>, state: &State) -> Block {
 #[test]
 fn build_witness_then_verify() {
     let mut state = State::new();
-    state.balances.insert(
-        "alice".to_string(),
-        Account::eoa(1000, 0),
-    );
+    state
+        .balances
+        .insert("alice".to_string(), Account::eoa(1000, 0));
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
     let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
@@ -77,10 +76,9 @@ fn build_witness_then_verify() {
 #[test]
 fn tampered_balance_rejected() {
     let mut state = State::new();
-    state.balances.insert(
-        "alice".to_string(),
-        Account::eoa(1000, 0),
-    );
+    state
+        .balances
+        .insert("alice".to_string(), Account::eoa(1000, 0));
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
     let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
@@ -103,14 +101,12 @@ fn tampered_balance_rejected() {
 #[test]
 fn witness_contains_only_touched_addresses() {
     let mut state = State::new();
-    state.balances.insert(
-        "alice".to_string(),
-        Account::eoa(5000, 0),
-    );
-    state.balances.insert(
-        "charlie".to_string(),
-        Account::eoa(3000, 0),
-    );
+    state
+        .balances
+        .insert("alice".to_string(), Account::eoa(5000, 0));
+    state
+        .balances
+        .insert("charlie".to_string(), Account::eoa(3000, 0));
 
     let genesis = genesis_block(vec![coinbase("alice", 5000), coinbase("charlie", 3000)]);
     let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
@@ -153,10 +149,9 @@ fn coinbase_only_block_witness() {
 #[test]
 fn wrong_parent_root_rejected() {
     let mut state = State::new();
-    state.balances.insert(
-        "alice".to_string(),
-        Account::eoa(1000, 0),
-    );
+    state
+        .balances
+        .insert("alice".to_string(), Account::eoa(1000, 0));
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
     let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
@@ -176,10 +171,9 @@ fn wrong_parent_root_rejected() {
 #[test]
 fn chain_of_blocks_witness() {
     let mut state = State::new();
-    state.balances.insert(
-        "alice".to_string(),
-        Account::eoa(10000, 0),
-    );
+    state
+        .balances
+        .insert("alice".to_string(), Account::eoa(10000, 0));
 
     let genesis = genesis_block(vec![coinbase("alice", 10000)]);
     let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
@@ -188,7 +182,13 @@ fn chain_of_blocks_witness() {
 
     let block1 = transfer_block(1, vec![transfer("alice", "bob", 500, 1)], &after_genesis);
     let witness1 = build_witness(&after_genesis, &block1).unwrap();
-    verify_block_stateless(&genesis_block.state_root, &block1, CHAIN_ID_REGTEST, &witness1).unwrap();
+    verify_block_stateless(
+        &genesis_block.state_root,
+        &block1,
+        CHAIN_ID_REGTEST,
+        &witness1,
+    )
+    .unwrap();
 
     let after_block1 = apply_block(&after_genesis, &block1, CHAIN_ID_REGTEST).unwrap();
     let block2 = transfer_block(2, vec![transfer("bob", "charlie", 200, 1)], &after_block1);
@@ -252,10 +252,9 @@ proptest! {
 #[test]
 fn forged_state_root_rejected() {
     let mut state = State::new();
-    state.balances.insert(
-        "alice".to_string(),
-        Account::eoa(1000, 0),
-    );
+    state
+        .balances
+        .insert("alice".to_string(), Account::eoa(1000, 0));
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
     let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
@@ -279,14 +278,12 @@ fn forged_state_root_rejected() {
 #[test]
 fn untouched_account_tamper_in_post_commitment_rejected() {
     let mut state = State::new();
-    state.balances.insert(
-        "alice".to_string(),
-        Account::eoa(5000, 0),
-    );
-    state.balances.insert(
-        "charlie".to_string(),
-        Account::eoa(3000, 0),
-    );
+    state
+        .balances
+        .insert("alice".to_string(), Account::eoa(5000, 0));
+    state
+        .balances
+        .insert("charlie".to_string(), Account::eoa(3000, 0));
 
     let genesis = genesis_block(vec![coinbase("alice", 5000), coinbase("charlie", 3000)]);
     let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
@@ -296,10 +293,9 @@ fn untouched_account_tamper_in_post_commitment_rejected() {
     let witness = build_witness(&after_genesis, &block).unwrap();
 
     let mut fake_post = apply_block(&after_genesis, &block, CHAIN_ID_REGTEST).unwrap();
-    fake_post.balances.insert(
-        "charlie".to_string(),
-        Account::eoa(999_999, 0),
-    );
+    fake_post
+        .balances
+        .insert("charlie".to_string(), Account::eoa(999_999, 0));
     let mut forged = block;
     forged.state_root = SparseMerkleTrie::compute_root(&fake_post.balances);
 
@@ -315,10 +311,9 @@ fn untouched_account_tamper_in_post_commitment_rejected() {
 #[test]
 fn zero_state_root_on_non_genesis_rejected() {
     let mut state = State::new();
-    state.balances.insert(
-        "alice".to_string(),
-        Account::eoa(1000, 0),
-    );
+    state
+        .balances
+        .insert("alice".to_string(), Account::eoa(1000, 0));
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
     let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
@@ -341,10 +336,9 @@ fn zero_state_root_on_non_genesis_rejected() {
 #[test]
 fn missing_touched_address_rejected() {
     let mut state = State::new();
-    state.balances.insert(
-        "alice".to_string(),
-        Account::eoa(1000, 0),
-    );
+    state
+        .balances
+        .insert("alice".to_string(), Account::eoa(1000, 0));
 
     let genesis = genesis_block(vec![coinbase("alice", 1000)]);
     let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();

@@ -86,9 +86,7 @@ impl Incoming {
             )),
             // A block hash commits to its ancestry, so the tip hash uniquely
             // identifies the whole candidate chain.
-            Incoming::CandidateChain { chain, .. } => {
-                chain.last().map(|b| format!("c:{}", b.hash))
-            }
+            Incoming::CandidateChain { chain, .. } => chain.last().map(|b| format!("c:{}", b.hash)),
             Incoming::NewHeaders { .. } => None,
         }
     }

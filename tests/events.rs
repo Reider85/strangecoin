@@ -82,7 +82,11 @@ async fn three_subscribers_each_receive_live_node_events() {
     );
 
     // Each subscriber must see both events, in publish order.
-    for (name, rx) in [("subscriber1", &rx1), ("subscriber2", &rx2), ("subscriber3", &rx3)] {
+    for (name, rx) in [
+        ("subscriber1", &rx1),
+        ("subscriber2", &rx2),
+        ("subscriber3", &rx3),
+    ] {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut seen_tx = false;
         let mut seen_block = false;

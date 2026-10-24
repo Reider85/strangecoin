@@ -6,7 +6,10 @@ use super::{AbiParam, AbiType};
 
 /// Canonical signature string whose blake3 prefix is the selector.
 pub fn method_signature(name: &str, params: &[AbiParam]) -> String {
-    let types: Vec<String> = params.iter().map(|p| p.param_type.canonical_name()).collect();
+    let types: Vec<String> = params
+        .iter()
+        .map(|p| p.param_type.canonical_name())
+        .collect();
     format!("{name}({})", types.join(","))
 }
 

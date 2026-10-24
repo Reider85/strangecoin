@@ -9,8 +9,8 @@
 use std::time::{Duration, Instant};
 
 use strangecoin_core::serialize::{
-    deserialize_block, deserialize_header, deserialize_transaction,
-    deserialize_transaction_signed, serialize_block,
+    deserialize_block, deserialize_header, deserialize_transaction, deserialize_transaction_signed,
+    serialize_block,
 };
 use strangecoin_core::types::{Block, Transaction};
 

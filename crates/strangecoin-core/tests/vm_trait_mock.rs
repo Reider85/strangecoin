@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use strangecoin_core::types::{Account, BlockHeader};
 use strangecoin_core::{
-    BlockContext, ExecutionResult, ExecutionContext, GasCounter, Log, Opcode, Receipt, TxStatus,
+    BlockContext, ExecutionContext, ExecutionResult, GasCounter, Log, Opcode, Receipt, TxStatus,
     VmError, VmExecutor,
 };
 

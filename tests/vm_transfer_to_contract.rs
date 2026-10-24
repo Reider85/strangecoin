@@ -14,9 +14,7 @@ mod common;
 
 use std::collections::HashMap;
 
-use common::vm_helpers::{
-    child_block, commit_block, derive, init_chain, keypair, sign, wat,
-};
+use common::vm_helpers::{child_block, commit_block, derive, init_chain, keypair, sign, wat};
 use strangecoin_core::consensus::CHAIN_ID_REGTEST;
 use strangecoin_core::state::{unapply_block, State};
 use strangecoin_core::types::Transaction;
@@ -271,14 +269,7 @@ fn nested_value_chain_a_to_b_to_c_settles_and_unapplies() {
         .enumerate()
         .map(|(i, wasm)| {
             sign(
-                Transaction::create(
-                    &alice,
-                    wasm.to_vec(),
-                    vec![],
-                    0,
-                    i as u64,
-                    CHAIN_ID_REGTEST,
-                ),
+                Transaction::create(&alice, wasm.to_vec(), vec![], 0, i as u64, CHAIN_ID_REGTEST),
                 &alice_sk,
             )
         })
@@ -291,7 +282,15 @@ fn nested_value_chain_a_to_b_to_c_settles_and_unapplies() {
 
     // --- Block 2: EOA calls A with value 50; the chain forwards onward ---
     let call = sign(
-        Transaction::call(&alice, &contract_a, vec![], 50, 200_000, 3, CHAIN_ID_REGTEST),
+        Transaction::call(
+            &alice,
+            &contract_a,
+            vec![],
+            50,
+            200_000,
+            3,
+            CHAIN_ID_REGTEST,
+        ),
         &alice_sk,
     );
     let call_block = child_block(chain.last().unwrap(), vec![call.clone()]);
@@ -321,12 +320,19 @@ fn nested_value_chain_a_to_b_to_c_settles_and_unapplies() {
             amount: 50,
         },
     ];
-    assert_eq!(state.receipts[1].value_transfers, trail, "commit-order trail");
+    assert_eq!(
+        state.receipts[1].value_transfers, trail,
+        "commit-order trail"
+    );
     assert_eq!(state.value_transfers_undo.get(&call_txid), Some(&trail));
 
     // --- Unapply: the whole chain unwinds in mirror order ----------------
-    let restored = unapply_block(&state, chain.last().expect("chain not empty"), CHAIN_ID_REGTEST)
-        .expect("call block must unapply");
+    let restored = unapply_block(
+        &state,
+        chain.last().expect("chain not empty"),
+        CHAIN_ID_REGTEST,
+    )
+    .expect("call block must unapply");
     assert_eq!(restored.get_balance(&alice), 10_000);
     assert_eq!(restored.get_balance(&contract_a), 0);
     assert_eq!(restored.get_balance(&contract_b), 0);
@@ -381,7 +387,15 @@ fn failed_value_chain_commits_nothing() {
     codes.insert(contract_b.clone(), b_wat.into_bytes());
 
     let call = sign(
-        Transaction::call(&alice, &contract_a, vec![], 50, 100_000, 2, CHAIN_ID_REGTEST),
+        Transaction::call(
+            &alice,
+            &contract_a,
+            vec![],
+            50,
+            100_000,
+            2,
+            CHAIN_ID_REGTEST,
+        ),
         &alice_sk,
     );
     let call_block = child_block(chain.last().unwrap(), vec![call.clone()]);
@@ -391,7 +405,11 @@ fn failed_value_chain_commits_nothing() {
     assert_eq!(receipt.status, TxStatus::Failed, "trap surfaces as Failed");
     assert_eq!(receipt.gas_used, 100_000, "full budget burned");
     assert!(receipt.value_transfers.is_empty(), "no trail on failure");
-    assert_eq!(state.get_balance(&alice), 10_000, "entry value not committed");
+    assert_eq!(
+        state.get_balance(&alice),
+        10_000,
+        "entry value not committed"
+    );
     assert_eq!(state.get_balance(&contract_a), 0);
     assert_eq!(state.get_balance(&contract_b), 0);
     let call_txid = strangecoin_core::serialize::txid(&call);

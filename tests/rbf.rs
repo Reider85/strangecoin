@@ -147,13 +147,7 @@ fn rbf_replacement_chain_is_limited() {
     };
 
     for i in 1..=MAX_RBF_REPLACEMENTS {
-        let next = transfer(
-            sender,
-            &"a".repeat(next_len(&prev)),
-            100,
-            1,
-            secret_key,
-        );
+        let next = transfer(sender, &"a".repeat(next_len(&prev)), 100, 1, secret_key);
         bc.apply_tx(next.clone())
             .unwrap_or_else(|e| panic!("replacement {} rejected: {}", i, e));
         assert!(bc.mempool_contains(&txid(&next)));
@@ -161,13 +155,7 @@ fn rbf_replacement_chain_is_limited() {
         prev = next;
     }
 
-    let overflow = transfer(
-        sender,
-        &"a".repeat(next_len(&prev)),
-        100,
-        1,
-        secret_key,
-    );
+    let overflow = transfer(sender, &"a".repeat(next_len(&prev)), 100, 1, secret_key);
     let err = bc
         .apply_tx(overflow)
         .expect_err("11-я замена должна упереться в лимит");
@@ -243,8 +231,7 @@ fn rbf_replacement_is_what_gets_mined() {
     let new_tx = transfer(sender, &"y".repeat(50), 100, 1, secret_key);
 
     bc.apply_tx(old_tx.clone()).expect("old tx accepted");
-    bc.apply_tx(new_tx.clone())
-        .expect("replacement accepted");
+    bc.apply_tx(new_tx.clone()).expect("replacement accepted");
 
     mine_current(&bc);
 

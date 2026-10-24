@@ -334,18 +334,16 @@ mod tests {
         let mut block = Block {
             index: 7,
             timestamp: 1_700_000_000,
-            transactions: vec![Transaction::Transfer(
-                strangecoin_core::types::TransferTx {
-                    from: "rsc1sender".into(),
-                    to: "rsc1receiver".into(),
-                    amount: 42,
-                    fee: 0,
-                    nonce: 1,
-                    chain_id: 3,
-                    signature: vec![1u8; 65],
-                    is_coinbase: false,
-                },
-            )],
+            transactions: vec![Transaction::Transfer(strangecoin_core::types::TransferTx {
+                from: "rsc1sender".into(),
+                to: "rsc1receiver".into(),
+                amount: 42,
+                fee: 0,
+                nonce: 1,
+                chain_id: 3,
+                signature: vec![1u8; 65],
+                is_coinbase: false,
+            })],
             previous_hash: "aa".repeat(32),
             hash: String::new(),
             nonce: 99,
@@ -462,9 +460,7 @@ mod tests {
     #[test]
     fn text_messages_never_collide_with_binary_tags() {
         assert!(b"HELLO"[0] != MSG_GET_HEADERS && b"HELLO"[0] != MSG_HEADERS);
-        assert!(
-            b"GET_BLOCKCHAIN"[0] != MSG_GET_BLOCKS && b"GET_BLOCKCHAIN"[0] != MSG_BLOCKS
-        );
+        assert!(b"GET_BLOCKCHAIN"[0] != MSG_GET_BLOCKS && b"GET_BLOCKCHAIN"[0] != MSG_BLOCKS);
         assert!(b"UPDATE_BLOCKCHAIN"[0] > 0x04);
     }
 }

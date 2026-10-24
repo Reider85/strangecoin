@@ -115,8 +115,7 @@ fn serde_default_tolerates_missing_value_transfers() {
     // deserializes to an empty trail.
     let mut receipt = sample_receipt([9u8; 32]);
     receipt.value_transfers = Vec::new();
-    let mut json: serde_json::Value =
-        serde_json::to_value(&receipt).expect("serialize");
+    let mut json: serde_json::Value = serde_json::to_value(&receipt).expect("serialize");
     json.as_object_mut()
         .expect("object")
         .remove("value_transfers")

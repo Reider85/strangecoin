@@ -70,17 +70,18 @@ async fn foreign_network_id_is_rejected_and_banned() {
     // 3. Control: the correct network_id gets served.
     let s2 = connect(port);
     let mut w2 = BufWriter::new(s2.try_clone().expect("clone for writing"));
-    w2.write_all(&protocol::encode_hello(strangecoin::consensus::CHAIN_ID_REGTEST))
-        .expect("write native HELLO");
+    w2.write_all(&protocol::encode_hello(
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+    ))
+    .expect("write native HELLO");
     w2.flush().expect("flush native HELLO");
-    protocol::write_length_prefixed(&mut w2, b"GET_BLOCKCHAIN")
-        .expect("write GET_BLOCKCHAIN");
+    protocol::write_length_prefixed(&mut w2, b"GET_BLOCKCHAIN").expect("write GET_BLOCKCHAIN");
 
     s2.set_read_timeout(Some(Duration::from_secs(5)))
         .expect("set read timeout");
     let mut r2 = BufReader::new(s2);
-    let response = protocol::read_length_prefixed(&mut r2)
-        .expect("valid network_id must be served");
+    let response =
+        protocol::read_length_prefixed(&mut r2).expect("valid network_id must be served");
     assert!(!response.is_empty(), "chain payload must not be empty");
 
     drop(node);

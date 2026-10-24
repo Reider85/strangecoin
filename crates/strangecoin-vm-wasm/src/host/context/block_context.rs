@@ -42,7 +42,12 @@ fn block_context(
     let (height, timestamp, gas_limit, coinbase) = {
         let state = caller.data();
         let bc = &state.ctx.block_context;
-        (bc.height, bc.timestamp, bc.block_gas_limit, bc.coinbase.clone())
+        (
+            bc.height,
+            bc.timestamp,
+            bc.block_gas_limit,
+            bc.coinbase.clone(),
+        )
     };
     let coinbase_bytes = coinbase.as_bytes();
 

@@ -5,7 +5,7 @@
 use wasmi::{Caller, Linker};
 
 use crate::gas::HostCallWeight;
-use crate::host::{crypto::hash_host, checked_u32, HostState};
+use crate::host::{checked_u32, crypto::hash_host, HostState};
 
 pub fn register(linker: &mut Linker<HostState>) -> Result<(), wasmi::Error> {
     linker
@@ -21,9 +21,7 @@ fn blake3_hash(
     out_ptr: i32,
 ) -> Result<i32, wasmi::Error> {
     let len = checked_u32(in_len, "in_len")?;
-    let weight = HostCallWeight::Blake3 {
-        bytes: len as u64,
-    };
+    let weight = HostCallWeight::Blake3 { bytes: len as u64 };
     hash_host(
         &mut caller,
         weight,

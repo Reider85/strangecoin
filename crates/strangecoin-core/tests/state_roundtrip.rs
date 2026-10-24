@@ -402,9 +402,16 @@ mod unit_tests {
 
         let mut vm = FailVm;
         let applied = apply_block_with_vm(&state, &block, CHAIN_ID_REGTEST, &mut vm).unwrap();
-        assert_eq!(applied.receipts[2].status, strangecoin_core::TxStatus::OutOfGas);
+        assert_eq!(
+            applied.receipts[2].status,
+            strangecoin_core::TxStatus::OutOfGas
+        );
         assert_eq!(applied.get_balance("alice"), 4_900);
-        assert_eq!(applied.get_balance(&contract), 100, "value stays on failure");
+        assert_eq!(
+            applied.get_balance(&contract),
+            100,
+            "value stays on failure"
+        );
 
         let restored = unapply_block(&applied, &block, CHAIN_ID_REGTEST).unwrap();
         assert_eq!(restored, state);

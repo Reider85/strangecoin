@@ -123,7 +123,12 @@ impl BlockchainFacade {
     }
 
     pub fn tip(&self) -> Option<Block> {
-        self.inner.read().expect(BLOCKCHAIN_LOCK).chain.last().cloned()
+        self.inner
+            .read()
+            .expect(BLOCKCHAIN_LOCK)
+            .chain
+            .last()
+            .cloned()
     }
 
     pub fn tip_hash(&self) -> String {
@@ -183,35 +188,71 @@ impl BlockchainFacade {
     // ------------------------------------------------------------------ state
 
     pub fn get_balance(&self, address: &str) -> u64 {
-        self.inner.read().expect(BLOCKCHAIN_LOCK).balances.balance(address)
+        self.inner
+            .read()
+            .expect(BLOCKCHAIN_LOCK)
+            .balances
+            .balance(address)
     }
 
     pub fn get_nonce(&self, address: &str) -> u64 {
-        self.inner.read().expect(BLOCKCHAIN_LOCK).balances.nonce(address)
+        self.inner
+            .read()
+            .expect(BLOCKCHAIN_LOCK)
+            .balances
+            .nonce(address)
     }
 
     pub fn get_account(&self, address: &str) -> Option<AccountState> {
-        self.inner.read().expect(BLOCKCHAIN_LOCK).balances.get(address)
+        self.inner
+            .read()
+            .expect(BLOCKCHAIN_LOCK)
+            .balances
+            .get(address)
     }
 
     pub fn has_account(&self, address: &str) -> bool {
-        self.inner.read().expect(BLOCKCHAIN_LOCK).balances.contains_key(address)
+        self.inner
+            .read()
+            .expect(BLOCKCHAIN_LOCK)
+            .balances
+            .contains_key(address)
     }
 
     pub fn first_account(&self) -> Option<String> {
-        self.inner.read().expect(BLOCKCHAIN_LOCK).balances.keys().next().cloned()
+        self.inner
+            .read()
+            .expect(BLOCKCHAIN_LOCK)
+            .balances
+            .keys()
+            .next()
+            .cloned()
     }
 
     pub fn account_keys(&self) -> Vec<String> {
-        self.inner.read().expect(BLOCKCHAIN_LOCK).balances.keys().cloned().collect()
+        self.inner
+            .read()
+            .expect(BLOCKCHAIN_LOCK)
+            .balances
+            .keys()
+            .cloned()
+            .collect()
     }
 
     pub fn total_supply(&self) -> u64 {
-        self.inner.read().expect(BLOCKCHAIN_LOCK).balances.total_supply()
+        self.inner
+            .read()
+            .expect(BLOCKCHAIN_LOCK)
+            .balances
+            .total_supply()
     }
 
     pub fn nonzero_balances(&self) -> HashMap<String, u64> {
-        self.inner.read().expect(BLOCKCHAIN_LOCK).balances.nonzero_balances()
+        self.inner
+            .read()
+            .expect(BLOCKCHAIN_LOCK)
+            .balances
+            .nonzero_balances()
     }
 
     pub fn state_snapshot(&self) -> StateCache {
@@ -219,7 +260,11 @@ impl BlockchainFacade {
     }
 
     pub fn ensure_account(&self, address: &str) {
-        self.inner.write().expect(BLOCKCHAIN_LOCK).balances.ensure_account(address);
+        self.inner
+            .write()
+            .expect(BLOCKCHAIN_LOCK)
+            .balances
+            .ensure_account(address);
     }
 
     pub fn with_state_cache_mut<R>(&self, f: impl FnOnce(&mut StateCache) -> R) -> R {
@@ -227,7 +272,10 @@ impl BlockchainFacade {
     }
 
     pub fn rebuild_state_cache(&self) -> Result<(), StrangecoinError> {
-        self.inner.write().expect(BLOCKCHAIN_LOCK).rebuild_state_cache()
+        self.inner
+            .write()
+            .expect(BLOCKCHAIN_LOCK)
+            .rebuild_state_cache()
     }
 
     // ---------------------------------------------------------------- mempool
@@ -241,11 +289,19 @@ impl BlockchainFacade {
     }
 
     pub fn mempool_contains(&self, txid: &[u8; 32]) -> bool {
-        self.inner.read().expect(BLOCKCHAIN_LOCK).mempool.contains(txid)
+        self.inner
+            .read()
+            .expect(BLOCKCHAIN_LOCK)
+            .mempool
+            .contains(txid)
     }
 
     pub fn mempool_transactions(&self) -> Vec<Transaction> {
-        self.inner.read().expect(BLOCKCHAIN_LOCK).mempool.transactions()
+        self.inner
+            .read()
+            .expect(BLOCKCHAIN_LOCK)
+            .mempool
+            .transactions()
     }
 
     pub fn apply_tx(&self, transaction: Transaction) -> Result<(), StrangecoinError> {
@@ -256,10 +312,11 @@ impl BlockchainFacade {
             .add_transaction(transaction)?;
         if let crate::mempool::InsertOutcome::Replaced(evicted) = outcome {
             for evicted_id in evicted {
-                self.event_bus.publish(crate::events::NodeEvent::TxRejected {
-                    txid: hex::encode(evicted_id),
-                    reason: crate::events::REASON_REPLACED.to_string(),
-                });
+                self.event_bus
+                    .publish(crate::events::NodeEvent::TxRejected {
+                        txid: hex::encode(evicted_id),
+                        reason: crate::events::REASON_REPLACED.to_string(),
+                    });
             }
         }
         Ok(())
@@ -272,13 +329,19 @@ impl BlockchainFacade {
     }
 
     pub fn set_allow_grant_blocks(&self, allow: bool) {
-        self.inner.write().expect(BLOCKCHAIN_LOCK).allow_grant_blocks = allow;
+        self.inner
+            .write()
+            .expect(BLOCKCHAIN_LOCK)
+            .allow_grant_blocks = allow;
     }
 
     /// SCIP-0002 / BUG-S1-002: legacy regtest opt-in for zero `state_root`
     /// blocks. Never enabled on mainnet/testnet (`Config::validate`).
     pub fn set_allow_zero_state_root(&self, allow: bool) {
-        self.inner.write().expect(BLOCKCHAIN_LOCK).allow_zero_state_root = allow;
+        self.inner
+            .write()
+            .expect(BLOCKCHAIN_LOCK)
+            .allow_zero_state_root = allow;
     }
 
     // -------------------------------------------------------------- operations
@@ -288,7 +351,10 @@ impl BlockchainFacade {
         progress_tx: mpsc::Sender<String>,
         shutdown: &Arc<std::sync::atomic::AtomicBool>,
     ) -> Option<Block> {
-        self.inner.write().expect(BLOCKCHAIN_LOCK).mine_block(progress_tx, shutdown)
+        self.inner
+            .write()
+            .expect(BLOCKCHAIN_LOCK)
+            .mine_block(progress_tx, shutdown)
     }
 
     pub fn validate_chain(&self) -> bool {
@@ -303,11 +369,17 @@ impl BlockchainFacade {
         &self,
         wallet_address: &str,
     ) -> Result<bool, StrangecoinError> {
-        self.inner.write().expect(BLOCKCHAIN_LOCK).grant_initial_balance_to_first_wallet(wallet_address)
+        self.inner
+            .write()
+            .expect(BLOCKCHAIN_LOCK)
+            .grant_initial_balance_to_first_wallet(wallet_address)
     }
 
     pub fn calculate_hash(&self, block: &Block) -> String {
-        self.inner.read().expect(BLOCKCHAIN_LOCK).calculate_hash(block)
+        self.inner
+            .read()
+            .expect(BLOCKCHAIN_LOCK)
+            .calculate_hash(block)
     }
 
     pub fn rules(&self) -> ConsensusManager {

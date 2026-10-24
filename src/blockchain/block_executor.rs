@@ -343,10 +343,7 @@ fn apply_and_execute(
 
 /// Reconstruct the contract code registry from a chain's `Create`
 /// transactions (S1.5-P14, invariant #1 style): deterministic, wire-independent.
-pub(crate) fn codes_from_chain(
-    chain: &[Block],
-    chain_id: u32,
-) -> HashMap<String, Vec<u8>> {
+pub(crate) fn codes_from_chain(chain: &[Block], chain_id: u32) -> HashMap<String, Vec<u8>> {
     let mut codes = HashMap::new();
     for block in chain {
         collect_block_codes(block, chain_id, &mut codes);
@@ -362,9 +359,11 @@ pub(crate) fn collect_block_codes(
 ) {
     for tx in &block.transactions {
         if let Transaction::Create(create) = tx {
-            if let Ok(address) =
-                strangecoin_core::address::derive_contract_address(&create.from, create.nonce, chain_id)
-            {
+            if let Ok(address) = strangecoin_core::address::derive_contract_address(
+                &create.from,
+                create.nonce,
+                chain_id,
+            ) {
                 codes.insert(address, create.init_code.clone());
             }
         }
@@ -451,12 +450,8 @@ fn invalid(block: &Block, reason: impl std::fmt::Display) -> StrangecoinError {
 
 impl Blockchain {
     pub(crate) fn create_genesis_block(&mut self) {
-        let genesis_transaction = Transaction::coinbase(
-            "genesis",
-            "initial_wallet_address",
-            10000,
-            self.chain_id,
-        );
+        let genesis_transaction =
+            Transaction::coinbase("genesis", "initial_wallet_address", 10000, self.chain_id);
         let mut genesis_block = Block {
             index: 0,
             timestamp: 0,
@@ -504,8 +499,7 @@ impl Blockchain {
     pub(crate) fn create_grant_block(&mut self, wallet_address: &str, amount: u64) {
         let previous_block = self.chain.last().unwrap().clone();
         let height = previous_block.index + 1;
-        let coinbase =
-            Transaction::coinbase("coinbase", wallet_address, 0, self.chain_id);
+        let coinbase = Transaction::coinbase("coinbase", wallet_address, 0, self.chain_id);
         let transfer = Transaction::transfer(
             "initial_wallet_address",
             wallet_address,
@@ -645,12 +639,18 @@ impl Blockchain {
             .next()
             .cloned()
             .unwrap_or_else(|| "miner".to_string());
-        let coinbase_tx = Transaction::coinbase("coinbase", &miner_address, coinbase_amount, self.chain_id);
+        let coinbase_tx =
+            Transaction::coinbase("coinbase", &miner_address, coinbase_amount, self.chain_id);
 
         let mut all_transactions = vec![coinbase_tx];
         all_transactions.extend(transactions);
 
-        let block = self.mine_block_inner(previous_block, all_transactions, progress_tx.clone(), shutdown);
+        let block = self.mine_block_inner(
+            previous_block,
+            all_transactions,
+            progress_tx.clone(),
+            shutdown,
+        );
 
         if let Some(block) = block {
             if let Err(e) = self.commit_block(&block) {
@@ -755,7 +755,8 @@ impl Blockchain {
             }
             block.nonce += 1;
             if iteration_count.is_multiple_of(10000) {
-                let _ = progress_tx.send(format!("Прогресс майнинга: {} итераций", iteration_count));
+                let _ =
+                    progress_tx.send(format!("Прогресс майнинга: {} итераций", iteration_count));
             }
         }
     }
@@ -772,8 +773,8 @@ impl Blockchain {
         let genesis_block = if crate::consensus::is_regtest(chain_id) {
             crate::consensus::regtest_genesis_block(blockchain.rules.expected_version(0))
         } else {
-            let genesis_path = crate::consensus::genesis_file_for_chain(chain_id)
-                .unwrap_or_else(|| {
+            let genesis_path =
+                crate::consensus::genesis_file_for_chain(chain_id).unwrap_or_else(|| {
                     panic!("No genesis file configured for network_id {}", chain_id)
                 });
             let block = crate::consensus::load_genesis(genesis_path.to_str().unwrap())
@@ -836,10 +837,7 @@ mod tests {
 
     #[test]
     fn block_at_gas_limit_is_accepted() {
-        let txs = vec![
-            call_tx(BLOCK_GAS_LIMIT / 2),
-            call_tx(BLOCK_GAS_LIMIT / 2),
-        ];
+        let txs = vec![call_tx(BLOCK_GAS_LIMIT / 2), call_tx(BLOCK_GAS_LIMIT / 2)];
         assert!(enforce_block_gas_limit(&txs).is_ok());
     }
 
@@ -859,9 +857,11 @@ mod tests {
 
     #[test]
     fn single_tx_over_gas_limit_is_rejected() {
-        let err =
-            enforce_block_gas_limit(&[call_tx(BLOCK_GAS_LIMIT + 1)]).expect_err("over limit");
-        assert!(matches!(err, StrangecoinError::BlockGasLimitExceeded { .. }));
+        let err = enforce_block_gas_limit(&[call_tx(BLOCK_GAS_LIMIT + 1)]).expect_err("over limit");
+        assert!(matches!(
+            err,
+            StrangecoinError::BlockGasLimitExceeded { .. }
+        ));
     }
 
     fn receipt(gas_used: u64) -> strangecoin_core::vm::Receipt {
@@ -884,7 +884,10 @@ mod tests {
 
     #[test]
     fn receipt_gas_over_limit_is_rejected() {
-        let receipts = vec![receipt(BLOCK_GAS_LIMIT / 2), receipt(BLOCK_GAS_LIMIT / 2 + 1)];
+        let receipts = vec![
+            receipt(BLOCK_GAS_LIMIT / 2),
+            receipt(BLOCK_GAS_LIMIT / 2 + 1),
+        ];
         let err = super::enforce_receipt_gas_limit(&receipts).expect_err("sum exceeds limit");
         assert!(matches!(
             err,

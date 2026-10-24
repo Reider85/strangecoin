@@ -99,7 +99,12 @@ fn nested_call_wat(target: &str) -> String {
 }
 
 fn test_block(index: u64, transactions: Vec<Transaction>) -> Block {
-    let mut all_txs = vec![Transaction::coinbase("coinbase", "sc1miner", 0, CHAIN_ID_REGTEST)];
+    let mut all_txs = vec![Transaction::coinbase(
+        "coinbase",
+        "sc1miner",
+        0,
+        CHAIN_ID_REGTEST,
+    )];
     all_txs.extend(transactions);
     Block {
         index,
@@ -141,9 +146,24 @@ fn derive(alice_nonce: u64) -> String {
 fn storage_write_flushes_and_moves_state_root() {
     let state = funded_state();
     let wasm = read_write_wat();
-    let create = Transaction::create("sc1alice", wasm.into_bytes(), vec![], 0, 0, CHAIN_ID_REGTEST);
+    let create = Transaction::create(
+        "sc1alice",
+        wasm.into_bytes(),
+        vec![],
+        0,
+        0,
+        CHAIN_ID_REGTEST,
+    );
     let contract = derive(0);
-    let call = Transaction::call("sc1alice", &contract, vec![], 0, 100_000, 1, CHAIN_ID_REGTEST);
+    let call = Transaction::call(
+        "sc1alice",
+        &contract,
+        vec![],
+        0,
+        100_000,
+        1,
+        CHAIN_ID_REGTEST,
+    );
     let block = test_block(1, vec![create, call]);
 
     let root_before = SparseMerkleTrie::compute_root(&state.balances);
@@ -157,7 +177,10 @@ fn storage_write_flushes_and_moves_state_root() {
     let storage_map = storage_of(&applied);
     let storage = storage_map.get(&contract).expect("flushed");
     assert_eq!(storage[&KEY_A], b"hello");
-    assert!(storage[&KEY_B].is_empty(), "first call copies an absent read");
+    assert!(
+        storage[&KEY_B].is_empty(),
+        "first call copies an absent read"
+    );
 
     let expected_root = contract_storage_root(storage);
     assert_ne!(expected_root, [0u8; 32]);
@@ -173,7 +196,10 @@ fn storage_write_flushes_and_moves_state_root() {
     drop(storage_map);
 
     let root_after = SparseMerkleTrie::compute_root(&applied.balances);
-    assert_ne!(root_after, root_before, "storage flush must move state root");
+    assert_ne!(
+        root_after, root_before,
+        "storage flush must move state root"
+    );
 
     // Invariant #19: the block committing to the computed root validates.
     let mut committed = block.clone();
@@ -188,13 +214,28 @@ fn storage_write_flushes_and_moves_state_root() {
 fn second_call_reads_persisted_storage_from_seeded_base() {
     let state = funded_state();
     let wasm = read_write_wat();
-    let create = Transaction::create("sc1alice", wasm.into_bytes(), vec![], 0, 0, CHAIN_ID_REGTEST);
+    let create = Transaction::create(
+        "sc1alice",
+        wasm.into_bytes(),
+        vec![],
+        0,
+        0,
+        CHAIN_ID_REGTEST,
+    );
     let contract = derive(0);
     let block1 = test_block(
         1,
         vec![
             create,
-            Transaction::call("sc1alice", &contract, vec![], 0, 100_000, 1, CHAIN_ID_REGTEST),
+            Transaction::call(
+                "sc1alice",
+                &contract,
+                vec![],
+                0,
+                100_000,
+                1,
+                CHAIN_ID_REGTEST,
+            ),
         ],
     );
     let after_first = {
@@ -226,8 +267,7 @@ fn second_call_reads_persisted_storage_from_seeded_base() {
     let storage = storage_map.get(&contract).expect("flushed");
     assert_eq!(storage[&KEY_A], b"hello");
     assert_eq!(
-        storage[&KEY_B],
-        b"hello",
+        storage[&KEY_B], b"hello",
         "second frame must read the persisted KEY_A written by the first call"
     );
 }
@@ -236,13 +276,28 @@ fn second_call_reads_persisted_storage_from_seeded_base() {
 fn unapply_restores_wasmi_storage_roundtrip() {
     let state = funded_state();
     let wasm = read_write_wat();
-    let create = Transaction::create("sc1alice", wasm.into_bytes(), vec![], 0, 0, CHAIN_ID_REGTEST);
+    let create = Transaction::create(
+        "sc1alice",
+        wasm.into_bytes(),
+        vec![],
+        0,
+        0,
+        CHAIN_ID_REGTEST,
+    );
     let contract = derive(0);
     let block1 = test_block(
         1,
         vec![
             create,
-            Transaction::call("sc1alice", &contract, vec![], 0, 100_000, 1, CHAIN_ID_REGTEST),
+            Transaction::call(
+                "sc1alice",
+                &contract,
+                vec![],
+                0,
+                100_000,
+                1,
+                CHAIN_ID_REGTEST,
+            ),
         ],
     );
     let after_first = {
@@ -268,10 +323,7 @@ fn unapply_restores_wasmi_storage_roundtrip() {
         apply_block_with_vm(&after_first, &block2, CHAIN_ID_REGTEST, &mut vm).expect("block2")
     };
     assert_eq!(after_second.receipts[1].status, TxStatus::Success);
-    assert_eq!(
-        storage_of(&after_second)[&contract][&KEY_B],
-        b"hello"
-    );
+    assert_eq!(storage_of(&after_second)[&contract][&KEY_B], b"hello");
 
     let restored_to_first = unapply_block(&after_second, &block2, CHAIN_ID_REGTEST).unwrap();
     assert_eq!(
@@ -339,9 +391,7 @@ fn nested_call_writes_into_callee_scope() {
     );
 
     let storage_map = storage_of(&applied);
-    let callee_storage = storage_map
-        .get(&callee)
-        .expect("callee storage flushed");
+    let callee_storage = storage_map.get(&callee).expect("callee storage flushed");
     assert_eq!(callee_storage[&KEY_A], vec![7, 7, 7]);
     assert_eq!(
         applied
@@ -395,14 +445,7 @@ fn storage_write_over_cap_rejected() {
     let wat = wat.replace("(memory (export \"memory\") 1)", "");
 
     let state = funded_state();
-    let create = Transaction::create(
-        "sc1alice",
-        wat.into_bytes(),
-        vec![],
-        0,
-        0,
-        CHAIN_ID_REGTEST,
-    );
+    let create = Transaction::create("sc1alice", wat.into_bytes(), vec![], 0, 0, CHAIN_ID_REGTEST);
     let contract = derive(0);
     let block = test_block(
         1,
@@ -434,13 +477,28 @@ fn storage_write_over_cap_rejected() {
 fn storage_roots_deterministic_across_replay() {
     let state = funded_state();
     let wasm = read_write_wat();
-    let create = Transaction::create("sc1alice", wasm.into_bytes(), vec![], 0, 0, CHAIN_ID_REGTEST);
+    let create = Transaction::create(
+        "sc1alice",
+        wasm.into_bytes(),
+        vec![],
+        0,
+        0,
+        CHAIN_ID_REGTEST,
+    );
     let contract = derive(0);
     let block = test_block(
         1,
         vec![
             create,
-            Transaction::call("sc1alice", &contract, vec![], 0, 100_000, 1, CHAIN_ID_REGTEST),
+            Transaction::call(
+                "sc1alice",
+                &contract,
+                vec![],
+                0,
+                100_000,
+                1,
+                CHAIN_ID_REGTEST,
+            ),
         ],
     );
 
@@ -641,10 +699,7 @@ fn unapply_restores_constructor_deploy_roundtrip() {
         let mut vm = WasmiExecutor::new();
         apply_block_with_vm(&state, &block, CHAIN_ID_REGTEST, &mut vm).expect("deploy applies")
     };
-    assert_eq!(
-        storage_of(&after)[&contract][&KEY_A],
-        vec![9, 9, 9]
-    );
+    assert_eq!(storage_of(&after)[&contract][&KEY_A], vec![9, 9, 9]);
 
     let restored = unapply_block(&after, &block, CHAIN_ID_REGTEST).expect("unapply");
     assert_eq!(

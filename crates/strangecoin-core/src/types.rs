@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use crate::abi::AbiParam;
 use crate::consensus::U256;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Block {
@@ -388,9 +388,7 @@ impl Serialize for Transaction {
 impl<'de> Deserialize<'de> for Transaction {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         match TransactionRepr::deserialize(deserializer)? {
-            TransactionRepr::Tagged(TaggedTransaction::Create(tx)) => {
-                Ok(Transaction::Create(tx))
-            }
+            TransactionRepr::Tagged(TaggedTransaction::Create(tx)) => Ok(Transaction::Create(tx)),
             TransactionRepr::Tagged(TaggedTransaction::Call(tx)) => Ok(Transaction::Call(tx)),
             TransactionRepr::LegacyTransfer(tx) => Ok(Transaction::Transfer(tx)),
         }

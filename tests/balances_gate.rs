@@ -20,11 +20,8 @@ use std::path::{Path, PathBuf};
 const RAW_MUTATION_WHITELIST: [&str; 2] = ["state_cache.rs", "block_executor.rs"];
 const FIELD_REPLACEMENT_WHITELIST: [&str; 2] = ["state_cache.rs", "chain_selector.rs"];
 
-const RAW_MUTATION_PATTERNS: [&str; 3] = [
-    ".balances.insert",
-    ".balances.remove",
-    ".balances.get_mut",
-];
+const RAW_MUTATION_PATTERNS: [&str; 3] =
+    [".balances.insert", ".balances.remove", ".balances.get_mut"];
 
 fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = std::fs::read_dir(dir).expect("failed to read src/");
@@ -39,9 +36,7 @@ fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 fn is_whitelisted(rel_path: &str, whitelist: &[&str; 2]) -> bool {
-    whitelist
-        .iter()
-        .any(|name| rel_path.ends_with(name))
+    whitelist.iter().any(|name| rel_path.ends_with(name))
 }
 
 fn is_raw_mutation_violation(rel_path: &str, line: &str) -> bool {

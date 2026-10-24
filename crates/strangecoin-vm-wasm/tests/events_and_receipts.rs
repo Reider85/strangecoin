@@ -214,13 +214,17 @@ fn apply_block_with_vm_collects_log_receipts_end_to_end() {
     state.set_balance("sc1alice", 1_000);
 
     let wasm = emit_log_wat();
-    let create = Transaction::create("sc1alice", wasm.into_bytes(), vec![], 100, 0, CHAIN_ID_REGTEST);
-    let contract_addr = strangecoin_core::address::derive_contract_address(
+    let create = Transaction::create(
         "sc1alice",
+        wasm.into_bytes(),
+        vec![],
+        100,
         0,
         CHAIN_ID_REGTEST,
-    )
-    .expect("derive address");
+    );
+    let contract_addr =
+        strangecoin_core::address::derive_contract_address("sc1alice", 0, CHAIN_ID_REGTEST)
+            .expect("derive address");
     let call = Transaction::call(
         "sc1alice",
         &contract_addr,
@@ -258,7 +262,11 @@ fn apply_block_with_vm_collects_log_receipts_end_to_end() {
 
     let contract = applied.get_account(&contract_addr).expect("deployed");
     assert!(contract.is_contract());
-    assert_eq!(contract.balance(), 110, "endowment 100 + value 10 on success");
+    assert_eq!(
+        contract.balance(),
+        110,
+        "endowment 100 + value 10 on success"
+    );
     assert_eq!(applied.get_balance("sc1alice"), 890);
 
     let root = receipts_subroot(&applied.receipts);
@@ -281,12 +289,9 @@ fn apply_block_with_vm_failed_call_receipt_and_value_not_transferred() {
         0,
         CHAIN_ID_REGTEST,
     );
-    let contract_addr = strangecoin_core::address::derive_contract_address(
-        "sc1alice",
-        0,
-        CHAIN_ID_REGTEST,
-    )
-    .expect("derive address");
+    let contract_addr =
+        strangecoin_core::address::derive_contract_address("sc1alice", 0, CHAIN_ID_REGTEST)
+            .expect("derive address");
     let call = Transaction::call(
         "sc1alice",
         &contract_addr,
@@ -332,12 +337,9 @@ fn unapply_block_reverses_create_and_call() {
         0,
         CHAIN_ID_REGTEST,
     );
-    let contract_addr = strangecoin_core::address::derive_contract_address(
-        "sc1alice",
-        0,
-        CHAIN_ID_REGTEST,
-    )
-    .expect("derive address");
+    let contract_addr =
+        strangecoin_core::address::derive_contract_address("sc1alice", 0, CHAIN_ID_REGTEST)
+            .expect("derive address");
     let call = Transaction::call(
         "sc1alice",
         &contract_addr,
@@ -367,7 +369,10 @@ fn unapply_block_reverses_create_and_call() {
         restored.get_account(&contract_addr).is_none(),
         "contract account removed on unapply"
     );
-    assert!(restored.receipts.is_empty(), "tip receipts cleared on unapply");
+    assert!(
+        restored.receipts.is_empty(),
+        "tip receipts cleared on unapply"
+    );
 }
 
 #[test]

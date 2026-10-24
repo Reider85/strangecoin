@@ -1,5 +1,5 @@
-use strangecoin_core::error::CoreError;
 use strangecoin_core::consensus::CHAIN_ID_REGTEST;
+use strangecoin_core::error::CoreError;
 use strangecoin_core::state::{apply_block, compute_state_root, root_after, State};
 use strangecoin_core::types::{Block, Transaction};
 
@@ -110,7 +110,10 @@ fn zero_state_root_rejected_without_opt_in() {
     let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
 
     let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)]);
-    assert_eq!(block.state_root, [0u8; 32], "fixture must be a zero-root block");
+    assert_eq!(
+        block.state_root, [0u8; 32],
+        "fixture must be a zero-root block"
+    );
 
     let err = root_after(&after_genesis, &block, CHAIN_ID_REGTEST, false)
         .expect_err("a zero state_root must be rejected when a commitment is required");

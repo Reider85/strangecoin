@@ -46,10 +46,7 @@ pub(crate) fn read_bytes<T>(
 }
 
 /// Read exactly 32 bytes at `ptr` (hash/key convention of the host surface).
-pub(crate) fn read_array32<T>(
-    caller: &Caller<'_, T>,
-    ptr: u32,
-) -> Result<[u8; 32], wasmi::Error> {
+pub(crate) fn read_array32<T>(caller: &Caller<'_, T>, ptr: u32) -> Result<[u8; 32], wasmi::Error> {
     let bytes = read_bytes(caller, ptr, 32)?;
     let arr: [u8; 32] = bytes
         .try_into()

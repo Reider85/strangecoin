@@ -5,7 +5,9 @@ use strangecoin::blockchain::block_executor::{now_secs, validate_and_apply, Bloc
 use strangecoin::consensus::CURRENT_CONSENSUS_VERSION;
 use strangecoin::error::StrangecoinError;
 use strangecoin::network::protocol::{MAX_BLOCK_SIZE, MAX_TX_SIZE};
-use strangecoin::serialize::{block_hash, compute_tx_root, serialize_block, serialize_transaction_signed};
+use strangecoin::serialize::{
+    block_hash, compute_tx_root, serialize_block, serialize_transaction_signed,
+};
 use strangecoin::test_support::{generate_keypair, sign_transaction};
 use strangecoin::{Block, Transaction};
 use strangecoin_core::consensus::{MAX_FUTURE_TIME, RETARGET_INTERVAL};
@@ -400,7 +402,10 @@ fn rejects_zero_state_root_when_commitment_required() {
     // that carries no state commitment is rejected.
     let (genesis, parent_state) = fixture();
     let block = child_of(&genesis, vec![coinbase("miner", 0)], 600);
-    assert_eq!(block.state_root, [0u8; 32], "fixture must be a zero-root block");
+    assert_eq!(
+        block.state_root, [0u8; 32],
+        "fixture must be a zero-root block"
+    );
 
     let strict = BlockView::new(
         std::slice::from_ref(&genesis),
@@ -438,8 +443,7 @@ fn rejects_zero_receipts_root_when_commitment_required() {
     block.state_root = compute_state_root(&post.balances);
     let block = rehash(block);
     assert_eq!(
-        block.receipts_root,
-        [0u8; 32],
+        block.receipts_root, [0u8; 32],
         "fixture must carry a zero receipts_root"
     );
 
@@ -511,8 +515,8 @@ fn grant_block_needs_the_opt_in_flag() {
     // S1.5-FBP07: the receipts commitment is attached once; the signature
     // check runs before the receipts check, so the rejection below still
     // surfaces InvalidSignature.
-    let genesis_state = validate_and_apply(&State::new(), &genesis, &view(&[], true))
-        .expect("genesis must apply");
+    let genesis_state =
+        validate_and_apply(&State::new(), &genesis, &view(&[], true)).expect("genesis must apply");
     let grant = with_receipts_commitment(&genesis_state, grant);
 
     let err = apply_block_on(&genesis, &grant, false)

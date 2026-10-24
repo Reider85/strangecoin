@@ -32,14 +32,12 @@ fn committed_chain(tag: &str) -> (Vec<strangecoin::Block>, strangecoin::Block, S
     sign_transaction(&mut transfer, &keypairs[0].1);
     let child = craft_child(&prefix, vec![coinbase_tx("miner", 0), transfer]);
     assert_ne!(
-        child.state_root,
-        [0u8; 32],
+        child.state_root, [0u8; 32],
         "crafted block must commit to its state root"
     );
     // S1.5-FBP07: the same holds for the receipts commitment past genesis.
     assert_ne!(
-        child.receipts_root,
-        [0u8; 32],
+        child.receipts_root, [0u8; 32],
         "crafted block must commit to its receipts root"
     );
     (prefix, child, alice, bob)
@@ -132,9 +130,7 @@ fn zero_root_chain(tag: &str) -> Vec<strangecoin::Block> {
     let bc_a = create_test_blockchain(dir_a.path());
     let keypairs = generate_keypairs(1);
     let alice = keypairs[0].0.clone();
-    assert!(bc_a
-        .grant_initial_balance_to_first_wallet(&alice)
-        .unwrap());
+    assert!(bc_a.grant_initial_balance_to_first_wallet(&alice).unwrap());
 
     let mut prefix = bc_a.chain_snapshot();
     let parent = prefix.last().expect("genesis exists").clone();
@@ -181,8 +177,7 @@ fn zero_state_root_is_tolerated_under_the_opt_in_flag() {
 
     let chain = zero_root_chain("sr_zero");
     assert!(
-        bc_b
-            .adopt_candidate(chain, None, Vec::new(), 0)
+        bc_b.adopt_candidate(chain, None, Vec::new(), 0)
             .expect("zero state_root means no commitment and must validate"),
         "chain without state commitments must still adopt under the opt-in"
     );
@@ -223,8 +218,7 @@ fn grant_and_mined_blocks_commit_real_state_roots() {
 
     let grant = bc.tip().expect("grant block exists");
     assert_ne!(
-        grant.state_root,
-        [0u8; 32],
+        grant.state_root, [0u8; 32],
         "grant block must commit to its state root"
     );
 
@@ -241,10 +235,12 @@ fn grant_and_mined_blocks_commit_real_state_roots() {
 
     let mined = bc.tip().expect("mined block exists");
     assert_ne!(
-        mined.state_root,
-        [0u8; 32],
+        mined.state_root, [0u8; 32],
         "mined block must commit to its state root"
     );
-    assert!(bc.validate_chain(), "chain of committed blocks must validate");
+    assert!(
+        bc.validate_chain(),
+        "chain of committed blocks must validate"
+    );
     assert_eq!(bc.get_balance(&bob), 500);
 }

@@ -59,9 +59,7 @@ async fn new_node_syncs_20_blocks_via_headers_first() {
     .await
     .expect("headers-first sync must succeed against a P16 peer");
 
-    let candidate = outcome
-        .candidate
-        .expect("fresh node must plan an adoption");
+    let candidate = outcome.candidate.expect("fresh node must plan an adoption");
     assert_eq!(outcome.headers_ingested, 21);
     assert_eq!(outcome.blocks_downloaded, 20);
     // The loop only plans and downloads; adoption is the SyncEngine's job
@@ -181,14 +179,15 @@ async fn longer_fork_resolved_via_headers_first() {
     .await
     .expect("headers-first sync must succeed");
 
-    let candidate = outcome
-        .candidate
-        .expect("longer fork must win fork choice");
+    let candidate = outcome.candidate.expect("longer fork must win fork choice");
     assert!(client_bc
         .adopt_candidate(candidate, None, Vec::new(), client_bc.difficulty())
         .expect("fork candidate must pass validation"));
     assert_eq!(client_bc.chain_len(), 5, "client did not reorg onto tip");
-    assert!(client_bc.validate_chain(), "reorged chain failed validation");
+    assert!(
+        client_bc.validate_chain(),
+        "reorged chain failed validation"
+    );
 
     let server_state = server_bc.state_snapshot();
     for (addr, expected) in &server_state {

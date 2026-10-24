@@ -25,18 +25,21 @@ pub(crate) fn encode_tuple(types: &[&AbiType], values: &[AbiValue]) -> Result<Ve
     }
     let mut head_len = 0usize;
     for t in types {
-        head_len += if t.is_dynamic() { 4 } else { t.static_size().unwrap_or(0) };
+        head_len += if t.is_dynamic() {
+            4
+        } else {
+            t.static_size().unwrap_or(0)
+        };
     }
     let mut head = Vec::with_capacity(head_len);
     let mut tail = Vec::new();
     for (t, v) in types.iter().zip(values.iter()) {
         if t.is_dynamic() {
-            let offset = u32::try_from(head_len + tail.len()).map_err(|_| {
-                AbiError::InvalidOffset {
+            let offset =
+                u32::try_from(head_len + tail.len()).map_err(|_| AbiError::InvalidOffset {
                     offset: u32::MAX,
                     bound: head_len + tail.len(),
-                }
-            })?;
+                })?;
             head.extend_from_slice(&offset.to_be_bytes());
             encode_dynamic_body(t, v, &mut tail)?;
         } else {

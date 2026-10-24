@@ -100,7 +100,10 @@ mod tests {
     #[test]
     fn from_writes_apply_to_roundtrip() {
         let base = writes(&[([1u8; 32], vec![10]), ([2u8; 32], vec![20])]);
-        let overlay = ContractStorageOverlay::from_writes(&writes(&[([2u8; 32], vec![99]), ([3u8; 32], vec![30])]));
+        let overlay = ContractStorageOverlay::from_writes(&writes(&[
+            ([2u8; 32], vec![99]),
+            ([3u8; 32], vec![30]),
+        ]));
 
         let mut merged = base.clone();
         overlay.apply_to(&mut merged);
@@ -123,8 +126,10 @@ mod tests {
     #[test]
     fn preimages_of_captures_absent_and_present() {
         let base = writes(&[([1u8; 32], vec![10])]);
-        let overlay =
-            ContractStorageOverlay::from_writes(&writes(&[([1u8; 32], vec![11]), ([2u8; 32], vec![22])]));
+        let overlay = ContractStorageOverlay::from_writes(&writes(&[
+            ([1u8; 32], vec![11]),
+            ([2u8; 32], vec![22]),
+        ]));
         let mut preimages = overlay.preimages_of(&base);
         preimages.sort_by_key(|(k, _)| *k);
         assert_eq!(preimages[0], ([1u8; 32], Some(vec![10])));
@@ -134,8 +139,7 @@ mod tests {
     #[test]
     fn root_from_equals_root_of_merged_map() {
         let base = writes(&[([1u8; 32], vec![10])]);
-        let overlay =
-            ContractStorageOverlay::from_writes(&writes(&[([1u8; 32], vec![11])]));
+        let overlay = ContractStorageOverlay::from_writes(&writes(&[([1u8; 32], vec![11])]));
         let mut merged = base.clone();
         overlay.apply_to(&mut merged);
         assert_eq!(overlay.root_from(&base), contract_storage_root(&merged));

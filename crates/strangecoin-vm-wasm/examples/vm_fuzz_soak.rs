@@ -217,7 +217,11 @@ fn check_gas_run(wat: &[u8], gas_limit: u64) {
     let second = executor.execute_wasm(wat, &execution_context(gas_limit));
     match (&first, &second) {
         (Ok(a), Ok(b)) => {
-            assert!(a.gas_used <= gas_limit, "gas_used {} exceeds limit", a.gas_used);
+            assert!(
+                a.gas_used <= gas_limit,
+                "gas_used {} exceeds limit",
+                a.gas_used
+            );
             assert_eq!(a.status, TxStatus::Success);
             assert_eq!(a, b);
         }
@@ -463,7 +467,11 @@ fn main() {
     let mut rng = Xorshift(0x5EED_5EED_5EED_5EED);
     // `all` splits the budget across the four phases; a named phase gets the
     // full `SOAK_SECONDS`.
-    let per_phase = if phase == "all" { (seconds / 4).max(1) } else { seconds };
+    let per_phase = if phase == "all" {
+        (seconds / 4).max(1)
+    } else {
+        seconds
+    };
 
     if phase == "all" || phase == "host" {
         let deadline = Instant::now() + Duration::from_secs(per_phase);

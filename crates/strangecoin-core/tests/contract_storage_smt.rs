@@ -187,8 +187,7 @@ fn call_flushes_storage_and_updates_roots() {
     let block = test_block(2, vec![call]);
 
     let root_before = SparseMerkleTrie::compute_root(&after_deploy.balances);
-    let applied =
-        apply_block_with_vm(&after_deploy, &block, CHAIN_ID_REGTEST, &mut vm).unwrap();
+    let applied = apply_block_with_vm(&after_deploy, &block, CHAIN_ID_REGTEST, &mut vm).unwrap();
 
     {
         let storage = storage_of(&applied);
@@ -207,7 +206,10 @@ fn call_flushes_storage_and_updates_roots() {
     }
 
     let root_after = SparseMerkleTrie::compute_root(&applied.balances);
-    assert_ne!(root_after, root_before, "storage write must change state root (invariant #19)");
+    assert_ne!(
+        root_after, root_before,
+        "storage write must change state root (invariant #19)"
+    );
 
     // root_after_with_vm: matching root passes, tampered root fails.
     let mut committed = block.clone();
@@ -255,9 +257,13 @@ fn second_call_sees_persisted_storage_from_context() {
             3,
         )],
     );
-    let after_first =
-        apply_block_with_vm(&after_deploy, &block2, CHAIN_ID_REGTEST, &mut WriteVm::new(vec![(key, vec![42])]))
-            .unwrap();
+    let after_first = apply_block_with_vm(
+        &after_deploy,
+        &block2,
+        CHAIN_ID_REGTEST,
+        &mut WriteVm::new(vec![(key, vec![42])]),
+    )
+    .unwrap();
 
     let mut vm = WriteVm::new(vec![(key, vec![43])]);
     let block3 = test_block(
@@ -302,9 +308,13 @@ fn unapply_restores_storage_and_storage_root() {
             3,
         )],
     );
-    let after_first =
-        apply_block_with_vm(&after_deploy, &block2, CHAIN_ID_REGTEST, &mut WriteVm::new(vec![(key, vec![42])]))
-            .unwrap();
+    let after_first = apply_block_with_vm(
+        &after_deploy,
+        &block2,
+        CHAIN_ID_REGTEST,
+        &mut WriteVm::new(vec![(key, vec![42])]),
+    )
+    .unwrap();
     let root_after_first = SparseMerkleTrie::compute_root(&after_first.balances);
 
     let block3 = test_block(
@@ -319,16 +329,17 @@ fn unapply_restores_storage_and_storage_root() {
             3,
         )],
     );
-    let after_second =
-        apply_block_with_vm(&after_first, &block3, CHAIN_ID_REGTEST, &mut WriteVm::new(vec![(key, vec![43])]))
-            .unwrap();
+    let after_second = apply_block_with_vm(
+        &after_first,
+        &block3,
+        CHAIN_ID_REGTEST,
+        &mut WriteVm::new(vec![(key, vec![43])]),
+    )
+    .unwrap();
 
     // Roll back the tip call: contents and storage_root restored exactly.
     let restored_to_first = unapply_block(&after_second, &block3, CHAIN_ID_REGTEST).unwrap();
-    assert_eq!(
-        storage_of(&restored_to_first)[&contract][&key],
-        vec![42]
-    );
+    assert_eq!(storage_of(&restored_to_first)[&contract][&key], vec![42]);
     assert_eq!(
         restored_to_first
             .get_account(&contract)
@@ -366,7 +377,8 @@ fn unapply_restores_storage_and_storage_root() {
     );
 
     // Roll back the deploy: account and storage entry gone.
-    let restored_to_genesis = unapply_block(&restored_to_deploy, &deploy, CHAIN_ID_REGTEST).unwrap();
+    let restored_to_genesis =
+        unapply_block(&restored_to_deploy, &deploy, CHAIN_ID_REGTEST).unwrap();
     assert!(restored_to_genesis.get_account(&contract).is_none());
     assert!(!storage_of(&restored_to_genesis).contains_key(&contract));
 }
@@ -411,9 +423,13 @@ fn unapply_after_failed_call_leaves_storage_untouched() {
             3,
         )],
     );
-    let after_ok =
-        apply_block_with_vm(&after_deploy, &block, CHAIN_ID_REGTEST, &mut WriteVm::new(vec![(key, vec![9])]))
-            .unwrap();
+    let after_ok = apply_block_with_vm(
+        &after_deploy,
+        &block,
+        CHAIN_ID_REGTEST,
+        &mut WriteVm::new(vec![(key, vec![9])]),
+    )
+    .unwrap();
 
     let fail_block = test_block(
         3,
@@ -546,8 +562,7 @@ fn flush_ignores_non_contract_scopes() {
             3,
         )],
     );
-    let applied =
-        apply_block_with_vm(&after_deploy, &block, CHAIN_ID_REGTEST, &mut vm).unwrap();
+    let applied = apply_block_with_vm(&after_deploy, &block, CHAIN_ID_REGTEST, &mut vm).unwrap();
     {
         let storage = storage_of(&applied);
         assert_eq!(storage[&contract][&key], vec![1]);
@@ -556,13 +571,11 @@ fn flush_ignores_non_contract_scopes() {
             "EOA scopes must not gain storage"
         );
     }
-    assert!(
-        applied
-            .get_account("alice")
-            .unwrap()
-            .as_contract()
-            .is_none()
-    );
+    assert!(applied
+        .get_account("alice")
+        .unwrap()
+        .as_contract()
+        .is_none());
 }
 
 // --- S1.5-FBP06: lazy contract storage access ------------------------------
@@ -647,8 +660,7 @@ fn lazy_storage_setup_is_pointer_stable_across_calls() {
         .collect();
     let block = test_block(2, txs);
 
-    let applied =
-        apply_block_with_vm(&after_deploy, &block, CHAIN_ID_REGTEST, &mut vm).unwrap();
+    let applied = apply_block_with_vm(&after_deploy, &block, CHAIN_ID_REGTEST, &mut vm).unwrap();
 
     let seen = vm.seen.lock().unwrap();
     assert_eq!(seen.len(), CALLS);

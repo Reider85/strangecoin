@@ -43,14 +43,8 @@ fn roundtrip_every_scalar_type() {
             vec![param("a", AbiType::Int(8))],
             vec![AbiValue::int_i64(-1)],
         ),
-        (
-            vec![param("a", AbiType::Bool)],
-            vec![AbiValue::Bool(true)],
-        ),
-        (
-            vec![param("a", AbiType::Bool)],
-            vec![AbiValue::Bool(false)],
-        ),
+        (vec![param("a", AbiType::Bool)], vec![AbiValue::Bool(true)]),
+        (vec![param("a", AbiType::Bool)], vec![AbiValue::Bool(false)]),
         (
             vec![param("a", AbiType::Address)],
             vec![AbiValue::Address(addr)],
@@ -96,10 +90,7 @@ fn roundtrip_arrays_and_tuples() {
             ])],
         ),
         (
-            vec![param(
-                "a",
-                AbiType::FixedArray(Box::new(AbiType::Bool), 3),
-            )],
+            vec![param("a", AbiType::FixedArray(Box::new(AbiType::Bool), 3))],
             vec![AbiValue::FixedArray(vec![
                 AbiValue::Bool(true),
                 AbiValue::Bool(false),
@@ -107,10 +98,7 @@ fn roundtrip_arrays_and_tuples() {
             ])],
         ),
         (
-            vec![param(
-                "a",
-                AbiType::FixedArray(Box::new(AbiType::Bytes), 2),
-            )],
+            vec![param("a", AbiType::FixedArray(Box::new(AbiType::Bytes), 2))],
             vec![AbiValue::FixedArray(vec![
                 AbiValue::Bytes(vec![1, 2, 3]),
                 AbiValue::Bytes(vec![]),
@@ -176,20 +164,11 @@ fn roundtrip_arrays_and_tuples() {
         (
             vec![param(
                 "a",
-                AbiType::Array(Box::new(AbiType::FixedArray(
-                    Box::new(AbiType::Uint(8)),
-                    2,
-                ))),
+                AbiType::Array(Box::new(AbiType::FixedArray(Box::new(AbiType::Uint(8)), 2))),
             )],
             vec![AbiValue::Array(vec![
-                AbiValue::FixedArray(vec![
-                    AbiValue::uint_u64(1),
-                    AbiValue::uint_u64(2),
-                ]),
-                AbiValue::FixedArray(vec![
-                    AbiValue::uint_u64(3),
-                    AbiValue::uint_u64(4),
-                ]),
+                AbiValue::FixedArray(vec![AbiValue::uint_u64(1), AbiValue::uint_u64(2)]),
+                AbiValue::FixedArray(vec![AbiValue::uint_u64(3), AbiValue::uint_u64(4)]),
             ])],
         ),
         // Empty dynamic array.
@@ -231,18 +210,27 @@ fn method_selector_matches_golden_vectors() {
         method_signature("transfer", &transfer),
         "transfer(address,uint256)"
     );
-    assert_eq!(method_selector("transfer", &transfer), [0xce, 0xae, 0xeb, 0xc1]);
+    assert_eq!(
+        method_selector("transfer", &transfer),
+        [0xce, 0xae, 0xeb, 0xc1]
+    );
 
     let increment = vec![param("by", AbiType::Uint(64))];
     assert_eq!(
         method_signature("increment", &increment),
         "increment(uint64)"
     );
-    assert_eq!(method_selector("increment", &increment), [0xd0, 0x66, 0x4d, 0xc7]);
+    assert_eq!(
+        method_selector("increment", &increment),
+        [0xd0, 0x66, 0x4d, 0xc7]
+    );
 
     let no_args: Vec<AbiParam> = vec![];
     assert_eq!(method_signature("totalSupply", &no_args), "totalSupply()");
-    assert_eq!(method_selector("totalSupply", &no_args), [0x1e, 0x92, 0x6a, 0x5b]);
+    assert_eq!(
+        method_selector("totalSupply", &no_args),
+        [0x1e, 0x92, 0x6a, 0x5b]
+    );
 }
 
 #[test]
@@ -339,10 +327,7 @@ fn wit_v2_format_version_returns_not_implemented() {
 
 #[test]
 fn decode_rejects_non_canonical_offset() {
-    let params = vec![
-        param("x", AbiType::Bool),
-        param("s", AbiType::String),
-    ];
+    let params = vec![param("x", AbiType::Bool), param("s", AbiType::String)];
     let values = vec![AbiValue::Bool(true), AbiValue::String("hi".into())];
     let mut encoded = encode_args(&params, &values).unwrap();
     // Corrupt the offset word (bytes 32..36, right after the static bool

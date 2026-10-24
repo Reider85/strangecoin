@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use strangecoin_core::types::{AccountState, BlockHeader};
-use strangecoin_core::vm::{
-    BlockContext, ExecutionContext, GasCounter, TxStatus, VmError,
-};
+use strangecoin_core::vm::{BlockContext, ExecutionContext, GasCounter, TxStatus, VmError};
 use strangecoin_vm_wasm::gas::{FuelGasCounter, HostCallWeight};
 use strangecoin_vm_wasm::{WasmiError, WasmiExecutor};
 
@@ -204,7 +202,9 @@ fn host_call_weights_follow_adr_0014() {
     counter
         .spend_host_call(HostCallWeight::Secp256k1Verify)
         .expect_err("3000 > 2999");
-    counter.spend_host_call(HostCallWeight::GasLeft).expect("3 fits");
+    counter
+        .spend_host_call(HostCallWeight::GasLeft)
+        .expect("3 fits");
     assert_eq!(counter.gas_left(), 2_996);
 }
 

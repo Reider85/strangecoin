@@ -51,24 +51,26 @@ fn seed_balances(db_path: &Path, balances: &HashMap<String, u64>) {
     {
         let db_arc = storage.db();
         let mut db = db_arc.lock().expect("seed DB lock");
-        db.put(b"balances", &serde_json::to_vec(balances).expect("balances json"))
-            .expect("seed balances");
+        db.put(
+            b"balances",
+            &serde_json::to_vec(balances).expect("balances json"),
+        )
+        .expect("seed balances");
     }
     // Drop closes the LevelDB handle so the open path can take the lock.
     drop(storage);
 }
 
-fn seed_balances_and_chain(
-    db_path: &Path,
-    balances: &HashMap<String, u64>,
-    chain: &[Block],
-) {
+fn seed_balances_and_chain(db_path: &Path, balances: &HashMap<String, u64>, chain: &[Block]) {
     let storage = Storage::new(db_path).expect("seed DB must open");
     {
         let db_arc = storage.db();
         let mut db = db_arc.lock().expect("seed DB lock");
-        db.put(b"balances", &serde_json::to_vec(balances).expect("balances json"))
-            .expect("seed balances");
+        db.put(
+            b"balances",
+            &serde_json::to_vec(balances).expect("balances json"),
+        )
+        .expect("seed balances");
         db.put(b"chain", &serde_json::to_vec(chain).expect("chain json"))
             .expect("seed chain");
     }
@@ -150,8 +152,14 @@ fn legacy_base64_balances_migrate_to_bech32_on_open() {
         !keys.iter().any(|k| k == &legacy_b),
         "legacy key b must be gone"
     );
-    assert!(keys.iter().any(|k| k == &bech32_a), "bech32 key a must exist");
-    assert!(keys.iter().any(|k| k == &bech32_b), "bech32 key b must exist");
+    assert!(
+        keys.iter().any(|k| k == &bech32_a),
+        "bech32 key a must exist"
+    );
+    assert!(
+        keys.iter().any(|k| k == &bech32_b),
+        "bech32 key b must exist"
+    );
 
     assert_eq!(facade.get_balance(&bech32_a), 10_000, "balance a migrated");
     assert_eq!(facade.get_balance(&bech32_b), 5_000, "balance b migrated");

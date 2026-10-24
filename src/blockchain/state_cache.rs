@@ -81,9 +81,7 @@ impl StateCache {
         self.contract_storage = contract_storage;
     }
 
-    pub fn contract_storage(
-        &self,
-    ) -> &strangecoin_core::state::ContractStorageMap {
+    pub fn contract_storage(&self) -> &strangecoin_core::state::ContractStorageMap {
         &self.contract_storage
     }
 
@@ -136,7 +134,10 @@ impl StateCache {
     }
 
     pub fn total_supply(&self) -> u64 {
-        self.accounts.values().map(|account| account.balance()).sum()
+        self.accounts
+            .values()
+            .map(|account| account.balance())
+            .sum()
     }
 
     pub fn nonzero_balances(&self) -> HashMap<String, u64> {
@@ -276,7 +277,9 @@ pub(crate) fn contract_storage_to_json(
     out
 }
 
-pub(crate) fn contract_storage_from_json(raw: &ContractStorageJson) -> Option<strangecoin_core::state::ContractStorageMap> {
+pub(crate) fn contract_storage_from_json(
+    raw: &ContractStorageJson,
+) -> Option<strangecoin_core::state::ContractStorageMap> {
     let mut map = strangecoin_core::state::ContractStorageMap::new();
     for (address, slots) in raw {
         let mut storage = strangecoin_core::state::ContractStorage::new();
@@ -291,7 +294,8 @@ pub(crate) fn contract_storage_from_json(raw: &ContractStorageJson) -> Option<st
 }
 
 pub(crate) fn db_path_for_port(port: u16) -> PathBuf {
-    let exe_path = std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
+    let exe_path =
+        std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
     let exe_dir = exe_path
         .parent()
         .expect("Не удалось получить директорию исполняемого файла");
@@ -366,10 +370,7 @@ pub(crate) fn open_blockchain(port: u16, chain_id: u32) -> Blockchain {
     blockchain.codes = block_executor::codes_from_chain(&blockchain.chain, chain_id);
     blockchain.save_state();
     blockchain.debug_db();
-    let duration = start_time
-        .elapsed()
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0);
+    let duration = start_time.elapsed().map(|d| d.as_secs_f64()).unwrap_or(0.0);
     info!(duration_secs = duration, "Создание блокчейна завершено");
     blockchain
 }
@@ -390,12 +391,14 @@ pub(crate) fn load_persisted_state(storage: &crate::storage::Storage) -> Persist
         if let Ok(accounts) = serde_json::from_slice::<HashMap<String, AccountState>>(&v) {
             Some(accounts)
         } else {
-            serde_json::from_slice::<HashMap<String, u64>>(&v).ok().map(|legacy| {
-                legacy
-                    .into_iter()
-                    .map(|(address, balance)| (address, AccountState::eoa(balance, 0)))
-                    .collect()
-            })
+            serde_json::from_slice::<HashMap<String, u64>>(&v)
+                .ok()
+                .map(|legacy| {
+                    legacy
+                        .into_iter()
+                        .map(|(address, balance)| (address, AccountState::eoa(balance, 0)))
+                        .collect()
+                })
         }
     });
     let difficulty = db_guard
@@ -412,7 +415,10 @@ pub(crate) fn load_persisted_state(storage: &crate::storage::Storage) -> Persist
         .expect("Не удалось создать итератор LevelDB");
     let mut mempool_txs = Vec::new();
     while let Some((key, value)) = iterator.next() {
-        if key == b"chain" || key == b"balances" || key == b"difficulty" || key == b"contract_storage"
+        if key == b"chain"
+            || key == b"balances"
+            || key == b"difficulty"
+            || key == b"contract_storage"
         {
             continue;
         }
@@ -461,9 +467,7 @@ impl Blockchain {
         &mut self,
         transaction: Transaction,
     ) -> Result<crate::mempool::InsertOutcome, StrangecoinError> {
-        if transaction.sender().is_empty()
-            || transaction.receiver().is_some_and(|r| r.is_empty())
-        {
+        if transaction.sender().is_empty() || transaction.receiver().is_some_and(|r| r.is_empty()) {
             tracing::warn!("Пустой адрес отправителя или получателя");
             return Err(StrangecoinError::SizeLimitExceeded("empty address"));
         }
@@ -587,10 +591,8 @@ impl Blockchain {
             .expect("Ошибка сохранения балансов");
         db.put(
             b"contract_storage",
-            &serde_json::to_vec(&contract_storage_to_json(
-                self.balances.contract_storage(),
-            ))
-            .unwrap(),
+            &serde_json::to_vec(&contract_storage_to_json(self.balances.contract_storage()))
+                .unwrap(),
         )
         .expect("Ошибка сохранения контрактного хранилища");
         db.put(
@@ -687,7 +689,8 @@ impl Blockchain {
                     if crate::address::decode_address(field).is_err()
                         && !matches!(
                             field,
-                            "genesis" | "coinbase"
+                            "genesis"
+                                | "coinbase"
                                 | "initial_wallet_address"
                                 | "regtest_initial_holder"
                                 | "recipient"

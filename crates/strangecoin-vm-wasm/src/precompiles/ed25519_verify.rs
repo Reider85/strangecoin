@@ -45,8 +45,5 @@ pub fn run(data: &[u8]) -> Result<PrecompileOutput, PrecompileError> {
     if verified {
         output[31] = 1;
     }
-    Ok(PrecompileOutput {
-        output,
-        gas_used,
-    })
+    Ok(PrecompileOutput { output, gas_used })
 }

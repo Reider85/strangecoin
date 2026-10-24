@@ -301,7 +301,11 @@ fn sign_vector() -> (Vec<u8>, [u8; 32], Vec<u8>) {
     let hash = [9u8; 32];
     let msg = Message::from_digest(hash);
     let sig = secp.sign_ecdsa(&msg, &sk);
-    (pk.serialize().to_vec(), hash, sig.serialize_compact().to_vec())
+    (
+        pk.serialize().to_vec(),
+        hash,
+        sig.serialize_compact().to_vec(),
+    )
 }
 
 #[test]

@@ -358,12 +358,12 @@ fn apply_non_genesis<V: VmExecutor>(
             Transaction::Create(create) => match vm.as_deref_mut() {
                 None => {
                     return Err(CoreError::UnsupportedTxType {
-                        reason: "create transactions require a VM executor (S1.5-P14)"
-                            .to_string(),
+                        reason: "create transactions require a VM executor (S1.5-P14)".to_string(),
                     })
                 }
                 Some(vm) => {
-                    let receipt = apply_create(state, create, chain_id, vm, block, tx_index as u32)?;
+                    let receipt =
+                        apply_create(state, create, chain_id, vm, block, tx_index as u32)?;
                     receipts.push(receipt);
                 }
             },
@@ -633,7 +633,12 @@ fn apply_call<V: VmExecutor>(
                 commit_value_transfers(state, txid, &result.value_transfers)?;
                 flush_storage_writes(state, &result, txid);
             }
-            Ok(Receipt::from_execution(txid, block.index, tx_index, &result))
+            Ok(Receipt::from_execution(
+                txid,
+                block.index,
+                tx_index,
+                &result,
+            ))
         }
         Err(err) => {
             let vm_error: VmError = err.into();
@@ -716,9 +721,7 @@ fn commit_value_transfers(
             .ok_or(CoreError::StateOverflow)?;
         state.set_balance(&transfer.to, new_payee);
     }
-    state
-        .value_transfers_undo
-        .insert(txid, transfers.to_vec());
+    state.value_transfers_undo.insert(txid, transfers.to_vec());
     Ok(())
 }
 
@@ -779,11 +782,7 @@ fn increment_nonce(state: &mut State, tx: &TransferTx) -> Result<(), CoreError> 
 /// Reverse `block` on top of `state` (S1.5-P14: also reverses `Create` and
 /// `Call`, then clears the tip receipts). `chain_id` is required to re-derive
 /// contract addresses on the way back.
-pub fn unapply_block(
-    state: &State,
-    block: &Block,
-    chain_id: u32,
-) -> Result<State, CoreError> {
+pub fn unapply_block(state: &State, block: &Block, chain_id: u32) -> Result<State, CoreError> {
     let mut new_state = state.clone();
 
     if block.index == 0 {
@@ -835,10 +834,7 @@ fn unapply_non_genesis(state: &mut State, block: &Block, chain_id: u32) -> Resul
                 // constructor — mirror that here (missing receipt defaults
                 // to success, like `unapply_call`). Failed deploys left no
                 // account and no storage; the removes are no-ops then.
-                let receipt = state
-                    .receipts
-                    .iter()
-                    .find(|r| r.txid == txid(tx));
+                let receipt = state.receipts.iter().find(|r| r.txid == txid(tx));
                 let was_success = receipt
                     .map(|r| r.status == TxStatus::Success)
                     .unwrap_or(true);
@@ -874,12 +870,10 @@ fn unapply_non_genesis(state: &mut State, block: &Block, chain_id: u32) -> Resul
                     .checked_sub(1)
                     .ok_or(CoreError::StateOverflow)?;
                 state.set_nonce(&call.from, nonce);
-                let receipt = state
-                    .receipts
-                    .iter()
-                    .find(|r| r.txid == txid(tx));
-                let reverse_value =
-                    receipt.map(|r| r.status == TxStatus::Success).unwrap_or(true);
+                let receipt = state.receipts.iter().find(|r| r.txid == txid(tx));
+                let reverse_value = receipt
+                    .map(|r| r.status == TxStatus::Success)
+                    .unwrap_or(true);
                 if reverse_value {
                     // S1.5-FBP05: the undo record carries the full committed
                     // trail (top-level entry transfer + settled nested
@@ -959,9 +953,7 @@ fn unapply_call_storage(state: &mut State, txid: [u8; 32]) {
         touched.insert(contract);
     }
     for contract in touched {
-        let empty = storage_map
-            .get(&contract)
-            .is_some_and(HashMap::is_empty);
+        let empty = storage_map.get(&contract).is_some_and(HashMap::is_empty);
         if empty {
             storage_map.remove(&contract);
         }
@@ -1268,12 +1260,8 @@ mod tests {
     #[test]
     fn commit_rejects_insufficient_balance_atomically() {
         let mut state = test_state_with_balance("alice", 100);
-        let err = commit_value_transfers(
-            &mut state,
-            [2u8; 32],
-            &[transfer("alice", "bob", 101)],
-        )
-        .unwrap_err();
+        let err = commit_value_transfers(&mut state, [2u8; 32], &[transfer("alice", "bob", 101)])
+            .unwrap_err();
         assert!(matches!(err, CoreError::StateOverflow));
         assert_eq!(state.get_balance("alice"), 100);
         assert_eq!(state.get_balance("bob"), 0);

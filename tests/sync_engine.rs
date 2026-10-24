@@ -118,9 +118,8 @@ fn concurrent_candidates_race_through_one_engine() {
     // Phase 1 — identical candidates race: applied exactly once, no reorg.
     push_pair(fork_a.chain_snapshot(), fork_a.difficulty());
     let ev = drain(Duration::from_millis(500), Duration::from_secs(5));
-    let count = |ev: &[NodeEvent], f: &dyn Fn(&NodeEvent) -> bool| {
-        ev.iter().filter(|e| f(e)).count()
-    };
+    let count =
+        |ev: &[NodeEvent], f: &dyn Fn(&NodeEvent) -> bool| ev.iter().filter(|e| f(e)).count();
     let is_applied = |e: &NodeEvent| matches!(e, NodeEvent::BlockApplied { .. });
     let is_reorg = |e: &NodeEvent| matches!(e, NodeEvent::BlockReorged { .. });
     let is_persisted = |e: &NodeEvent| matches!(e, NodeEvent::StatePersisted { .. });
@@ -130,7 +129,12 @@ fn concurrent_candidates_race_through_one_engine() {
         "identical racing candidates must apply once: {:?}",
         ev
     );
-    assert_eq!(count(&ev, &is_reorg), 0, "first adoption is not a reorg: {:?}", ev);
+    assert_eq!(
+        count(&ev, &is_reorg),
+        0,
+        "first adoption is not a reorg: {:?}",
+        ev
+    );
     assert_eq!(
         count(&ev, &is_persisted),
         1,
@@ -143,11 +147,7 @@ fn concurrent_candidates_race_through_one_engine() {
     // Phase 2 — a worse fork raced twice: fork choice rejects it silently.
     push_pair(fork_b.chain_snapshot(), fork_b.difficulty());
     let ev = drain(Duration::from_millis(500), Duration::from_secs(5));
-    assert!(
-        ev.is_empty(),
-        "worse fork must produce no events: {:?}",
-        ev
-    );
+    assert!(ev.is_empty(), "worse fork must produce no events: {:?}", ev);
     assert_eq!(main.chain_len(), 4, "worse fork must not replace the chain");
     assert_eq!(main.tip_hash(), fork_a.tip_hash());
 

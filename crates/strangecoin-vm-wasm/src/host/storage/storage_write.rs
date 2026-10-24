@@ -58,7 +58,11 @@ fn storage_write(
         .unwrap_or(0);
     let overlay = state.ctx.storage_overlay.entry(address).or_default();
     let replaced = overlay.get(&key).map_or(0, Vec::len);
-    let staged: usize = overlay.values().map(Vec::len).sum::<usize>().saturating_sub(replaced);
+    let staged: usize = overlay
+        .values()
+        .map(Vec::len)
+        .sum::<usize>()
+        .saturating_sub(replaced);
     if persisted.saturating_add(staged).saturating_add(value.len()) > MAX_STORAGE_PER_CONTRACT {
         return Err(vm_err(VmError::MaxStoragePerContract));
     }

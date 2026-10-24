@@ -89,7 +89,8 @@ pub fn verify_block_stateless(
 
     for (addr, account_proof) in &witness.proofs {
         let account = account_proof.account();
-        if !SparseMerkleTrie::verify_proof(parent_state_root, addr, &account, &account_proof.proof) {
+        if !SparseMerkleTrie::verify_proof(parent_state_root, addr, &account, &account_proof.proof)
+        {
             return Err(CoreError::WitnessVerificationFailed);
         }
     }
@@ -122,11 +123,7 @@ pub fn verify_block_stateless(
             address: addr,
             pre: account_proof.account(),
             proof: &account_proof.proof,
-            post: post_state
-                .balances
-                .get(addr)
-                .cloned()
-                .unwrap_or_default(),
+            post: post_state.balances.get(addr).cloned().unwrap_or_default(),
         })
         .collect();
     let computed = SparseMerkleTrie::root_after_updates(parent_state_root, &updates)?;

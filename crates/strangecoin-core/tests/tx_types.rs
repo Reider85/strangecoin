@@ -5,9 +5,7 @@
 //! defers Create/Call execution to S1.5-P15.
 
 use secp256k1::{ecdsa::RecoverableSignature, Message, Secp256k1, SecretKey};
-use strangecoin_core::consensus::{
-    verify_transaction, CHAIN_ID_MAINNET, CHAIN_ID_REGTEST,
-};
+use strangecoin_core::consensus::{verify_transaction, CHAIN_ID_MAINNET, CHAIN_ID_REGTEST};
 use strangecoin_core::error::CoreError;
 use strangecoin_core::serialize::{
     deserialize_transaction, deserialize_transaction_signed, serialize_transaction,
@@ -22,8 +20,8 @@ fn keypair() -> (String, SecretKey) {
     sk_bytes[0] = 42;
     let sk = SecretKey::from_slice(&sk_bytes).expect("valid secret key");
     let pk = secp256k1::PublicKey::from_secret_key(&secp, &sk);
-    let addr = strangecoin_core::address::encode_address(&pk, CHAIN_ID_REGTEST)
-        .expect("encode address");
+    let addr =
+        strangecoin_core::address::encode_address(&pk, CHAIN_ID_REGTEST).expect("encode address");
     (addr, sk)
 }
 
@@ -61,7 +59,14 @@ fn transfer_roundtrip_unsigned_signed_txid() {
 
 #[test]
 fn create_roundtrip() {
-    let tx = Transaction::create("alice", vec![0x00, 0x61], vec![9, 9, 9], 50, 3, CHAIN_ID_MAINNET);
+    let tx = Transaction::create(
+        "alice",
+        vec![0x00, 0x61],
+        vec![9, 9, 9],
+        50,
+        3,
+        CHAIN_ID_MAINNET,
+    );
     let unsigned = serialize_transaction(&tx);
     assert_eq!(deserialize_transaction(&unsigned).unwrap(), tx);
 
@@ -73,7 +78,15 @@ fn create_roundtrip() {
 
 #[test]
 fn call_roundtrip() {
-    let tx = Transaction::call("alice", "bob", vec![1, 2, 3, 4], 7, 100_000, 5, CHAIN_ID_REGTEST);
+    let tx = Transaction::call(
+        "alice",
+        "bob",
+        vec![1, 2, 3, 4],
+        7,
+        100_000,
+        5,
+        CHAIN_ID_REGTEST,
+    );
     let unsigned = serialize_transaction(&tx);
     assert_eq!(deserialize_transaction(&unsigned).unwrap(), tx);
 
@@ -108,7 +121,14 @@ fn verify_transfer_signed_ok() {
 #[test]
 fn verify_create_signed_ok() {
     let (addr, sk) = keypair();
-    let mut tx = Transaction::create(&addr, vec![0x00, 0x61, 0x73, 0x6d], vec![], 0, 1, CHAIN_ID_REGTEST);
+    let mut tx = Transaction::create(
+        &addr,
+        vec![0x00, 0x61, 0x73, 0x6d],
+        vec![],
+        0,
+        1,
+        CHAIN_ID_REGTEST,
+    );
     sign(&mut tx, &sk);
     verify_transaction(&tx).expect("valid signed create must verify");
 }
@@ -138,7 +158,15 @@ fn verify_create_rejects_gas_limit_over_block_limit() {
 #[test]
 fn verify_call_signed_ok() {
     let (addr, sk) = keypair();
-    let mut tx = Transaction::call(&addr, "contract1", vec![1, 2, 3], 10, 50_000, 1, CHAIN_ID_REGTEST);
+    let mut tx = Transaction::call(
+        &addr,
+        "contract1",
+        vec![1, 2, 3],
+        10,
+        50_000,
+        1,
+        CHAIN_ID_REGTEST,
+    );
     sign(&mut tx, &sk);
     verify_transaction(&tx).expect("valid signed call must verify");
 }
@@ -161,7 +189,15 @@ fn verify_rejects_tampered_payload() {
 #[test]
 fn verify_rejects_tampered_call_data() {
     let (addr, sk) = keypair();
-    let mut tx = Transaction::call(&addr, "contract1", vec![1, 2, 3], 10, 50_000, 1, CHAIN_ID_REGTEST);
+    let mut tx = Transaction::call(
+        &addr,
+        "contract1",
+        vec![1, 2, 3],
+        10,
+        50_000,
+        1,
+        CHAIN_ID_REGTEST,
+    );
     sign(&mut tx, &sk);
     if let Transaction::Call(t) = &mut tx {
         t.data = vec![9, 9, 9];
@@ -295,7 +331,10 @@ fn serde_transfer_serializes_with_legacy_field_names() {
     let json = serde_json::to_string(&tx).unwrap();
     assert!(json.contains("\"sender\":\"alice\""), "{json}");
     assert!(json.contains("\"receiver\":\"bob\""), "{json}");
-    assert!(!json.contains("\"type\""), "transfer must stay untagged: {json}");
+    assert!(
+        !json.contains("\"type\""),
+        "transfer must stay untagged: {json}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -304,7 +343,12 @@ fn serde_transfer_serializes_with_legacy_field_names() {
 
 fn regtest_block(index: u64, transactions: Vec<Transaction>) -> Block {
     let txs = if index > 0 {
-        let mut v = vec![Transaction::coinbase("coinbase", "miner", 0, CHAIN_ID_REGTEST)];
+        let mut v = vec![Transaction::coinbase(
+            "coinbase",
+            "miner",
+            0,
+            CHAIN_ID_REGTEST,
+        )];
         v.extend(transactions);
         v
     } else {
@@ -332,28 +376,63 @@ fn apply_block_rejects_create_and_call() {
 
     let create_block = regtest_block(
         1,
-        vec![Transaction::create("alice", vec![1, 2, 3], vec![], 100, 1, CHAIN_ID_REGTEST)],
+        vec![Transaction::create(
+            "alice",
+            vec![1, 2, 3],
+            vec![],
+            100,
+            1,
+            CHAIN_ID_REGTEST,
+        )],
     );
     let err = apply_block(&state, &create_block, CHAIN_ID_REGTEST).unwrap_err();
-    assert!(matches!(err, CoreError::UnsupportedTxType { .. }), "{err:?}");
+    assert!(
+        matches!(err, CoreError::UnsupportedTxType { .. }),
+        "{err:?}"
+    );
 
     let call_block = regtest_block(
         1,
-        vec![Transaction::call("alice", "contract1", vec![], 10, 100_000, 1, CHAIN_ID_REGTEST)],
+        vec![Transaction::call(
+            "alice",
+            "contract1",
+            vec![],
+            10,
+            100_000,
+            1,
+            CHAIN_ID_REGTEST,
+        )],
     );
     let err = apply_block(&state, &call_block, CHAIN_ID_REGTEST).unwrap_err();
-    assert!(matches!(err, CoreError::UnsupportedTxType { .. }), "{err:?}");
+    assert!(
+        matches!(err, CoreError::UnsupportedTxType { .. }),
+        "{err:?}"
+    );
 }
 
 #[test]
 fn transfer_apply_unapply_roundtrip_still_works() {
     let state = State::new();
-    let genesis = regtest_block(0, vec![Transaction::coinbase("genesis", "alice", 1000, CHAIN_ID_REGTEST)]);
+    let genesis = regtest_block(
+        0,
+        vec![Transaction::coinbase(
+            "genesis",
+            "alice",
+            1000,
+            CHAIN_ID_REGTEST,
+        )],
+    );
     let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
 
     let block = regtest_block(
         1,
-        vec![Transaction::transfer("alice", "bob", 300, 1, CHAIN_ID_REGTEST)],
+        vec![Transaction::transfer(
+            "alice",
+            "bob",
+            300,
+            1,
+            CHAIN_ID_REGTEST,
+        )],
     );
     let after = apply_block(&after_genesis, &block, CHAIN_ID_REGTEST).unwrap();
     assert_eq!(after.get_balance("alice"), 700);

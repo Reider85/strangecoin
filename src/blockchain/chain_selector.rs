@@ -44,7 +44,11 @@ pub(crate) fn chain_has_tx(chain: &[Block], tx: &Transaction) -> bool {
 }
 
 /// Headers for the HEADERS response: `index >= from_height`, ascending, at most `max`.
-pub(crate) fn headers_from_height(chain: &[Block], from_height: u64, max: usize) -> Vec<BlockHeader> {
+pub(crate) fn headers_from_height(
+    chain: &[Block],
+    from_height: u64,
+    max: usize,
+) -> Vec<BlockHeader> {
     chain
         .iter()
         .filter(|b| b.index >= from_height)
@@ -122,7 +126,8 @@ impl<'de> Deserialize<'de> for Blockchain {
         // Legacy serde-JSON wire path (tests/diagnostics): the snapshot does
         // not carry a chain; the receiving node pins its own network when it
         // adopts via `try_adopt_candidate` (BUG-S1-004).
-        let mut mempool = crate::mempool::Mempool::new(strangecoin_core::consensus::CHAIN_ID_REGTEST);
+        let mut mempool =
+            crate::mempool::Mempool::new(strangecoin_core::consensus::CHAIN_ID_REGTEST);
         for tx in pending_transactions.into_iter().chain(mempool_txs) {
             let account = AccountState::default();
             let _ = mempool.insert(tx, &account);
@@ -285,7 +290,11 @@ mod tests {
         // Lookup uses the stored `hash` field, not a recomputed hash.
         let stored = chain[2].hash.clone();
         let _ = target;
-        let blocks = blocks_by_hashes(&chain, &[hex::decode(&stored).unwrap().try_into().unwrap()], 10);
+        let blocks = blocks_by_hashes(
+            &chain,
+            &[hex::decode(&stored).unwrap().try_into().unwrap()],
+            10,
+        );
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].index, 2);
     }

@@ -6,12 +6,12 @@
 //! fails this test if the old public seed string is reintroduced into
 //! consensus source. Per-network expected hashes: BUG-S1-004.
 
-use strangecoin::consensus::{load_genesis, regtest_genesis_block, validate_genesis};
+use strangecoin::consensus::CURRENT_CONSENSUS_VERSION;
 use strangecoin::consensus::EXPECTED_GENESIS_HASH;
 use strangecoin::consensus::EXPECTED_TESTNET_GENESIS_HASH;
+use strangecoin::consensus::{load_genesis, regtest_genesis_block, validate_genesis};
 use strangecoin::consensus::{CHAIN_ID_MAINNET, CHAIN_ID_REGTEST, CHAIN_ID_TESTNET};
 use strangecoin::error::StrangecoinError;
-use strangecoin::consensus::CURRENT_CONSENSUS_VERSION;
 
 fn repo_path(rel: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel)
@@ -45,11 +45,10 @@ fn initial_holder_address_derives_from_pubkey_only() {
         .expect("genesis.json must expose initial_holder_pubkey");
     let pk_hex = pk_hex.strip_prefix("0x").unwrap_or(pk_hex);
     let pk_bytes = hex::decode(pk_hex).expect("pubkey hex");
-    let public_key =
-        secp256k1::PublicKey::from_slice(&pk_bytes).expect("valid secp256k1 pubkey");
+    let public_key = secp256k1::PublicKey::from_slice(&pk_bytes).expect("valid secp256k1 pubkey");
     let network_id = json["network_id"].as_u64().expect("network_id") as u32;
-    let addr = strangecoin::address::encode_address(&public_key, network_id)
-        .expect("encode_address");
+    let addr =
+        strangecoin::address::encode_address(&public_key, network_id).expect("encode_address");
 
     assert_eq!(
         block.transactions[0].receiver(),
@@ -88,7 +87,11 @@ fn genesis_json_contains_only_public_key_material() {
         .expect("initial_holder_pubkey required");
     let pk_hex = pk_hex.strip_prefix("0x").unwrap_or(pk_hex);
     let pk_bytes = hex::decode(pk_hex).expect("pubkey hex");
-    assert_eq!(pk_bytes.len(), 33, "compressed secp256k1 pubkey is 33 bytes");
+    assert_eq!(
+        pk_bytes.len(),
+        33,
+        "compressed secp256k1 pubkey is 33 bytes"
+    );
     assert!(
         pk_bytes[0] == 0x02 || pk_bytes[0] == 0x03,
         "pubkey must be compressed (0x02/0x03 prefix)"

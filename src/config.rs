@@ -90,8 +90,7 @@ impl Config {
     /// Network-aware default (SCIP-0002): `None` → `true` on regtest,
     /// `false` on mainnet/testnet. Explicit values always win.
     pub fn zero_state_root_allowed(&self) -> bool {
-        self.allow_zero_state_root
-            .unwrap_or(self.network_id == 3)
+        self.allow_zero_state_root.unwrap_or(self.network_id == 3)
     }
 }
 
@@ -130,13 +129,19 @@ mod tests {
             network_id: 1,
             ..Config::default()
         };
-        assert!(!mainnet.zero_state_root_allowed(), "mainnet default is false");
+        assert!(
+            !mainnet.zero_state_root_allowed(),
+            "mainnet default is false"
+        );
 
         let testnet = Config {
             network_id: 2,
             ..Config::default()
         };
-        assert!(!testnet.zero_state_root_allowed(), "testnet default is false");
+        assert!(
+            !testnet.zero_state_root_allowed(),
+            "testnet default is false"
+        );
     }
 
     #[test]
@@ -164,10 +169,7 @@ mod tests {
                 ..Config::default()
             };
             let err = cfg.validate().expect_err("must reject on public networks");
-            assert!(
-                err.to_string().contains("allow_zero_state_root"),
-                "{err:?}"
-            );
+            assert!(err.to_string().contains("allow_zero_state_root"), "{err:?}");
         }
     }
 

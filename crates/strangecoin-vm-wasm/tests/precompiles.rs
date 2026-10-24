@@ -9,8 +9,8 @@ use strangecoin_core::address::is_precompile_address;
 use strangecoin_core::types::{AccountState, BlockHeader};
 use strangecoin_core::vm::{BlockContext, ExecutionContext, TxStatus, VmError, VmExecutor};
 use strangecoin_vm_wasm::precompiles::{
-    blake3, bls_aggregate, dispatch_precompile, ecrecover, ed25519_verify, keccak, modexp,
-    sha256, PrecompileError,
+    blake3, bls_aggregate, dispatch_precompile, ecrecover, ed25519_verify, keccak, modexp, sha256,
+    PrecompileError,
 };
 use strangecoin_vm_wasm::{WasmiError, WasmiExecutor};
 

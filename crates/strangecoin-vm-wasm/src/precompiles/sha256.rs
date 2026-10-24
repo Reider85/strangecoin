@@ -5,7 +5,7 @@
 
 use sha2::{Digest, Sha256};
 
-use super::{PrecompileError, PrecompileOutput, hash_gas};
+use super::{hash_gas, PrecompileError, PrecompileOutput};
 use crate::gas::HostCallWeight;
 
 pub fn run(data: &[u8]) -> Result<PrecompileOutput, PrecompileError> {

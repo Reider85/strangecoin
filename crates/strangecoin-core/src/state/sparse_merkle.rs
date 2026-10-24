@@ -256,11 +256,7 @@ impl SparseMerkleTrie {
     /// (BUG-S0-016): a non-empty account must be present with the matching
     /// leaf hash; an empty account ([`Account::is_empty`]) must be absent.
     /// Mismatch → [`CoreError::ProofAccountMismatch`].
-    pub fn prove(
-        &self,
-        address: &str,
-        account: &Account,
-    ) -> Result<Vec<[u8; 32]>, CoreError> {
+    pub fn prove(&self, address: &str, account: &Account) -> Result<Vec<[u8; 32]>, CoreError> {
         let key = account_key_hash(address);
         let is_pruned = account.is_empty();
         let expected_leaf = if is_pruned {
@@ -609,12 +605,18 @@ mod tests {
             let mut without_last = accounts.clone();
             without_last.remove(&format!("user_{}", n - 1));
             let root_less = SparseMerkleTrie::compute_root(&without_last);
-            assert_ne!(root, root_less, "removing one of n={n} accounts must change root");
+            assert_ne!(
+                root, root_less,
+                "removing one of n={n} accounts must change root"
+            );
 
             let mut tweaked = accounts.clone();
             tweaked.insert(format!("user_{}", n - 1), make_account(999_999, 2));
             let root_tweaked = SparseMerkleTrie::compute_root(&tweaked);
-            assert_ne!(root, root_tweaked, "balance change at n={n} must change root");
+            assert_ne!(
+                root, root_tweaked,
+                "balance change at n={n} must change root"
+            );
         }
     }
 
@@ -705,7 +707,10 @@ mod tests {
         let mut key_changed = a.clone();
         key_changed.remove(&[1u8; 32]);
         key_changed.insert([3u8; 32], vec![1, 2, 3]);
-        assert_ne!(contract_storage_root(&a), contract_storage_root(&key_changed));
+        assert_ne!(
+            contract_storage_root(&a),
+            contract_storage_root(&key_changed)
+        );
     }
 
     /// S1.5-P07: prove/verify round-trip for a contract account.
@@ -723,10 +728,7 @@ mod tests {
         }
         let proof = trie.prove("contract", &contract).unwrap();
         assert!(SparseMerkleTrie::verify_proof(
-            &root,
-            "contract",
-            &contract,
-            &proof
+            &root, "contract", &contract, &proof
         ));
 
         let wrong_storage = make_contract([7u8; 32], [8u8; 32]);
@@ -771,7 +773,9 @@ mod tests {
         let absent = make_account(0, 0);
         let proof = trie.prove("nobody", &absent).unwrap();
         assert_eq!(proof.len(), DEPTH);
-        assert!(SparseMerkleTrie::verify_proof(&root, "nobody", &absent, &proof));
+        assert!(SparseMerkleTrie::verify_proof(
+            &root, "nobody", &absent, &proof
+        ));
     }
 
     #[test]
@@ -786,7 +790,9 @@ mod tests {
         let account = make_account(1000, 0);
         let mut proof = trie.prove("alice", &account).unwrap();
         proof[10][0] ^= 0xff;
-        assert!(!SparseMerkleTrie::verify_proof(&root, "alice", &account, &proof));
+        assert!(!SparseMerkleTrie::verify_proof(
+            &root, "alice", &account, &proof
+        ));
     }
 
     #[test]
@@ -801,7 +807,9 @@ mod tests {
         let real = make_account(1000, 0);
         let fake = make_account(999, 0);
         let proof = trie.prove("alice", &real).unwrap();
-        assert!(!SparseMerkleTrie::verify_proof(&root, "alice", &fake, &proof));
+        assert!(!SparseMerkleTrie::verify_proof(
+            &root, "alice", &fake, &proof
+        ));
     }
 
     #[test]
@@ -809,8 +817,18 @@ mod tests {
         let accounts = accounts_map(&[("alice", 1000, 0)]);
         let root = SparseMerkleTrie::compute_root(&accounts);
         let account = make_account(1000, 0);
-        assert!(!SparseMerkleTrie::verify_proof(&root, "alice", &account, &[]));
-        assert!(!SparseMerkleTrie::verify_proof(&root, "alice", &account, &[[0u8; 32]; 10]));
+        assert!(!SparseMerkleTrie::verify_proof(
+            &root,
+            "alice",
+            &account,
+            &[]
+        ));
+        assert!(!SparseMerkleTrie::verify_proof(
+            &root,
+            "alice",
+            &account,
+            &[[0u8; 32]; 10]
+        ));
     }
 
     /// BUG-S0-016: prove() validates the claimed account against the trie.
@@ -988,7 +1006,10 @@ mod tests {
         let mut updated = accounts;
         updated.remove("alice");
         let expected = SparseMerkleTrie::compute_root(&updated);
-        assert_eq!(expected, SparseMerkleTrie::compute_root(&accounts_map(&[("bob", 42, 0)])));
+        assert_eq!(
+            expected,
+            SparseMerkleTrie::compute_root(&accounts_map(&[("bob", 42, 0)]))
+        );
 
         assert_eq!(
             SparseMerkleTrie::root_after_updates(&pre_root, &updates).unwrap(),

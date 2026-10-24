@@ -133,8 +133,7 @@ pub fn init_chain(funded: &str, amount: u64) -> (Vec<Block>, State) {
         CURRENT_CONSENSUS_VERSION,
         CHAIN_ID_REGTEST,
     );
-    let state =
-        validate_and_apply(&State::new(), &genesis, &view).expect("genesis must apply");
+    let state = validate_and_apply(&State::new(), &genesis, &view).expect("genesis must apply");
     (vec![genesis], state)
 }
 
@@ -196,8 +195,8 @@ pub fn commit_block(
         CHAIN_ID_REGTEST,
     )
     .with_codes(codes);
-    let applied = validate_and_apply(state, &block, &view)
-        .expect("crafted block must pass full validation");
+    let applied =
+        validate_and_apply(state, &block, &view).expect("crafted block must pass full validation");
     chain.push(block);
     applied
 }
@@ -234,11 +233,7 @@ pub fn core_block(index: u64, transactions: Vec<Transaction>) -> Block {
 }
 
 /// Apply a core-level block with a freshly seeded executor.
-pub fn core_apply(
-    state: &State,
-    block: &Block,
-    codes: &HashMap<String, Vec<u8>>,
-) -> State {
+pub fn core_apply(state: &State, block: &Block, codes: &HashMap<String, Vec<u8>>) -> State {
     let mut vm = executor_with(codes);
     apply_block_with_vm(state, block, CHAIN_ID_REGTEST, &mut vm)
         .expect("core-level block must apply")

@@ -121,12 +121,7 @@ impl Node {
         // same dual-mode rule as `sync_engine::spawn`: on a runtime it becomes
         // a task; without one (plain `#[test]` threads) it runs on a dedicated
         // thread with its own current-thread runtime.
-        spawn_mining_worker(
-            mining_rx,
-            peers.clone(),
-            address.clone(),
-            network_id,
-        );
+        spawn_mining_worker(mining_rx, peers.clone(), address.clone(), network_id);
         node
     }
 
@@ -244,11 +239,7 @@ impl Node {
 
     /// Start the P2P server (ADR-0011: async accept loop + per-connection
     /// tokio tasks; replaces the legacy thread-per-connection model).
-    pub async fn start_server(
-        &mut self,
-        port: u16,
-        sync_tx: UnboundedSender<ChainSnapshot>,
-    ) {
+    pub async fn start_server(&mut self, port: u16, sync_tx: UnboundedSender<ChainSnapshot>) {
         let start_time = SystemTime::now();
         // ADR-0010: the engine spawned here is the only adopter of incoming
         // data; the handlers below only enqueue into its inbox.
@@ -282,11 +273,10 @@ impl Node {
                 // Accept with a tick-bounded timeout so the shutdown flag is
                 // observed even when no connection arrives (the legacy
                 // listener.incoming() only woke on a connection).
-                let accepted =
-                    match tokio::time::timeout(SYNC_TICK, listener.accept()).await {
-                        Ok(result) => result,
-                        Err(_) => continue,
-                    };
+                let accepted = match tokio::time::timeout(SYNC_TICK, listener.accept()).await {
+                    Ok(result) => result,
+                    Err(_) => continue,
+                };
                 match accepted {
                     Ok((stream, peer_addr)) => {
                         let blockchain = Arc::clone(&blockchain);
@@ -702,8 +692,7 @@ async fn handle_connection(
             Some(&proto::MSG_GET_BLOCKS) => {
                 let payload = match proto::parse_get_blocks(&request_bytes) {
                     Ok(hashes) => {
-                        let blocks =
-                            blockchain.blocks_by_hashes(&hashes, proto::MAX_BLOCKS_BATCH);
+                        let blocks = blockchain.blocks_by_hashes(&hashes, proto::MAX_BLOCKS_BATCH);
                         proto::encode_blocks(&blocks).map_err(|e| {
                             warn!(error = %e, "Не удалось закодировать блоки");
                         })
@@ -911,10 +900,7 @@ async fn mining_worker_loop(
         if let Some(block) = &result {
             successful_mining += 1;
             info!(mining_count, ?block, "Майнинг успешен, блок добавлен");
-            let _ = status_tx.send(format!(
-                "Транзакция отправлена, блок добавлен: {:?}",
-                block
-            ));
+            let _ = status_tx.send(format!("Транзакция отправлена, блок добавлен: {:?}", block));
             let mut sync_node = Node {
                 blockchain: blockchain.clone(),
                 peers: peers.clone(),
@@ -957,7 +943,11 @@ async fn mining_worker_loop(
                             MiningStatus::Failed("Майнинг не удался: нет транзакций или превышен лимит итераций/таймаут".to_string())
                         }
                     };
-                    debug!(mining_count, ?mining_status_guard, "Статус майнинга обновлён");
+                    debug!(
+                        mining_count,
+                        ?mining_status_guard,
+                        "Статус майнинга обновлён"
+                    );
                     StatusUpdate::Updated
                 }
                 Err(_) => StatusUpdate::Busy,
@@ -1347,10 +1337,7 @@ pub mod test_support {
 
     /// Test blockchain on `network_id` (BUG-S1-004): regtest by default;
     /// mainnet/testnet modes exercise the configured chain's rules.
-    pub fn create_test_blockchain_for_network(
-        db_path: &Path,
-        network_id: u32,
-    ) -> BlockchainFacade {
+    pub fn create_test_blockchain_for_network(db_path: &Path, network_id: u32) -> BlockchainFacade {
         fs::create_dir_all(db_path).expect("Failed to create test DB directory");
         let storage = crate::storage::Storage::new(db_path).expect("Failed to open test DB");
         let mut bc = Blockchain {

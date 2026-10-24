@@ -63,7 +63,11 @@ pub enum StrangecoinError {
     #[error("invalid HELLO message")]
     InvalidHelloMessage,
     #[error("foreign network: peer {peer} has network_id {got}, expected {expected}")]
-    ForeignNetworkId { peer: String, expected: u32, got: u32 },
+    ForeignNetworkId {
+        peer: String,
+        expected: u32,
+        got: u32,
+    },
     #[error("genesis network_id {network_id} does not match chain_id {chain_id}")]
     GenesisNetworkMismatch { network_id: u32, chain_id: u32 },
     #[error("rbf feerate too low: need >= {needed}, got {got}")]
@@ -127,11 +131,9 @@ impl From<strangecoin_core::CoreError> for StrangecoinError {
             strangecoin_core::CoreError::WitnessVerificationFailed => {
                 StrangecoinError::ConfigError("witness verification failed".to_string())
             }
-            strangecoin_core::CoreError::ProofAccountMismatch => {
-                StrangecoinError::ConfigError(
-                    "proof account mismatch: claimed account not found in trie state".to_string(),
-                )
-            }
+            strangecoin_core::CoreError::ProofAccountMismatch => StrangecoinError::ConfigError(
+                "proof account mismatch: claimed account not found in trie state".to_string(),
+            ),
             strangecoin_core::CoreError::InvalidAddressChecksum => {
                 StrangecoinError::ConfigError("invalid address checksum".to_string())
             }

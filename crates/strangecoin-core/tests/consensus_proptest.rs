@@ -4,10 +4,10 @@ use strangecoin_core::consensus::{
     compute_target, u256_div, u256_from_bytes, u256_from_u64, u256_le, u256_mul, u256_mul_sat,
     validate_nonce, CHAIN_ID_REGTEST, MAX_TARGET_CHANGE_FACTOR, RETARGET_INTERVAL,
 };
-use strangecoin_core::error::CoreError;
 use strangecoin_core::economics::emission::{
     block_reward_at_height_for_chain, HALVING_INTERVAL, INITIAL_REWARD, MAX_SUPPLY_PRE_TAIL,
 };
+use strangecoin_core::error::CoreError;
 use strangecoin_core::serialize;
 use strangecoin_core::types::Block;
 use strangecoin_core::Transaction;

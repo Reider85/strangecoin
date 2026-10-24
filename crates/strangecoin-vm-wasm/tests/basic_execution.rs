@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use strangecoin_core::abi::{AbiEntry, ContractAbi};
 use strangecoin_core::types::{AccountState, BlockHeader};
-use strangecoin_core::vm::{BlockContext, ExecutionContext, Opcode, TxStatus, VmExecutor, VmError};
+use strangecoin_core::vm::{BlockContext, ExecutionContext, Opcode, TxStatus, VmError, VmExecutor};
 use strangecoin_vm_wasm::{WasmiError, WasmiExecutor};
 
 const RETURN_42_WAT: &str = r#"(module (func (export "main") (result i32) i32.const 42))"#;
@@ -265,7 +265,10 @@ fn input_read_exposes_calldata_to_legacy_main() {
 fn selector_dispatch_calls_zero_arg_export_with_input_read() {
     let mut executor = WasmiExecutor::new();
     executor.insert_code("sc1contract", INPUT_READ_WAT.as_bytes().to_vec());
-    executor.insert_abi("sc1contract", ContractAbi::new(vec![abi_entry("readcalldata")]));
+    executor.insert_abi(
+        "sc1contract",
+        ContractAbi::new(vec![abi_entry("readcalldata")]),
+    );
     let mut input = AbiEntry::selector_from_name("readcalldata").to_vec();
     input.extend_from_slice(&[0xaa; 4]);
     let ctx = execution_context_with_input("sc1contract", 100_000, input.clone());

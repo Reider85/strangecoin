@@ -15,7 +15,7 @@
 //! dependency-free, no panics. The gas schedule (linear in result bytes)
 //! bounds the work well before performance matters.
 
-use super::{PrecompileError, PrecompileOutput, modexp_gas};
+use super::{modexp_gas, PrecompileError, PrecompileOutput};
 
 /// Length of the three big-endian size headers.
 pub const HEADER_LEN: usize = 96;

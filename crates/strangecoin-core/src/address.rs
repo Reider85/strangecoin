@@ -1,7 +1,7 @@
-use bech32::{Hrp, encode, decode, Bech32m};
-use secp256k1::PublicKey;
-use crate::error::CoreError;
 use crate::consensus;
+use crate::error::CoreError;
+use bech32::{decode, encode, Bech32m, Hrp};
+use secp256k1::PublicKey;
 
 pub fn hrp_for_network(network_id: u32) -> Result<&'static str, CoreError> {
     match network_id {
@@ -17,33 +17,35 @@ pub fn encode_address(pk: &PublicKey, network_id: u32) -> Result<String, CoreErr
     let hrp = Hrp::parse(hrp).map_err(|_| CoreError::InvalidAddressFormat {
         reason: format!("Invalid HRP: {}", hrp),
     })?;
-    
+
     let pk_bytes = pk.serialize();
     let data = pk_bytes.as_slice();
     let encoded = encode::<Bech32m>(hrp, data)?;
-    
+
     Ok(encoded)
 }
 
 pub fn decode_address(s: &str) -> Result<(PublicKey, u32), CoreError> {
     let (hrp, data) = decode(s).map_err(|_| CoreError::InvalidAddressChecksum)?;
     let hrp_str = hrp.as_str();
-    
+
     let network_id = match hrp_str {
         "sc" => consensus::CHAIN_ID_MAINNET,
         "tsc" => consensus::CHAIN_ID_TESTNET,
         "rsc" => consensus::CHAIN_ID_REGTEST,
-        _ => return Err(CoreError::UnknownAddressHrp {
-            hrp: hrp_str.to_string(),
-        }),
+        _ => {
+            return Err(CoreError::UnknownAddressHrp {
+                hrp: hrp_str.to_string(),
+            })
+        }
     };
-    
+
     let bytes = data;
-    
+
     let pk = PublicKey::from_slice(&bytes).map_err(|e| CoreError::InvalidAddressFormat {
         reason: format!("Invalid public key: {}", e),
     })?;
-    
+
     Ok((pk, network_id))
 }
 
@@ -73,14 +75,17 @@ pub fn derive_contract_address(
 /// Reserved precompile addresses `0x01..=0x07` (ADR-0015). `create` must never
 /// deploy into this range; full precompile dispatch lands in S1.5-P11.
 pub fn is_precompile_address(addr: &str) -> bool {
-    matches!(addr, "0x01" | "0x02" | "0x03" | "0x04" | "0x05" | "0x06" | "0x07")
+    matches!(
+        addr,
+        "0x01" | "0x02" | "0x03" | "0x04" | "0x05" | "0x06" | "0x07"
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use secp256k1::{Secp256k1, SecretKey};
     use rand::RngCore;
+    use secp256k1::{Secp256k1, SecretKey};
 
     #[test]
     fn test_round_trip() {
@@ -89,11 +94,11 @@ mod tests {
         rand::thread_rng().fill_bytes(&mut sk_bytes);
         let sk = SecretKey::from_slice(&sk_bytes).unwrap();
         let pk = PublicKey::from_secret_key(&secp, &sk);
-        
+
         for network_id in [1, 2, 3] {
             let encoded = encode_address(&pk, network_id).unwrap();
             let (decoded_pk, decoded_net) = decode_address(&encoded).unwrap();
-            
+
             assert_eq!(decoded_pk, pk);
             assert_eq!(decoded_net, network_id);
         }
@@ -102,7 +107,10 @@ mod tests {
     #[test]
     fn test_checksum_error() {
         let bad_address = "sc1invalidaddress12345";
-        assert!(matches!(decode_address(bad_address), Err(CoreError::InvalidAddressChecksum)));
+        assert!(matches!(
+            decode_address(bad_address),
+            Err(CoreError::InvalidAddressChecksum)
+        ));
     }
 
     #[test]
@@ -112,15 +120,18 @@ mod tests {
         rand::thread_rng().fill_bytes(&mut sk_bytes);
         let sk = SecretKey::from_slice(&sk_bytes).unwrap();
         let pk = PublicKey::from_secret_key(&secp, &sk);
-        
+
         // Valid HRP
         assert!(encode_address(&pk, 1).is_ok());
         assert!(encode_address(&pk, 2).is_ok());
         assert!(encode_address(&pk, 3).is_ok());
-        
+
         // Invalid network ID
-        assert!(matches!(encode_address(&pk, 99), Err(CoreError::UnknownNetworkId { network_id: 99 })));
-        
+        assert!(matches!(
+            encode_address(&pk, 99),
+            Err(CoreError::UnknownNetworkId { network_id: 99 })
+        ));
+
         // Invalid HRP in decode - use a valid bech32 string with unknown HRP
         // We need to encode a proper bech32 string with an unknown HRP to test UnknownAddressHrp
         let _unknown_hrp_address = "unknown1address";
@@ -140,14 +151,14 @@ mod tests {
         rand::thread_rng().fill_bytes(&mut sk_bytes);
         let sk = SecretKey::from_slice(&sk_bytes).unwrap();
         let pk = PublicKey::from_secret_key(&secp, &sk);
-        
+
         // Test that encode produces addresses with correct HRP
         let mainnet_addr = encode_address(&pk, 1).unwrap();
         assert!(mainnet_addr.starts_with("sc1"));
-        
+
         let testnet_addr = encode_address(&pk, 2).unwrap();
         assert!(testnet_addr.starts_with("tsc1"));
-        
+
         let regtest_addr = encode_address(&pk, 3).unwrap();
         assert!(regtest_addr.starts_with("rsc1"));
     }

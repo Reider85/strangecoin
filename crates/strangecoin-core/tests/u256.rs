@@ -53,8 +53,14 @@ fn from_u64_agrees_with_from_bytes() {
 fn mul_of_small_scalars_does_not_overflow() {
     // With BE-limb converters from_u64(3) landed in words[3] = 3 * 2^192 and
     // the product 12 * 2^384 truncated to zero — retarget never scaled.
-    assert_eq!(u256_mul(u256_from_u64(3), u256_from_u64(4)), u256_from_u64(12));
-    assert_eq!(u256_mul(u256_from_u64(0), u256_from_u64(4)), u256_from_u64(0));
+    assert_eq!(
+        u256_mul(u256_from_u64(3), u256_from_u64(4)),
+        u256_from_u64(12)
+    );
+    assert_eq!(
+        u256_mul(u256_from_u64(0), u256_from_u64(4)),
+        u256_from_u64(0)
+    );
 }
 
 #[test]

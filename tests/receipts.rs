@@ -97,9 +97,7 @@ fn receipts_are_replaced_not_accumulated() {
         "tip receipts belong to the tip block only, got {}",
         grant_receipts.len()
     );
-    assert!(grant_receipts
-        .iter()
-        .all(|r| r.block_height == 1));
+    assert!(grant_receipts.iter().all(|r| r.block_height == 1));
     assert_ne!(
         genesis_receipts.len(),
         grant_receipts.len(),
@@ -174,8 +172,7 @@ fn genesis_zero_receipts_root_is_tolerated_but_mined_blocks_commit() {
     let genesis = bc.tip().expect("genesis must exist");
     assert_eq!(genesis.index, 0);
     assert_eq!(
-        genesis.receipts_root,
-        [0u8; 32],
+        genesis.receipts_root, [0u8; 32],
         "genesis header keeps the zero receipts root"
     );
 
@@ -185,8 +182,7 @@ fn genesis_zero_receipts_root_is_tolerated_but_mined_blocks_commit() {
     let grant = bc.tip().expect("grant block must exist");
     assert_eq!(grant.index, 1);
     assert_ne!(
-        grant.receipts_root,
-        [0u8; 32],
+        grant.receipts_root, [0u8; 32],
         "grant block must commit to its receipts root"
     );
 }

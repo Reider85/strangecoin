@@ -11,7 +11,7 @@
 use wasmi::{Caller, Linker};
 
 use crate::gas::HostCallWeight;
-use crate::host::{charge, checked_u32, abi, HostState};
+use crate::host::{abi, charge, checked_u32, HostState};
 
 pub fn register(linker: &mut Linker<HostState>) -> Result<(), wasmi::Error> {
     linker

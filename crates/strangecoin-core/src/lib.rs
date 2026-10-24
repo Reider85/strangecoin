@@ -25,6 +25,6 @@ pub use types::{
     EoaAccount, Transaction, TransferTx,
 };
 pub use vm::{
-    BlockContext, ExecutionResult, ExecutionContext, GasCounter, Log, Opcode, Receipt, TxStatus,
+    BlockContext, ExecutionContext, ExecutionResult, GasCounter, Log, Opcode, Receipt, TxStatus,
     ValueTransfer, VmError, VmExecutor,
 };

@@ -86,14 +86,7 @@ fn three_txids_odd_duplication() {
 #[test]
 fn seven_txids_multi_level() {
     let txs: Vec<Transaction> = (0..7)
-        .map(|i| {
-            make_tx(
-                "sender",
-                &format!("recv_{}", i),
-                (i + 1) * 100,
-                i + 1,
-            )
-        })
+        .map(|i| make_tx("sender", &format!("recv_{}", i), (i + 1) * 100, i + 1))
         .collect();
     let ids: Vec<[u8; 32]> = txs.iter().map(txid).collect();
 

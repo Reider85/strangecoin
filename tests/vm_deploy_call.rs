@@ -46,14 +46,7 @@ fn deploy_call_event_receipt_storage_end_to_end() {
     // --- Block 1: deploy (CreateTx) ------------------------------------
     let init_code = storage_log_ret42_wat().into_bytes();
     let create = sign(
-        Transaction::create(
-            &alice,
-            init_code.clone(),
-            vec![],
-            100,
-            0,
-            CHAIN_ID_REGTEST,
-        ),
+        Transaction::create(&alice, init_code.clone(), vec![], 100, 0, CHAIN_ID_REGTEST),
         &alice_sk,
     );
     let contract = derive(&alice, 0);
@@ -63,7 +56,10 @@ fn deploy_call_event_receipt_storage_end_to_end() {
     codes.insert(contract.clone(), init_code.clone());
 
     let account = state.get_account(&contract).expect("contract account");
-    assert!(account.is_contract(), "Create must install a contract account");
+    assert!(
+        account.is_contract(),
+        "Create must install a contract account"
+    );
     let contract_acc = account.as_contract().unwrap();
     assert_eq!(
         contract_acc.code_hash,
@@ -83,15 +79,7 @@ fn deploy_call_event_receipt_storage_end_to_end() {
     // --- Block 2: call (CallTx) — event + storage + return value --------
     let root_before_call = compute_state_root(&state.balances);
     let call = sign(
-        Transaction::call(
-            &alice,
-            &contract,
-            vec![],
-            10,
-            200_000,
-            1,
-            CHAIN_ID_REGTEST,
-        ),
+        Transaction::call(&alice, &contract, vec![], 10, 200_000, 1, CHAIN_ID_REGTEST),
         &alice_sk,
     );
     let call_block = child_block(chain.last().unwrap(), vec![call.clone()]);
@@ -124,8 +112,7 @@ fn deploy_call_event_receipt_storage_end_to_end() {
     // block header commits to the new global state root.
     let contract_acc = account.as_contract().unwrap();
     assert_ne!(
-        contract_acc.storage_root,
-        [0u8; 32],
+        contract_acc.storage_root, [0u8; 32],
         "storage_root must reflect the flushed overlay"
     );
     let stored = state
@@ -155,7 +142,10 @@ fn deploy_call_event_receipt_storage_end_to_end() {
     let wasm = String::from_utf8(init_code.clone()).expect("wat is utf-8");
     let vm = strangecoin_vm_wasm::WasmiExecutor::new();
     let result = vm
-        .execute_wasm(wasm.as_bytes(), &execution_context(&contract, vec![], 200_000))
+        .execute_wasm(
+            wasm.as_bytes(),
+            &execution_context(&contract, vec![], 200_000),
+        )
         .expect("deployed module must run");
     assert_eq!(result.status, TxStatus::Success);
     assert_eq!(
@@ -223,11 +213,7 @@ fn deploy_constructor_initializes_storage_then_call_reads_it() {
         .cloned()
         .expect("constructor storage must persist through the full pipeline");
     assert_eq!(stored, b"init");
-    let contract_acc = state
-        .get_account(&contract)
-        .unwrap()
-        .as_contract()
-        .unwrap();
+    let contract_acc = state.get_account(&contract).unwrap().as_contract().unwrap();
     assert_ne!(contract_acc.storage_root, [0u8; 32]);
     assert_eq!(contract_acc.balance, 100, "endowment moved on Success");
     assert_eq!(state.get_balance(&alice), 9_900);
