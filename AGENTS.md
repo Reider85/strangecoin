@@ -1,6 +1,6 @@
 # AGENTS.md — Strangecoin Developer Guide
 
-> **NOTE — Stage 2 in progress.** Этот файл ведётся инкрементально по правилу FBP10 из retro §8.1 (`prompt-stage2.md` §6.5): Stage 2 секции добавляются только в тех же коммитах, где уже существуют соответствующие артефакты (см. §Forbidden Updates). Секции §Active Stage, §Stage 2 Dependency Map, §Stage 2 Pin Policy, §Stage 2 Determinism Checklist, §Stage 2 Pitfalls **активны** (артефакты S2-P01..S2-P05 существуют: ADR-0020..0023 + `crates/strangecoin-net/` scaffolding).
+> **NOTE — Stage 2 in progress.** Этот файл ведётся инкрементально по правилу FBP10 из retro §8.1 (`prompt-stage2.md` §6.5): Stage 2 секции добавляются только в тех же коммитах, где уже существуют соответствующие артефакты (см. §Forbidden Updates). Секции §Active Stage, §Stage 2 Dependency Map, §Stage 2 Pin Policy, §Stage 2 Determinism Checklist, §Stage 2 Pitfalls **активны** (артефакты S2-P01..S2-P06 существуют: ADR-0020..0023 + `crates/strangecoin-net/` scaffolding + миграция network-модулей).
 
 ## Project Overview
 
@@ -16,13 +16,13 @@ Strangecoin — Rust cryptocurrency (**v1.5.0**, edition 2021): PoW blockchain �
 
 **Status**: in progress (precondition verified — tag `v1.5.0-stage1.5` confirmed on origin commit `1f133c7`; `bugfixes-stage1.5.md` v1.2 verified 11/11 fixed, см. `prompt-stage2.md` §0.1).
 
-**Next prompt**: S2-P06 (миграция `src/network/*` → `crates/strangecoin-net/`, strangler pattern) — гейты открыты (tag gate + ADR-0020..0023 + scaffolding выполнены).
+**Next prompt**: S2-P07 (Noise handshake XX pattern, snow crate). После S2-P06 открыты параллельные треки: Noise S2-P07..S2-P09, Peer S2-P10..S2-P12, Cleanup S2-P18∥S2-P19, Shadow S2-P20 (гейт №3 S2-P05+S2-P06 закрыт).
 
-**Prompts done**: 5 / 24 (S2-P01..S2-P05).
+**Prompts done**: 6 / 24 (S2-P01..S2-P06).
 
 **Track status** (см. §Stage 2 Dependency Map ниже для деталей):
 - [x] ADRs track: S2-P01 (ADR-0020) / S2-P02 (ADR-0021) / S2-P03 (ADR-0022) / S2-P04 (ADR-0023) — done
-- [x] Crate track: S2-P05 (scaffolding `crates/strangecoin-net/` + workspace member + feature `net` default-on) — done; → S2-P06 (migration) next
+- [x] Crate track: S2-P05 (scaffolding `crates/strangecoin-net/` + workspace member + feature `net` default-on) / S2-P06 (migration `src/network/*` → strangecoin-net + re-export shim + `BlockchainView`/`EventSink` cycle break) — done
 - [ ] Noise track: S2-P07 (handshake) → S2-P08 (transport) → S2-P09 (Ed25519 auth) — последовательно
 - [ ] Peer track: S2-P10 (HELLO) → S2-P11 (discovery) → S2-P12 (peer mgmt) — последовательно
 - [ ] Gossip track: S2-P13 (INV) → S2-P14 (compact blocks) → S2-P15 (Erlay) — последовательно
@@ -231,27 +231,28 @@ crates/strangecoin-vm-wasm/src/  # wasmi runtime (feature vm-wasm, default-on)
 ├── host/             # 13 host functions: crypto/ storage/ calls/ context/ logs/
 └── precompiles/      # 0x01..0x07 (bls_aggregate NotImplemented until Stage 7)
 
-# EXISTING skeleton (S2-P05 created: lib.rs, error.rs, 9 stub modules, tests/, README;
-# populated by S2-P06 + S2-P07..S2-P20):
+# EXISTING crate (S2-P05 создал scaffolding; S2-P06 мигрировал
+# protocol/rate_limiter/sync/sync_engine; S2-P07..S2-P20 наполняют stubs):
 crates/strangecoin-net/src/      # network runtime (feature net, default-on после S2-P05)
-├── lib.rs            # pub mod declarations + NetError re-export (S2-P05); NetworkHandle/NetworkConfig — later
+├── lib.rs            # pub mod declarations + NetError/BlockchainView re-export; NetworkHandle/NetworkConfig — later
 ├── error.rs          # NetError: Handshake/Transport/Peer/Protocol/RateLimit + From<io::Error> (snow From в S2-P07)
-├── protocol.rs       # stub → Message enum + framing (migrated S2-P06; encrypt_frame/decrypt_frame after S2-P08)
+├── blockchain_view.rs # trait BlockchainView (S2-P06: разрыв цикла network↔blockchain)
+├── protocol.rs       # framing + wire codecs (migrated S2-P06; encrypt_frame/decrypt_frame after S2-P08)
 ├── protocol/hello.rs # HELLO message + capabilities negotiation (S2-P10)
 ├── noise.rs          # stub → handshake (S2-P07), transport (S2-P08), auth (S2-P09)
 ├── discovery.rs      # stub → seeds.rs, dnssec.rs, addr_gossip.rs (S2-P11)
 ├── peer.rs           # stub → store.rs, manager.rs, pool.rs (S2-P12), scoring.rs (S2-P17)
 ├── gossip.rs         # stub → inv.rs, get_data.rs, broadcast.rs (S2-P13), compact_blocks.rs (S2-P14), erlay/ (S2-P15)
-├── rate_limiter.rs   # stub → migrated S2-P06, rewrite: token bucket + per-message caps (S2-P16)
-├── sync.rs           # stub → migrated from src/network/sync.rs (S2-P06)
-├── sync_engine.rs    # stub → migrated from src/network/sync_engine.rs (S2-P06)
+├── rate_limiter.rs   # migrated S2-P06 (sliding window), rewrite: token bucket + per-message caps (S2-P16)
+├── sync.rs           # headers-first sync (migrated S2-P06)
+├── sync_engine.rs    # sync engine + trait EventSink (migrated S2-P06)
 └── shadow.rs         # stub → replay.rs, compare.rs (S2-P20, optional)
 
 src/                  # node monolith (orchestrator)
-├── lib.rs            # Node, mining, P2P orchestration (imports strangecoin-net after S2-P06)
-├── blockchain/       # facade, block_executor (gas-limit enforcement), state_cache, chain_selector, consensus_manager
-├── network/          # mod.rs (5-line re-export shim после S2-P06); остальные файлы migrируют в strangecoin-net
-├── events.rs         # EventBus (crossbeam)
+├── lib.rs            # Node, mining, P2P orchestration (network-импорты идут через network shim → strangecoin-net)
+├── blockchain/       # facade, block_executor (gas-limit enforcement), state_cache, chain_selector, consensus_manager; impl BlockchainView for BlockchainFacade (S2-P06)
+├── network/          # mod.rs — re-export shim на strangecoin_net::{protocol, rate_limiter, sync, sync_engine} (S2-P06; других файлов больше нет)
+├── events.rs         # EventBus (crossbeam) + impl EventSink для SyncEngine (S2-P06)
 ├── mempool/          # RBF-capable mempool
 ├── wallet.rs         # secp256k1 keystore (PBKDF2+AES-GCM) + Ed25519 long-term node keypair (S2-P09)
 ├── config.rs         # allow_grant_blocks flag, TOML config
@@ -415,7 +416,7 @@ src/                  # node monolith (orchestrator)
 | **FORTHCOMING**: `docs/stage2/{INVARIANTS_ENFORCED,THREAT_MODEL_STAGE2,RESIDUAL_RISKS_STAGE3_PLUS}.md` | S2-P23 |
 | `crates/strangecoin-vm-wasm/src/lib.rs` | WasmiExecutor (runtime entry point) |
 | `crates/strangecoin-core/src/abi/` | JSON ABI codec (encode/decode/selector) |
-| `crates/strangecoin-net/src/lib.rs` | Network crate skeleton (S2-P05) — entry point, populate в S2-P06..S2-P20 |
+| `crates/strangecoin-net/src/lib.rs` | Network crate entry point (S2-P05 scaffolding; S2-P06 мигрировал protocol/rate_limiter/sync/sync_engine) |
 | `genesis.json` | Genesis block definition |
 
 ---
@@ -437,6 +438,9 @@ src/                  # node monolith (orchestrator)
 - **snow `HandshakeState` → `TransportState`**: переход не thread-safe — см. §Stage 2 Pitfalls
 - **minisketch-rs C++ bindings**: Windows требует MSBuild; локально — stub impl (см. §Stage 2 Pitfalls)
 - **Ed25519 vs secp256k1**: P2P использует Ed25519, wallet — secp256k1. Keystore segregates `keystore/node/` vs `keystore/wallet/` (см. §Stage 2 Pitfalls)
+- **Network errors — `NetError`, не `StrangecoinError` (S2-P06)**: мигрированные `protocol`/`rate_limiter`/`sync` возвращают `NetError`; маппинг: `SizeLimitExceeded`→`Protocol`, `IoError`→`Transport`, `InvalidHelloMessage`→`Protocol`, `PeerBanned`→`RateLimit`, `InvalidBlock`→`Protocol`. Побочный эффект: префикс категории в лог-строке («size limit exceeded: X» → «protocol error: size limit exceeded: X») — ни один тест на это не ассертит
+- **Shim `src/network/mod.rs`**: формула из спеки промпта `pub use strangecoin_net::{mod::*, …}` невалидна (`mod` — keyword); рабочая форма `pub use strangecoin_net::{protocol, rate_limiter, sync, sync_engine}` + item-re-export `RateLimiter`/`MessageClass`. `src/network/` больше не содержит файлов кроме `mod.rs`
+- **`Arc::clone(&x)` не коэрсится в `Arc<dyn Trait>`** (вложенная coercion через `&Arc<T>` не проходит): в позиции аргумента передавайте `x.clone()` — unsized coercion применяется к owned value (см. `sync_engine::spawn` в `src/lib.rs`)
 
 ---
 

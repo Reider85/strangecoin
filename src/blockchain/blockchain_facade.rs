@@ -467,3 +467,67 @@ impl BlockchainFacade {
 }
 
 const BLOCKCHAIN_LOCK: &str = "blockchain lock poisoned";
+
+// ------------------------------------------- network view (S2-P06)
+//
+// Cycle break (ARCHITECT3 §17): `strangecoin-net` must not depend on the
+// monolith, so the SyncEngine talks to `strangecoin_net::BlockchainView`
+// instead of this concrete facade
+// (crates/strangecoin-net/src/blockchain_view.rs). Inherent methods win
+// over trait methods in resolution, so `self.foo()` below delegates to the
+// inherent impl of the same name.
+
+#[cfg(feature = "net")]
+impl strangecoin_net::BlockchainView for BlockchainFacade {
+    fn tip_hash(&self) -> String {
+        self.tip_hash()
+    }
+
+    fn chain_len(&self) -> usize {
+        self.chain_len()
+    }
+
+    fn adopt_candidate(
+        &self,
+        candidate_chain: Vec<Block>,
+        candidate_balances: Option<HashMap<String, AccountState>>,
+        candidate_mempool_txs: Vec<Transaction>,
+        candidate_difficulty: u32,
+    ) -> Result<bool, String> {
+        self.adopt_candidate(
+            candidate_chain,
+            candidate_balances,
+            candidate_mempool_txs,
+            candidate_difficulty,
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    fn apply_tx(&self, transaction: Transaction) -> Result<(), String> {
+        self.apply_tx(transaction).map_err(|e| e.to_string())
+    }
+
+    fn add_block(&self, block: Block) -> Result<(), String> {
+        self.add_block(block).map_err(|e| e.to_string())
+    }
+
+    fn chain_contains_tx(&self, tx: &Transaction) -> bool {
+        self.chain_contains_tx(tx)
+    }
+
+    fn mempool_contains(&self, txid: &[u8; 32]) -> bool {
+        self.mempool_contains(txid)
+    }
+
+    fn save_state(&self) {
+        self.save_state();
+    }
+
+    fn chain_contains_block(&self, block_hash: &str) -> bool {
+        self.with_inner(|bc| bc.chain.iter().any(|b| b.hash == block_hash))
+    }
+
+    fn snapshot_wire(&self) -> ChainSnapshot {
+        self.snapshot_wire()
+    }
+}

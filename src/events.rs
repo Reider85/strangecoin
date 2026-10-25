@@ -102,6 +102,32 @@ impl Default for EventBus {
     }
 }
 
+/// S2-P06 (cycle break): the SyncEngine lives in `strangecoin-net` and
+/// publishes through `EventSink`; this bridges those calls onto the node's
+/// concrete `NodeEvent` stream.
+#[cfg(feature = "net")]
+impl strangecoin_net::sync_engine::EventSink for EventBus {
+    fn block_applied(&self, height: u64, hash: String) {
+        self.publish(NodeEvent::BlockApplied { height, hash });
+    }
+
+    fn block_reorged(&self, old_tip: String, new_tip: String) {
+        self.publish(NodeEvent::BlockReorged { old_tip, new_tip });
+    }
+
+    fn tx_accepted(&self, txid: String) {
+        self.publish(NodeEvent::TxAccepted { txid });
+    }
+
+    fn tx_rejected(&self, txid: String, reason: String) {
+        self.publish(NodeEvent::TxRejected { txid, reason });
+    }
+
+    fn state_persisted(&self, height: u64) {
+        self.publish(NodeEvent::StatePersisted { height });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

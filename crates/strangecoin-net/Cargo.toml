@@ -7,7 +7,7 @@ description = "Strangecoin network crate: P2P protocol, Noise transport, gossip,
 [dependencies]
 # See docs/ADR/0020-noise-protocol-framework.md (Noise), 0021-erlay-integration.md (Erlay), 0022-peer-scoring-algorithm.md (scoring), 0023-rate-limiting-strategy.md (rate limit)
 strangecoin-core = { path = "../strangecoin-core", version = "1.5.0" }
-tokio = { version = "1", features = ["rt", "net", "sync", "time", "macros"] }
+tokio = { version = "1", features = ["rt", "net", "sync", "time", "macros", "io-util"] }
 tracing = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 blake3 = "1"

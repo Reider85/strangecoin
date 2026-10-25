@@ -67,7 +67,7 @@ fn concurrent_candidates_race_through_one_engine() {
     // Subscribe before spawning the engine so no event can be missed.
     let events = main.event_bus().subscribe();
     let inbox = sync_engine::spawn(
-        Arc::clone(&main),
+        main.clone(),
         main.event_bus(),
         sync_tx,
         Arc::clone(&shutdown),

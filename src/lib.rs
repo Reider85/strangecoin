@@ -245,8 +245,12 @@ impl Node {
         // data; the handlers below only enqueue into its inbox.
         if self.inbox.is_none() {
             self.inbox = Some(crate::network::sync_engine::spawn(
-                Arc::clone(&self.blockchain),
-                Arc::clone(&self.event_bus),
+                // Plain `clone()` (not `Arc::clone(&…)`): the spawn signature
+                // takes `Arc<dyn BlockchainView>` / `Arc<dyn EventSink>`, and
+                // the unsized coercion happens on the owned value at the
+                // argument position, not through the `&Arc<T>` reference.
+                self.blockchain.clone(),
+                self.event_bus.clone(),
                 sync_tx.clone(),
                 Arc::clone(&self.shutdown),
                 Arc::clone(&self.rate_limiter),
