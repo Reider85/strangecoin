@@ -35,6 +35,14 @@ impl From<std::io::Error> for NetError {
     }
 }
 
-// TODO(S2-P07): `impl From<snow::Error> for NetError` — added together with
-// the `snow` dependency (ADR-0020); S2-P05 scaffolding must not pull snow
-// in yet.
+impl From<crate::noise::NoiseError> for NetError {
+    fn from(err: crate::noise::NoiseError) -> Self {
+        NetError::Handshake(err.to_string())
+    }
+}
+
+impl From<snow::Error> for NetError {
+    fn from(err: snow::Error) -> Self {
+        NetError::Handshake(err.to_string())
+    }
+}
