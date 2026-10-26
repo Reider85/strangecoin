@@ -16,15 +16,15 @@ Strangecoin — Rust cryptocurrency (**v1.5.0**, edition 2021): PoW blockchain �
 
 **Status**: in progress (precondition verified — tag `v1.5.0-stage1.5` confirmed on origin commit `1f133c7`; `bugfixes-stage1.5.md` v1.2 verified 11/11 fixed, см. `prompt-stage2.md` §0.1).
 
-**Next prompt**: S2-P10 (HELLO + capabilities negotiation, `protocol/hello.rs`). Открыты параллельные треки: Peer S2-P10..S2-P12, Gossip S2-P13.., Cleanup S2-P18∥S2-P19, Shadow S2-P20 (Noise-трек S2-P07..S2-P09 закрыт).
+**Next prompt**: S2-P11 (peer discovery: seed IPs + DNSSEC + ADDR gossip, `discovery/{mod,seeds,dnssec,addr_gossip}.rs`). Открыты параллельные треки: Peer S2-P11..S2-P12, Gossip S2-P13.., Cleanup S2-P18∥S2-P19, Shadow S2-P20 (Noise-трек S2-P07..S2-P09 закрыт).
 
-**Prompts done**: 9 / 24 (S2-P01..S2-P09).
+**Prompts done**: 10 / 24 (S2-P01..S2-P10).
 
 **Track status** (см. §Stage 2 Dependency Map ниже для деталей):
 - [x] ADRs track: S2-P01 (ADR-0020) / S2-P02 (ADR-0021) / S2-P03 (ADR-0022) / S2-P04 (ADR-0023) — done
 - [x] Crate track: S2-P05 (scaffolding `crates/strangecoin-net/` + workspace member + feature `net` default-on) / S2-P06 (migration `src/network/*` → strangecoin-net + re-export shim + `BlockchainView`/`EventSink` cycle break) — done
 - [x] Noise track: S2-P07 (handshake `NoiseHandshake`, XX 3 round trips, `expect_remote_static`) / S2-P08 (transport `NoiseTransport`: encrypt/decrypt, monotonic nonces, `NoiseError::Replay`, rekey; framing `encrypt_frame`/`decrypt_frame`, chunking >65519 B) / S2-P09 (Ed25519 `NodeId` auth: `noise/auth.rs`, auth blob `[pubkey||sig]` в rounds 2/3, `into_transport → (NoiseTransport, NodeId)`, `wallet::load_or_create_node_keypair`, детерминированный ephemeral `noise/ephemeral.rs`) — done
-- [ ] Peer track: S2-P10 (HELLO) → S2-P11 (discovery) → S2-P12 (peer mgmt) — последовательно
+- [ ] Peer track: S2-P10 (HELLO + capabilities negotiation, `protocol/hello.rs`) — done → S2-P11 (discovery) → S2-P12 (peer mgmt) — последовательно
 - [ ] Gossip track: S2-P13 (INV) → S2-P14 (compact blocks) → S2-P15 (Erlay) — последовательно
 - [ ] Limits track: S2-P16 (rate limiting) ∥ S2-P17 (peer scoring) — параллельны после peer
 - [ ] Cleanup track: S2-P18 (deprecated msgs) ∥ S2-P19 (async migration) — параллельны после scaffolding
@@ -247,6 +247,7 @@ crates/strangecoin-net/src/      # network runtime (feature net, default-on по
 ├── blockchain_view.rs # trait BlockchainView (S2-P06: разрыв цикла network↔blockchain)
 ├── protocol.rs       # framing + wire codecs (migrated S2-P06; encrypt_frame/decrypt_frame S2-P08)
 ├── protocol/hello.rs # HELLO message + capabilities negotiation (S2-P10)
+├── protocol/hello.rs # HELLO message + capabilities negotiation (S2-P10)
 ├── noise/mod.rs      # NoiseError (S2-P07, Replay — S2-P08; Auth расширен S2-P09) + pub mod auth/handshake/transport + crate-internal ephemeral
 ├── noise/auth.rs      # NodeId=blake3(pubkey), NodeKeypair (from_keystore/from_seed, sign), verify_node_id — S2-P09
 ├── noise/ephemeral.rs # SeedResolver: HKDF-выведенный детерминированный ephemeral RNG вместо OS CSPRNG (S2-P09, чек-лист #2/#3)
@@ -283,6 +284,7 @@ src/                  # node monolith (orchestrator)
 - **Grant blocks**: only with `allow_grant_blocks=true` (regtest / legacy migration)
 - **wasmi pinned** `=2.0.0`; gas constants hardcoded (ADR-0014/0015) — post-freeze changes via SCIP only
 - **Stage 2 network dependencies pinned** (см. §Stage 2 Pin Policy): `snow`, `ed25519-dalek =2.0`, `minisketch-rs`, `siphasher`, `hickory-resolver` — все через `=`, update via SCIP only
+- **Stage 2 protocol version**: HELLO `MIN_PROTO_VERSION = 2` (`crates/strangecoin-net/src/protocol/hello.rs`, S2-P10; Stage 1.5 = 1) — peers с version < 2 отвергаются; mismatched `network_id` → drop connection (инвариант #10); capabilities = bitfield, negotiation = `local & remote`
 
 **Stage 2 IN-SCOPE** (это Stage 2 work, НЕ anti-goals — устраняет двусмысленность формулировки «Noise/Erlay Stage 2»):
 - Noise Protocol Framework (handshake XX + ChaCha20-Poly1305 transport + Ed25519 auth) — S2-P07..S2-P09

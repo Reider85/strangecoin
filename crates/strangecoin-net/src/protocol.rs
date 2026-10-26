@@ -10,6 +10,10 @@ use strangecoin_core::serialize::{
 use strangecoin_core::types::{Block, BlockHeader};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// Binary HELLO + capabilities negotiation (S2-P10) — sent over the
+/// encrypted framing below, right after the Noise handshake finishes.
+pub mod hello;
+
 /// Framing/parse size violation, folded into the Stage 2 `NetError`
 /// taxonomy (S2-P06 migration): a malformed or over-sized peer message is a
 /// protocol violation. Keeps the legacy `size limit exceeded: {0}` payload
