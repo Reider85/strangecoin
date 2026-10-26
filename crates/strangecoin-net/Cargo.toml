@@ -26,3 +26,17 @@ hkdf = "=0.12.1"
 sha2 = "=0.10.9"
 # Error enum convention matches strangecoin-core / strangecoin-vm-wasm.
 thiserror = "1"
+# network.json parsing (`seed_config` section loader, S2-P11 seeds.rs).
+serde_json = "1"
+# DNSSEC-validated DNS seed resolution (S2-P11, threat V-16). Pinned exact per
+# Stage 2 Pin Policy (AGENTS.md): resolver API churns between minors (0.24 ->
+# 0.26 removed TokioAsyncResolver/ResolveError) and DNSSEC sits on the peer
+# discovery trust path; bumps go through SCIP after mainnet freeze only.
+# `dnssec-ring` (not dnssec-aws-lc-rs): ring builds on windows-gnu with the
+# msys64 preamble, aws-lc-rs would need cmake on the Windows host.
+hickory-resolver = { version = "=0.26.3", features = ["dnssec-ring"] }
+
+[dev-dependencies]
+# `test-util` powers `#[tokio::test(start_paused = true)]` — the simulated
+# clock the S2-P11 bootstrap budget tests run on (30s budget in 0 wall time).
+tokio = { version = "1", features = ["test-util"] }

@@ -39,7 +39,10 @@ pub const AUTH_BLOB_LEN: usize = 96;
 /// node (ARCHITECT3 §3.8). Deliberately *not* the key itself: the handle is
 /// stable, short and safe to log/persist, while the signature still proves
 /// possession of the underlying key on every handshake.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// `Ord` (S2-P11): peer lists are ordered by `node_id` bytes for the Stage 2
+/// determinism checklist #4 — same input set, same order, on every node.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeId(pub(crate) [u8; 32]);
 
 impl NodeId {

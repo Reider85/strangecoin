@@ -1114,8 +1114,23 @@ pub async fn run_async() {
         .unwrap_or(default_peers.clone());
 
     if peers == default_peers {
-        let network_content = serde_json::to_string_pretty(&serde_json::json!({ "peers": peers }))
-            .expect("Ошибка сериализации network.json");
+        // S2-P11: the generated network.json carries the `seed_config`
+        // schema (strangecoin_net::discovery::seeds::SeedConfig) so the
+        // operator has a section to fill in. The write goes through the
+        // already-parsed document: an existing `seed_config` is preserved
+        // instead of being erased by this default path.
+        let mut doc = network_config;
+        doc["peers"] = serde_json::json!(peers);
+        if doc.get("seed_config").is_none() {
+            doc["seed_config"] = serde_json::json!({
+                "hard_coded_ips": [],
+                "dns_seeds": [],
+                "dnssec_required": true,
+                "default_port": 8081
+            });
+        }
+        let network_content =
+            serde_json::to_string_pretty(&doc).expect("Ошибка сериализации network.json");
         fs::write(&network_path, network_content).expect("Ошибка записи в network.json");
     }
 

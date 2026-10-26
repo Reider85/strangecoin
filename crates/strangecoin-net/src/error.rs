@@ -4,8 +4,8 @@ use thiserror::Error;
 ///
 /// Stage 2 taxonomy (S2-P05): handshake failures (Noise, S2-P07..S2-P09),
 /// transport/framing failures, peer-management failures, protocol violations
-/// (malformed or unexpected messages), and rate-limit violations
-/// (ADR-0023, implemented in S2-P16).
+/// (malformed or unexpected messages), rate-limit violations
+/// (ADR-0023, implemented in S2-P16), and discovery failures (S2-P11).
 #[derive(Debug, Error)]
 pub enum NetError {
     /// Noise handshake failed (S2-P07..S2-P09).
@@ -27,6 +27,11 @@ pub enum NetError {
     /// Rate-limit violation (ADR-0023).
     #[error("rate limit exceeded: {0}")]
     RateLimit(String),
+
+    /// Peer discovery failure (S2-P11): seed loading, DNSSEC-validated
+    /// resolution, multi-source bootstrap below threshold.
+    #[error("discovery error: {0}")]
+    Discovery(String),
 }
 
 impl From<std::io::Error> for NetError {

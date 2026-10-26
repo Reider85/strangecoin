@@ -16,15 +16,15 @@ Strangecoin — Rust cryptocurrency (**v1.5.0**, edition 2021): PoW blockchain �
 
 **Status**: in progress (precondition verified — tag `v1.5.0-stage1.5` confirmed on origin commit `1f133c7`; `bugfixes-stage1.5.md` v1.2 verified 11/11 fixed, см. `prompt-stage2.md` §0.1).
 
-**Next prompt**: S2-P11 (peer discovery: seed IPs + DNSSEC + ADDR gossip, `discovery/{mod,seeds,dnssec,addr_gossip}.rs`). Открыты параллельные треки: Peer S2-P11..S2-P12, Gossip S2-P13.., Cleanup S2-P18∥S2-P19, Shadow S2-P20 (Noise-трек S2-P07..S2-P09 закрыт).
+**Next prompt**: S2-P12 (peer_store + peer_manager + connection_pool split, `peer/{mod,store,manager,pool}.rs` + `AddrSender`-интеграция из discovery). Открыты параллельные треки: Peer S2-P12, Gossip S2-P13.., Cleanup S2-P18∥S2-P19, Shadow S2-P20 (Noise-трек S2-P07..S2-P09 закрыт; discovery S2-P11 закрыт).
 
-**Prompts done**: 10 / 24 (S2-P01..S2-P10).
+**Prompts done**: 11 / 24 (S2-P01..S2-P11).
 
 **Track status** (см. §Stage 2 Dependency Map ниже для деталей):
 - [x] ADRs track: S2-P01 (ADR-0020) / S2-P02 (ADR-0021) / S2-P03 (ADR-0022) / S2-P04 (ADR-0023) — done
 - [x] Crate track: S2-P05 (scaffolding `crates/strangecoin-net/` + workspace member + feature `net` default-on) / S2-P06 (migration `src/network/*` → strangecoin-net + re-export shim + `BlockchainView`/`EventSink` cycle break) — done
 - [x] Noise track: S2-P07 (handshake `NoiseHandshake`, XX 3 round trips, `expect_remote_static`) / S2-P08 (transport `NoiseTransport`: encrypt/decrypt, monotonic nonces, `NoiseError::Replay`, rekey; framing `encrypt_frame`/`decrypt_frame`, chunking >65519 B) / S2-P09 (Ed25519 `NodeId` auth: `noise/auth.rs`, auth blob `[pubkey||sig]` в rounds 2/3, `into_transport → (NoiseTransport, NodeId)`, `wallet::load_or_create_node_keypair`, детерминированный ephemeral `noise/ephemeral.rs`) — done
-- [ ] Peer track: S2-P10 (HELLO + capabilities negotiation, `protocol/hello.rs`) — done → S2-P11 (discovery) → S2-P12 (peer mgmt) — последовательно
+- [ ] Peer track: S2-P10 (HELLO + capabilities negotiation, `protocol/hello.rs`) — done → S2-P11 (discovery: `discovery/{mod,seeds,dnssec,addr_gossip}.rs`, `AddrBook`/`AddrSender` + bootstrap) — done → S2-P12 (peer mgmt) — последовательно
 - [ ] Gossip track: S2-P13 (INV) → S2-P14 (compact blocks) → S2-P15 (Erlay) — последовательно
 - [ ] Limits track: S2-P16 (rate limiting) ∥ S2-P17 (peer scoring) — параллельны после peer
 - [ ] Cleanup track: S2-P18 (deprecated msgs) ∥ S2-P19 (async migration) — параллельны после scaffolding
@@ -66,10 +66,10 @@ Strangecoin — Rust cryptocurrency (**v1.5.0**, edition 2021): PoW blockchain �
 | `sha2` | `=0.10.9` | ADR-0020 | S2-P09 | Sha256 для `hkdf` (на handshake key-derivation path) |
 | `minisketch-rs` | `=x.y.z` (точная версия определяется в S2-P15) | ADR-0021 | S2-P15 | Erlay reconciliation (PinSketch sketches, mincut protocol) |
 | `siphasher` | `=x.y` | — | S2-P14 | Compact blocks BIP 152 (siphash short tx IDs) |
-| `hickory-resolver` | `=x.y` | — | S2-P11 | DNSSEC validation для peer discovery |
+| `hickory-resolver` | `=0.26.3` (features `dnssec-ring`, дефолтные `system-config`/`tokio`) | — | S2-P11 | DNSSEC validation для peer discovery |
 | `chacha20poly1305` | через `snow` (не напрямую) | ADR-0020 | S2-P08 | AEAD transport encryption |
 
-**Почему pin**: Noise API может меняться между majors (snow 0.9 → 0.10 breaking); minisketch-rs C++ bindings чувствительны к версии cc-rs; ed25519-dalek 2.0 имеет breaking API vs 1.x; hkdf/sha2 сидят на handshake key-derivation path (детерминизм S2-P09). После mainnet freeze любая смена pinned version = SCIP с activation height, чтобы все узлы обновились синхронно.
+**Почему pin**: Noise API может меняться между majors (snow 0.9 → 0.10 breaking); minisketch-rs C++ bindings чувствительны к версии cc-rs; ed25519-dalek 2.0 имеет breaking API vs 1.x; hkdf/sha2 сидят на handshake key-derivation path (детерминизм S2-P09); hickory-resolver ломает API между минорами (0.24 → 0.26 удалил `TokioAsyncResolver`/`ResolveError`, ввёл `TokioRuntimeProvider`/`NetError`) и сидит на trust-пути DNSSEC-валидации seed'ов (V-16). После mainnet freeze любая смена pinned version = SCIP с activation height, чтобы все узлы обновились синхронно.
 
 ---
 
@@ -92,6 +92,8 @@ Strangecoin — Rust cryptocurrency (**v1.5.0**, edition 2021): PoW blockchain �
 **Статус S2-P08 (2026-10-26)**: obligation пунктов 2–3 не закрыт на момент S2-P08 (тот же дефолтный resolver) — закрыт в S2-P09 (см. статус выше); сами transport-функции чек-лист не нарушают: нет time/RNG/I/O, nonce-счётчики стартуют с 0 и двигаются ровно на 1 за кадр, ключи — из handshake transcript. Rekey-расписание (N сообщений / M байт, синхронизируемое между пирами, noise rev1 §11.3) — примитив `NoiseTransport::rekey()` готов, триггер придёт с connection loop (S2-P12/S2-P19).
 
 **Статус S2-P09 (2026-10-26) — obligation пунктов 2–3 закрыт**: эфемерные ключи Noise больше не берут OS CSPRNG — `SeedResolver` (`noise/ephemeral.rs`) подменяет только RNG snow's resolver (DH/hash/cipher — default), seed = `HKDF-SHA256(long_term_seed, info = b"noise_ephemeral_v1" || counter_be)`, стрим — blake3 в counter mode. Счётчик живёт в `Arc`-внутренности `NodeKeypair` (fetch_add на каждый handshake): одинаковый seed + тот же порядок handshakes → та же последовательность ephemeral keys (reproducibility), каждый следующий handshake → новый ключ (forward secrecy в пределах прогона узла). `OsRng` — только при однократном создании `keystore/node/node_key.json` на старте (разрешено чек-листом). Тест: `tests/noise_auth.rs::ephemeral_keys_are_reproducible_per_seed_and_fresh_per_handshake` + unit-тесты `noise/ephemeral.rs`. Trade-off (зафиксирован явно): эфемер выводится из long-term seed, поэтому компрометация seed раскрывает записанные сессии этого узла — принято ради reproducibility (§0 требует «один и тот же seed → та же последовательность»); верификация — S2-P23/S2-P24. Обязательный пункт КГ-ревью на детерминизм выполнен (нет time/RNG/I/O в handshake-пути, счётчики + transcript-only ключи).
+
+**Статус S2-P11 (2026-10-26)**: чек-лист не обязателен для S2-P11 (в списке §0 только 07/08/09/15/17), ревью выполнено добровольно. Пункт 4 выполняется: `bootstrap` дедуплицирует и сортирует кандидатов по `(addr, node_id)`, `AddrBook::top_k_sorted` / `broadcast_known_addrs` — по `node_id` (NodeId получил `Ord`); повторный прогон с теми же входами → тот же упорядоченный список (`bootstrap_merges_gossip_and_seeds_deterministically`). RNG нет нигде (включая ADDR-рассылку — вместо «случайным пирам» из спеки детерминированный round-robin по отсортированным recipients, отклонение зафиксировано в коммите); `Instant`/`SystemTime` на discovery-путях нет (бюджет 30s — параметр, `tokio::time::timeout` + симулированный clock в тестах). Осознанное ограничение: список жёстких seed-адресов не ротируется автоматически (rotation of seeds из V-16) — ручная ротация через `network.json`, автоматическая отложена до S2-P12/S2-P17 (peer store с TTL).
 
 ---
 
@@ -181,7 +183,7 @@ cargo run --example canonical_decode_soak   # fuzz smoke (fallback; cargo-fuzz v
 |---------|-------|
 | `cargo check --workspace` | 2–4 мин (после fmt — полная перепроверка) |
 | `cargo clippy --all-targets -- -D warnings` | ≈1 мин |
-| `cargo test --workspace` | ≈10–12 мин (network tests: 193с + 292с) |
+| `cargo test --workspace` | ≈10–12 мин network-tests (193с + 292с), НО single-run пересек 25 мин на S2-P11 (пересборка + core lib suite 284с) — гонять чанками: `-p strangecoin` (root) → `-p strangecoin-core` → `-p strangecoin-vm-wasm` → `-p strangecoin-net` → `--doc`, каждый `cmd /c "... > target\x.log"` |
 | `cargo build --release` | ≈30 мин cold (первый с gui-default: eframe+wgpu+LTO); далее инкрементально + LTO |
 | `cargo fmt --all -- --check` | секунды (см. §Common Gotchas про fmt drift) |
 
@@ -243,17 +245,19 @@ crates/strangecoin-vm-wasm/src/  # wasmi runtime (feature vm-wasm, default-on)
 # protocol/rate_limiter/sync/sync_engine; S2-P07..S2-P20 наполняют stubs):
 crates/strangecoin-net/src/      # network runtime (feature net, default-on после S2-P05)
 ├── lib.rs            # pub mod declarations + NetError/BlockchainView re-export; NetworkHandle/NetworkConfig — later
-├── error.rs          # NetError: Handshake/Transport/Peer/Protocol/RateLimit + From<io::Error>/From<snow::Error>/From<NoiseError>
+├── error.rs          # NetError: Handshake/Transport/Peer/Protocol/RateLimit/Discovery (S2-P11) + From<io::Error>/From<snow::Error>/From<NoiseError>
 ├── blockchain_view.rs # trait BlockchainView (S2-P06: разрыв цикла network↔blockchain)
 ├── protocol.rs       # framing + wire codecs (migrated S2-P06; encrypt_frame/decrypt_frame S2-P08)
-├── protocol/hello.rs # HELLO message + capabilities negotiation (S2-P10)
 ├── protocol/hello.rs # HELLO message + capabilities negotiation (S2-P10)
 ├── noise/mod.rs      # NoiseError (S2-P07, Replay — S2-P08; Auth расширен S2-P09) + pub mod auth/handshake/transport + crate-internal ephemeral
 ├── noise/auth.rs      # NodeId=blake3(pubkey), NodeKeypair (from_keystore/from_seed, sign), verify_node_id — S2-P09
 ├── noise/ephemeral.rs # SeedResolver: HKDF-выведенный детерминированный ephemeral RNG вместо OS CSPRNG (S2-P09, чек-лист #2/#3)
 ├── noise/handshake.rs # NoiseHandshake XX state machine (S2-P07) + auth-blob rounds 2/3 → (NoiseTransport, NodeId) (S2-P09)
 ├── noise/transport.rs # NoiseTransport: AEAD framing, monotonic nonces, anti-replay, rekey (S2-P08)
-├── discovery.rs      # stub → seeds.rs, dnssec.rs, addr_gossip.rs (S2-P11)
+├── discovery/mod.rs  # multi-source bootstrap: ≥3 sources параллельно, union ≥8 peers за ≤30s бюджет (S2-P11; DoD #4)
+├── discovery/seeds.rs # SeedConfig { hard_coded_ips, dns_seeds, dnssec_required, default_port } + load_seeds из network.json (V-16)
+├── discovery/dnssec.rs # DnssecResolver (hickory =0.26.3, opts.validate) + apply_dnssec_policy — reject не-Secure answers (S2-P11)
+├── discovery/addr_gossip.rs # ADDR wire [0x05] + AddrBook (unverified→mark_verified) + AddrSender trait + broadcast_known_addrs (S2-P11)
 ├── peer.rs           # stub → store.rs, manager.rs, pool.rs (S2-P12), scoring.rs (S2-P17)
 ├── gossip.rs         # stub → inv.rs, get_data.rs, broadcast.rs (S2-P13), compact_blocks.rs (S2-P14), erlay/ (S2-P15)
 ├── rate_limiter.rs   # migrated S2-P06 (sliding window), rewrite: token bucket + per-message caps (S2-P16)
