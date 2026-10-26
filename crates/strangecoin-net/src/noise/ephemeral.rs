@@ -36,6 +36,12 @@ use snow::types::{Cipher, Dh, Hash, Random};
 /// HKDF `info` domain separator for Noise ephemeral seeds.
 const EPHEMERAL_INFO: &[u8] = b"noise_ephemeral_v1";
 
+/// HKDF `info` domain separator for the long-term Noise X25519 static key
+/// (S2-P12 — the DH identity `NoiseHandshake::initiator/responder` takes as
+/// `static_key`). Distinct from [`EPHEMERAL_INFO`] so the two derivations can
+/// never collide on the same seed.
+const NOISE_STATIC_INFO: &[u8] = b"noise_static_v1";
+
 /// Derive the per-handshake ephemeral seed from the node's long-term seed
 /// and the keypair's handshake counter (Stage 2 checklist #3).
 pub(crate) fn ephemeral_seed(long_term_seed: &[u8; 32], counter: u64) -> [u8; 32] {
@@ -45,6 +51,21 @@ pub(crate) fn ephemeral_seed(long_term_seed: &[u8; 32], counter: u64) -> [u8; 32
     info[EPHEMERAL_INFO.len()..].copy_from_slice(&counter.to_be_bytes());
     let mut okm = [0u8; 32];
     hk.expand(&info, &mut okm)
+        .expect("HKDF-SHA256 expand to 32 bytes stays below the 255*32 limit");
+    okm
+}
+
+/// Derive the node's long-term Noise X25519 static private key from the
+/// keystore seed (S2-P12 production sourcing for `connect_to_peer`).
+///
+/// Deterministic (Stage 2 checklist #2/#3): the same long-term seed yields
+/// the same static key on every start, no OS RNG and no extra keystore entry.
+/// Forward secrecy is unaffected — it comes from the per-handshake ephemeral
+/// keys ([`ephemeral_seed`]), not from this static DH identity.
+pub(crate) fn noise_static_seed(long_term_seed: &[u8; 32]) -> [u8; 32] {
+    let hk = Hkdf::<Sha256>::new(None, long_term_seed);
+    let mut okm = [0u8; 32];
+    hk.expand(NOISE_STATIC_INFO, &mut okm)
         .expect("HKDF-SHA256 expand to 32 bytes stays below the 255*32 limit");
     okm
 }
@@ -124,6 +145,15 @@ impl Random for Blake3Random {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn noise_static_key_is_deterministic_per_seed_and_distinct_from_ephemeral() {
+        assert_eq!(noise_static_seed(&[7u8; 32]), noise_static_seed(&[7u8; 32]));
+        assert_ne!(noise_static_seed(&[7u8; 32]), noise_static_seed(&[8u8; 32]));
+        // Different HKDF info domains: the static key never equals any
+        // ephemeral seed drawn from the same long-term seed.
+        assert_ne!(noise_static_seed(&[7u8; 32]), ephemeral_seed(&[7u8; 32], 0));
+    }
 
     #[test]
     fn same_seed_and_counter_derive_the_same_ephemeral_seed() {

@@ -7,8 +7,10 @@
 //! Scaffolding created in S2-P05; `protocol`, `rate_limiter`, `sync` and
 //! `sync_engine` were migrated from the monolith in S2-P06 (strangler
 //! pattern); the Noise handshake state machine landed in S2-P07, the
-//! encrypted transport framing in S2-P08 and the Ed25519 `node_id` auth +
-//! deterministic ephemeral keys in S2-P09 (`noise`). The remaining stub
+//! encrypted transport framing in S2-P08, the Ed25519 `node_id` auth +
+//! deterministic ephemeral keys in S2-P09 (`noise`), HELLO negotiation in
+//! S2-P10, multi-source discovery in S2-P11 and the peer store/manager/pool
+//! split with the ban state machine in S2-P12 (`peer`). The remaining stub
 //! modules are populated by the later Stage 2 prompts (see
 //! `analytics/prompt-stage2.md`).
 
@@ -29,4 +31,8 @@ pub use error::NetError;
 pub use noise::{
     verify_node_id, NodeId, NodeKeypair, NodeKeystore, NoiseError, NoiseHandshake, NoiseRole,
     NoiseTransport,
+};
+pub use peer::{
+    BanReason, BanRecord, Connection, ConnectionPool, PeerManager, PeerManagerConfig, PeerRecord,
+    PeerStore, TickReport,
 };

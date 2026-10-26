@@ -136,6 +136,19 @@ impl NodeKeypair {
         NodeId::from_public_bytes(self.inner.public)
     }
 
+    /// This node's long-term Noise X25519 static private key (S2-P12 —
+    /// production sourcing for `PeerManager::connect_to_peer`).
+    ///
+    /// Derived deterministically from the same keystore seed as the Ed25519
+    /// identity (`HKDF-SHA256(seed, info = b"noise_static_v1")`, Stage 2
+    /// determinism checklist #2/#3): no extra keystore entry, no OS RNG on any
+    /// path, same seed → same static key on every start. The DH identity Noise
+    /// uses — distinct from the Ed25519 `node_id` identity and from the
+    /// secp256k1 wallet keys (Stage 2 Pitfalls).
+    pub fn noise_static_private_key(&self) -> [u8; 32] {
+        super::ephemeral::noise_static_seed(&self.inner.seed)
+    }
+
     /// The raw Ed25519 public key bytes (32).
     pub fn public_key(&self) -> [u8; 32] {
         self.inner.public

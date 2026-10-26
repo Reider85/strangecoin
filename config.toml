@@ -7,6 +7,12 @@ data_dir = "./data"
 listen_addr = "127.0.0.1:8081"
 seeds = []
 max_peers = 50
+# S2-P12 (ADR-0022): peer score below which a peer is temp-banned for 1 h.
+peer_ban_threshold = 0.2
+# S2-P12: total concurrent TCP connections (peer manager).
+max_connections = 50
+# S2-P12 (V-17): max connections per IPv4 /24 or IPv6 /64 range.
+max_per_ip_range = 8
 
 [storage]
 path = "./data/leveldb"

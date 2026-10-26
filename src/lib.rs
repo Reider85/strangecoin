@@ -1056,6 +1056,7 @@ pub async fn run_async() {
                 .unwrap(),
                 seeds: vec![],
                 max_peers: 50,
+                ..Default::default()
             },
             storage: crate::config::StorageConfig {
                 path: exe_dir.join("data/leveldb"),

@@ -35,6 +35,46 @@ pub struct NetworkConfig {
     pub listen_addr: SocketAddr,
     pub seeds: Vec<SocketAddr>,
     pub max_peers: usize,
+    /// S2-P12 (`peer_ban_threshold`): peer score below which a peer is
+    /// temp-banned for 1 h (ADR-0022; mirror of
+    /// `strangecoin_net::peer::DEFAULT_BAN_THRESHOLD`).
+    #[serde(default = "default_peer_ban_threshold")]
+    pub peer_ban_threshold: f32,
+    /// S2-P12 (`max_connections`): total concurrent TCP connections managed
+    /// by the peer manager (distinct from `max_peers`, the known-peer target
+    /// size for sync).
+    #[serde(default = "default_max_connections")]
+    pub max_connections: usize,
+    /// S2-P12 (`max_per_ip_range`): Sybil cap per IPv4 /24 or IPv6 /64 range
+    /// in the connection pool (threat V-17; mirror of
+    /// `strangecoin_net::peer::DEFAULT_MAX_PER_IP_RANGE`).
+    #[serde(default = "default_max_per_ip_range")]
+    pub max_per_ip_range: usize,
+}
+
+fn default_peer_ban_threshold() -> f32 {
+    0.2
+}
+
+fn default_max_connections() -> usize {
+    50
+}
+
+fn default_max_per_ip_range() -> usize {
+    8
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        NetworkConfig {
+            listen_addr: "127.0.0.1:8081".parse().unwrap(),
+            seeds: vec![],
+            max_peers: 50,
+            peer_ban_threshold: default_peer_ban_threshold(),
+            max_connections: default_max_connections(),
+            max_per_ip_range: default_max_per_ip_range(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +114,22 @@ impl Config {
                 "max_peers must be > 0".into(),
             ));
         }
+        if !(self.network.peer_ban_threshold > 0.0 && self.network.peer_ban_threshold < 1.0) {
+            return Err(StrangecoinError::ConfigError(format!(
+                "peer_ban_threshold must be in (0, 1), got {}",
+                self.network.peer_ban_threshold
+            )));
+        }
+        if self.network.max_connections == 0 {
+            return Err(StrangecoinError::ConfigError(
+                "max_connections must be > 0".into(),
+            ));
+        }
+        if self.network.max_per_ip_range == 0 {
+            return Err(StrangecoinError::ConfigError(
+                "max_per_ip_range must be > 0".into(),
+            ));
+        }
         if self.data_dir.as_os_str().is_empty() {
             return Err(StrangecoinError::ConfigError(
                 "data_dir must not be empty".into(),
@@ -94,16 +150,34 @@ impl Config {
     }
 }
 
+#[cfg(feature = "net")]
+impl Config {
+    /// Map the operator's `config.toml` onto the network crate's peer-manager
+    /// tunables (S2-P12).
+    ///
+    /// Only the three file tunables are overridden; scoring thresholds,
+    /// ban durations and capabilities keep the ADR-0022 defaults until
+    /// S2-P17 exposes them as `peer_scoring_*` keys. The identity keypair
+    /// (Ed25519 + derived Noise static) and the `network.json` path are
+    /// supplied at construction time by the orchestrator wiring (S2-P13/
+    /// S2-P19).
+    pub fn peer_manager_config(&self) -> strangecoin_net::PeerManagerConfig {
+        strangecoin_net::PeerManagerConfig {
+            ban_threshold: self.network.peer_ban_threshold,
+            max_connections: self.network.max_connections,
+            max_per_ip_range: self.network.max_per_ip_range,
+            network_id: self.network_id,
+            ..strangecoin_net::PeerManagerConfig::default()
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
             network_id: 3,
             node_mode: NodeMode::default(),
-            network: NetworkConfig {
-                listen_addr: "127.0.0.1:8081".parse().unwrap(),
-                seeds: vec![],
-                max_peers: 50,
-            },
+            network: NetworkConfig::default(),
             storage: StorageConfig {
                 path: "./data/leveldb".into(),
             },
@@ -181,5 +255,86 @@ mod tests {
             ..Config::default()
         };
         cfg.validate().expect("regtest may enable the opt-in");
+    }
+
+    #[test]
+    fn peer_tunables_default_when_missing_from_config_file() {
+        // Stage 1.5-era files (no peer keys) must keep parsing — S2-P12
+        // serde defaults.
+        let toml = r#"
+            network_id = 3
+            node_mode = "full"
+            log_level = "info"
+            data_dir = "./data"
+
+            [network]
+            listen_addr = "127.0.0.1:8081"
+            seeds = []
+            max_peers = 50
+
+            [storage]
+            path = "./data/leveldb"
+        "#;
+        let cfg: Config = toml::from_str(toml).expect("legacy config must parse");
+        assert_eq!(cfg.network.peer_ban_threshold, 0.2);
+        assert_eq!(cfg.network.max_connections, 50);
+        assert_eq!(cfg.network.max_per_ip_range, 8);
+        cfg.validate().expect("defaults are valid");
+    }
+
+    #[test]
+    fn peer_tunables_reject_invalid_values() {
+        let base = Config::default();
+        let bad_threshold = Config {
+            network: NetworkConfig {
+                peer_ban_threshold: 1.5,
+                ..base.network.clone()
+            },
+            ..Config::default()
+        };
+        assert!(bad_threshold.validate().is_err());
+
+        let bad_connections = Config {
+            network: NetworkConfig {
+                max_connections: 0,
+                ..base.network.clone()
+            },
+            ..Config::default()
+        };
+        assert!(bad_connections.validate().is_err());
+
+        let bad_per_ip = Config {
+            network: NetworkConfig {
+                max_per_ip_range: 0,
+                ..base.network.clone()
+            },
+            ..Config::default()
+        };
+        assert!(bad_per_ip.validate().is_err());
+    }
+
+    #[cfg(feature = "net")]
+    #[test]
+    fn peer_manager_config_maps_file_tunables() {
+        let cfg = Config {
+            network: NetworkConfig {
+                peer_ban_threshold: 0.35,
+                max_connections: 12,
+                max_per_ip_range: 3,
+                ..Config::default().network
+            },
+            ..Config::default()
+        };
+        let pm = cfg.peer_manager_config();
+        assert_eq!(pm.ban_threshold, 0.35);
+        assert_eq!(pm.max_connections, 12);
+        assert_eq!(pm.max_per_ip_range, 3);
+        assert_eq!(pm.network_id, 3);
+        assert_eq!(pm.warn_threshold, 0.4, "ADR-0022 default until S2-P17");
+        assert_eq!(pm.persistent_threshold, 0.05);
+        assert!(
+            pm.network_json_path.is_none(),
+            "path is supplied at wiring time, not from config.toml"
+        );
     }
 }

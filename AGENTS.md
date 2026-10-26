@@ -1,6 +1,6 @@
 # AGENTS.md — Strangecoin Developer Guide
 
-> **NOTE — Stage 2 in progress.** Этот файл ведётся инкрементально по правилу FBP10 из retro §8.1 (`prompt-stage2.md` §6.5): Stage 2 секции добавляются только в тех же коммитах, где уже существуют соответствующие артефакты (см. §Forbidden Updates). Секции §Active Stage, §Stage 2 Dependency Map, §Stage 2 Pin Policy, §Stage 2 Determinism Checklist, §Stage 2 Pitfalls **активны** (артефакты S2-P01..S2-P09 существуют: ADR-0020..0023 + `crates/strangecoin-net/` scaffolding + миграция network-модулей + Noise handshake `noise/{mod,handshake}.rs` + Noise transport `noise/transport.rs` + `encrypt_frame`/`decrypt_frame` + Noise auth `noise/{auth,ephemeral}.rs` + `wallet::load_or_create_node_keypair`).
+> **NOTE — Stage 2 in progress.** Этот файл ведётся инкрементально по правилу FBP10 из retro §8.1 (`prompt-stage2.md` §6.5): Stage 2 секции добавляются только в тех же коммитах, где уже существуют соответствующие артефакты (см. §Forbidden Updates). Секции §Active Stage, §Stage 2 Dependency Map, §Stage 2 Pin Policy, §Stage 2 Determinism Checklist, §Stage 2 Pitfalls **активны** (артефакты S2-P01..S2-P12 существуют: ADR-0020..0023 + `crates/strangecoin-net/` scaffolding + миграция network-модулей + Noise handshake/transport/auth `noise/{mod,handshake,transport,auth,ephemeral}.rs` (`encrypt_frame`/`decrypt_frame`, `wallet::load_or_create_node_keypair`) + HELLO `protocol/hello.rs` + discovery `discovery/{mod,seeds,dnssec,addr_gossip}.rs` + peer management `peer/{mod,store,manager,pool}.rs`).
 
 ## Project Overview
 
@@ -16,17 +16,17 @@ Strangecoin — Rust cryptocurrency (**v1.5.0**, edition 2021): PoW blockchain �
 
 **Status**: in progress (precondition verified — tag `v1.5.0-stage1.5` confirmed on origin commit `1f133c7`; `bugfixes-stage1.5.md` v1.2 verified 11/11 fixed, см. `prompt-stage2.md` §0.1).
 
-**Next prompt**: S2-P12 (peer_store + peer_manager + connection_pool split, `peer/{mod,store,manager,pool}.rs` + `AddrSender`-интеграция из discovery). Открыты параллельные треки: Peer S2-P12, Gossip S2-P13.., Cleanup S2-P18∥S2-P19, Shadow S2-P20 (Noise-трек S2-P07..S2-P09 закрыт; discovery S2-P11 закрыт).
+**Next prompt**: S2-P13 (Gossip protocol: `gossip/{mod,inv,get_data,broadcast}.rs`, INV/GET_DATA через peer_manager). Открыты параллельные треки: Gossip S2-P13→S2-P14→S2-P15, Limits S2-P16∥S2-P17 (разблокированы закрытием peer), Cleanup S2-P18∥S2-P19, Shadow S2-P20 (Noise S2-P07..S2-P09, discovery S2-P11, peer S2-P12 закрыты).
 
-**Prompts done**: 11 / 24 (S2-P01..S2-P11).
+**Prompts done**: 12 / 24 (S2-P01..S2-P12).
 
 **Track status** (см. §Stage 2 Dependency Map ниже для деталей):
 - [x] ADRs track: S2-P01 (ADR-0020) / S2-P02 (ADR-0021) / S2-P03 (ADR-0022) / S2-P04 (ADR-0023) — done
 - [x] Crate track: S2-P05 (scaffolding `crates/strangecoin-net/` + workspace member + feature `net` default-on) / S2-P06 (migration `src/network/*` → strangecoin-net + re-export shim + `BlockchainView`/`EventSink` cycle break) — done
 - [x] Noise track: S2-P07 (handshake `NoiseHandshake`, XX 3 round trips, `expect_remote_static`) / S2-P08 (transport `NoiseTransport`: encrypt/decrypt, monotonic nonces, `NoiseError::Replay`, rekey; framing `encrypt_frame`/`decrypt_frame`, chunking >65519 B) / S2-P09 (Ed25519 `NodeId` auth: `noise/auth.rs`, auth blob `[pubkey||sig]` в rounds 2/3, `into_transport → (NoiseTransport, NodeId)`, `wallet::load_or_create_node_keypair`, детерминированный ephemeral `noise/ephemeral.rs`) — done
-- [ ] Peer track: S2-P10 (HELLO + capabilities negotiation, `protocol/hello.rs`) — done → S2-P11 (discovery: `discovery/{mod,seeds,dnssec,addr_gossip}.rs`, `AddrBook`/`AddrSender` + bootstrap) — done → S2-P12 (peer mgmt) — последовательно
+- [x] Peer track: S2-P10 (HELLO + capabilities negotiation, `protocol/hello.rs`) / S2-P11 (discovery: `discovery/{mod,seeds,dnssec,addr_gossip}.rs`, `AddrBook`/`AddrSender` + bootstrap) / S2-P12 (peer mgmt: `peer/{mod,store,manager,pool}.rs`, ban state machine, `connect_to_peer` = TCP+Noise XX+HELLO, `impl AddrSender for PeerManager`, network.json `known_peers`/`banned_peers`, config.toml peer tunables) — done
 - [ ] Gossip track: S2-P13 (INV) → S2-P14 (compact blocks) → S2-P15 (Erlay) — последовательно
-- [ ] Limits track: S2-P16 (rate limiting) ∥ S2-P17 (peer scoring) — параллельны после peer
+- [ ] Limits track: S2-P16 (rate limiting) ∥ S2-P17 (peer scoring) — параллельны, разблокированы (peer закрыт S2-P12)
 - [ ] Cleanup track: S2-P18 (deprecated msgs) ∥ S2-P19 (async migration) — параллельны после scaffolding
 - [ ] Shadow track: S2-P20 — параллелен после S2-P06, опциональный но рекомендуется
 - [ ] Verification track: S2-P21 (fuzz) → S2-P22 (integration tests) → S2-P23 (invariants+threat) → S2-P24 (DoD+tag) — строго после всех proper
@@ -94,6 +94,8 @@ Strangecoin — Rust cryptocurrency (**v1.5.0**, edition 2021): PoW blockchain �
 **Статус S2-P09 (2026-10-26) — obligation пунктов 2–3 закрыт**: эфемерные ключи Noise больше не берут OS CSPRNG — `SeedResolver` (`noise/ephemeral.rs`) подменяет только RNG snow's resolver (DH/hash/cipher — default), seed = `HKDF-SHA256(long_term_seed, info = b"noise_ephemeral_v1" || counter_be)`, стрим — blake3 в counter mode. Счётчик живёт в `Arc`-внутренности `NodeKeypair` (fetch_add на каждый handshake): одинаковый seed + тот же порядок handshakes → та же последовательность ephemeral keys (reproducibility), каждый следующий handshake → новый ключ (forward secrecy в пределах прогона узла). `OsRng` — только при однократном создании `keystore/node/node_key.json` на старте (разрешено чек-листом). Тест: `tests/noise_auth.rs::ephemeral_keys_are_reproducible_per_seed_and_fresh_per_handshake` + unit-тесты `noise/ephemeral.rs`. Trade-off (зафиксирован явно): эфемер выводится из long-term seed, поэтому компрометация seed раскрывает записанные сессии этого узла — принято ради reproducibility (§0 требует «один и тот же seed → та же последовательность»); верификация — S2-P23/S2-P24. Обязательный пункт КГ-ревью на детерминизм выполнен (нет time/RNG/I/O в handshake-пути, счётчики + transcript-only ключи).
 
 **Статус S2-P11 (2026-10-26)**: чек-лист не обязателен для S2-P11 (в списке §0 только 07/08/09/15/17), ревью выполнено добровольно. Пункт 4 выполняется: `bootstrap` дедуплицирует и сортирует кандидатов по `(addr, node_id)`, `AddrBook::top_k_sorted` / `broadcast_known_addrs` — по `node_id` (NodeId получил `Ord`); повторный прогон с теми же входами → тот же упорядоченный список (`bootstrap_merges_gossip_and_seeds_deterministically`). RNG нет нигде (включая ADDR-рассылку — вместо «случайным пирам» из спеки детерминированный round-robin по отсортированным recipients, отклонение зафиксировано в коммите); `Instant`/`SystemTime` на discovery-путях нет (бюджет 30s — параметр, `tokio::time::timeout` + симулированный clock в тестах). Осознанное ограничение: список жёстких seed-адресов не ротируется автоматически (rotation of seeds из V-16) — ручная ротация через `network.json`, автоматическая отложена до S2-P12/S2-P17 (peer store с TTL).
+
+**Статус S2-P12 (2026-10-26)**: чек-лист не обязателен для S2-P12 (в списке §0 только 07/08/09/15/17), ревью выполнено добровольно. Пункты 1/2 выполняются: scoring — чистая функция счётчиков (`PeerStore::update_score`, скелет), нет `SystemTime`/`Instant`/RNG на scoring-путях; wall clock только на edges (сравнение `ban_until < now` в `tick_at` + age/remaining-stamps при load/save `network.json` — ban policy, не consensus state). Тесты инжекят часы (`tick_at(t0 + 3601s)` вместо сна). Пункт 4: итерации (broadcast, tick, persist, `known_addr_entries`) сортированы по `node_id` — одинаковый набор → одинаковый порядок. Noise static X25519 для dial выводится детерминированно (`HKDF(seed, info=b"noise_static_v1")`, `noise/ephemeral.rs`), без OS CSPRNG; `connect_to_peer` без RNG. Осознанный scope: read-loop входящих сообщений и backpressure (`try_write` WouldBlock) отложены на S2-P19 — детерминизм не затронут.
 
 ---
 
@@ -251,14 +253,17 @@ crates/strangecoin-net/src/      # network runtime (feature net, default-on по
 ├── protocol/hello.rs # HELLO message + capabilities negotiation (S2-P10)
 ├── noise/mod.rs      # NoiseError (S2-P07, Replay — S2-P08; Auth расширен S2-P09) + pub mod auth/handshake/transport + crate-internal ephemeral
 ├── noise/auth.rs      # NodeId=blake3(pubkey), NodeKeypair (from_keystore/from_seed, sign), verify_node_id — S2-P09
-├── noise/ephemeral.rs # SeedResolver: HKDF-выведенный детерминированный ephemeral RNG вместо OS CSPRNG (S2-P09, чек-лист #2/#3)
+├── noise/ephemeral.rs # SeedResolver: HKDF-выведенный детерминированный ephemeral RNG вместо OS CSPRNG (S2-P09, чек-лист #2/#3) + noise_static_seed (Noise X25519 static = HKDF(seed, "noise_static_v1"), S2-P12)
 ├── noise/handshake.rs # NoiseHandshake XX state machine (S2-P07) + auth-blob rounds 2/3 → (NoiseTransport, NodeId) (S2-P09)
 ├── noise/transport.rs # NoiseTransport: AEAD framing, monotonic nonces, anti-replay, rekey (S2-P08)
 ├── discovery/mod.rs  # multi-source bootstrap: ≥3 sources параллельно, union ≥8 peers за ≤30s бюджет (S2-P11; DoD #4)
 ├── discovery/seeds.rs # SeedConfig { hard_coded_ips, dns_seeds, dnssec_required, default_port } + load_seeds из network.json (V-16)
 ├── discovery/dnssec.rs # DnssecResolver (hickory =0.26.3, opts.validate) + apply_dnssec_policy — reject не-Secure answers (S2-P11)
 ├── discovery/addr_gossip.rs # ADDR wire [0x05] + AddrBook (unverified→mark_verified) + AddrSender trait + broadcast_known_addrs (S2-P11)
-├── peer.rs           # stub → store.rs, manager.rs, pool.rs (S2-P12), scoring.rs (S2-P17)
+├── peer/mod.rs       # store/manager/pool split (S2-P12)
+├── peer/store.rs     # PeerStore: PeerRecord + BanRecord/BanReason + network.json known_peers/banned_peers (ADR-0022) + skeleton update_score (scoring.rs → S2-P17)
+├── peer/manager.rs   # PeerManager: connect_to_peer = TCP+Noise XX+HELLO dial, ban state machine (warn→temp 1h→persistent 30d), tick/tick_at (clock injection), record_{invalid_block,protocol_violation,rate_violation,latency}, impl AddrSender (S2-P12)
+├── peer/pool.rs      # Connection (transport: Mutex<NoiseTransport> + TcpStream, send_payload = encrypt_frame+try_write) + ConnectionPool: per-IP-range Sybil cap V-17 (IPv4 /24, IPv6 /64) (S2-P12)
 ├── gossip.rs         # stub → inv.rs, get_data.rs, broadcast.rs (S2-P13), compact_blocks.rs (S2-P14), erlay/ (S2-P15)
 ├── rate_limiter.rs   # migrated S2-P06 (sliding window), rewrite: token bucket + per-message caps (S2-P16)
 ├── sync.rs           # headers-first sync (migrated S2-P06)
@@ -272,7 +277,7 @@ src/                  # node monolith (orchestrator)
 ├── events.rs         # EventBus (crossbeam) + impl EventSink для SyncEngine (S2-P06)
 ├── mempool/          # RBF-capable mempool
 ├── wallet.rs         # secp256k1 keystore (PBKDF2+AES-GCM) + Ed25519 long-term node keypair (S2-P09)
-├── config.rs         # allow_grant_blocks flag, TOML config
+├── config.rs         # allow_grant_blocks flag, TOML config + peer tunables (peer_ban_threshold/max_connections/max_per_ip_range, S2-P12) + Config::peer_manager_config()
 ├── storage/          # LevelDB wrapper
 └── error.rs          # StrangecoinError + lock ordering docs
 ```
