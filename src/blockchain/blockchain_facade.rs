@@ -538,6 +538,10 @@ impl strangecoin_net::BlockchainView for BlockchainFacade {
         self.mempool_tx(txid)
     }
 
+    fn mempool_txs(&self) -> Vec<Transaction> {
+        self.mempool_transactions()
+    }
+
     fn block_by_hash(&self, block_hash: &str) -> Option<Block> {
         self.block_by_hash(block_hash)
     }

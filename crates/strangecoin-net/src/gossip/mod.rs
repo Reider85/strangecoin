@@ -15,18 +15,22 @@
 //! peers that already know an object, and `handle_inv` never requests an
 //! object the local node already has.
 //!
-//! Compact blocks (BIP 152, S2-P14) and Erlay reconciliation (ADR-0021,
-//! S2-P15) extend this module in the later Stage 2 prompts.
+//! Erlay reconciliation (ADR-0021, S2-P15) extends this module later.
 //!
 //! **Determinism** (Stage 2 checklist, threat V-21 extension): codecs are
 //! pure byte shuffling; announce iterates `node_id`-sorted connected peers
 //! (determinism #4); no clock, no RNG, no I/O anywhere in this module.
 
 pub mod broadcast;
+pub mod compact_blocks;
 pub mod get_data;
 pub mod inv;
 
 pub use broadcast::{announce_block, announce_tx, handle_get_data, handle_inv, GossipState};
+pub use compact_blocks::{
+    apply_block_txn, fill_up, handle_get_block_txn, BlockTxn, CompactBlock, FillOutcome,
+    GetBlockTxn,
+};
 pub use get_data::{GetData, NotFound};
 pub use inv::{Inv, InvKind, InventoryItem};
 
@@ -50,6 +54,12 @@ pub enum GossipMessage {
     Block(Block),
     /// `NOTFOUND [0x0A]` — requested objects we do not have.
     NotFound(NotFound),
+    /// `COMPACT_BLOCK [0x09]` — BIP 152 compact block (S2-P14).
+    CompactBlock(CompactBlock),
+    /// `GET_BLOCK_TXN [0x0B]` — request missing compact-block bodies (S2-P14).
+    GetBlockTxn(GetBlockTxn),
+    /// `BLOCK_TXN [0x0C]` — the requested compact-block bodies (S2-P14).
+    BlockTxn(BlockTxn),
 }
 
 impl GossipMessage {
@@ -63,6 +73,9 @@ impl GossipMessage {
                 crate::protocol::encode_blocks(std::slice::from_ref(block))
             }
             GossipMessage::NotFound(msg) => msg.encode(),
+            GossipMessage::CompactBlock(msg) => msg.encode(),
+            GossipMessage::GetBlockTxn(msg) => msg.encode(),
+            GossipMessage::BlockTxn(msg) => msg.encode(),
         }
     }
 
@@ -88,6 +101,13 @@ impl GossipMessage {
                 Ok(GossipMessage::Block(blocks.pop().expect("len checked")))
             }
             get_data::MSG_NOTFOUND => Ok(GossipMessage::NotFound(NotFound::parse(bytes)?)),
+            compact_blocks::MSG_COMPACT_BLOCK => {
+                Ok(GossipMessage::CompactBlock(CompactBlock::parse(bytes)?))
+            }
+            compact_blocks::MSG_GET_BLOCK_TXN => {
+                Ok(GossipMessage::GetBlockTxn(GetBlockTxn::parse(bytes)?))
+            }
+            compact_blocks::MSG_BLOCK_TXN => Ok(GossipMessage::BlockTxn(BlockTxn::parse(bytes)?)),
             other => Err(NetError::Protocol(format!(
                 "gossip: unknown message tag {other:#04x}"
             ))),
@@ -144,6 +164,15 @@ mod tests {
             GossipMessage::Block(sample_block()),
             GossipMessage::NotFound(NotFound {
                 items: vec![InventoryItem::tx([3u8; 32])],
+            }),
+            GossipMessage::CompactBlock(compact_blocks::CompactBlock::from_block(&sample_block())),
+            GossipMessage::GetBlockTxn(compact_blocks::GetBlockTxn {
+                block_hash: [4u8; 32],
+                missing_indices: vec![0, 2],
+            }),
+            GossipMessage::BlockTxn(compact_blocks::BlockTxn {
+                block_hash: [5u8; 32],
+                txs: vec![sample_tx()],
             }),
         ];
         for message in messages {

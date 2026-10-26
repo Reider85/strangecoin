@@ -1,6 +1,6 @@
 # AGENTS.md — Strangecoin Developer Guide
 
-> **NOTE — Stage 2 in progress.** Этот файл ведётся инкрементально по правилу FBP10 из retro §8.1 (`prompt-stage2.md` §6.5): Stage 2 секции добавляются только в тех же коммитах, где уже существуют соответствующие артефакты (см. §Forbidden Updates). Секции §Active Stage, §Stage 2 Dependency Map, §Stage 2 Pin Policy, §Stage 2 Determinism Checklist, §Stage 2 Pitfalls **активны** (артефакты S2-P01..S2-P13 существуют: ADR-0020..0023 + `crates/strangecoin-net/` scaffolding + миграция network-модулей + Noise handshake/transport/auth `noise/{mod,handshake,transport,auth,ephemeral}.rs` (`encrypt_frame`/`decrypt_frame`, `wallet::load_or_create_node_keypair`) + HELLO `protocol/hello.rs` + discovery `discovery/{mod,seeds,dnssec,addr_gossip}.rs` + peer management `peer/{mod,store,manager,pool}.rs` + gossip `gossip/{mod,inv,get_data,broadcast}.rs`).
+> **NOTE — Stage 2 in progress.** Этот файл ведётся инкрементально по правилу FBP10 из retro §8.1 (`prompt-stage2.md` §6.5): Stage 2 секции добавляются только в тех же коммитах, где уже существуют соответствующие артефакты (см. §Forbidden Updates). Секции §Active Stage, §Stage 2 Dependency Map, §Stage 2 Pin Policy, §Stage 2 Determinism Checklist, §Stage 2 Pitfalls **активны** (артефакты S2-P01..S2-P14 существуют: ADR-0020..0023 + `crates/strangecoin-net/` scaffolding + миграция network-модулей + Noise handshake/transport/auth `noise/{mod,handshake,transport,auth,ephemeral}.rs` (`encrypt_frame`/`decrypt_frame`, `wallet::load_or_create_node_keypair`) + HELLO `protocol/hello.rs` + discovery `discovery/{mod,seeds,dnssec,addr_gossip}.rs` + peer management `peer/{mod,store,manager,pool}.rs` + gossip `gossip/{mod,inv,get_data,broadcast}.rs` + compact blocks `gossip/compact_blocks.rs`).
 
 ## Project Overview
 
@@ -16,16 +16,16 @@ Strangecoin — Rust cryptocurrency (**v1.5.0**, edition 2021): PoW blockchain �
 
 **Status**: in progress (precondition verified — tag `v1.5.0-stage1.5` confirmed on origin commit `1f133c7`; `bugfixes-stage1.5.md` v1.2 verified 11/11 fixed, см. `prompt-stage2.md` §0.1).
 
-**Next prompt**: S2-P14 (Compact blocks BIP 152: `gossip/compact_blocks.rs`, siphash short IDs + fill-up). Открыты параллельные треки: Gossip S2-P14→S2-P15, Limits S2-P16∥S2-P17 (разблокированы закрытием peer), Cleanup S2-P18∥S2-P19, Shadow S2-P20 (Noise S2-P07..S2-P09, discovery S2-P11, peer S2-P12, gossip S2-P13 закрыты).
+**Next prompt**: S2-P15 (Erlay reconciliation: `gossip/erlay/{mod,reconcile,mincut,fallback}.rs`, minisketch sketches + fallback). Открыты параллельные треки: Gossip S2-P15 (последний в треке), Limits S2-P16∥S2-P17 (разблокированы закрытием peer), Cleanup S2-P18∥S2-P19, Shadow S2-P20 (Noise S2-P07..S2-P09, discovery S2-P11, peer S2-P12, gossip S2-P13/S2-P14 закрыты).
 
-**Prompts done**: 13 / 24 (S2-P01..S2-P13).
+**Prompts done**: 14 / 24 (S2-P01..S2-P14).
 
 **Track status** (см. §Stage 2 Dependency Map ниже для деталей):
 - [x] ADRs track: S2-P01 (ADR-0020) / S2-P02 (ADR-0021) / S2-P03 (ADR-0022) / S2-P04 (ADR-0023) — done
 - [x] Crate track: S2-P05 (scaffolding `crates/strangecoin-net/` + workspace member + feature `net` default-on) / S2-P06 (migration `src/network/*` → strangecoin-net + re-export shim + `BlockchainView`/`EventSink` cycle break) — done
 - [x] Noise track: S2-P07 (handshake `NoiseHandshake`, XX 3 round trips, `expect_remote_static`) / S2-P08 (transport `NoiseTransport`: encrypt/decrypt, monotonic nonces, `NoiseError::Replay`, rekey; framing `encrypt_frame`/`decrypt_frame`, chunking >65519 B) / S2-P09 (Ed25519 `NodeId` auth: `noise/auth.rs`, auth blob `[pubkey||sig]` в rounds 2/3, `into_transport → (NoiseTransport, NodeId)`, `wallet::load_or_create_node_keypair`, детерминированный ephemeral `noise/ephemeral.rs`) — done
 - [x] Peer track: S2-P10 (HELLO + capabilities negotiation, `protocol/hello.rs`) / S2-P11 (discovery: `discovery/{mod,seeds,dnssec,addr_gossip}.rs`, `AddrBook`/`AddrSender` + bootstrap) / S2-P12 (peer mgmt: `peer/{mod,store,manager,pool}.rs`, ban state machine, `connect_to_peer` = TCP+Noise XX+HELLO, `impl AddrSender for PeerManager`, network.json `known_peers`/`banned_peers`, config.toml peer tunables) — done
-- [ ] Gossip track: S2-P13 (INV: `gossip/{mod,inv,get_data,broadcast}.rs`, `GossipState` per-peer dedup, `BlockchainView::mempool_tx`/`block_by_hash`, `PeerManager::send_to_peer`, tests 100-peer ≤1s + real-socket announce) → S2-P14 (compact blocks) → S2-P15 (Erlay) — последовательно; S2-P13 done
+- [ ] Gossip track: S2-P13 (INV: `gossip/{mod,inv,get_data,broadcast}.rs`, `GossipState` per-peer dedup, `BlockchainView::mempool_tx`/`block_by_hash`, `PeerManager::send_to_peer`, tests 100-peer ≤1s + real-socket announce) → S2-P14 (compact blocks) → S2-P15 (Erlay) — последовательно; S2-P13 done, S2-P14 done
 - [ ] Limits track: S2-P16 (rate limiting) ∥ S2-P17 (peer scoring) — параллельны, разблокированы (peer закрыт S2-P12)
 - [ ] Cleanup track: S2-P18 (deprecated msgs) ∥ S2-P19 (async migration) — параллельны после scaffolding
 - [ ] Shadow track: S2-P20 — параллелен после S2-P06, опциональный но рекомендуется
@@ -65,7 +65,7 @@ Strangecoin — Rust cryptocurrency (**v1.5.0**, edition 2021): PoW blockchain �
 | `hkdf` | `=0.12.1` | ADR-0020 | S2-P09 | HKDF-SHA256 для детерминированного вывода Noise ephemeral keys (чек-лист #3) |
 | `sha2` | `=0.10.9` | ADR-0020 | S2-P09 | Sha256 для `hkdf` (на handshake key-derivation path) |
 | `minisketch-rs` | `=x.y.z` (точная версия определяется в S2-P15) | ADR-0021 | S2-P15 | Erlay reconciliation (PinSketch sketches, mincut protocol) |
-| `siphasher` | `=x.y` | — | S2-P14 | Compact blocks BIP 152 (siphash short tx IDs) |
+| `siphasher` | `=1.0.4` | — | S2-P14 | Compact blocks BIP 152 (siphash short tx IDs) |
 | `hickory-resolver` | `=0.26.3` (features `dnssec-ring`, дефолтные `system-config`/`tokio`) | — | S2-P11 | DNSSEC validation для peer discovery |
 | `chacha20poly1305` | через `snow` (не напрямую) | ADR-0020 | S2-P08 | AEAD transport encryption |
 
@@ -98,6 +98,8 @@ Strangecoin — Rust cryptocurrency (**v1.5.0**, edition 2021): PoW blockchain �
 **Статус S2-P12 (2026-10-26)**: чек-лист не обязателен для S2-P12 (в списке §0 только 07/08/09/15/17), ревью выполнено добровольно. Пункты 1/2 выполняются: scoring — чистая функция счётчиков (`PeerStore::update_score`, скелет), нет `SystemTime`/`Instant`/RNG на scoring-путях; wall clock только на edges (сравнение `ban_until < now` в `tick_at` + age/remaining-stamps при load/save `network.json` — ban policy, не consensus state). Тесты инжекят часы (`tick_at(t0 + 3601s)` вместо сна). Пункт 4: итерации (broadcast, tick, persist, `known_addr_entries`) сортированы по `node_id` — одинаковый набор → одинаковый порядок. Noise static X25519 для dial выводится детерминированно (`HKDF(seed, info=b"noise_static_v1")`, `noise/ephemeral.rs`), без OS CSPRNG; `connect_to_peer` без RNG. Осознанный scope: read-loop входящих сообщений и backpressure (`try_write` WouldBlock) отложены на S2-P19 — детерминизм не затронут.
 
 **Статус S2-P13 (2026-10-26)**: чек-лист не обязателен для S2-P13 (в списке §0 только 07/08/09/15/17), ревью выполнено добровольно. Пункты 1/2/3 выполняются: кодеки (`gossip/{inv,get_data}.rs`, `GossipMessage`) — чистый byte-shuffling, нет `SystemTime`/`Instant`/`RNG`/I/O; `GossipState` — `HashMap<NodeId, HashSet<InventoryItem>>` без clock/RNG (cap 4096/peer, clear-on-overflow — паттерн `SEEN_CAP`); `announce_*`/`handle_*` не таймстампятся. Пункт 4: `announce_*` итерирует `PeerManager::connected_peers()` (sorted by `node_id` из `ConnectionPool::node_ids_sorted`) — детерминированный порядок отправки. Осознанный scope: txid-lookup покрывает только mempool (`chain_contains_tx` требует полной tx — lookup по mined-txid отсутствует, задокументировано в `broadcast.rs`); межпроцессная доставка (read-loop) — S2-P19.
+
+**Статус S2-P14 (2026-10-27)**: чек-лист не обязателен для S2-P14 (в списке §0 только 07/08/09/15/17), ревью выполнено добровольно. Пункты 1/2/3 выполняются: кодеки (`gossip/compact_blocks.rs`) + `short_id` — чистые функции без `SystemTime`/`Instant`/`RNG`/I/O; compact-block nonce **детерминированно** выводится из block hash (`derive_nonce`, отклонение от random-nonce BIP 152 зафиксировано в module docs — диктуется пунктом 2); `fill_up`/`apply_block_txn` не таймстампятся, мемпул-резолв итерирует `mempool_txs()` (порядок не влияет на результат — сверка через merkle `tx_root`). Пункт 5: codec round-trip + fill-up тесты воспроизводимы между прогонами (нет RNG). Осознанный scope: отправка compact-block через live connection loop и per-peer capability gating — S2-P19 (connection loop ещё не читает входящие сообщения).
 
 ---
 
@@ -250,7 +252,7 @@ crates/strangecoin-vm-wasm/src/  # wasmi runtime (feature vm-wasm, default-on)
 crates/strangecoin-net/src/      # network runtime (feature net, default-on после S2-P05)
 ├── lib.rs            # pub mod declarations + NetError/BlockchainView re-export; NetworkHandle/NetworkConfig — later
 ├── error.rs          # NetError: Handshake/Transport/Peer/Protocol/RateLimit/Discovery (S2-P11) + From<io::Error>/From<snow::Error>/From<NoiseError>
-├── blockchain_view.rs # trait BlockchainView (S2-P06: разрыв цикла network↔blockchain) + mempool_tx/block_by_hash (S2-P13)
+├── blockchain_view.rs # trait BlockchainView (S2-P06: разрыв цикла network↔blockchain) + mempool_tx/block_by_hash (S2-P13) + mempool_txs (S2-P14)
 ├── protocol.rs       # framing + wire codecs (migrated S2-P06; encrypt_frame/decrypt_frame S2-P08)
 ├── protocol/hello.rs # HELLO message + capabilities negotiation (S2-P10)
 ├── noise/mod.rs      # NoiseError (S2-P07, Replay — S2-P08; Auth расширен S2-P09) + pub mod auth/handshake/transport + crate-internal ephemeral
@@ -266,7 +268,7 @@ crates/strangecoin-net/src/      # network runtime (feature net, default-on по
 ├── peer/store.rs     # PeerStore: PeerRecord + BanRecord/BanReason + network.json known_peers/banned_peers (ADR-0022) + skeleton update_score (scoring.rs → S2-P17)
 ├── peer/manager.rs   # PeerManager: connect_to_peer = TCP+Noise XX+HELLO dial, ban state machine (warn→temp 1h→persistent 30d), tick/tick_at (clock injection), record_{invalid_block,protocol_violation,rate_violation,latency}, send_to_peer (S2-P13), impl AddrSender (S2-P12)
 ├── peer/pool.rs      # Connection (transport: Mutex<NoiseTransport> + TcpStream, send_payload = encrypt_frame+try_write) + ConnectionPool: per-IP-range Sybil cap V-17 (IPv4 /24, IPv6 /64) (S2-P12)
-├── gossip/           # mod.rs (GossipMessage dispatch + GossipState), inv.rs (INV/TX wire), get_data.rs (GET_DATA/NOTFOUND), broadcast.rs (announce_tx/block + handle_inv/get_data) — S2-P13; compact_blocks.rs (S2-P14), erlay/ (S2-P15)
+├── gossip/           # mod.rs (GossipMessage dispatch + GossipState), inv.rs (INV/TX wire), get_data.rs (GET_DATA/NOTFOUND), broadcast.rs (announce_tx/block + handle_inv/get_data) — S2-P13; compact_blocks.rs (BIP 152 short IDs + fill-up, S2-P14); erlay/ (S2-P15)
 ├── rate_limiter.rs   # migrated S2-P06 (sliding window), rewrite: token bucket + per-message caps (S2-P16)
 ├── sync.rs           # headers-first sync (migrated S2-P06)
 ├── sync_engine.rs    # sync engine + trait EventSink (migrated S2-P06)

@@ -43,6 +43,9 @@ pub trait BlockchainView: Send + Sync {
     /// Full pending transaction by txid, if present (S2-P13: gossip
     /// `GET_DATA` → `TX` response). `None` = not in the mempool.
     fn mempool_tx(&self, txid: &[u8; 32]) -> Option<Transaction>;
+    /// All pending mempool transactions (S2-P14: compact-block fill-up
+    /// indexes them by siphash short ID). Order is not consensus-relevant.
+    fn mempool_txs(&self) -> Vec<Transaction>;
     /// Full canonical block by its hash, if present (S2-P13: gossip
     /// `GET_DATA` → `BLOCK` response). `None` = unknown block.
     fn block_by_hash(&self, block_hash: &str) -> Option<Block>;

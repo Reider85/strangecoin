@@ -28,6 +28,11 @@ sha2 = "=0.10.9"
 thiserror = "1"
 # network.json parsing (`seed_config` section loader, S2-P11 seeds.rs).
 serde_json = "1"
+# SipHash-2-4 for BIP 152 compact-block short tx IDs (S2-P14). Pinned exact per
+# Stage 2 Pin Policy (AGENTS.md): short IDs sit on the block-relay path — a
+# version bump would change wire-visible IDs between node builds; bumps go
+# through SCIP after mainnet freeze only.
+siphasher = "=1.0.4"
 # DNSSEC-validated DNS seed resolution (S2-P11, threat V-16). Pinned exact per
 # Stage 2 Pin Policy (AGENTS.md): resolver API churns between minors (0.24 ->
 # 0.26 removed TokioAsyncResolver/ResolveError) and DNSSEC sits on the peer

@@ -114,6 +114,10 @@ impl strangecoin_net::BlockchainView for TestView {
         self.mempool.get(txid).cloned()
     }
 
+    fn mempool_txs(&self) -> Vec<Transaction> {
+        self.mempool.values().cloned().collect()
+    }
+
     fn block_by_hash(&self, block_hash: &str) -> Option<Block> {
         self.blocks.get(block_hash).cloned()
     }
