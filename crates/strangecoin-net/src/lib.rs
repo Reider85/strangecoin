@@ -6,9 +6,10 @@
 //!
 //! Scaffolding created in S2-P05; `protocol`, `rate_limiter`, `sync` and
 //! `sync_engine` were migrated from the monolith in S2-P06 (strangler
-//! pattern); the Noise handshake state machine landed in S2-P07 (`noise`).
-//! The remaining stub modules are populated by the later Stage 2 prompts
-//! (see `analytics/prompt-stage2.md`).
+//! pattern); the Noise handshake state machine landed in S2-P07 and the
+//! encrypted transport framing in S2-P08 (`noise`). The remaining stub
+//! modules are populated by the later Stage 2 prompts (see
+//! `analytics/prompt-stage2.md`).
 
 pub mod blockchain_view;
 pub mod discovery;
@@ -24,4 +25,4 @@ pub mod sync_engine;
 
 pub use blockchain_view::BlockchainView;
 pub use error::NetError;
-pub use noise::{NoiseError, NoiseHandshake, NoiseRole};
+pub use noise::{NoiseError, NoiseHandshake, NoiseRole, NoiseTransport};

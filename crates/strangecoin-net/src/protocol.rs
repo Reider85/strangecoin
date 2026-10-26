@@ -1,4 +1,8 @@
 use crate::error::NetError;
+use crate::noise::transport::{
+    MAX_ENCRYPTED_PART, MAX_TRANSPORT_PAYLOAD, NOISE_NONCE_LEN, NOISE_TAG_LEN,
+};
+use crate::noise::NoiseTransport;
 use std::io::Read;
 use strangecoin_core::serialize::{
     deserialize_block, deserialize_header, serialize_block, serialize_header, HEADER_WIRE_LEN,
@@ -321,6 +325,116 @@ pub async fn write_length_prefixed_async<W: AsyncWriteExt + Unpin>(
     writer.write_all(&data).await?;
     writer.flush().await?;
     Ok(())
+}
+
+// ------------------------------------------- encrypted framing (S2-P08)
+
+/// Wire format of one encrypted message: a 4-byte BE total length covering
+/// everything after it, then consecutive Noise parts
+/// `[nonce: u64 BE][ciphertext + AEAD tag]`:
+///
+/// ```text
+/// [total_len: u32 BE][nonce: u64][ciphertext + tag][nonce][ciphertext + tag]…
+/// ```
+///
+/// A single part below the Noise size limit is exactly the S2-P08 spec shape
+/// `[length][nonce][ciphertext + AEAD tag: length - 8]`; larger payloads are
+/// split into [`MAX_TRANSPORT_PAYLOAD`]-sized plaintext chunks because the
+/// Noise transport caps one message at 65 535 bytes. Non-final parts are
+/// therefore always exactly [`MAX_ENCRYPTED_PART`] bytes and the final part
+/// carries the remainder — [`decrypt_frame`] splits on that rule.
+///
+/// Length-prefix discipline (invariant #16): [`decrypt_frame`] validates the
+/// claimed length against [`MAX_MESSAGE_SIZE`] **before** it allocates.
+pub const ENCRYPTED_FRAME_OVERHEAD: usize = NOISE_NONCE_LEN + NOISE_TAG_LEN;
+
+/// Encrypt one complete message into a self-contained wire frame (the whole
+/// `[length][nonce][ct…]` structure — send it with a plain write, do **not**
+/// wrap it in another length prefix).
+///
+/// Payloads larger than [`MAX_TRANSPORT_PAYLOAD`] are chunked transparently;
+/// every chunk consumes one transport nonce, so the peer reassembles in
+/// order. The total length is patched in after the loop, once it is known.
+///
+/// Note: the S2-P08 spec types this as `msg: &Message`; this crate has no
+/// `Message` type (messages are tagged byte payloads built by `encode_*` /
+/// parsed by `parse_*`), so the function encrypts raw payload bytes.
+pub fn encrypt_frame(
+    transport: &mut NoiseTransport,
+    msg: &[u8],
+    out: &mut Vec<u8>,
+) -> Result<(), NetError> {
+    let parts = msg.len().div_ceil(MAX_TRANSPORT_PAYLOAD).max(1);
+    let wire_len = 4 + msg.len() + parts * ENCRYPTED_FRAME_OVERHEAD;
+    if wire_len > MAX_MESSAGE_SIZE {
+        return Err(size_err("encrypted message"));
+    }
+    out.clear();
+    out.extend_from_slice(&0u32.to_be_bytes()); // total_len, patched below
+    let mut part = vec![0u8; MAX_ENCRYPTED_PART];
+    let mut start = 0;
+    loop {
+        let end = std::cmp::min(start + MAX_TRANSPORT_PAYLOAD, msg.len());
+        let n = transport
+            .encrypt(&msg[start..end], &mut part)
+            .map_err(|e| NetError::Transport(e.to_string()))?;
+        out.extend_from_slice(&part[..n]);
+        start = end;
+        if start >= msg.len() {
+            break;
+        }
+    }
+    let total = out.len() - 4;
+    out[0..4].copy_from_slice(&(total as u32).to_be_bytes());
+    Ok(())
+}
+
+/// Decrypt a complete wire frame produced by [`encrypt_frame`] (including its
+/// leading length prefix), reassembling chunked payloads.
+///
+/// Order of checks — every one of them runs before the allocation or side
+/// effect it protects (invariant #16):
+///
+/// 1. claimed `total_len` ≤ [`MAX_MESSAGE_SIZE`] → reject huge lengths
+///    before `Vec::with_capacity`;
+/// 2. `total_len` matches the buffer → reject truncation;
+/// 3. per-part minimum size before the per-part scratch buffer;
+/// 4. nonce check + AEAD tag inside `NoiseTransport::decrypt`.
+///
+/// Transport-layer failures (tampered tag, replayed nonce) surface as
+/// [`NetError::Transport`], framing violations as [`NetError::Protocol`].
+pub fn decrypt_frame(transport: &mut NoiseTransport, raw: &[u8]) -> Result<Vec<u8>, NetError> {
+    if raw.len() < 4 {
+        return Err(size_err("encrypted frame prefix"));
+    }
+    let total = u32::from_be_bytes([raw[0], raw[1], raw[2], raw[3]]) as usize;
+    if total > MAX_MESSAGE_SIZE {
+        return Err(size_err("encrypted frame"));
+    }
+    if total != raw.len() - 4 {
+        return Err(size_err("encrypted frame length"));
+    }
+    if total < ENCRYPTED_FRAME_OVERHEAD {
+        return Err(size_err("encrypted frame"));
+    }
+    let blob = &raw[4..];
+    let mut plaintext = Vec::with_capacity(total);
+    let mut offset = 0;
+    while offset < total {
+        let remaining = total - offset;
+        let take = remaining.min(MAX_ENCRYPTED_PART);
+        let part = &blob[offset..offset + take];
+        if part.len() < ENCRYPTED_FRAME_OVERHEAD {
+            return Err(size_err("encrypted part"));
+        }
+        let mut chunk = vec![0u8; part.len() - ENCRYPTED_FRAME_OVERHEAD];
+        let n = transport
+            .decrypt(part, &mut chunk)
+            .map_err(|e| NetError::Transport(e.to_string()))?;
+        plaintext.extend_from_slice(&chunk[..n]);
+        offset += take;
+    }
+    Ok(plaintext)
 }
 
 #[cfg(test)]

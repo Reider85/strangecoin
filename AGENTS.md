@@ -1,6 +1,6 @@
 # AGENTS.md — Strangecoin Developer Guide
 
-> **NOTE — Stage 2 in progress.** Этот файл ведётся инкрементально по правилу FBP10 из retro §8.1 (`prompt-stage2.md` §6.5): Stage 2 секции добавляются только в тех же коммитах, где уже существуют соответствующие артефакты (см. §Forbidden Updates). Секции §Active Stage, §Stage 2 Dependency Map, §Stage 2 Pin Policy, §Stage 2 Determinism Checklist, §Stage 2 Pitfalls **активны** (артефакты S2-P01..S2-P07 существуют: ADR-0020..0023 + `crates/strangecoin-net/` scaffolding + миграция network-модулей + Noise handshake `noise/{mod,handshake}.rs`).
+> **NOTE — Stage 2 in progress.** Этот файл ведётся инкрементально по правилу FBP10 из retro §8.1 (`prompt-stage2.md` §6.5): Stage 2 секции добавляются только в тех же коммитах, где уже существуют соответствующие артефакты (см. §Forbidden Updates). Секции §Active Stage, §Stage 2 Dependency Map, §Stage 2 Pin Policy, §Stage 2 Determinism Checklist, §Stage 2 Pitfalls **активны** (артефакты S2-P01..S2-P08 существуют: ADR-0020..0023 + `crates/strangecoin-net/` scaffolding + миграция network-модулей + Noise handshake `noise/{mod,handshake}.rs` + Noise transport `noise/transport.rs` + `encrypt_frame`/`decrypt_frame`).
 
 ## Project Overview
 
@@ -16,14 +16,14 @@ Strangecoin — Rust cryptocurrency (**v1.5.0**, edition 2021): PoW blockchain �
 
 **Status**: in progress (precondition verified — tag `v1.5.0-stage1.5` confirmed on origin commit `1f133c7`; `bugfixes-stage1.5.md` v1.2 verified 11/11 fixed, см. `prompt-stage2.md` §0.1).
 
-**Next prompt**: S2-P08 (Noise transport encryption, ChaCha20-Poly1305 framing). Открыты параллельные треки: Noise S2-P08→S2-P09, Peer S2-P10..S2-P12, Gossip S2-P13.., Cleanup S2-P18∥S2-P19, Shadow S2-P20 (Noise-трек: S2-P07 закрыт).
+**Next prompt**: S2-P09 (node_id auth via Ed25519, `noise/auth.rs`). Открыты параллельные треки: Noise S2-P09, Peer S2-P10..S2-P12, Gossip S2-P13.., Cleanup S2-P18∥S2-P19, Shadow S2-P20 (Noise-трек: S2-P07, S2-P08 закрыты).
 
-**Prompts done**: 7 / 24 (S2-P01..S2-P07).
+**Prompts done**: 8 / 24 (S2-P01..S2-P08).
 
 **Track status** (см. §Stage 2 Dependency Map ниже для деталей):
 - [x] ADRs track: S2-P01 (ADR-0020) / S2-P02 (ADR-0021) / S2-P03 (ADR-0022) / S2-P04 (ADR-0023) — done
 - [x] Crate track: S2-P05 (scaffolding `crates/strangecoin-net/` + workspace member + feature `net` default-on) / S2-P06 (migration `src/network/*` → strangecoin-net + re-export shim + `BlockchainView`/`EventSink` cycle break) — done
-- [ ] Noise track: S2-P07 (handshake `NoiseHandshake`, XX 3 round trips, `expect_remote_static`) — done; → S2-P08 (transport) → S2-P09 (Ed25519 auth) — последовательно
+- [ ] Noise track: S2-P07 (handshake `NoiseHandshake`, XX 3 round trips, `expect_remote_static`) / S2-P08 (transport `NoiseTransport`: encrypt/decrypt, monotonic nonces, `NoiseError::Replay`, rekey; framing `encrypt_frame`/`decrypt_frame`, chunking >65519 B) — done; → S2-P09 (Ed25519 auth) — последовательно
 - [ ] Peer track: S2-P10 (HELLO) → S2-P11 (discovery) → S2-P12 (peer mgmt) — последовательно
 - [ ] Gossip track: S2-P13 (INV) → S2-P14 (compact blocks) → S2-P15 (Erlay) — последовательно
 - [ ] Limits track: S2-P16 (rate limiting) ∥ S2-P17 (peer scoring) — параллельны после peer
@@ -86,6 +86,8 @@ Strangecoin — Rust cryptocurrency (**v1.5.0**, edition 2021): PoW blockchain �
 Ревью каждой новой network-функции на детерминизм — **обязательный пункт КГ** в каждом из S2-P07/P08/P09/P15/P17 (см. `prompt-stage2.md` §0 строка 132).
 
 **Статус S2-P07 (2026-10-26) — deferred obligation по пунктам 2–3**: сигнатура `NoiseHandshake::initiator/responder(static_key)` зафиксирована спекой промпта, поэтому эфемерный X25519-ключ сейчас идёт из snow default resolver (OS CSPRNG) — чек-лист это запрещает. Решение принято явно при выполнении S2-P07 и зафиксировано в commit message (правило «отклонения — явно»). Закрывается в **S2-P09** вместе с keystore-интеграцией (`NodeKeypair::from_keystore`): HKDF(seed=`keystore.long_term_seed`, `info=b"noise_ephemeral_v1"`) → собственный `snow::resolvers::CryptoResolver` вместо default; верифицируется в S2-P23/S2-P24. Пункты 1/4/5 S2-P07 не затронул (нет time- и peer-list-логики).
+
+**Статус S2-P08 (2026-10-26)**: obligation пунктов 2–3 не закрыт (тот же дефолтный resolver — S2-P09); сами transport-функции чек-лист не нарушают: нет time/RNG/I/O, nonce-счётчики стартуют с 0 и двигаются ровно на 1 за кадр, ключи — из handshake transcript. Rekey-расписание (N сообщений / M байт, синхронизируемое между пирами, noise rev1 §11.3) — примитив `NoiseTransport::rekey()` готов, триггер придёт с connection loop (S2-P12/S2-P19).
 
 ---
 
@@ -239,10 +241,11 @@ crates/strangecoin-net/src/      # network runtime (feature net, default-on по
 ├── lib.rs            # pub mod declarations + NetError/BlockchainView re-export; NetworkHandle/NetworkConfig — later
 ├── error.rs          # NetError: Handshake/Transport/Peer/Protocol/RateLimit + From<io::Error>/From<snow::Error>/From<NoiseError>
 ├── blockchain_view.rs # trait BlockchainView (S2-P06: разрыв цикла network↔blockchain)
-├── protocol.rs       # framing + wire codecs (migrated S2-P06; encrypt_frame/decrypt_frame after S2-P08)
+├── protocol.rs       # framing + wire codecs (migrated S2-P06; encrypt_frame/decrypt_frame S2-P08)
 ├── protocol/hello.rs # HELLO message + capabilities negotiation (S2-P10)
-├── noise/mod.rs      # NoiseError (S2-P07) + pub mod handshake
-├── noise/handshake.rs # NoiseHandshake XX state machine (S2-P07), transport (S2-P08), auth (S2-P09)
+├── noise/mod.rs      # NoiseError (S2-P07, Replay — S2-P08) + pub mod handshake/transport
+├── noise/handshake.rs # NoiseHandshake XX state machine (S2-P07), auth (S2-P09)
+├── noise/transport.rs # NoiseTransport: AEAD framing, monotonic nonces, anti-replay, rekey (S2-P08)
 ├── discovery.rs      # stub → seeds.rs, dnssec.rs, addr_gossip.rs (S2-P11)
 ├── peer.rs           # stub → store.rs, manager.rs, pool.rs (S2-P12), scoring.rs (S2-P17)
 ├── gossip.rs         # stub → inv.rs, get_data.rs, broadcast.rs (S2-P13), compact_blocks.rs (S2-P14), erlay/ (S2-P15)
@@ -431,6 +434,7 @@ src/                  # node monolith (orchestrator)
 - **dlltool / windows-gnu raw-dylib**: host toolchain `x86_64-pc-windows-gnu` не содержит `as.exe` в self-contained, а `dlltool` из rustup-тулчейна не может запустить `as` (CreateProcess падает из-за кириллического профиля `C:\Users\ЗС`). Рабочее решение — **Windows host preamble** в §Build & Test Commands (`C:\msys64\mingw64\bin` первым в PATH того же вызова, что и cargo). НЕ добавлять `target/dlltool-shim` (закрытый as.exe ломает cc-rs: gcc exit 1 без stderr); НЕ выставлять `CC_*`/`AR_*` env-vars (инвалидация всех C-build fingerprints). CI (ubuntu) не затронут
 - **fmt drift (закрыт [S2-P05] style-коммитом)**: до S2-P05 repo-wide `cargo fmt --all -- --check` давал ~300 pre-existing diff'ов (~80 файлов core+src+tests) — дрейф накопился ранее и не был от правок промпта. Закрыто: `cargo fmt --all` принят rustfmt 1.9.0 (gnu), 1.10.0 (= CI stable канал, msvc-тулчейн) и nightly — 0 diff каждым. Если дрейф появится снова (смена rustfmt-канала) — повторить `cargo fmt --all` отдельным style-коммитом; сверять только тронутые файлы (`cargo fmt -p <crate> -- --check`), полный fmt-прогон секунды. CI beta-канал и статус CI-джоб локально **неверифицируемы** (нет `gh` CLI на хосте)
 - **Пайплайн-обрыв в PowerShell**: `cargo test ... | Select-String ... | Select-Object -First N` убивает cargo после N совпадений (exit -1, тесты не дорабатывают). Полный прогон: перенаправлять в файл (`... | Out-File target\test.log`) и фильтровать файл после завершения
+- **Долгие команды убивает харнесс (наблюдение, S2-P08)**: любая команда с выводом в shell-pipe живёт ~5 мин и гибнет с `ChildProcess.kill` (даже при большем timeout-параметре; `| Out-File` — тоже pipe на стороне PS). Нативная запись в файл через `cmd /c "cargo ... > target\x.log 2>&1"` (дескриптор stdout = файл, не pipe) переживает и 5+ мин — verified на `cargo test -p strangecoin-core --lib` (303 s, exit 0). `cargo test --workspace` целиком (~10–12 мин) через pipe не проходит — гонять чанками (`-p <crate>`, отдельные `--test <name>`) с `cmd /c "... > log"`, результаты собирать grep'ом по логам после каждой команды
 - **GUI**: feature `gui` is defined; default-on после S2-P05 (по спеке промпта; headless-режим — `-- --headless` runtime-флаг)
 - **cargo-fuzz**: not runnable on this Windows host — use `cargo run --example canonical_decode_soak`; coverage-guided runs live in CI jobs `fuzz-canonical-decode` + Stage 1.5 VM targets + Stage 2 network targets (push/PR)
 - **tracing only** (no println!) — структура: `tracing::info!(target = "net::noise", peer_id = %id, "handshake completed")`

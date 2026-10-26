@@ -3,13 +3,16 @@
 //! * S2-P07 (this module's [`handshake`]): `Noise_XX_25519_ChaChaPoly_BLAKE2s`
 //!   handshake state machine — 3 round trips, mutual auth without PSK,
 //!   ephemeral keys per session (forward secrecy).
-//! * S2-P08: ChaCha20-Poly1305 record-layer framing on top of the
-//!   `snow::TransportState` produced here.
+//! * S2-P08 (this module's [`transport`]): ChaCha20-Poly1305 record-layer
+//!   framing on top of the `snow::TransportState` the handshake produces —
+//!   explicit nonces, anti-replay, rekey.
 //! * S2-P09: Ed25519 `node_id` binding for the peer identity.
 
 pub mod handshake;
+pub mod transport;
 
 pub use handshake::{NoiseHandshake, NoiseRole, NOISE_PARAMS};
+pub use transport::NoiseTransport;
 
 use thiserror::Error;
 
@@ -54,6 +57,11 @@ pub enum NoiseError {
     /// (auth check at the `es` / `se` step, ADR-0020 MITM detection).
     #[error("remote static key mismatch")]
     Auth,
+
+    /// Frame nonce did not equal the expected monotonic counter — replayed,
+    /// reordered or corrupted nonce header (S2-P08 transport, threat V-14).
+    #[error("nonce out of sequence")]
+    Replay,
 }
 
 impl From<snow::Error> for NoiseError {
