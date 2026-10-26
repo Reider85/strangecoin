@@ -1,6 +1,6 @@
 # AGENTS.md — Strangecoin Developer Guide
 
-> **NOTE — Stage 2 in progress.** Этот файл ведётся инкрементально по правилу FBP10 из retro §8.1 (`prompt-stage2.md` §6.5): Stage 2 секции добавляются только в тех же коммитах, где уже существуют соответствующие артефакты (см. §Forbidden Updates). Секции §Active Stage, §Stage 2 Dependency Map, §Stage 2 Pin Policy, §Stage 2 Determinism Checklist, §Stage 2 Pitfalls **активны** (артефакты S2-P01..S2-P08 существуют: ADR-0020..0023 + `crates/strangecoin-net/` scaffolding + миграция network-модулей + Noise handshake `noise/{mod,handshake}.rs` + Noise transport `noise/transport.rs` + `encrypt_frame`/`decrypt_frame`).
+> **NOTE — Stage 2 in progress.** Этот файл ведётся инкрементально по правилу FBP10 из retro §8.1 (`prompt-stage2.md` §6.5): Stage 2 секции добавляются только в тех же коммитах, где уже существуют соответствующие артефакты (см. §Forbidden Updates). Секции §Active Stage, §Stage 2 Dependency Map, §Stage 2 Pin Policy, §Stage 2 Determinism Checklist, §Stage 2 Pitfalls **активны** (артефакты S2-P01..S2-P09 существуют: ADR-0020..0023 + `crates/strangecoin-net/` scaffolding + миграция network-модулей + Noise handshake `noise/{mod,handshake}.rs` + Noise transport `noise/transport.rs` + `encrypt_frame`/`decrypt_frame` + Noise auth `noise/{auth,ephemeral}.rs` + `wallet::load_or_create_node_keypair`).
 
 ## Project Overview
 
@@ -16,14 +16,14 @@ Strangecoin — Rust cryptocurrency (**v1.5.0**, edition 2021): PoW blockchain �
 
 **Status**: in progress (precondition verified — tag `v1.5.0-stage1.5` confirmed on origin commit `1f133c7`; `bugfixes-stage1.5.md` v1.2 verified 11/11 fixed, см. `prompt-stage2.md` §0.1).
 
-**Next prompt**: S2-P09 (node_id auth via Ed25519, `noise/auth.rs`). Открыты параллельные треки: Noise S2-P09, Peer S2-P10..S2-P12, Gossip S2-P13.., Cleanup S2-P18∥S2-P19, Shadow S2-P20 (Noise-трек: S2-P07, S2-P08 закрыты).
+**Next prompt**: S2-P10 (HELLO + capabilities negotiation, `protocol/hello.rs`). Открыты параллельные треки: Peer S2-P10..S2-P12, Gossip S2-P13.., Cleanup S2-P18∥S2-P19, Shadow S2-P20 (Noise-трек S2-P07..S2-P09 закрыт).
 
-**Prompts done**: 8 / 24 (S2-P01..S2-P08).
+**Prompts done**: 9 / 24 (S2-P01..S2-P09).
 
 **Track status** (см. §Stage 2 Dependency Map ниже для деталей):
 - [x] ADRs track: S2-P01 (ADR-0020) / S2-P02 (ADR-0021) / S2-P03 (ADR-0022) / S2-P04 (ADR-0023) — done
 - [x] Crate track: S2-P05 (scaffolding `crates/strangecoin-net/` + workspace member + feature `net` default-on) / S2-P06 (migration `src/network/*` → strangecoin-net + re-export shim + `BlockchainView`/`EventSink` cycle break) — done
-- [ ] Noise track: S2-P07 (handshake `NoiseHandshake`, XX 3 round trips, `expect_remote_static`) / S2-P08 (transport `NoiseTransport`: encrypt/decrypt, monotonic nonces, `NoiseError::Replay`, rekey; framing `encrypt_frame`/`decrypt_frame`, chunking >65519 B) — done; → S2-P09 (Ed25519 auth) — последовательно
+- [x] Noise track: S2-P07 (handshake `NoiseHandshake`, XX 3 round trips, `expect_remote_static`) / S2-P08 (transport `NoiseTransport`: encrypt/decrypt, monotonic nonces, `NoiseError::Replay`, rekey; framing `encrypt_frame`/`decrypt_frame`, chunking >65519 B) / S2-P09 (Ed25519 `NodeId` auth: `noise/auth.rs`, auth blob `[pubkey||sig]` в rounds 2/3, `into_transport → (NoiseTransport, NodeId)`, `wallet::load_or_create_node_keypair`, детерминированный ephemeral `noise/ephemeral.rs`) — done
 - [ ] Peer track: S2-P10 (HELLO) → S2-P11 (discovery) → S2-P12 (peer mgmt) — последовательно
 - [ ] Gossip track: S2-P13 (INV) → S2-P14 (compact blocks) → S2-P15 (Erlay) — последовательно
 - [ ] Limits track: S2-P16 (rate limiting) ∥ S2-P17 (peer scoring) — параллельны после peer
@@ -60,14 +60,16 @@ Strangecoin — Rust cryptocurrency (**v1.5.0**, edition 2021): PoW blockchain �
 
 | Crate | Pin | ADR | Промпт | Назначение |
 |-------|-----|-----|---------|------------|
-| `snow` | `=x.y.z` (точная версия определяется в S2-P07) | ADR-0020 | S2-P07 | Noise Protocol Framework (XX handshake, ChaCha20-Poly1305 transport) |
-| `ed25519-dalek` | `=2.0` | ADR-0020 | S2-P09 | Ed25519 internal P2P identity (node_id auth) |
+| `snow` | `=0.10.0` | ADR-0020 | S2-P07 | Noise Protocol Framework (XX handshake, ChaCha20-Poly1305 transport) |
+| `ed25519-dalek` | `=2.0` (резолвится в 2.0.0; lock унифицирован со `strangecoin-vm-wasm`, req `"2"`) | ADR-0020 | S2-P09 | Ed25519 internal P2P identity (node_id auth) |
+| `hkdf` | `=0.12.1` | ADR-0020 | S2-P09 | HKDF-SHA256 для детерминированного вывода Noise ephemeral keys (чек-лист #3) |
+| `sha2` | `=0.10.9` | ADR-0020 | S2-P09 | Sha256 для `hkdf` (на handshake key-derivation path) |
 | `minisketch-rs` | `=x.y.z` (точная версия определяется в S2-P15) | ADR-0021 | S2-P15 | Erlay reconciliation (PinSketch sketches, mincut protocol) |
 | `siphasher` | `=x.y` | — | S2-P14 | Compact blocks BIP 152 (siphash short tx IDs) |
 | `hickory-resolver` | `=x.y` | — | S2-P11 | DNSSEC validation для peer discovery |
 | `chacha20poly1305` | через `snow` (не напрямую) | ADR-0020 | S2-P08 | AEAD transport encryption |
 
-**Почему pin**: Noise API может меняться между majors (snow 0.9 → 0.10 breaking); minisketch-rs C++ bindings чувствительны к версии cc-rs; ed25519-dalek 2.0 имеет breaking API vs 1.x. После mainnet freeze любая смена pinned version = SCIP с activation height, чтобы все узлы обновились синхронно.
+**Почему pin**: Noise API может меняться между majors (snow 0.9 → 0.10 breaking); minisketch-rs C++ bindings чувствительны к версии cc-rs; ed25519-dalek 2.0 имеет breaking API vs 1.x; hkdf/sha2 сидят на handshake key-derivation path (детерминизм S2-P09). После mainnet freeze любая смена pinned version = SCIP с activation height, чтобы все узлы обновились синхронно.
 
 ---
 
@@ -85,9 +87,11 @@ Strangecoin — Rust cryptocurrency (**v1.5.0**, edition 2021): PoW blockchain �
 
 Ревью каждой новой network-функции на детерминизм — **обязательный пункт КГ** в каждом из S2-P07/P08/P09/P15/P17 (см. `prompt-stage2.md` §0 строка 132).
 
-**Статус S2-P07 (2026-10-26) — deferred obligation по пунктам 2–3**: сигнатура `NoiseHandshake::initiator/responder(static_key)` зафиксирована спекой промпта, поэтому эфемерный X25519-ключ сейчас идёт из snow default resolver (OS CSPRNG) — чек-лист это запрещает. Решение принято явно при выполнении S2-P07 и зафиксировано в commit message (правило «отклонения — явно»). Закрывается в **S2-P09** вместе с keystore-интеграцией (`NodeKeypair::from_keystore`): HKDF(seed=`keystore.long_term_seed`, `info=b"noise_ephemeral_v1"`) → собственный `snow::resolvers::CryptoResolver` вместо default; верифицируется в S2-P23/S2-P24. Пункты 1/4/5 S2-P07 не затронул (нет time- и peer-list-логики).
+**Статус S2-P07 (2026-10-26) — deferred obligation по пунктам 2–3 закрыт в S2-P09**: сигнатура `NoiseHandshake::initiator/responder(static_key)` была зафиксирована спекой промпта S2-P07, поэтому эфемерный X25519-ключ шёл из snow default resolver (OS CSPRNG) — чек-лист это запрещает. Решение принято явно при выполнении S2-P07 и зафиксировано в commit message (правило «отклонения — явно»). Закрыто вместе с keystore-интеграцией (`NodeKeypair::from_keystore` + `wallet::load_or_create_node_keypair`): HKDF(seed=`keystore.long_term_seed`, `info=b"noise_ephemeral_v1" || counter`) → собственный `snow::resolvers::CryptoResolver` (`noise/ephemeral.rs`) вместо default. Пункты 1/4/5 S2-P07 не затронуты (нет time- и peer-list-логики).
 
-**Статус S2-P08 (2026-10-26)**: obligation пунктов 2–3 не закрыт (тот же дефолтный resolver — S2-P09); сами transport-функции чек-лист не нарушают: нет time/RNG/I/O, nonce-счётчики стартуют с 0 и двигаются ровно на 1 за кадр, ключи — из handshake transcript. Rekey-расписание (N сообщений / M байт, синхронизируемое между пирами, noise rev1 §11.3) — примитив `NoiseTransport::rekey()` готов, триггер придёт с connection loop (S2-P12/S2-P19).
+**Статус S2-P08 (2026-10-26)**: obligation пунктов 2–3 не закрыт на момент S2-P08 (тот же дефолтный resolver) — закрыт в S2-P09 (см. статус выше); сами transport-функции чек-лист не нарушают: нет time/RNG/I/O, nonce-счётчики стартуют с 0 и двигаются ровно на 1 за кадр, ключи — из handshake transcript. Rekey-расписание (N сообщений / M байт, синхронизируемое между пирами, noise rev1 §11.3) — примитив `NoiseTransport::rekey()` готов, триггер придёт с connection loop (S2-P12/S2-P19).
+
+**Статус S2-P09 (2026-10-26) — obligation пунктов 2–3 закрыт**: эфемерные ключи Noise больше не берут OS CSPRNG — `SeedResolver` (`noise/ephemeral.rs`) подменяет только RNG snow's resolver (DH/hash/cipher — default), seed = `HKDF-SHA256(long_term_seed, info = b"noise_ephemeral_v1" || counter_be)`, стрим — blake3 в counter mode. Счётчик живёт в `Arc`-внутренности `NodeKeypair` (fetch_add на каждый handshake): одинаковый seed + тот же порядок handshakes → та же последовательность ephemeral keys (reproducibility), каждый следующий handshake → новый ключ (forward secrecy в пределах прогона узла). `OsRng` — только при однократном создании `keystore/node/node_key.json` на старте (разрешено чек-листом). Тест: `tests/noise_auth.rs::ephemeral_keys_are_reproducible_per_seed_and_fresh_per_handshake` + unit-тесты `noise/ephemeral.rs`. Trade-off (зафиксирован явно): эфемер выводится из long-term seed, поэтому компрометация seed раскрывает записанные сессии этого узла — принято ради reproducibility (§0 требует «один и тот же seed → та же последовательность»); верификация — S2-P23/S2-P24. Обязательный пункт КГ-ревью на детерминизм выполнен (нет time/RNG/I/O в handshake-пути, счётчики + transcript-only ключи).
 
 ---
 
@@ -243,8 +247,10 @@ crates/strangecoin-net/src/      # network runtime (feature net, default-on по
 ├── blockchain_view.rs # trait BlockchainView (S2-P06: разрыв цикла network↔blockchain)
 ├── protocol.rs       # framing + wire codecs (migrated S2-P06; encrypt_frame/decrypt_frame S2-P08)
 ├── protocol/hello.rs # HELLO message + capabilities negotiation (S2-P10)
-├── noise/mod.rs      # NoiseError (S2-P07, Replay — S2-P08) + pub mod handshake/transport
-├── noise/handshake.rs # NoiseHandshake XX state machine (S2-P07), auth (S2-P09)
+├── noise/mod.rs      # NoiseError (S2-P07, Replay — S2-P08; Auth расширен S2-P09) + pub mod auth/handshake/transport + crate-internal ephemeral
+├── noise/auth.rs      # NodeId=blake3(pubkey), NodeKeypair (from_keystore/from_seed, sign), verify_node_id — S2-P09
+├── noise/ephemeral.rs # SeedResolver: HKDF-выведенный детерминированный ephemeral RNG вместо OS CSPRNG (S2-P09, чек-лист #2/#3)
+├── noise/handshake.rs # NoiseHandshake XX state machine (S2-P07) + auth-blob rounds 2/3 → (NoiseTransport, NodeId) (S2-P09)
 ├── noise/transport.rs # NoiseTransport: AEAD framing, monotonic nonces, anti-replay, rekey (S2-P08)
 ├── discovery.rs      # stub → seeds.rs, dnssec.rs, addr_gossip.rs (S2-P11)
 ├── peer.rs           # stub → store.rs, manager.rs, pool.rs (S2-P12), scoring.rs (S2-P17)

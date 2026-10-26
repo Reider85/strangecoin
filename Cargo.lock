@@ -1246,15 +1246,14 @@ dependencies = [
 
 [[package]]
 name = "ed25519-dalek"
-version = "2.2.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
+checksum = "7277392b266383ef8396db7fdeb1e77b6c52fed775f5df15bb24f35b72156980"
 dependencies = [
  "curve25519-dalek",
  "ed25519",
  "serde",
  "sha2",
- "subtle",
  "zeroize",
 ]
 
@@ -1907,6 +1906,15 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hkdf"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "796c3626b70dbdccf7b21612ab47b4c58b0f333c55d0ddb54cf9107a979a318d"
+dependencies = [
+ "hmac",
+]
 
 [[package]]
 name = "hmac"
@@ -3682,8 +3690,11 @@ name = "strangecoin-net"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "ed25519-dalek",
  "hex",
+ "hkdf",
  "serde",
+ "sha2",
  "snow",
  "strangecoin-core",
  "thiserror 1.0.69",

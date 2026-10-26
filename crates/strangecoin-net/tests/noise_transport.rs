@@ -9,7 +9,7 @@ use strangecoin_net::noise::transport::{
     MAX_ENCRYPTED_PART, MAX_TRANSPORT_PAYLOAD, NOISE_NONCE_LEN,
 };
 use strangecoin_net::protocol::{decrypt_frame, encrypt_frame, ENCRYPTED_FRAME_OVERHEAD};
-use strangecoin_net::{NetError, NoiseError, NoiseHandshake, NoiseTransport};
+use strangecoin_net::{NetError, NodeKeypair, NoiseError, NoiseHandshake, NoiseTransport};
 
 const BUF: usize = 512;
 
@@ -18,8 +18,12 @@ const RESPONDER_STATIC: [u8; 32] = [0x22; 32];
 
 /// Run a full XX handshake and return both peers' transports.
 fn handshake_pair() -> (NoiseTransport, NoiseTransport) {
-    let mut init = NoiseHandshake::initiator(&INITIATOR_STATIC).expect("initiator");
-    let mut resp = NoiseHandshake::responder(&RESPONDER_STATIC).expect("responder");
+    let init_id = NodeKeypair::from_seed([0xA1; 32]);
+    let resp_id = NodeKeypair::from_seed([0xB2; 32]);
+    let mut init = NoiseHandshake::initiator(&INITIATOR_STATIC, &init_id, Some(resp_id.node_id()))
+        .expect("initiator");
+    let mut resp = NoiseHandshake::responder(&RESPONDER_STATIC, &resp_id, Some(init_id.node_id()))
+        .expect("responder");
 
     let mut msg = [0u8; BUF];
     let mut payload = [0u8; BUF];
@@ -35,8 +39,10 @@ fn handshake_pair() -> (NoiseTransport, NoiseTransport) {
         .expect("round 3 read");
 
     assert!(init.is_finished() && resp.is_finished());
-    let initiator = NoiseTransport::new(init.into_transport().expect("init transport"), None);
-    let responder = NoiseTransport::new(resp.into_transport().expect("resp transport"), None);
+    let (initiator, init_peer) = init.into_transport().expect("init transport");
+    let (responder, resp_peer) = resp.into_transport().expect("resp transport");
+    assert_eq!(init_peer, resp_id.node_id(), "auth pinned the responder");
+    assert_eq!(resp_peer, init_id.node_id(), "auth pinned the initiator");
     (initiator, responder)
 }
 

@@ -247,3 +247,99 @@ impl Drop for Wallet {
         tracing::info!("Wallet dropped, keystore locked");
     }
 }
+
+/// The node's long-term Ed25519 identity (`keystore/node/node_key.json`) —
+/// S2-P09, internal node-to-node auth only (ARCHITECT3 §3.8), never an EOA
+/// key: transaction signing stays secp256k1 (ADR-0001), and the two key
+/// kinds live in segregated keystore directories (Stage 2 Pitfalls).
+#[cfg(feature = "net")]
+pub use strangecoin_net::noise::NodeKeypair;
+
+/// Where the node identity file lives: `<data_dir>/keystore/node/node_key.json`.
+#[cfg(feature = "net")]
+pub fn node_key_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("keystore").join("node").join("node_key.json")
+}
+
+/// Load the node's long-term Ed25519 identity, creating it on first start.
+///
+/// Unlike the wallet keystore this file is *not* password-gated: the node
+/// must restore its P2P identity unattended at startup. It stays inside the
+/// keystore tree (secrets policy — never `config.toml`) and inherits the data
+/// directory's ACLs (0600 set explicitly on unix).
+///
+/// `OsRng` here is the one spot the Stage 2 determinism checklist (#2) allows
+/// it: one-time keypair generation during node setup, offline, before any
+/// network activity. Everything derived afterwards — Noise ephemeral keys in
+/// particular — is deterministic from this seed (checklist #3, S2-P09).
+#[cfg(feature = "net")]
+pub fn load_or_create_node_keypair(data_dir: &Path) -> Result<NodeKeypair, StrangecoinError> {
+    let path = node_key_path(data_dir);
+    let seed: [u8; 32] = if path.exists() {
+        let raw = fs::read_to_string(&path)
+            .map_err(|e| StrangecoinError::ConfigError(format!("Error reading node key: {e}")))?;
+        let value: serde_json::Value = serde_json::from_str(&raw)
+            .map_err(|e| StrangecoinError::ConfigError(format!("Error parsing node key: {e}")))?;
+        let hex_seed = value.get("seed").and_then(|v| v.as_str()).ok_or_else(|| {
+            StrangecoinError::ConfigError("node key file is missing `seed`".into())
+        })?;
+        let bytes = hex::decode(hex_seed)
+            .map_err(|e| StrangecoinError::ConfigError(format!("Error decoding node key: {e}")))?;
+        <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| {
+            StrangecoinError::ConfigError("node key seed must be exactly 32 bytes".into())
+        })?
+    } else {
+        let mut seed = [0u8; 32];
+        OsRng.fill_bytes(&mut seed);
+        let dir = path
+            .parent()
+            .expect("node key path always has a parent directory");
+        fs::create_dir_all(dir).map_err(|e| {
+            StrangecoinError::ConfigError(format!("Failed to create node keystore dir: {e}"))
+        })?;
+        let file = serde_json::json!({ "version": "1.0", "seed": hex::encode(seed) });
+        let json = serde_json::to_string_pretty(&file)
+            .map_err(|e| StrangecoinError::ConfigError(format!("Node key serialization: {e}")))?;
+        fs::write(&path, json)
+            .map_err(|e| StrangecoinError::ConfigError(format!("Error writing node key: {e}")))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        }
+        info!(
+            path = %path.display(),
+            "Node Ed25519 identity created (keystore/node)"
+        );
+        seed
+    };
+
+    NodeKeypair::from_keystore(&seed)
+        .map_err(|e| StrangecoinError::ConfigError(format!("Node keypair build failed: {e}")))
+}
+
+#[cfg(all(test, feature = "net"))]
+mod node_identity_tests {
+    use super::*;
+
+    #[test]
+    fn node_keypair_keystore_roundtrip() {
+        let dir =
+            std::env::temp_dir().join(format!("strangecoin-nodekey-{}", uuid::Uuid::new_v4()));
+
+        let first = load_or_create_node_keypair(&dir).expect("first load creates the identity");
+        assert!(
+            node_key_path(&dir).exists(),
+            "identity persisted under keystore/node/"
+        );
+
+        let second = load_or_create_node_keypair(&dir).expect("second load reads the identity");
+        assert_eq!(
+            first.node_id(),
+            second.node_id(),
+            "reload must reproduce the same node_id"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

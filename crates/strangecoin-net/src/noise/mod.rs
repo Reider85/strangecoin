@@ -1,16 +1,24 @@
 //! Noise Protocol Framework transport (ADR-0020) — S2-P07..S2-P09.
 //!
+//! * S2-P09 (this module's [`auth`]): Ed25519 `node_id` identity — the peer
+//!   handle, its signing keypair, and the `verify_node_id` binding check.
 //! * S2-P07 (this module's [`handshake`]): `Noise_XX_25519_ChaChaPoly_BLAKE2s`
 //!   handshake state machine — 3 round trips, mutual auth without PSK,
-//!   ephemeral keys per session (forward secrecy).
+//!   ephemeral keys per session (forward secrecy), auth-blob rounds that
+//!   pin the peer's `node_id` (S2-P09).
 //! * S2-P08 (this module's [`transport`]): ChaCha20-Poly1305 record-layer
 //!   framing on top of the `snow::TransportState` the handshake produces —
 //!   explicit nonces, anti-replay, rekey.
-//! * S2-P09: Ed25519 `node_id` binding for the peer identity.
+//! * S2-P09 (this module's [`ephemeral`], crate-internal): deterministic
+//!   ephemeral-key derivation from the long-term seed (Stage 2 determinism
+//!   checklist #2/#3).
 
+pub mod auth;
+pub(crate) mod ephemeral;
 pub mod handshake;
 pub mod transport;
 
+pub use auth::{verify_node_id, NodeId, NodeKeypair, NodeKeystore, AUTH_BLOB_LEN};
 pub use handshake::{NoiseHandshake, NoiseRole, NOISE_PARAMS};
 pub use transport::NoiseTransport;
 
@@ -53,9 +61,11 @@ pub enum NoiseError {
     #[error("noise rng failed")]
     Rng,
 
-    /// The peer's Noise static public key does not match the expected one
-    /// (auth check at the `es` / `se` step, ADR-0020 MITM detection).
-    #[error("remote static key mismatch")]
+    /// Authentication check failed: the peer's Noise static public key does
+    /// not match the expected one (`es` / `se` step), its Ed25519 auth blob
+    /// does not verify, or the derived `node_id` is not the pinned peer
+    /// (ADR-0020 MITM detection, S2-P09).
+    #[error("remote identity mismatch")]
     Auth,
 
     /// Frame nonce did not equal the expected monotonic counter — replayed,
