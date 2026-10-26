@@ -296,6 +296,21 @@ impl BlockchainFacade {
             .contains(txid)
     }
 
+    /// Тx по txid из mempool (S2-P13 gossip GET_DATA → TX).
+    pub fn mempool_tx(&self, txid: &[u8; 32]) -> Option<Transaction> {
+        self.inner
+            .read()
+            .expect(BLOCKCHAIN_LOCK)
+            .mempool
+            .get(txid)
+            .cloned()
+    }
+
+    /// Канонический блок по hex-хешу (S2-P13 gossip GET_DATA → BLOCK).
+    pub fn block_by_hash(&self, block_hash: &str) -> Option<Block> {
+        self.with_inner(|bc| bc.chain.iter().find(|b| b.hash == block_hash).cloned())
+    }
+
     pub fn mempool_transactions(&self) -> Vec<Transaction> {
         self.inner
             .read()
@@ -517,6 +532,14 @@ impl strangecoin_net::BlockchainView for BlockchainFacade {
 
     fn mempool_contains(&self, txid: &[u8; 32]) -> bool {
         self.mempool_contains(txid)
+    }
+
+    fn mempool_tx(&self, txid: &[u8; 32]) -> Option<Transaction> {
+        self.mempool_tx(txid)
+    }
+
+    fn block_by_hash(&self, block_hash: &str) -> Option<Block> {
+        self.block_by_hash(block_hash)
     }
 
     fn save_state(&self) {

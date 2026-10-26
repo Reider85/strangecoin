@@ -223,6 +223,12 @@ impl Mempool {
         self.txs.contains_key(tx_id)
     }
 
+    /// Тx по txid (S2-P13: gossip GET_DATA → TX response через
+    /// `BlockchainView::mempool_tx`).
+    pub fn get(&self, tx_id: &TxId) -> Option<&Transaction> {
+        self.txs.get(tx_id)
+    }
+
     pub fn transactions(&self) -> Vec<Transaction> {
         self.txs.values().cloned().collect()
     }

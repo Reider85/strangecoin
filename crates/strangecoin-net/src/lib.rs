@@ -9,10 +9,10 @@
 //! pattern); the Noise handshake state machine landed in S2-P07, the
 //! encrypted transport framing in S2-P08, the Ed25519 `node_id` auth +
 //! deterministic ephemeral keys in S2-P09 (`noise`), HELLO negotiation in
-//! S2-P10, multi-source discovery in S2-P11 and the peer store/manager/pool
-//! split with the ban state machine in S2-P12 (`peer`). The remaining stub
-//! modules are populated by the later Stage 2 prompts (see
-//! `analytics/prompt-stage2.md`).
+//! S2-P10, multi-source discovery in S2-P11, the peer store/manager/pool
+//! split with the ban state machine in S2-P12 (`peer`) and INV/GET_DATA
+//! gossip in S2-P13 (`gossip`). The remaining stub modules are populated by
+//! the later Stage 2 prompts (see `analytics/prompt-stage2.md`).
 
 pub mod blockchain_view;
 pub mod discovery;
@@ -28,6 +28,10 @@ pub mod sync_engine;
 
 pub use blockchain_view::BlockchainView;
 pub use error::NetError;
+pub use gossip::{
+    announce_block, announce_tx, GetData, GossipMessage, GossipState, Inv, InvKind, InventoryItem,
+    NotFound,
+};
 pub use noise::{
     verify_node_id, NodeId, NodeKeypair, NodeKeystore, NoiseError, NoiseHandshake, NoiseRole,
     NoiseTransport,

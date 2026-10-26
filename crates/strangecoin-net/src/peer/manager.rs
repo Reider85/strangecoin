@@ -379,6 +379,17 @@ impl PeerManager {
         sent
     }
 
+    /// Encrypt `payload` and send it to one connected peer (S2-P13 gossip
+    /// per-peer INV path; also the S2-P11 `AddrSender` primitive). Errors
+    /// when the peer is not connected.
+    pub fn send_to_peer(&self, node_id: &NodeId, payload: &[u8]) -> Result<(), NetError> {
+        let connection = self
+            .pool()
+            .get_connection(node_id)
+            .ok_or_else(|| NetError::Peer(format!("peer {node_id} not connected")))?;
+        connection.send_payload(payload)
+    }
+
     /// A peer sent a block (or tx) that failed validation — ADR-0022
     /// `invalid_blocks_txs_sent` counter (threat V-15).
     pub fn record_invalid_block(&self, node_id: NodeId) {
@@ -616,11 +627,7 @@ impl PeerManager {
 
 impl AddrSender for PeerManager {
     fn send_addr(&self, peer: &NodeId, payload: &[u8]) -> Result<(), NetError> {
-        let connection = self
-            .pool()
-            .get_connection(peer)
-            .ok_or_else(|| NetError::Peer(format!("peer {peer} not connected")))?;
-        connection.send_payload(payload)
+        self.send_to_peer(peer, payload)
     }
 }
 

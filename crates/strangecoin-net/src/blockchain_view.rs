@@ -40,6 +40,12 @@ pub trait BlockchainView: Send + Sync {
     fn chain_contains_tx(&self, tx: &Transaction) -> bool;
     /// Is this txid pending in the mempool?
     fn mempool_contains(&self, txid: &[u8; 32]) -> bool;
+    /// Full pending transaction by txid, if present (S2-P13: gossip
+    /// `GET_DATA` → `TX` response). `None` = not in the mempool.
+    fn mempool_tx(&self, txid: &[u8; 32]) -> Option<Transaction>;
+    /// Full canonical block by its hash, if present (S2-P13: gossip
+    /// `GET_DATA` → `BLOCK` response). `None` = unknown block.
+    fn block_by_hash(&self, block_hash: &str) -> Option<Block>;
     /// Persist current state (no-op semantics owned by the facade).
     fn save_state(&self);
     /// Does a block with this hash still exist in the canonical chain?
