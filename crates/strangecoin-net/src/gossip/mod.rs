@@ -15,7 +15,10 @@
 //! peers that already know an object, and `handle_inv` never requests an
 //! object the local node already has.
 //!
-//! Erlay reconciliation (ADR-0021, S2-P15) extends this module later.
+//! Erlay reconciliation (ADR-0021, S2-P15) lives in [`erlay`]: it reuses
+//! this module's INV/GET_DATA path to transmit only the set difference
+//! between peers, with a mandatory full-relay fallback on any decode
+//! failure.
 //!
 //! **Determinism** (Stage 2 checklist, threat V-21 extension): codecs are
 //! pure byte shuffling; announce iterates `node_id`-sorted connected peers
@@ -23,6 +26,7 @@
 
 pub mod broadcast;
 pub mod compact_blocks;
+pub mod erlay;
 pub mod get_data;
 pub mod inv;
 
@@ -30,6 +34,10 @@ pub use broadcast::{announce_block, announce_tx, handle_get_data, handle_inv, Go
 pub use compact_blocks::{
     apply_block_txn, fill_up, handle_get_block_txn, BlockTxn, CompactBlock, FillOutcome,
     GetBlockTxn,
+};
+pub use erlay::{
+    create_sketch, decode_difference, fallback_full_relay, PeerReconciliation,
+    ReconciliationConfig, ReconciliationState,
 };
 pub use get_data::{GetData, NotFound};
 pub use inv::{Inv, InvKind, InventoryItem};

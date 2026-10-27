@@ -40,6 +40,24 @@ siphasher = "=1.0.4"
 # `dnssec-ring` (not dnssec-aws-lc-rs): ring builds on windows-gnu with the
 # msys64 preamble, aws-lc-rs would need cmake on the Windows host.
 hickory-resolver = { version = "=0.26.3", features = ["dnssec-ring"] }
+# Erlay PinSketch sketches (ADR-0021), S2-P15. Pinned exact per Stage 2 Pin
+# Policy (AGENTS.md): the crate sits on the reconciliation wire path; bumps go
+# through SCIP after mainnet freeze only.
+#
+# Optional + default-OFF (documented stub, ADR-0021 «Fallback dependency»
+# escape hatch): minisketch-rs 0.1.9 builds libminisketch via cc-rs + bindgen
+# 0.49, and bindgen needs libclang — absent on this Windows host (checked
+# 2026-10-27: no LLVM, LIBCLANG_PATH unset). The ACTIVE implementation is the
+# capacity-bounded pure-Rust stub in `gossip/erlay/mincut.rs` (contract-compatible
+# with libminisketch: same envelope, same decode-failure semantics). The
+# feature is reserved for the SCIP-gated full impl; nothing enables it today.
+minisketch-rs = { version = "=0.1.9", optional = true }
+
+[features]
+# SCIP-gated: enables the real minisketch-rs PinSketch payload (requires
+# libclang on the build host — see the dependency comment above). Default off;
+# the stub in `gossip/erlay/mincut.rs` is the active implementation.
+minisketch = ["dep:minisketch-rs"]
 
 [dev-dependencies]
 # `test-util` powers `#[tokio::test(start_paused = true)]` — the simulated
