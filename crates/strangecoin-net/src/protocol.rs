@@ -29,10 +29,12 @@ pub const MAX_TX_SIZE: usize = 256 * 1024;
 pub const HELLO_PREFIX: &str = "HELLO:";
 
 // ---------------------------------------------------------------- S1-P16
-// Binary message tags (first payload byte). Text messages ("HELLO:",
-// "GET_BLOCKCHAIN", "UPDATE_BLOCKCHAIN:…") start with ASCII letters, so the
-// tag space 0x01..=0x04 is unambiguous and a pre-P16 peer silently ignores
-// an unknown binary request (no response → read timeout → fallback).
+// Binary message tags (first payload byte). S2-P18 removed the v0.8.6 text
+// protocol (`GET_BLOCKCHAIN` / `UPDATE_BLOCKCHAIN:`), so every defined
+// message is now a binary tag: an ASCII-leading payload (or any tag outside
+// `KNOWN_TAGS`) is an unknown *future* message type and decodes to
+// [`InboundMessage::UnknownMessage`] — the caller logs and ignores it
+// (forward-compat, never a crash and never a ban).
 
 pub const MSG_GET_HEADERS: u8 = 0x01;
 pub const MSG_HEADERS: u8 = 0x02;
@@ -44,6 +46,79 @@ pub const MSG_BLOCKS: u8 = 0x04;
 pub const MAX_HEADERS_BATCH: usize = 2000;
 /// Max blocks per GET_BLOCKS / BLOCKS message.
 pub const MAX_BLOCKS_BATCH: usize = 128;
+
+// ------------------------------------------------- top-level dispatch (S2-P18)
+
+/// Every first-byte tag the Stage 2 wire format defines: the sync codecs
+/// `0x01..=0x04` (this module), `ADDR` gossip `0x05`, and the gossip/compact
+/// codecs `0x06..=0x0C`. Anything outside this set — including the removed
+/// v0.8.6 text protocol — is an unknown *future* message type.
+pub const KNOWN_TAGS: [u8; 12] = [
+    MSG_GET_HEADERS,
+    MSG_HEADERS,
+    MSG_GET_BLOCKS,
+    MSG_BLOCKS,
+    crate::discovery::addr_gossip::MSG_ADDR,
+    crate::gossip::inv::MSG_INV,
+    crate::gossip::get_data::MSG_GET_DATA,
+    crate::gossip::inv::MSG_TX,
+    crate::gossip::compact_blocks::MSG_COMPACT_BLOCK,
+    crate::gossip::get_data::MSG_NOTFOUND,
+    crate::gossip::compact_blocks::MSG_GET_BLOCK_TXN,
+    crate::gossip::compact_blocks::MSG_BLOCK_TXN,
+];
+
+/// Whether `tag` is a message type this build knows ([`KNOWN_TAGS`]).
+pub fn is_known_tag(tag: u8) -> bool {
+    KNOWN_TAGS.contains(&tag)
+}
+
+/// One inbound payload after top-level tag dispatch (S2-P18 forward-compat).
+///
+/// This is the single decode entry point for a connection's request loop:
+/// the two request messages come fully decoded, every other *known* tag is
+/// handed to its owning codec one layer up, and everything else — the
+/// removed v0.8.6 text protocol (`GET_BLOCKCHAIN`, `UPDATE_BLOCKCHAIN:`) or
+/// a future message type this build does not know — is an
+/// [`InboundMessage::UnknownMessage`].
+///
+/// The forward-compat contract: a caller that receives `UnknownMessage`
+/// **logs and ignores** it — never crashes, never scores a protocol
+/// violation and never bans the peer (a future peer speaking a newer
+/// protocol must not be punished for it; junk payloads still draw main-bucket
+/// rate-limit tokens through [`MessageClass::Other`](crate::rate_limiter::MessageClass)).
+/// Malformed *known* requests surface as `Err` — those stay protocol
+/// violations (ADR-0022) and are scored by their owning codec.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InboundMessage {
+    /// `GET_HEADERS [0x01]` — fully decoded `from_height`.
+    GetHeaders(u64),
+    /// `GET_BLOCKS [0x03]` — fully decoded requested hashes.
+    GetBlocks(Vec<[u8; 32]>),
+    /// A known tag whose body belongs to another codec (`HEADERS`/`BLOCKS`
+    /// responses, `ADDR`, gossip `0x06..=0x0C`) — parse it one layer up.
+    KnownTag(u8),
+    /// Unrecognized payload: removed v0.8.6 text messages and any future
+    /// message type. Log + ignore (forward-compat).
+    UnknownMessage(Vec<u8>),
+}
+
+/// Decode one inbound payload (the request loop's top-level dispatch,
+/// S2-P18). Never fails for unknown types — those are
+/// [`InboundMessage::UnknownMessage`]; `Err` is reserved for malformed
+/// *known* requests (`GET_HEADERS`/`GET_BLOCKS`), preserving the pre-S2-P18
+/// handler behaviour of closing the connection on a broken sync request.
+pub fn decode_message(bytes: &[u8]) -> Result<InboundMessage, NetError> {
+    let Some(&tag) = bytes.first() else {
+        return Ok(InboundMessage::UnknownMessage(bytes.to_vec()));
+    };
+    match tag {
+        MSG_GET_HEADERS => parse_get_headers(bytes).map(InboundMessage::GetHeaders),
+        MSG_GET_BLOCKS => parse_get_blocks(bytes).map(InboundMessage::GetBlocks),
+        t if is_known_tag(t) => Ok(InboundMessage::KnownTag(t)),
+        _ => Ok(InboundMessage::UnknownMessage(bytes.to_vec())),
+    }
+}
 
 fn put_u32(out: &mut Vec<u8>, v: u32) {
     out.extend_from_slice(&v.to_be_bytes());
@@ -574,9 +649,60 @@ mod tests {
     }
 
     #[test]
-    fn text_messages_never_collide_with_binary_tags() {
-        assert!(b"HELLO"[0] != MSG_GET_HEADERS && b"HELLO"[0] != MSG_HEADERS);
-        assert!(b"GET_BLOCKCHAIN"[0] != MSG_GET_BLOCKS && b"GET_BLOCKCHAIN"[0] != MSG_BLOCKS);
-        assert!(b"UPDATE_BLOCKCHAIN"[0] > 0x04);
+    fn ascii_leading_payloads_are_never_known_tags() {
+        // S2-P18: text messages (the removed v0.8.6 protocol started with
+        // ASCII letters) can never be confused with binary tags.
+        for byte in b'A'..=b'Z' {
+            assert!(!is_known_tag(byte), "{:#04x} must not be a tag", byte);
+        }
+    }
+
+    #[test]
+    fn decode_message_roundtrips_sync_requests() {
+        assert_eq!(
+            decode_message(&encode_get_headers(1234)).unwrap(),
+            InboundMessage::GetHeaders(1234)
+        );
+        let hashes = [[1u8; 32], [2u8; 32]];
+        assert_eq!(
+            decode_message(&encode_get_blocks(&hashes).unwrap()).unwrap(),
+            InboundMessage::GetBlocks(hashes.to_vec())
+        );
+    }
+
+    #[test]
+    fn decode_message_marks_known_non_request_tags_as_known() {
+        for tag in KNOWN_TAGS {
+            if tag == MSG_GET_HEADERS || tag == MSG_GET_BLOCKS {
+                continue; // fully decoded above / malformed → Err
+            }
+            assert_eq!(
+                decode_message(&[tag]).unwrap(),
+                InboundMessage::KnownTag(tag)
+            );
+        }
+    }
+
+    #[test]
+    fn decode_message_rejects_malformed_known_requests() {
+        // Truncated GET_HEADERS payload: a protocol violation, not unknown.
+        assert!(decode_message(&[MSG_GET_HEADERS, 0]).is_err());
+        assert!(decode_message(&[MSG_GET_BLOCKS, 0, 0, 0, 1, 0xaa]).is_err());
+    }
+
+    #[test]
+    fn decode_message_treats_unknown_and_empty_payloads_as_unknown_message() {
+        assert_eq!(
+            decode_message(b"PING").unwrap(),
+            InboundMessage::UnknownMessage(b"PING".to_vec())
+        );
+        assert_eq!(
+            decode_message(&[0x7f, 0xde, 0xad]).unwrap(),
+            InboundMessage::UnknownMessage(vec![0x7f, 0xde, 0xad])
+        );
+        assert_eq!(
+            decode_message(&[]).unwrap(),
+            InboundMessage::UnknownMessage(Vec::new())
+        );
     }
 }

@@ -67,7 +67,10 @@ async fn foreign_network_id_is_rejected_and_banned() {
         "foreign network_id must ban the peer"
     );
 
-    // 3. Control: the correct network_id gets served.
+    // 3. Control: the correct network_id gets served (S2-P18: the removed
+    //    v0.8.6 `GET_BLOCKCHAIN` probe is replaced by a headers-first
+    //    request — the only request type the legacy text protocol shared
+    //    with the current wire format).
     let s2 = connect(port);
     let mut w2 = BufWriter::new(s2.try_clone().expect("clone for writing"));
     w2.write_all(&protocol::encode_hello(
@@ -75,14 +78,16 @@ async fn foreign_network_id_is_rejected_and_banned() {
     ))
     .expect("write native HELLO");
     w2.flush().expect("flush native HELLO");
-    protocol::write_length_prefixed(&mut w2, b"GET_BLOCKCHAIN").expect("write GET_BLOCKCHAIN");
+    protocol::write_length_prefixed(&mut w2, &protocol::encode_get_headers(0))
+        .expect("write GET_HEADERS");
 
     s2.set_read_timeout(Some(Duration::from_secs(5)))
         .expect("set read timeout");
     let mut r2 = BufReader::new(s2);
     let response =
         protocol::read_length_prefixed(&mut r2).expect("valid network_id must be served");
-    assert!(!response.is_empty(), "chain payload must not be empty");
+    assert!(!response.is_empty(), "headers payload must not be empty");
+    assert_eq!(response[0], protocol::MSG_HEADERS, "served a HEADERS reply");
 
     drop(node);
 }

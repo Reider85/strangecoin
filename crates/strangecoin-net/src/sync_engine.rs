@@ -4,9 +4,9 @@
 //! paths — they parse, dedupe and `try_send` into the bounded inbox channels
 //! ([`Inbox`]); this task drains those channels strictly sequentially and
 //! performs the whole validate → apply → announce pipeline against
-//! [`BlockchainView`]. Read-serving (`GET_HEADERS` / `GET_BLOCKS` /
-//! `GET_BLOCKCHAIN`) stays on read-only facade calls and does not pass
-//! through here. (ADR-0011: handlers are tokio tasks, not threads.)
+//! [`BlockchainView`]. Read-serving (`GET_HEADERS` / `GET_BLOCKS`) stays on
+//! read-only facade calls and does not pass through here. (ADR-0011:
+//! handlers are tokio tasks, not threads.)
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -64,9 +64,11 @@ pub enum Incoming {
         tx: Transaction,
         from: Option<SocketAddr>,
     },
-    /// A full candidate chain: the adopted shape used both by the legacy
-    /// `UPDATE_BLOCKCHAIN` gossip path and by the headers-first download
-    /// result.
+    /// A full candidate chain: the adopted shape used by the headers-first
+    /// download result (the v0.8.6 `UPDATE_BLOCKCHAIN` gossip path that also
+    /// produced it was removed in S2-P18; `balances`/`mempool_txs`/
+    /// `pending_transactions` stay for the wire-snapshot shape
+    /// `BlockchainDeserialize` and future snapshot sync).
     CandidateChain {
         chain: Vec<Block>,
         balances: Option<HashMap<String, AccountState>>,
@@ -120,7 +122,7 @@ pub struct Inbox {
 
 impl Inbox {
     /// Enqueue without attribution-based bans (pull results: headers-first
-    /// candidate, legacy `GET_BLOCKCHAIN` fallback; tests).
+    /// candidate; tests).
     ///
     /// Returns `false` when the message was dropped — a duplicate that is
     /// already in the seen-set, or a full/closed lane.
@@ -128,10 +130,10 @@ impl Inbox {
         self.enqueue(msg, false)
     }
 
-    /// Enqueue for an inbound gossip connection (`UPDATE_BLOCKCHAIN`
-    /// handler): like [`push`](Self::push), but a producer that pushes into
-    /// a FULL inbox gets its attributed peer banned through the
-    /// [`RateLimiter`] (ADR-0010 backpressure).
+    /// Enqueue for an inbound connection (future gossip wiring, S2-P19):
+    /// like [`push`](Self::push), but a producer that pushes into a FULL
+    /// inbox gets its attributed peer banned through the [`RateLimiter`]
+    /// (ADR-0010 backpressure).
     pub fn push_inbound(&self, msg: Incoming) -> bool {
         self.enqueue(msg, true)
     }

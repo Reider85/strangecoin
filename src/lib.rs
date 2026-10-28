@@ -6,7 +6,6 @@ use std::sync::{
     mpsc, Arc, Mutex,
 };
 use std::time::{Duration, Instant, SystemTime};
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, error, info, warn};
@@ -243,7 +242,9 @@ impl Node {
     pub async fn start_server(&mut self, port: u16, sync_tx: UnboundedSender<ChainSnapshot>) {
         let start_time = SystemTime::now();
         // ADR-0010: the engine spawned here is the only adopter of incoming
-        // data; the handlers below only enqueue into its inbox.
+        // data; the sync loop enqueues candidates into its inbox (the
+        // inbound handler serves read-only requests and does not enqueue —
+        // S2-P18 removed the legacy `UPDATE_BLOCKCHAIN` path that did).
         if self.inbox.is_none() {
             self.inbox = Some(crate::network::sync_engine::spawn(
                 // Plain `clone()` (not `Arc::clone(&…)`): the spawn signature
@@ -257,10 +258,6 @@ impl Node {
                 Arc::clone(&self.rate_limiter),
             ));
         }
-        let inbox = self
-            .inbox
-            .clone()
-            .expect("SyncEngine inbox must exist after spawn");
         let blockchain = Arc::clone(&self.blockchain);
         let rate_limiter = Arc::clone(&self.rate_limiter);
         let shutdown = Arc::clone(&self.shutdown);
@@ -285,14 +282,12 @@ impl Node {
                 match accepted {
                     Ok((stream, peer_addr)) => {
                         let blockchain = Arc::clone(&blockchain);
-                        let inbox = inbox.clone();
                         let rate_limiter = Arc::clone(&rate_limiter);
                         let shutdown = Arc::clone(&shutdown);
                         tokio::spawn(handle_connection(
                             stream,
                             peer_addr,
                             blockchain,
-                            inbox,
                             rate_limiter,
                             shutdown,
                             network_id,
@@ -310,8 +305,10 @@ impl Node {
         info!(port, duration_secs = duration, "Сервер запущен");
     }
     /// One outgoing sync round against all known peers (ADR-0011: async —
-    /// gossip push, headers-first and the legacy fallback all await instead
-    /// of blocking a thread or runtime worker).
+    /// the headers-first download awaits instead of blocking a thread or
+    /// runtime worker). S2-P18 removed the v0.8.6 text protocol: there is
+    /// no `UPDATE_BLOCKCHAIN` gossip push and no `GET_BLOCKCHAIN` fallback
+    /// anymore — headers-first is the only sync path.
     pub async fn sync_blockchain(&mut self) {
         let start_time = SystemTime::now();
         let rate_limiter = Arc::clone(&self.rate_limiter);
@@ -345,42 +342,13 @@ impl Node {
                 warn!(peer = %peer, error = %e, "Rate limit exceeded for outgoing request, skipping peer");
                 continue;
             }
-            let current_chain_length = blockchain.chain_len();
-            debug!(current_chain_length, "Текущая длина chain");
-            if current_chain_length <= 1 {
-                info!("Новый узел, только получение данных, отправка цепочки запрещена");
-            } else {
-                // Отправка UPDATE_BLOCKCHAIN with HELLO handshake
-                let gossip = tokio::time::timeout(
-                    Duration::from_secs(1),
-                    tokio::net::TcpStream::connect(&addr),
-                )
-                .await;
-                if let Ok(Ok(mut stream)) = gossip {
-                    // Send HELLO handshake first
-                    let hello_data = crate::network::protocol::encode_hello(network_id);
-                    if stream.write_all(&hello_data).await.is_err() {
-                        warn!(peer = %peer, "Failed to send HELLO handshake");
-                        continue;
-                    }
-
-                    // Send UPDATE_BLOCKCHAIN
-                    let response = blockchain.to_wire_json();
-                    let message = format!("UPDATE_BLOCKCHAIN:{}", response);
-                    let mut data = (message.len() as u32).to_be_bytes().to_vec();
-                    data.extend_from_slice(message.as_bytes());
-                    if stream.write_all(&data).await.is_ok() {
-                        info!(peer = %peer, message_len = data.len(), "Блокчейн отправлен узлу");
-                    }
-                }
-            }
 
             // S1-P16: headers-first sync. Errors mean the peer does not
-            // serve the binary protocol (pre-P16 peers never answer) — then
-            // we fall back to GET_BLOCKCHAIN below. An enqueued candidate
-            // skips the fallback; "nothing better" does not (mempool gossip
-            // lives there). ADR-0010: the candidate is adopted by the engine.
-            let mut candidate_via_headers = false;
+            // serve the binary protocol (pre-P16 peers never answer) — the
+            // peer is then skipped for this round (S2-P18 removed the
+            // legacy `GET_BLOCKCHAIN` fallback that used to follow). An
+            // enqueued candidate or "nothing better" both end the round for
+            // this peer. ADR-0010: the candidate is adopted by the engine.
             let local_chain = blockchain.chain_snapshot();
             match crate::network::sync::sync_headers_first(
                 addr,
@@ -392,7 +360,6 @@ impl Node {
             {
                 Ok(outcome) => {
                     if let Some(candidate) = outcome.candidate {
-                        candidate_via_headers = true;
                         info!(
                             peer = %peer,
                             headers = outcome.headers_ingested,
@@ -427,84 +394,8 @@ impl Node {
                     debug!(
                         peer = %peer,
                         error = %e,
-                        "Headers-first недоступен, переходим к GET_BLOCKCHAIN"
+                        "Headers-first недоступен, пропускаем пир (S2-P18: fallback удалён)"
                     );
-                }
-            }
-            if candidate_via_headers {
-                continue;
-            }
-
-            // Запрос GET_BLOCKCHAIN with HELLO handshake
-            let legacy = tokio::time::timeout(
-                Duration::from_secs(1),
-                tokio::net::TcpStream::connect(&addr),
-            )
-            .await;
-            if let Ok(Ok(mut stream)) = legacy {
-                // Send HELLO handshake first
-                let hello_data = crate::network::protocol::encode_hello(network_id);
-                if stream.write_all(&hello_data).await.is_err() {
-                    warn!(peer = %peer, "Failed to send HELLO handshake");
-                    continue;
-                }
-
-                let message = "GET_BLOCKCHAIN";
-                let mut data = (message.len() as u32).to_be_bytes().to_vec();
-                data.extend_from_slice(message.as_bytes());
-                if stream.write_all(&data).await.is_ok() {
-                    // The legacy path had no read timeout at all; ADR-0011
-                    // bounds it with the same SYNC_IO_TIMEOUT as headers-first.
-                    let response_bytes = match tokio::time::timeout(
-                        SYNC_IO_TIMEOUT,
-                        crate::network::protocol::read_length_prefixed_async(&mut stream),
-                    )
-                    .await
-                    {
-                        Ok(Ok(bytes)) => bytes,
-                        Ok(Err(e)) => {
-                            warn!(peer = %peer, error = %e, "Failed to read length-prefixed response");
-                            continue;
-                        }
-                        Err(_) => {
-                            warn!(peer = %peer, "Timeout reading GET_BLOCKCHAIN response");
-                            continue;
-                        }
-                    };
-                    let response = String::from_utf8_lossy(&response_bytes).to_string();
-                    debug!(peer = %peer, response_len = response.len(), "Получен ответ от узла");
-                    match serde_json::from_str::<BlockchainDeserialize>(&response) {
-                        Ok(received) => {
-                            if received.chain.len() <= 1 {
-                                info!(peer = %peer, chain_len = received.chain.len(), "Получена пустая или минимальная цепочка, игнорируем");
-                                continue;
-                            }
-                            info!(peer = %peer, chain_len = received.chain.len(), "Полученная цепочка от узла");
-                            // ADR-0010: parse and enqueue only — the
-                            // SyncEngine validates and adopts.
-                            match &inbox {
-                                Some(inbox) => {
-                                    inbox.push(Incoming::CandidateChain {
-                                        chain: received.chain,
-                                        balances: Some(received.balances),
-                                        mempool_txs: received.mempool_txs,
-                                        pending_transactions: received.pending_transactions,
-                                        difficulty: received.difficulty,
-                                        from: Some(addr),
-                                    });
-                                }
-                                None => warn!(
-                                    peer = %peer,
-                                    "SyncEngine inbox отсутствует: кандидат отброшен"
-                                ),
-                            }
-                        }
-                        Err(e) => {
-                            error!(peer = %peer, error = %e, "Ошибка десериализации блокчейна от узла")
-                        }
-                    }
-                } else {
-                    debug!(peer = %peer, "Узел недоступен");
                 }
             }
         }
@@ -550,35 +441,32 @@ impl Drop for Node {
 // ---------------------------------------------------- connection handling
 
 /// Classify an inbound wire message for per-class rate limiting
-/// (BUG-S1-005). Binary tags (0x01..=0x04) are checked before the UTF-8
-/// text path — text messages start with ASCII letters.
+/// (BUG-S1-005). Binary tags (0x01/0x03) are checked first — everything
+/// else (gossip tags, junk, a removed v0.8.6 text message) draws from the
+/// main bucket as [`MessageClass::Other`] (ADR-0023; the `ChainGossip`
+/// class went away with the text protocol in S2-P18).
 fn classify_request(request_bytes: &[u8]) -> crate::network::MessageClass {
     use crate::network::protocol as proto;
     use crate::network::MessageClass;
     match request_bytes.first() {
         Some(&proto::MSG_GET_HEADERS) => MessageClass::GetHeaders,
         Some(&proto::MSG_GET_BLOCKS) => MessageClass::GetBlocks,
-        _ => {
-            if request_bytes.starts_with(b"UPDATE_BLOCKCHAIN:") {
-                MessageClass::ChainGossip
-            } else {
-                MessageClass::Other
-            }
-        }
+        _ => MessageClass::Other,
     }
 }
 
 /// Serve one inbound peer connection (ADR-0011: runs as a tokio task; the
 /// legacy version was a dedicated `std::thread` per TCP stream).
 ///
-/// Read-serving only: headers/blocks/json requests touch the facade through
-/// read-only calls; `UPDATE_BLOCKCHAIN:` is parsed and enqueued into the
-/// SyncEngine inbox (ADR-0010) — adoption happens in the engine.
+/// Read-serving only: headers/blocks requests touch the facade through
+/// read-only calls; every other payload goes through
+/// [`decode_message`](crate::network::protocol::decode_message) — known
+/// non-request tags and unknown (future / removed v0.8.6) messages are
+/// logged and ignored, never crash (S2-P18).
 async fn handle_connection(
     mut stream: tokio::net::TcpStream,
     peer_addr: SocketAddr,
     blockchain: Arc<BlockchainFacade>,
-    inbox: Inbox,
     rate_limiter: Arc<crate::network::RateLimiter>,
     shutdown: Arc<AtomicBool>,
     network_id: u32,
@@ -673,23 +561,18 @@ async fn handle_connection(
             }
         }
 
-        // Binary requests (S1-P16) — checked before the UTF-8 text path;
-        // text messages start with ASCII letters, tags with 0x01..=0x04.
-        match request_bytes.first() {
-            Some(&proto::MSG_GET_HEADERS) => {
-                let payload = match proto::parse_get_headers(&request_bytes) {
-                    Ok(from_height) => {
-                        let headers =
-                            blockchain.headers_from_height(from_height, proto::MAX_HEADERS_BATCH);
-                        proto::encode_headers(&headers).map_err(|e| {
-                            warn!(error = %e, "Не удалось закодировать заголовки");
-                        })
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Некорректный GET_HEADERS");
-                        Err(())
-                    }
-                };
+        // Top-level dispatch (S2-P18): GET_HEADERS/GET_BLOCKS are served
+        // from the read-only facade; known non-request tags (gossip, ADDR,
+        // responses) and unknown — future or removed v0.8.6 — messages are
+        // logged and ignored (forward-compat: never crash, never ban).
+        match proto::decode_message(&request_bytes) {
+            Ok(proto::InboundMessage::GetHeaders(from_height)) => {
+                let payload = proto::encode_headers(
+                    &blockchain.headers_from_height(from_height, proto::MAX_HEADERS_BATCH),
+                )
+                .map_err(|e| {
+                    warn!(error = %e, "Не удалось закодировать заголовки");
+                });
                 match payload {
                     Ok(payload) => {
                         if let Err(e) =
@@ -703,19 +586,13 @@ async fn handle_connection(
                 }
                 continue;
             }
-            Some(&proto::MSG_GET_BLOCKS) => {
-                let payload = match proto::parse_get_blocks(&request_bytes) {
-                    Ok(hashes) => {
-                        let blocks = blockchain.blocks_by_hashes(&hashes, proto::MAX_BLOCKS_BATCH);
-                        proto::encode_blocks(&blocks).map_err(|e| {
-                            warn!(error = %e, "Не удалось закодировать блоки");
-                        })
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Некорректный GET_BLOCKS");
-                        Err(())
-                    }
-                };
+            Ok(proto::InboundMessage::GetBlocks(hashes)) => {
+                let payload = proto::encode_blocks(
+                    &blockchain.blocks_by_hashes(&hashes, proto::MAX_BLOCKS_BATCH),
+                )
+                .map_err(|e| {
+                    warn!(error = %e, "Не удалось закодировать блоки");
+                });
                 match payload {
                     Ok(payload) => {
                         if let Err(e) =
@@ -729,39 +606,23 @@ async fn handle_connection(
                 }
                 continue;
             }
-            _ => {}
-        }
-
-        let request = String::from_utf8_lossy(&request_bytes).to_string();
-        debug!(request = %request, "Получен запрос");
-
-        if request == "GET_BLOCKCHAIN" {
-            let response = blockchain.to_wire_json();
-            let mut data = (response.len() as u32).to_be_bytes().to_vec();
-            data.extend_from_slice(response.as_bytes());
-            if stream.write_all(&data).await.is_ok() {
-                info!("Отправлен блокчейн клиенту");
+            Ok(proto::InboundMessage::KnownTag(tag)) => {
+                debug!(peer = %peer_addr, tag, "Известный не-sync тег — игнорируется");
+                continue;
             }
-        } else if request.starts_with("UPDATE_BLOCKCHAIN:") {
-            let blockchain_data = request.strip_prefix("UPDATE_BLOCKCHAIN:").unwrap_or("");
-            let temp_blockchain: BlockchainDeserialize = match serde_json::from_str(blockchain_data)
-            {
-                Ok(data) => data,
-                Err(e) => {
-                    error!(error = %e, "Ошибка десериализации данных блокчейна");
-                    return;
-                }
-            };
-            // ADR-0010: parse and enqueue only — the SyncEngine validates
-            // and adopts.
-            inbox.push_inbound(Incoming::CandidateChain {
-                chain: temp_blockchain.chain,
-                balances: Some(temp_blockchain.balances),
-                mempool_txs: temp_blockchain.mempool_txs,
-                pending_transactions: temp_blockchain.pending_transactions,
-                difficulty: temp_blockchain.difficulty,
-                from: Some(peer_addr),
-            });
+            Ok(proto::InboundMessage::UnknownMessage(payload)) => {
+                warn!(
+                    peer = %peer_addr,
+                    len = payload.len(),
+                    tag = ?payload.first(),
+                    "Неизвестный тип сообщения — игнорируется (forward-compat, S2-P18)"
+                );
+                continue;
+            }
+            Err(e) => {
+                warn!(error = %e, "Некорректный sync-запрос");
+                break;
+            }
         }
     }
 }

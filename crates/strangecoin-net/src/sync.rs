@@ -41,7 +41,8 @@ fn invalid_block(msg: String) -> NetError {
 
 /// Read/write timeout for one headers-first exchange. A pre-P16 peer closes
 /// the connection without answering a binary request, which surfaces here as
-/// an EOF/timeout and triggers the GET_BLOCKCHAIN fallback.
+/// an EOF/timeout and fails the round (S2-P18 removed the legacy
+/// `GET_BLOCKCHAIN` fallback such a peer used to trigger).
 pub const SYNC_IO_TIMEOUT: Duration = Duration::from_secs(10);
 /// Connect timeout for a single sync peer.
 pub const SYNC_CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
@@ -263,9 +264,10 @@ pub struct SyncOutcome {
 
 /// One headers-first sync round against a single peer (ADR-0011: async).
 ///
-/// Errors mean "this peer could not serve headers-first" — the caller falls
-/// back to the legacy `GET_BLOCKCHAIN` path (pre-P16 peers never answer a
-/// binary request, so this is the compatibility trigger).
+/// Errors mean "this peer could not serve headers-first" — the caller skips
+/// the peer for this round (S2-P18 removed the legacy `GET_BLOCKCHAIN`
+/// fallback, so pre-P16 peers that never answer a binary request simply
+/// never sync).
 ///
 /// The loop is pure download + plan: it never touches the local chain beyond
 /// reading `local_chain`, so handing the returned candidate to the engine is

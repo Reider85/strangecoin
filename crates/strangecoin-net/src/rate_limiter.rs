@@ -75,19 +75,21 @@ pub enum MessageType {
     Addr,
 }
 
-/// Legacy Stage 1 classification. Kept as the type-to-sub-bucket mapping
-/// until S2-P18 drops the legacy classes entirely (ADR-0023 "Neutral"):
-/// `GetHeaders`/`GetBlocks` charge their dedicated sync sub-buckets,
-/// `ChainGossip`/`Other` draw from the main bucket only.
+/// Legacy Stage 1 classification, kept as the type-to-sub-bucket mapping
+/// (ADR-0023): `GetHeaders`/`GetBlocks` charge their dedicated sync
+/// sub-buckets, `Other` draws from the main bucket only. The legacy
+/// `ChainGossip` class (v0.8.6 `UPDATE_BLOCKCHAIN:` pushes) was removed
+/// together with the text protocol in S2-P18 (ADR-0023 "Neutral"); unknown
+/// types — including anything a removed v0.8.6 peer still sends — are
+/// `Other`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageClass {
     /// `MSG_GET_HEADERS` — sync sub-bucket (100 burst / 10 per s).
     GetHeaders,
     /// `MSG_GET_BLOCKS` — sync sub-bucket (100 burst / 10 per s).
     GetBlocks,
-    /// Legacy `UPDATE_BLOCKCHAIN:` gossip pushes — main bucket only.
-    ChainGossip,
-    /// Anything else (junk `PING`, legacy `GET_BLOCKCHAIN`, unknown tags).
+    /// Anything else (junk `PING`, unknown tags, a removed v0.8.6 text
+    /// message) — main bucket only.
     Other,
 }
 
@@ -418,7 +420,7 @@ impl PeerRateLimiter {
     }
 
     /// Legacy [`MessageClass`] mapping (ADR-0023: sync classes charge their
-    /// sub-buckets, `ChainGossip`/`Other` draw from the main bucket only).
+    /// sub-buckets, `Other` draws from the main bucket only).
     pub fn check_class(&mut self, class: MessageClass) -> Result<(), RateLimitError> {
         self.check_class_at(Instant::now(), class)
     }
@@ -457,8 +459,8 @@ impl PeerRateLimiter {
                     self.record_violation(now)
                 }
             }
-            MessageClass::ChainGossip | MessageClass::Other => {
-                // ADR-0023: legacy ChainGossip/Other map onto the main bucket.
+            MessageClass::Other => {
+                // ADR-0023: everything else maps onto the main bucket.
                 if self.main_bucket.try_consume_at(now, 1) {
                     Ok(())
                 } else {
@@ -831,8 +833,8 @@ mod tests {
         );
         // GetBlocks has its own bucket: unaffected.
         peer.check_class_at(now, MessageClass::GetBlocks).unwrap();
-        // ChainGossip/Other charge main only (ADR-0023 mapping).
-        peer.check_class_at(now, MessageClass::ChainGossip).unwrap();
+        // Other charges main only (ADR-0023 mapping; the v0.8.6 ChainGossip
+        // class went away with the text protocol in S2-P18).
         peer.check_class_at(now, MessageClass::Other).unwrap();
         assert_eq!(peer.violations(), 1);
     }
