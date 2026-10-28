@@ -8,11 +8,31 @@ listen_addr = "127.0.0.1:8081"
 seeds = []
 max_peers = 50
 # S2-P12 (ADR-0022): peer score below which a peer is temp-banned for 1 h.
+# Historical S2-P12 key — the rest of the S2-P17 scoring surface lives in
+# the peer_scoring_* keys below.
 peer_ban_threshold = 0.2
 # S2-P12: total concurrent TCP connections (peer manager).
 max_connections = 50
 # S2-P12 (V-17): max connections per IPv4 /24 or IPv6 /64 range.
 max_per_ip_range = 8
+# S2-P17 (ADR-0022): peer scoring weights — score = clamp01(quality −
+# abuse); quality = (w_latency·(1−lat_norm) + w_uptime·uptime_norm) /
+# (w_latency + w_uptime); abuse = w_invalid·(invalid/invalid_full) +
+# w_violation·(violations/violation_full).
+peer_scoring_w_latency = 0.2
+peer_scoring_w_invalid = 0.5
+peer_scoring_w_violation = 0.2
+peer_scoring_w_uptime = 0.1
+# S2-P17: ban bands — warn below 0.4 (stays connected), temp ban below
+# peer_ban_threshold (1 h), persistent ban below 0.05 (30 d, network.json).
+peer_scoring_warn_threshold = 0.4
+peer_scoring_persistent_threshold = 0.05
+peer_scoring_temp_ban_duration_sec = 3600
+peer_scoring_persistent_ban_duration_sec = 2592000
+# S2-P17: events that cost the full penalty weight (ADR-0022: 6 invalids /
+# 4 violations scale linearly up to w_invalid / w_violation).
+peer_scoring_invalid_full_weight = 6
+peer_scoring_violation_full_weight = 4
 # S2-P16 (ADR-0023): violations inside rate_limit_ban_window_sec that
 # trigger the fast-path rate-limit ban.
 rate_limit_ban_threshold = 5

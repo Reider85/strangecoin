@@ -38,7 +38,9 @@ pub struct NetworkConfig {
     pub max_peers: usize,
     /// S2-P12 (`peer_ban_threshold`): peer score below which a peer is
     /// temp-banned for 1 h (ADR-0022; mirror of
-    /// `strangecoin_net::peer::DEFAULT_BAN_THRESHOLD`).
+    /// `strangecoin_net::peer::DEFAULT_BAN_THRESHOLD`). Kept as the
+    /// historical S2-P12 key for the temp-ban threshold — the rest of the
+    /// S2-P17 scoring surface lives under `peer_scoring_*`.
     #[serde(default = "default_peer_ban_threshold")]
     pub peer_ban_threshold: f32,
     /// S2-P12 (`max_connections`): total concurrent TCP connections managed
@@ -75,6 +77,45 @@ pub struct NetworkConfig {
     /// sub-buckets (Stage 1 carry-over; beyond the prompt's 3-key list).
     #[serde(default)]
     pub rate_limit_per_type: RateLimitPerTypeConfig,
+    /// S2-P17 (`peer_scoring_w_latency`, ADR-0022): latency grading weight.
+    #[serde(default = "default_ps_w_latency")]
+    pub peer_scoring_w_latency: f32,
+    /// S2-P17 (`peer_scoring_w_invalid`): invalid blocks/txs penalty weight
+    /// (threat V-15).
+    #[serde(default = "default_ps_w_invalid")]
+    pub peer_scoring_w_invalid: f32,
+    /// S2-P17 (`peer_scoring_w_violation`): protocol-violations penalty
+    /// weight (rate-limit feed, threat V-17).
+    #[serde(default = "default_ps_w_violation")]
+    pub peer_scoring_w_violation: f32,
+    /// S2-P17 (`peer_scoring_w_uptime`): uptime grading weight.
+    #[serde(default = "default_ps_w_uptime")]
+    pub peer_scoring_w_uptime: f32,
+    /// S2-P17 (`peer_scoring_warn_threshold`): score below which a peer is
+    /// warned (stays connected).
+    #[serde(default = "default_ps_warn_threshold")]
+    pub peer_scoring_warn_threshold: f32,
+    /// S2-P17 (`peer_scoring_persistent_threshold`): score below which a
+    /// peer is persistently banned 30 d (`network.json`).
+    #[serde(default = "default_ps_persistent_threshold")]
+    pub peer_scoring_persistent_threshold: f32,
+    /// S2-P17 (`peer_scoring_temp_ban_duration_sec`): temp-ban duration.
+    #[serde(default = "default_ps_temp_ban_duration_sec")]
+    pub peer_scoring_temp_ban_duration_sec: u64,
+    /// S2-P17 (`peer_scoring_persistent_ban_duration_sec`): persistent-ban
+    /// duration (ADR-0022: 30 days).
+    #[serde(default = "default_ps_persistent_ban_duration_sec")]
+    pub peer_scoring_persistent_ban_duration_sec: u64,
+    /// S2-P17 (`peer_scoring_invalid_full_weight`): invalid events at which
+    /// the penalty reaches `peer_scoring_w_invalid` (ADR-0022
+    /// `INVALID_FULL_WEIGHT`).
+    #[serde(default = "default_ps_invalid_full_weight")]
+    pub peer_scoring_invalid_full_weight: u32,
+    /// S2-P17 (`peer_scoring_violation_full_weight`): violations at which
+    /// the penalty reaches `peer_scoring_w_violation` (ADR-0022
+    /// `VIOLATION_FULL_WEIGHT`).
+    #[serde(default = "default_ps_violation_full_weight")]
+    pub peer_scoring_violation_full_weight: u32,
 }
 
 fn default_peer_ban_threshold() -> f32 {
@@ -152,6 +193,49 @@ fn default_rl_get_blocks() -> String {
     "100/10s".into()
 }
 
+// S2-P17 peer-scoring defaults — mirrors of strangecoin_net::peer::scoring
+// (ADR-0022 initial tables).
+
+fn default_ps_w_latency() -> f32 {
+    0.2
+}
+
+fn default_ps_w_invalid() -> f32 {
+    0.5
+}
+
+fn default_ps_w_violation() -> f32 {
+    0.2
+}
+
+fn default_ps_w_uptime() -> f32 {
+    0.1
+}
+
+fn default_ps_warn_threshold() -> f32 {
+    0.4
+}
+
+fn default_ps_persistent_threshold() -> f32 {
+    0.05
+}
+
+fn default_ps_temp_ban_duration_sec() -> u64 {
+    3600
+}
+
+fn default_ps_persistent_ban_duration_sec() -> u64 {
+    60 * 60 * 24 * 30
+}
+
+fn default_ps_invalid_full_weight() -> u32 {
+    6
+}
+
+fn default_ps_violation_full_weight() -> u32 {
+    4
+}
+
 impl Default for RateLimitPerTypeConfig {
     fn default() -> Self {
         RateLimitPerTypeConfig {
@@ -179,6 +263,16 @@ impl Default for NetworkConfig {
             rate_limit_main_capacity: default_rate_limit_main_capacity(),
             rate_limit_main_refill: default_rate_limit_main_refill(),
             rate_limit_per_type: RateLimitPerTypeConfig::default(),
+            peer_scoring_w_latency: default_ps_w_latency(),
+            peer_scoring_w_invalid: default_ps_w_invalid(),
+            peer_scoring_w_violation: default_ps_w_violation(),
+            peer_scoring_w_uptime: default_ps_w_uptime(),
+            peer_scoring_warn_threshold: default_ps_warn_threshold(),
+            peer_scoring_persistent_threshold: default_ps_persistent_threshold(),
+            peer_scoring_temp_ban_duration_sec: default_ps_temp_ban_duration_sec(),
+            peer_scoring_persistent_ban_duration_sec: default_ps_persistent_ban_duration_sec(),
+            peer_scoring_invalid_full_weight: default_ps_invalid_full_weight(),
+            peer_scoring_violation_full_weight: default_ps_violation_full_weight(),
         }
     }
 }
@@ -225,6 +319,61 @@ impl Config {
                 "peer_ban_threshold must be in (0, 1), got {}",
                 self.network.peer_ban_threshold
             )));
+        }
+        // S2-P17 (ADR-0022): band ordering 0 < persistent < temp < warn < 1
+        // and non-degenerate grading weights.
+        let ps = &self.network;
+        if !(ps.peer_scoring_persistent_threshold > 0.0
+            && ps.peer_scoring_persistent_threshold < ps.peer_ban_threshold
+            && ps.peer_ban_threshold < ps.peer_scoring_warn_threshold
+            && ps.peer_scoring_warn_threshold < 1.0)
+        {
+            return Err(StrangecoinError::ConfigError(format!(
+                "peer scoring thresholds must satisfy 0 < persistent ({}) < \
+                 peer_ban_threshold ({}) < warn ({}) < 1",
+                ps.peer_scoring_persistent_threshold,
+                ps.peer_ban_threshold,
+                ps.peer_scoring_warn_threshold
+            )));
+        }
+        for (name, weight) in [
+            ("peer_scoring_w_latency", ps.peer_scoring_w_latency),
+            ("peer_scoring_w_invalid", ps.peer_scoring_w_invalid),
+            ("peer_scoring_w_violation", ps.peer_scoring_w_violation),
+            ("peer_scoring_w_uptime", ps.peer_scoring_w_uptime),
+        ] {
+            if !(weight.is_finite() && weight >= 0.0) {
+                return Err(StrangecoinError::ConfigError(format!(
+                    "{name} must be a finite value >= 0, got {weight}"
+                )));
+            }
+        }
+        if ps.peer_scoring_w_latency + ps.peer_scoring_w_uptime <= 0.0 {
+            return Err(StrangecoinError::ConfigError(
+                "peer_scoring_w_latency + peer_scoring_w_uptime must be > 0 \
+                 (grading part of the score)"
+                    .into(),
+            ));
+        }
+        if ps.peer_scoring_temp_ban_duration_sec == 0 {
+            return Err(StrangecoinError::ConfigError(
+                "peer_scoring_temp_ban_duration_sec must be > 0".into(),
+            ));
+        }
+        if ps.peer_scoring_persistent_ban_duration_sec == 0 {
+            return Err(StrangecoinError::ConfigError(
+                "peer_scoring_persistent_ban_duration_sec must be > 0".into(),
+            ));
+        }
+        if ps.peer_scoring_invalid_full_weight == 0 {
+            return Err(StrangecoinError::ConfigError(
+                "peer_scoring_invalid_full_weight must be > 0".into(),
+            ));
+        }
+        if ps.peer_scoring_violation_full_weight == 0 {
+            return Err(StrangecoinError::ConfigError(
+                "peer_scoring_violation_full_weight must be > 0".into(),
+            ));
         }
         if self.network.max_connections == 0 {
             return Err(StrangecoinError::ConfigError(
@@ -303,19 +452,33 @@ impl Config {
 #[cfg(feature = "net")]
 impl Config {
     /// Map the operator's `config.toml` onto the network crate's peer-manager
-    /// tunables (S2-P12).
+    /// tunables (S2-P12 connection caps + S2-P17 `peer_scoring_*`).
     ///
-    /// Only the three file tunables are overridden; scoring thresholds,
-    /// ban durations and capabilities keep the ADR-0022 defaults until
-    /// S2-P17 exposes them as `peer_scoring_*` keys. The identity keypair
-    /// (Ed25519 + derived Noise static) and the `network.json` path are
-    /// supplied at construction time by the orchestrator wiring (S2-P13/
-    /// S2-P19).
+    /// The temp-ban threshold keeps the historical S2-P12 key
+    /// `peer_ban_threshold`; every other ADR-0022 weight/threshold/duration
+    /// is a `peer_scoring_*` key. The identity keypair (Ed25519 + derived
+    /// Noise static) and the `network.json` path are supplied at
+    /// construction time by the orchestrator wiring (S2-P13/S2-P19).
     pub fn peer_manager_config(&self) -> strangecoin_net::PeerManagerConfig {
+        let net = &self.network;
         strangecoin_net::PeerManagerConfig {
-            ban_threshold: self.network.peer_ban_threshold,
-            max_connections: self.network.max_connections,
-            max_per_ip_range: self.network.max_per_ip_range,
+            scoring: strangecoin_net::ScoringConfig {
+                w_latency: net.peer_scoring_w_latency,
+                w_invalid: net.peer_scoring_w_invalid,
+                w_violation: net.peer_scoring_w_violation,
+                w_uptime: net.peer_scoring_w_uptime,
+                warn_threshold: net.peer_scoring_warn_threshold,
+                temp_ban_threshold: net.peer_ban_threshold,
+                persistent_ban_threshold: net.peer_scoring_persistent_threshold,
+                temp_ban_duration: Duration::from_secs(net.peer_scoring_temp_ban_duration_sec),
+                persistent_ban_duration: Duration::from_secs(
+                    net.peer_scoring_persistent_ban_duration_sec,
+                ),
+                invalid_full_weight: net.peer_scoring_invalid_full_weight,
+                violation_full_weight: net.peer_scoring_violation_full_weight,
+            },
+            max_connections: net.max_connections,
+            max_per_ip_range: net.max_per_ip_range,
             network_id: self.network_id,
             ..strangecoin_net::PeerManagerConfig::default()
         }
@@ -506,17 +669,153 @@ mod tests {
             },
             ..Config::default()
         };
+        cfg.validate().expect("tunables are valid");
         let pm = cfg.peer_manager_config();
-        assert_eq!(pm.ban_threshold, 0.35);
+        assert_eq!(pm.scoring.temp_ban_threshold, 0.35);
         assert_eq!(pm.max_connections, 12);
         assert_eq!(pm.max_per_ip_range, 3);
         assert_eq!(pm.network_id, 3);
-        assert_eq!(pm.warn_threshold, 0.4, "ADR-0022 default until S2-P17");
-        assert_eq!(pm.persistent_threshold, 0.05);
+        assert_eq!(pm.scoring.warn_threshold, 0.4, "ADR-0022 default");
+        assert_eq!(pm.scoring.persistent_ban_threshold, 0.05);
         assert!(
             pm.network_json_path.is_none(),
             "path is supplied at wiring time, not from config.toml"
         );
+    }
+
+    #[test]
+    fn peer_scoring_tunables_default_when_missing_from_config_file() {
+        // Pre-S2-P17 files (no peer_scoring_* keys) must keep parsing and
+        // get the ADR-0022 initial tables — S2-P17 serde defaults.
+        let toml = r#"
+            network_id = 3
+            node_mode = "full"
+            log_level = "info"
+            data_dir = "./data"
+
+            [network]
+            listen_addr = "127.0.0.1:8081"
+            seeds = []
+            max_peers = 50
+
+            [storage]
+            path = "./data/leveldb"
+        "#;
+        let cfg: Config = toml::from_str(toml).expect("legacy config must parse");
+        assert_eq!(cfg.network.peer_scoring_w_latency, 0.2);
+        assert_eq!(cfg.network.peer_scoring_w_invalid, 0.5);
+        assert_eq!(cfg.network.peer_scoring_w_violation, 0.2);
+        assert_eq!(cfg.network.peer_scoring_w_uptime, 0.1);
+        assert_eq!(cfg.network.peer_scoring_warn_threshold, 0.4);
+        assert_eq!(cfg.network.peer_scoring_persistent_threshold, 0.05);
+        assert_eq!(cfg.network.peer_scoring_temp_ban_duration_sec, 3600);
+        assert_eq!(
+            cfg.network.peer_scoring_persistent_ban_duration_sec,
+            60 * 60 * 24 * 30
+        );
+        assert_eq!(cfg.network.peer_scoring_invalid_full_weight, 6);
+        assert_eq!(cfg.network.peer_scoring_violation_full_weight, 4);
+        cfg.validate().expect("defaults are valid");
+    }
+
+    #[cfg(feature = "net")]
+    #[test]
+    fn peer_scoring_config_defaults_match_adr0022() {
+        let pm = Config::default().peer_manager_config();
+        let dflt = strangecoin_net::ScoringConfig::default();
+        assert_eq!(pm.scoring, dflt);
+    }
+
+    #[test]
+    fn peer_scoring_tunables_reject_invalid_values() {
+        let base = Config::default();
+
+        let inverted_bands = Config {
+            network: NetworkConfig {
+                peer_scoring_warn_threshold: 0.1,
+                ..base.network.clone()
+            },
+            ..Config::default()
+        };
+        assert!(inverted_bands.validate().is_err());
+
+        let negative_weight = Config {
+            network: NetworkConfig {
+                peer_scoring_w_invalid: -0.1,
+                ..base.network.clone()
+            },
+            ..Config::default()
+        };
+        assert!(negative_weight.validate().is_err());
+
+        let zero_grading = Config {
+            network: NetworkConfig {
+                peer_scoring_w_latency: 0.0,
+                peer_scoring_w_uptime: 0.0,
+                ..base.network.clone()
+            },
+            ..Config::default()
+        };
+        assert!(zero_grading.validate().is_err());
+
+        let zero_full_weight = Config {
+            network: NetworkConfig {
+                peer_scoring_invalid_full_weight: 0,
+                ..base.network.clone()
+            },
+            ..Config::default()
+        };
+        assert!(zero_full_weight.validate().is_err());
+
+        let zero_duration = Config {
+            network: NetworkConfig {
+                peer_scoring_temp_ban_duration_sec: 0,
+                ..base.network.clone()
+            },
+            ..Config::default()
+        };
+        assert!(zero_duration.validate().is_err());
+    }
+
+    #[cfg(feature = "net")]
+    #[test]
+    fn peer_scoring_maps_file_tunables() {
+        let cfg = Config {
+            network: NetworkConfig {
+                peer_ban_threshold: 0.25,
+                peer_scoring_w_latency: 0.3,
+                peer_scoring_w_invalid: 0.4,
+                peer_scoring_w_violation: 0.2,
+                peer_scoring_w_uptime: 0.1,
+                peer_scoring_warn_threshold: 0.6,
+                peer_scoring_persistent_threshold: 0.08,
+                peer_scoring_temp_ban_duration_sec: 1800,
+                peer_scoring_persistent_ban_duration_sec: 86_400,
+                peer_scoring_invalid_full_weight: 9,
+                peer_scoring_violation_full_weight: 5,
+                ..Config::default().network
+            },
+            ..Config::default()
+        };
+        cfg.validate().expect("tunables are valid");
+        let pm = cfg.peer_manager_config();
+        assert_eq!(pm.scoring.temp_ban_threshold, 0.25);
+        assert_eq!(pm.scoring.w_latency, 0.3);
+        assert_eq!(pm.scoring.w_invalid, 0.4);
+        assert_eq!(pm.scoring.w_violation, 0.2);
+        assert_eq!(pm.scoring.w_uptime, 0.1);
+        assert_eq!(pm.scoring.warn_threshold, 0.6);
+        assert_eq!(pm.scoring.persistent_ban_threshold, 0.08);
+        assert_eq!(
+            pm.scoring.temp_ban_duration,
+            Duration::from_secs(1800)
+        );
+        assert_eq!(
+            pm.scoring.persistent_ban_duration,
+            Duration::from_secs(86_400)
+        );
+        assert_eq!(pm.scoring.invalid_full_weight, 9);
+        assert_eq!(pm.scoring.violation_full_weight, 5);
     }
 
     #[test]

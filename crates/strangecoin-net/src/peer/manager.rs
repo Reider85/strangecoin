@@ -22,11 +22,13 @@
 //! S2-P16 integration seam).
 //!
 //! **Determinism** (Stage 2 checklist, threat V-21 extension): scoring is a
-//! pure function of record counters ([`PeerStore::update_score`]); broadcast
+//! pure function of record counters ([`scoring::update_score`]); broadcast
 //! and tick iterate `node_id`-sorted; no RNG anywhere; wall time appears only
-//! at ban-expiry edges — tests inject a simulated clock through `tick_at`.
+//! at ban-expiry edges and the uptime-accrual/tick stamps — tests inject a
+//! simulated clock through `tick_at`.
 
 use super::pool::{Connection, ConnectionPool};
+use super::scoring::{self, BanDecision, ScoringConfig};
 use super::store::{BanReason, PeerStore};
 use crate::discovery::addr_gossip::{AddrEntry, AddrSender};
 use crate::error::NetError;
@@ -36,6 +38,7 @@ use crate::protocol::hello::{
 };
 use crate::protocol::{read_length_prefixed_async, write_length_prefixed_async};
 use crate::rate_limiter::RateLimitError;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -43,18 +46,6 @@ use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
-/// Score below which a peer is warned (ADR-0022; tunable via
-/// `peer_scoring_*` in S2-P17).
-pub const DEFAULT_WARN_THRESHOLD: f32 = 0.4;
-/// Score below which a peer is temp-banned — the prompt's
-/// `config.toml: peer_ban_threshold` (ADR-0022).
-pub const DEFAULT_BAN_THRESHOLD: f32 = 0.2;
-/// Score below which a peer is persistently banned (ADR-0022).
-pub const DEFAULT_PERSISTENT_THRESHOLD: f32 = 0.05;
-/// Temp-ban duration (ADR-0022).
-pub const DEFAULT_TEMP_BAN_DURATION: Duration = Duration::from_secs(60 * 60);
-/// Persistent-ban duration (ADR-0022).
-pub const DEFAULT_PERSISTENT_BAN_DURATION: Duration = Duration::from_secs(60 * 60 * 24 * 30);
 /// Default total-connection cap (`config.toml: max_connections`).
 pub const DEFAULT_MAX_CONNECTIONS: usize = 50;
 /// Default per-IP-range cap (`config.toml: max_per_ip_range`, threat V-17).
@@ -79,12 +70,9 @@ const HANDSHAKE_BUF: usize = 512;
 /// operational parameters that are not file tunables.
 #[derive(Debug, Clone)]
 pub struct PeerManagerConfig {
-    /// `peer_ban_threshold` — temp-ban score threshold (ADR-0022).
-    pub ban_threshold: f32,
-    pub warn_threshold: f32,
-    pub persistent_threshold: f32,
-    pub temp_ban_duration: Duration,
-    pub persistent_ban_duration: Duration,
+    /// ADR-0022 scoring weights/thresholds/durations (S2-P17;
+    /// `config.toml: peer_scoring_*` + `peer_ban_threshold`).
+    pub scoring: ScoringConfig,
     /// `max_connections` — total concurrent TCP connections.
     pub max_connections: usize,
     /// `max_per_ip_range` — Sybil cap per IPv4 /24 or IPv6 /64 (V-17).
@@ -100,11 +88,7 @@ pub struct PeerManagerConfig {
 impl Default for PeerManagerConfig {
     fn default() -> Self {
         PeerManagerConfig {
-            ban_threshold: DEFAULT_BAN_THRESHOLD,
-            warn_threshold: DEFAULT_WARN_THRESHOLD,
-            persistent_threshold: DEFAULT_PERSISTENT_THRESHOLD,
-            temp_ban_duration: DEFAULT_TEMP_BAN_DURATION,
-            persistent_ban_duration: DEFAULT_PERSISTENT_BAN_DURATION,
+            scoring: ScoringConfig::default(),
             max_connections: DEFAULT_MAX_CONNECTIONS,
             max_per_ip_range: DEFAULT_MAX_PER_IP_RANGE,
             network_id: 3,
@@ -123,29 +107,11 @@ pub struct TickReport {
     pub warned: usize,
 }
 
-/// Threshold-band evaluation of one score (ADR-0022 ban state machine).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BanDecision {
-    NoAction,
-    Warn,
-    TempBan { until: Instant },
-    PersistentBan { until: Instant },
-}
-
-fn decide(score: f32, cfg: &PeerManagerConfig, now: Instant) -> BanDecision {
-    if score < cfg.persistent_threshold {
-        BanDecision::PersistentBan {
-            until: now + cfg.persistent_ban_duration,
-        }
-    } else if score < cfg.ban_threshold {
-        BanDecision::TempBan {
-            until: now + cfg.temp_ban_duration,
-        }
-    } else if score < cfg.warn_threshold {
-        BanDecision::Warn
-    } else {
-        BanDecision::NoAction
-    }
+/// Outcome of applying one [`BanDecision`] to the store (shared by the
+/// event path and `tick_at`).
+struct DecisionOutcome {
+    banned: bool,
+    needs_save: bool,
 }
 
 /// Which counter a recorded event increments (ADR-0022 has one penalty
@@ -154,6 +120,49 @@ fn decide(score: f32, cfg: &PeerManagerConfig, now: Instant) -> BanDecision {
 enum Counter {
     Invalid,
     Violation,
+}
+
+/// Apply one band decision to the store under the caller's lock: mint the
+/// ban (temp in-memory / persistent written through), log Warn. Returns
+/// the side-effect flags the caller runs after dropping the lock.
+fn apply_decision(
+    store: &mut PeerStore,
+    node_id: NodeId,
+    reason: BanReason,
+    decision: BanDecision,
+    now: Instant,
+) -> DecisionOutcome {
+    match decision {
+        BanDecision::NoAction => DecisionOutcome {
+            banned: false,
+            needs_save: false,
+        },
+        BanDecision::Warn => {
+            tracing::warn!(
+                target = "net::peer",
+                peer = %node_id,
+                "peer score in warn band"
+            );
+            DecisionOutcome {
+                banned: false,
+                needs_save: false,
+            }
+        }
+        BanDecision::TempBan { until } => {
+            store.ban_peer(node_id, reason, until, now, false);
+            DecisionOutcome {
+                banned: true,
+                needs_save: false,
+            }
+        }
+        BanDecision::PersistentBan { until } => {
+            store.ban_peer(node_id, reason, until, now, true);
+            DecisionOutcome {
+                banned: true,
+                needs_save: true,
+            }
+        }
+    }
 }
 
 /// Active connection orchestration + ban logic for one node identity.
@@ -452,19 +461,29 @@ impl PeerManager {
     }
 
     /// Feed one observed message-latency sample into the record's EWMA
-    /// (`ewma = 0.9 * ewma + 0.1 * sample`, ADR-0022 α = 0.1).
+    /// (`ewma = 0.9 * ewma + 0.1 * sample`, ADR-0022 α = 0.1,
+    /// [`scoring::record_latency_sample`]).
     ///
-    /// Grading only — latency never triggers a ban decision here; that
-    /// structural false-positive guarantee (a responsive slow peer stays
-    /// above the temp threshold) is ADR-0022's. The formula is provisional
-    /// until `scoring.rs` (S2-P17) owns all factor updates.
+    /// Grading only — latency never crosses a ban threshold on its own
+    /// (ADR-0022's structural false-positive guarantee: a responsive slow
+    /// peer floors at ~0.333, above the 0.2 temp threshold); the decision
+    /// still runs so an already-abusive peer tipped over a band edge by
+    /// worsening latency is handled uniformly.
     pub fn record_latency(&self, node_id: NodeId, sample: Duration) {
-        let mut store = self.store();
-        if let Some(record) = store.get_peer_mut(&node_id) {
-            let next = 0.9 * record.latency_ewma.as_secs_f32() + 0.1 * sample.as_secs_f32();
-            record.latency_ewma = Duration::from_secs_f32(next.max(0.0));
-            PeerStore::update_score(record);
-        }
+        let now = Instant::now();
+        let outcome = {
+            let mut store = self.store();
+            let Some(record) = store.get_peer_mut(&node_id) else {
+                return;
+            };
+            scoring::record_latency_sample(record, sample);
+            scoring::note_message(record);
+            record.last_seen = now;
+            let decision = scoring::update_score(record, &self.config.scoring, now);
+            let reason = scoring::dominant_reason(record, &self.config.scoring);
+            apply_decision(&mut store, node_id, reason, decision, now)
+        };
+        self.finish_decision(node_id, outcome);
     }
 
     /// The active ban for `node_id`, if any (cloned snapshot).
@@ -480,9 +499,7 @@ impl PeerManager {
 
     fn record_event(&self, node_id: NodeId, reason: BanReason, counter: Counter) {
         let now = Instant::now();
-        let mut banned = false;
-        let mut needs_save = false;
-        {
+        let outcome = {
             let mut store = self.store();
             let Some(record) = store.get_peer_mut(&node_id) else {
                 tracing::debug!(
@@ -496,39 +513,27 @@ impl PeerManager {
                 Counter::Invalid => record.invalid_count += 1,
                 Counter::Violation => record.violation_count += 1,
             }
+            scoring::note_message(record);
             record.last_seen = now;
-            let score = PeerStore::update_score(record);
-            match decide(score, &self.config, now) {
-                BanDecision::NoAction => {}
-                BanDecision::Warn => {
-                    tracing::warn!(
-                        target = "net::peer",
-                        peer = %node_id,
-                        score,
-                        "peer score in warn band"
-                    );
-                }
-                BanDecision::TempBan { until } => {
-                    store.ban_peer(node_id, reason, until, now, false);
-                    banned = true;
-                }
-                BanDecision::PersistentBan { until } => {
-                    store.ban_peer(node_id, reason, until, now, true);
-                    banned = true;
-                    needs_save = true;
-                }
-            }
-        }
-        if banned {
+            let decision = scoring::update_score(record, &self.config.scoring, now);
+            apply_decision(&mut store, node_id, reason, decision, now)
+        };
+        self.finish_decision(node_id, outcome);
+    }
+
+    /// Post-decision side effects that must run *outside* the store lock
+    /// (AGENTS.md lock ordering): drop the live session on a ban, rewrite
+    /// `network.json` when a persistent ban was written.
+    fn finish_decision(&self, node_id: NodeId, outcome: DecisionOutcome) {
+        if outcome.banned {
             tracing::warn!(
                 target = "net::peer",
                 peer = %node_id,
-                ?reason,
                 "peer banned by scoring"
             );
             self.disconnect_peer(&node_id);
         }
-        if needs_save {
+        if outcome.needs_save {
             self.persist();
         }
     }
@@ -574,14 +579,20 @@ impl PeerManager {
     /// Same as [`tick`](Self::tick) with an injected clock — the ban-expiry
     /// edge ADR-0022 §Determinism allows, made testable (simulated 1 h / 30 d
     /// without sleeping).
+    ///
+    /// S2-P17 semantics: uptime windows accrue for **every** known peer;
+    /// scores are re-evaluated for every peer *except* the ones whose ban
+    /// just expired in this pass (a just-unbanned peer gets at least one
+    /// full tick window before the ladder can re-arm — otherwise cumulative
+    /// counters would re-ban it instantly and the expiry would be a no-op).
     pub fn tick_at(&self, now: Instant) -> TickReport {
         let mut report = TickReport::default();
-        let connected = self.pool().node_ids_sorted();
         let mut to_disconnect: Vec<NodeId> = Vec::new();
         let mut needs_save = false;
         {
             let mut store = self.store();
             let expired = store.expire_bans(now);
+            let expired_set: HashSet<NodeId> = expired.iter().copied().collect();
             if !expired.is_empty() {
                 report.expired_bans = expired.len();
                 needs_save = true;
@@ -593,40 +604,46 @@ impl PeerManager {
                     );
                 }
             }
-            for node_id in connected {
+            // Determinism checklist #4: iterate node_id-sorted — the same
+            // store contents produce the same pass order on every node.
+            for node_id in store.peer_ids_sorted() {
+                let banned_now = store.is_banned(&node_id);
                 let Some(record) = store.get_peer_mut(&node_id) else {
                     continue;
                 };
-                let score = PeerStore::update_score(record);
-                match decide(score, &self.config, now) {
-                    BanDecision::NoAction => {}
-                    BanDecision::Warn => {
-                        report.warned += 1;
-                        tracing::warn!(
-                            target = "net::peer",
-                            peer = %node_id,
-                            score,
-                            "peer score in warn band (tick)"
-                        );
-                    }
-                    BanDecision::TempBan { until } => {
-                        if store.ban_peer(node_id, BanReason::ProtocolViolation, until, now, false)
-                        {
-                            report.newly_banned += 1;
-                            to_disconnect.push(node_id);
-                        }
-                    }
-                    BanDecision::PersistentBan { until } => {
-                        if store.ban_peer(node_id, BanReason::ProtocolViolation, until, now, true) {
-                            report.newly_banned += 1;
-                            to_disconnect.push(node_id);
-                            needs_save = true;
-                        }
-                    }
+                scoring::accrue_uptime(record, now);
+                // An active ban is served, not re-armed (re-minting `until`
+                // every tick would extend it indefinitely); a just-expired
+                // ban gets one full tick window before the ladder can
+                // re-arm, so expiry is never a same-pass no-op.
+                if banned_now || expired_set.contains(&node_id) {
+                    continue;
                 }
+                let decision = scoring::update_score(record, &self.config.scoring, now);
+                if matches!(decision, BanDecision::NoAction) {
+                    continue;
+                }
+                let reason = scoring::dominant_reason(record, &self.config.scoring);
+                let outcome = apply_decision(&mut store, node_id, reason, decision, now);
+                match decision {
+                    BanDecision::Warn => report.warned += 1,
+                    BanDecision::TempBan { .. } | BanDecision::PersistentBan { .. } => {
+                        if outcome.banned {
+                            report.newly_banned += 1;
+                            to_disconnect.push(node_id);
+                        }
+                    }
+                    BanDecision::NoAction => {}
+                }
+                needs_save |= outcome.needs_save;
             }
         }
         for node_id in &to_disconnect {
+            tracing::warn!(
+                target = "net::peer",
+                peer = %node_id,
+                "peer banned by scoring (tick)"
+            );
             self.disconnect_peer(node_id);
         }
         if needs_save {

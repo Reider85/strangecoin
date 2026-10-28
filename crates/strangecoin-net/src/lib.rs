@@ -12,8 +12,10 @@
 //! S2-P10, multi-source discovery in S2-P11, the peer store/manager/pool
 //! split with the ban state machine in S2-P12 (`peer`), INV/GET_DATA
 //! gossip in S2-P13 (`gossip`), BIP 152 compact blocks in S2-P14
-//! (`gossip::compact_blocks`) and Erlay reconciliation in S2-P15
-//! (`gossip::erlay`). The remaining stub modules are populated by
+//! (`gossip::compact_blocks`), Erlay reconciliation in S2-P15
+//! (`gossip::erlay`), the token-bucket rate limiter in S2-P16
+//! (`rate_limiter`) and the ADR-0022 scoring formula in S2-P17
+//! (`peer::scoring`). The remaining stub modules are populated by
 //! the later Stage 2 prompts (see `analytics/prompt-stage2.md`).
 
 pub mod blockchain_view;
@@ -41,8 +43,8 @@ pub use noise::{
     NoiseTransport,
 };
 pub use peer::{
-    BanReason, BanRecord, Connection, ConnectionPool, PeerManager, PeerManagerConfig, PeerRecord,
-    PeerStore, TickReport,
+    BanDecision, BanReason, BanRecord, Connection, ConnectionPool, PeerManager,
+    PeerManagerConfig, PeerRecord, PeerStore, ScoringConfig, TickReport,
 };
 pub use rate_limiter::{
     parse_rate_spec, BucketSpec, MessageClass, MessageType, RateLimitConfig, RateLimitError,

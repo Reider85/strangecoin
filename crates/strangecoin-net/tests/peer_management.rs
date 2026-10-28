@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use strangecoin_net::discovery::addr_gossip::{AddrEntry, AddrSender};
 use strangecoin_net::noise::{NodeKeypair, NoiseHandshake};
+use strangecoin_net::peer::scoring::{self, ScoringConfig};
 use strangecoin_net::protocol::decrypt_frame;
 use strangecoin_net::protocol::hello::{read_hello, write_hello, Hello, STAGE2_CAPABILITIES};
 use strangecoin_net::protocol::read_length_prefixed_async;
@@ -146,7 +147,7 @@ fn peer_store_roundtrip_recovers_peers_and_preserves_other_keys() {
         let record = store.get_peer_mut(&node_id(1)).expect("record");
         record.invalid_count = 3;
         record.latency_ewma = Duration::from_millis(50);
-        PeerStore::update_score(record);
+        scoring::update_score(record, &ScoringConfig::default(), now);
     }
     assert!(store.ban_peer(
         node_id(2),
@@ -214,11 +215,11 @@ fn peer_store_roundtrip_recovers_peers_and_preserves_other_keys() {
 
 #[test]
 fn malicious_peer_banned_after_n_invalid_blocks_at_configured_threshold() {
-    let manager = manager_with(|config| config.ban_threshold = 0.5, None);
+    let manager = manager_with(|config| config.scoring.temp_ban_threshold = 0.5, None);
     manager.learn_addrs(vec![entry(1, 1)]);
 
-    // Skeleton score: 1 − 0.083·invalid. Six invalid blocks → 0.502 (still
-    // above the configured 0.5 threshold); the seventh crosses it.
+    // ADR-0022 formula: quality 1.0 − 0.5·invalid/6. Six invalid blocks →
+    // 0.500 (not < the configured 0.5 threshold); the seventh crosses it.
     for _ in 0..6 {
         manager.record_invalid_block(node_id(1));
         assert!(!manager.is_banned(&node_id(1)), "not banned yet");
@@ -270,7 +271,7 @@ async fn persistent_ban_survives_restart() {
     let path = dir.join("network.json");
     let manager = manager_with(|_| {}, Some(path.clone()));
     manager.learn_addrs(vec![entry(3, 3)]);
-    // 20 protocol violations → skeleton score 0.0 → persistent band.
+    // 20 protocol violations → ADR-0022 score 0.0 → persistent band.
     for _ in 0..20 {
         manager.record_protocol_violation(node_id(3));
     }

@@ -14,13 +14,14 @@
 //! those two keys — `peers` and `seed_config` survive a read-modify-write.
 //!
 //! **Determinism** (Stage 2 checklist, threat V-21 extension): no clock, no
-//! RNG, no I/O on any scoring path — [`PeerStore::update_score`] is a pure
+//! RNG, no I/O on any scoring path — [`scoring::compute_score`] is a pure
 //! function of the record's counters. Wall time appears only at the edges
-//! (ban-expiry comparison in `PeerManager::tick_at`, and the age/remaining
-//! stamps written to or read from `network.json`), exactly as ADR-0022
-//! §Determinism prescribes. Persistence uses second-granularity ages and
-//! remainings instead of wall-clock timestamps so an `Instant` (monotonic,
-//! non-serializable) round-trips without pulling a datetime dependency in.
+//! (ban-expiry comparison in `PeerManager::tick_at`, uptime accrual through
+//! the injected `now`, and the age/remaining stamps written to or read from
+//! `network.json`), exactly as ADR-0022 §Determinism prescribes.
+//! Persistence uses second-granularity ages and remainings instead of
+//! wall-clock timestamps so an `Instant` (monotonic, non-serializable)
+//! round-trips without pulling a datetime dependency in.
 
 use crate::discovery::addr_gossip::{is_dialable, AddrEntry};
 use crate::error::NetError;
@@ -31,16 +32,6 @@ use std::fs;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::time::{Duration, Instant};
-
-/// Skeleton latency penalty: `latency_norm = clamp(ms / 100, 0, 1)` costs up
-/// to this much score — ≥100 ms floors the total at `1 − 0.667 ≈ 0.333`,
-/// the ADR-0022 false-positive bound (a responsive peer with zero violations
-/// sits in Warn and is mathematically unbannable, whatever its latency).
-const SKELETON_LATENCY_FULL_PENALTY: f32 = 0.667;
-/// Skeleton invalid-blocks penalty: 12 invalid blocks reach score 0.
-const SKELETON_INVALID_FULL_PENALTY: f32 = 0.083;
-/// Skeleton protocol-violation penalty: 20 violations reach score 0.
-const SKELETON_VIOLATION_FULL_PENALTY: f32 = 0.05;
 
 /// Score a freshly-seen peer starts at (no observations yet).
 pub const INITIAL_PEER_SCORE: f32 = 1.0;
@@ -71,13 +62,26 @@ pub struct PeerRecord {
     pub node_id: NodeId,
     pub addr: SocketAddr,
     pub last_seen: Instant,
-    /// Recomputed by [`PeerStore::update_score`] (skeleton formula; the
-    /// full ADR-0022 weighted sum lands in `scoring.rs`, S2-P17).
+    /// Recomputed by [`scoring::update_score`](crate::peer::scoring::update_score)
+    /// (ADR-0022 weighted formula, S2-P17).
     pub score: f32,
     pub latency_ewma: Duration,
     pub invalid_count: u32,
     pub violation_count: u32,
+    /// Responsive seconds numerator of the ADR-0022 uptime fraction
+    /// (field name kept for `network.json` wire compat; S2-P17 changed the
+    /// semantics from cumulative contact time to the responsive fraction).
     pub uptime_seconds: u64,
+    /// Observed seconds denominator of the uptime fraction (S2-P17; missing
+    /// in pre-S2-P17 files → `#[serde(default)]` 0 → `uptime_norm` 1.0).
+    pub observed_seconds: u64,
+    /// Accrual anchor for [`scoring::accrue_uptime`](crate::peer::scoring::accrue_uptime)
+    /// — in-memory only (reset to the load-time `now`; ADR-0022 keeps
+    /// scoring accumulators non-durable).
+    pub uptime_anchor: Instant,
+    /// Whether a message arrived since `uptime_anchor` (in-memory window
+    /// flag; S2-P17).
+    pub responsive_since_anchor: bool,
     /// `true` once a Noise handshake with this `node_id` completed (S2-P09);
     /// ADDR-gossip-learned peers start `false`.
     pub verified: bool,
@@ -93,6 +97,9 @@ struct PersistedPeer {
     invalid_count: u32,
     violation_count: u32,
     uptime_seconds: u64,
+    /// S2-P17 uptime-fraction denominator; absent in pre-S2-P17 files.
+    #[serde(default)]
+    observed_seconds: u64,
     verified: bool,
     last_seen_age_secs: u64,
 }
@@ -133,7 +140,9 @@ impl PeerStore {
     ///
     /// Refresh semantics: the address we just proved dialable (direct
     /// connect) or gossip advertised wins; `verified` is sticky — a known
-    /// record is never demoted back to unverified.
+    /// record is never demoted back to unverified. A `verified` sighting
+    /// (post-Noise-handshake) marks the current uptime window responsive
+    /// (S2-P17: the handshake *is* a message exchange).
     pub fn add_peer(
         &mut self,
         node_id: NodeId,
@@ -146,6 +155,9 @@ impl PeerStore {
                 record.addr = addr;
                 record.verified |= verified;
                 record.last_seen = now;
+                if verified {
+                    record.responsive_since_anchor = true;
+                }
                 false
             }
             None => {
@@ -160,6 +172,9 @@ impl PeerStore {
                         invalid_count: 0,
                         violation_count: 0,
                         uptime_seconds: 0,
+                        observed_seconds: 0,
+                        uptime_anchor: now,
+                        responsive_since_anchor: verified,
                         verified,
                     },
                 );
@@ -186,24 +201,6 @@ impl PeerStore {
         let mut ids: Vec<NodeId> = self.peers.keys().copied().collect();
         ids.sort();
         ids
-    }
-
-    /// Recompute `record.score` from its factors and return it.
-    ///
-    /// **S2-P12 skeleton** — a provisional penalty model shaped after
-    /// ADR-0022 (latency floor 0.333, milestone counts 12 invalid / 20
-    /// violations → 0) so the ban state machine and its tests are honest
-    /// today; the full weighted quality/abuse formula, EWMA/uptime tracking
-    /// and `ScoringConfig` replace this in `peer/scoring.rs` (S2-P17) per
-    /// ADR-0022. Pure function — determinism checklist #1/#2.
-    pub fn update_score(record: &mut PeerRecord) -> f32 {
-        let latency_ms = record.latency_ewma.as_secs_f32() * 1000.0;
-        let latency_norm = (latency_ms / 100.0).clamp(0.0, 1.0);
-        let penalty = SKELETON_LATENCY_FULL_PENALTY * latency_norm
-            + SKELETON_INVALID_FULL_PENALTY * record.invalid_count as f32
-            + SKELETON_VIOLATION_FULL_PENALTY * record.violation_count as f32;
-        record.score = (1.0 - penalty).clamp(0.0, 1.0);
-        record.score
     }
 
     /// Record a ban, replacing any existing one.
@@ -441,11 +438,15 @@ impl PersistedPeer {
             invalid_count: record.invalid_count,
             violation_count: record.violation_count,
             uptime_seconds: record.uptime_seconds,
+            observed_seconds: record.observed_seconds,
             verified: record.verified,
             last_seen_age_secs: now.saturating_duration_since(record.last_seen).as_secs(),
         }
     }
 
+    /// The uptime accrual anchor and the responsive window flag are
+    /// in-memory (ADR-0022: accumulators reset on restart); the anchor
+    /// restarts at the load-time `now`.
     fn into_record(self, now: Instant) -> Option<PeerRecord> {
         let bytes: [u8; 32] = hex::decode(&self.node_id).ok()?.try_into().ok()?;
         let addr: SocketAddr = self.addr.parse().ok()?;
@@ -460,6 +461,9 @@ impl PersistedPeer {
             invalid_count: self.invalid_count,
             violation_count: self.violation_count,
             uptime_seconds: self.uptime_seconds,
+            observed_seconds: self.observed_seconds,
+            uptime_anchor: now,
+            responsive_since_anchor: false,
             verified: self.verified,
         })
     }
