@@ -26,8 +26,6 @@ pub const MAX_MESSAGE_SIZE: usize = 32 * 1024 * 1024;
 pub const MAX_BLOCK_SIZE: usize = 4 * 1024 * 1024;
 pub const MAX_TX_SIZE: usize = 256 * 1024;
 
-pub const HELLO_PREFIX: &str = "HELLO:";
-
 // ---------------------------------------------------------------- S1-P16
 // Binary message tags (first payload byte). S2-P18 removed the v0.8.6 text
 // protocol (`GET_BLOCKCHAIN` / `UPDATE_BLOCKCHAIN:`), so every defined
@@ -50,10 +48,11 @@ pub const MAX_BLOCKS_BATCH: usize = 128;
 // ------------------------------------------------- top-level dispatch (S2-P18)
 
 /// Every first-byte tag the Stage 2 wire format defines: the sync codecs
-/// `0x01..=0x04` (this module), `ADDR` gossip `0x05`, and the gossip/compact
-/// codecs `0x06..=0x0C`. Anything outside this set — including the removed
-/// v0.8.6 text protocol — is an unknown *future* message type.
-pub const KNOWN_TAGS: [u8; 12] = [
+/// `0x01..=0x04` (this module), `ADDR` gossip `0x05`, the gossip/compact
+/// codecs `0x06..=0x0C` and the Erlay reconcile envelope `0x0D` (S2-P19).
+/// Anything outside this set — including the removed v0.8.6 text protocol —
+/// is an unknown *future* message type.
+pub const KNOWN_TAGS: [u8; 13] = [
     MSG_GET_HEADERS,
     MSG_HEADERS,
     MSG_GET_BLOCKS,
@@ -66,6 +65,7 @@ pub const KNOWN_TAGS: [u8; 12] = [
     crate::gossip::get_data::MSG_NOTFOUND,
     crate::gossip::compact_blocks::MSG_GET_BLOCK_TXN,
     crate::gossip::compact_blocks::MSG_BLOCK_TXN,
+    crate::gossip::erlay::MSG_ERLAY_RECONCILE,
 ];
 
 /// Whether `tag` is a message type this build knows ([`KNOWN_TAGS`]).
@@ -319,24 +319,10 @@ pub fn parse_blocks(bytes: &[u8]) -> Result<Vec<Block>, NetError> {
 
 // ------------------------------------------------------------ existing API
 
-pub fn encode_hello(network_id: u32) -> Vec<u8> {
-    let hello_msg = format!("{}{}", HELLO_PREFIX, network_id);
-    let length = hello_msg.len() as u32;
-    let mut data = length.to_be_bytes().to_vec();
-    data.extend_from_slice(hello_msg.as_bytes());
-    data
-}
-
-pub fn parse_hello(bytes: &[u8]) -> Result<u32, NetError> {
-    let msg = String::from_utf8_lossy(bytes);
-    if !msg.starts_with(HELLO_PREFIX) {
-        return Err(NetError::Protocol("invalid HELLO message".to_string()));
-    }
-    let network_id_str = &msg[HELLO_PREFIX.len()..];
-    network_id_str
-        .parse()
-        .map_err(|_| NetError::Protocol("invalid HELLO message".to_string()))
-}
+// S2-P19 removed the plaintext `HELLO:<network_id>` codec
+// (`encode_hello`/`parse_hello`/`HELLO_PREFIX`): every session now speaks
+// the Noise-encrypted S2-P10 HELLO (`protocol::hello`) — the Stage 1.5
+// plaintext greeting is gone with the rest of the pre-Noise wire.
 
 pub fn read_length_prefixed<R: Read>(reader: &mut R) -> Result<Vec<u8>, NetError> {
     let mut len_buf = [0u8; 4];

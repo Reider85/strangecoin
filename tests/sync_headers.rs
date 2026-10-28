@@ -17,6 +17,12 @@ fn shutdown_flag() -> Arc<AtomicBool> {
     Arc::new(AtomicBool::new(false))
 }
 
+/// S2-P19: the headers-first dialer runs a Noise XX initiator handshake and
+/// needs an identity to sign its auth blob.
+fn dialer_identity() -> strangecoin_net::NodeKeypair {
+    strangecoin_net::NodeKeypair::from_seed([0xC1; 32])
+}
+
 // ADR-0011: the server accepts on the test runtime; multi_thread keeps it
 // live while the test thread drives the (now async) headers-first client.
 // The NETWORK_TEST_LOCK std Mutex is held for the whole test by design
@@ -53,6 +59,7 @@ async fn new_node_syncs_20_blocks_via_headers_first() {
     let outcome = sync::sync_headers_first(
         to_addr(port),
         strangecoin::consensus::CHAIN_ID_REGTEST,
+        &dialer_identity(),
         &local,
         &shutdown,
     )
@@ -115,6 +122,7 @@ async fn equal_chain_reports_nothing_better() {
     let outcome = sync::sync_headers_first(
         to_addr(port),
         strangecoin::consensus::CHAIN_ID_REGTEST,
+        &dialer_identity(),
         &local,
         &shutdown,
     )
@@ -173,6 +181,7 @@ async fn longer_fork_resolved_via_headers_first() {
     let outcome = sync::sync_headers_first(
         to_addr(port),
         strangecoin::consensus::CHAIN_ID_REGTEST,
+        &dialer_identity(),
         &local,
         &shutdown,
     )

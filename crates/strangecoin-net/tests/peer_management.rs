@@ -113,9 +113,10 @@ async fn local_stream_pair() -> (TcpStream, TcpStream) {
 async fn make_connection(node_seed: u8, peer_addr: SocketAddr) -> Arc<Connection> {
     let (_transport_a, _peer_a, transport_b, peer_b) = transport_pair([node_seed; 32], [0xEE; 32]);
     let (client, _server) = local_stream_pair().await;
+    let (_read_half, write_half) = Connection::split_stream(client);
     Arc::new(Connection::new(
         transport_b,
-        client,
+        write_half,
         peer_addr,
         peer_b,
         STAGE2_CAPABILITIES,

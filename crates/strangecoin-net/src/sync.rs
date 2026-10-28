@@ -1,4 +1,5 @@
-//! Headers-first sync (S1-P16; ADR-0011: network loop is async).
+//! Headers-first sync (S1-P16; ADR-0011: network loop is async; S2-P19:
+//! Noise-encrypted transport).
 //!
 //! Three layers, deliberately separable so the logic is testable without TCP:
 //!
@@ -8,12 +9,15 @@
 //! 2. [`plan_best_branch`] — fork choice over headers only: candidate tips are
 //!    walked back to the shared genesis, compared by cumulative work through
 //!    [`ChainSelector`] (work → timestamp → hash) against the local chain.
-//! 3. [`sync_headers_first`] — the network loop: GET_HEADERS until the peer's
-//!    headers are exhausted, plan, GET_BLOCKS for exactly the missing hashes,
-//!    and assemble the candidate chain (`local prefix + fork bodies`). Since
-//!    ADR-0010 the loop does **not** adopt: the caller enqueues the candidate
-//!    into the SyncEngine inbox, and the engine runs the full `validate_chain`
-//!    path over the bodies. Headers lay out the route; they never weaken it.
+//! 3. [`sync_headers_first`] — the network loop: dial a short-lived Noise XX
+//!    session (initiator side — the peer's accept loop is the responder,
+//!    `peer::manager::accept_inbound`), exchange the S2-P10 encrypted HELLO,
+//!    GET_HEADERS until the peer's headers are exhausted, plan, GET_BLOCKS
+//!    for exactly the missing hashes, and assemble the candidate chain
+//!    (`local prefix + fork bodies`). Since ADR-0010 the loop does **not**
+//!    adopt: the caller enqueues the candidate into the SyncEngine inbox,
+//!    and the engine runs the full `validate_chain` path over the bodies.
+//!    Headers lay out the route; they never weaken it.
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -22,11 +26,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
 use crate::error::NetError;
-use crate::protocol::{self, MAX_BLOCKS_BATCH, MAX_HEADERS_BATCH};
+use crate::noise::{NodeKeypair, NoiseHandshake, NoiseTransport};
+use crate::peer::manager::{drive_initiator_handshake, read_hello_frame};
+use crate::protocol::hello::Hello;
+use crate::protocol::{
+    self, decrypt_frame, encrypt_frame, read_length_prefixed_async, MAX_BLOCKS_BATCH,
+    MAX_HEADERS_BATCH,
+};
 use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 use strangecoin_core::consensus::{cumulative_work_headers, validate_header_pow};
 use strangecoin_core::serialize::block_hash;
@@ -262,7 +273,15 @@ pub struct SyncOutcome {
     pub peer_tip_height: u64,
 }
 
-/// One headers-first sync round against a single peer (ADR-0011: async).
+/// One headers-first sync round against a single peer (ADR-0011: async;
+/// S2-P19: Noise-encrypted short-lived session).
+///
+/// The round dials its own TCP connection, runs the Noise XX handshake as
+/// the *initiator* (the peer's accept loop is the responder), exchanges the
+/// S2-P10 encrypted HELLO and then speaks GET_HEADERS / GET_BLOCKS over the
+/// encrypted framing — the same wire the peer's long-lived connection loop
+/// serves. `identity` is this node's Ed25519 keypair (the handshake signs
+/// its auth blob with it).
 ///
 /// Errors mean "this peer could not serve headers-first" — the caller skips
 /// the peer for this round (S2-P18 removed the legacy `GET_BLOCKCHAIN`
@@ -276,6 +295,7 @@ pub struct SyncOutcome {
 pub async fn sync_headers_first(
     addr: SocketAddr,
     network_id: u32,
+    identity: &NodeKeypair,
     local_chain: &[Block],
     shutdown: &Arc<AtomicBool>,
 ) -> Result<SyncOutcome, NetError> {
@@ -283,12 +303,27 @@ pub async fn sync_headers_first(
     let mut stream = timeout(SYNC_CONNECT_TIMEOUT, tokio::net::TcpStream::connect(&addr))
         .await
         .map_err(|_| timeout_error())??;
-    timeout(
-        SYNC_IO_TIMEOUT,
-        stream.write_all(&protocol::encode_hello(network_id)),
-    )
-    .await
-    .map_err(|_| timeout_error())??;
+
+    // Noise XX as the initiator (same rounds as `connect_to_peer`), then
+    // the encrypted HELLO exchange (S2-P10).
+    let mut handshake =
+        NoiseHandshake::initiator(&identity.noise_static_private_key(), identity, None)
+            .map_err(|err| NetError::Handshake(err.to_string()))?;
+    with_io_timeout(drive_initiator_handshake(&mut handshake, &mut stream)).await?;
+    let (mut transport, _peer_node_id) = handshake.into_transport()?;
+
+    let local_height = local_chain.len().saturating_sub(1) as u64;
+    // Short-lived sync sessions advertise Noise only: reconciliation and
+    // compact-block relaying belong to the long-lived connection loops, and
+    // an Erlay-capability bit here would make the peer's loop auto-send a
+    // sketch that this pull-driven session never asked for (S2-P19).
+    let hello = Hello::new(
+        network_id,
+        crate::protocol::hello::Capability::Noise.bit(),
+        local_height,
+    );
+    send_encrypted(&mut transport, &mut stream, &hello.encode()).await?;
+    let _peer_hello = read_hello_frame(&mut transport, &mut stream, network_id).await?;
 
     // Local view taken once: this round plans against one consistent snapshot.
     let local_hashes: HashSet<String> = local_chain.iter().map(|b| b.hash.clone()).collect();
@@ -300,12 +335,13 @@ pub async fn sync_headers_first(
         if shutdown.load(Ordering::Relaxed) {
             return Err(shutdown_error());
         }
-        with_io_timeout(protocol::write_length_prefixed_async(
+        send_encrypted(
+            &mut transport,
             &mut stream,
             &protocol::encode_get_headers(from_height),
-        ))
+        )
         .await?;
-        let payload = with_io_timeout(protocol::read_length_prefixed_async(&mut stream)).await?;
+        let payload = recv_encrypted(&mut transport, &mut stream).await?;
         let headers = protocol::parse_headers(&payload)?;
         if headers.is_empty() {
             break;
@@ -357,12 +393,13 @@ pub async fn sync_headers_first(
                 .map_err(|_| invalid_block("headers-first: bad header hash".to_string()))?;
             requested.push(arr);
         }
-        with_io_timeout(protocol::write_length_prefixed_async(
+        send_encrypted(
+            &mut transport,
             &mut stream,
             &protocol::encode_get_blocks(&requested)?,
-        ))
+        )
         .await?;
-        let payload = with_io_timeout(protocol::read_length_prefixed_async(&mut stream)).await?;
+        let payload = recv_encrypted(&mut transport, &mut stream).await?;
         let batch = protocol::parse_blocks(&payload)?;
         let expected: HashSet<String> = chunk.iter().map(|h| h.hash.clone()).collect();
         let mut seen: HashSet<String> = HashSet::new();
@@ -411,6 +448,36 @@ pub async fn sync_headers_first(
         blocks_downloaded,
         peer_tip_height,
     })
+}
+
+/// Seal `payload` into an encrypted wire frame and write it (S2-P19: every
+/// post-handshake byte rides the Noise transport).
+async fn send_encrypted(
+    transport: &mut NoiseTransport,
+    stream: &mut TcpStream,
+    payload: &[u8],
+) -> Result<(), NetError> {
+    let mut frame = Vec::new();
+    encrypt_frame(transport, payload, &mut frame)?;
+    with_io_timeout(async {
+        stream
+            .write_all(&frame)
+            .await
+            .map_err(|err| NetError::Transport(err.to_string()))
+    })
+    .await
+}
+
+/// Read one length-prefixed wire body and decrypt it into the payload.
+async fn recv_encrypted(
+    transport: &mut NoiseTransport,
+    stream: &mut TcpStream,
+) -> Result<Vec<u8>, NetError> {
+    let body = with_io_timeout(read_length_prefixed_async(stream)).await?;
+    let mut raw = Vec::with_capacity(4 + body.len());
+    raw.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    raw.extend_from_slice(&body);
+    decrypt_frame(transport, &raw)
 }
 
 /// Bound one framing operation by [`SYNC_IO_TIMEOUT`] (ADR-0011: replaces

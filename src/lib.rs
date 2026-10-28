@@ -8,9 +8,8 @@ use std::sync::{
 use std::time::{Duration, Instant, SystemTime};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, warn, Instrument};
 
-use crate::network::sync::SYNC_IO_TIMEOUT;
 use crate::network::sync_engine::{Inbox, Incoming};
 
 pub mod address;
@@ -39,6 +38,12 @@ pub use strangecoin_core::AccountState;
 pub const SYNC_TICK: Duration = Duration::from_millis(100);
 /// Number of `SYNC_TICK`s between two `sync_blockchain` rounds (~1s).
 pub const SYNC_TICKS_PER_SYNC: u32 = 10;
+/// S2-P19: outbound dial cadence — try to establish long-lived gossip
+/// sessions with known peers.
+pub const DIAL_INTERVAL: Duration = Duration::from_secs(30);
+/// S2-P19: peer-store maintenance cadence (ban expiry, score re-check —
+/// ADR-0022 recommends every 60 s).
+pub const PEER_TICK_INTERVAL: Duration = Duration::from_secs(60);
 /// Budget granted to in-flight work after a shutdown signal (P17).
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 /// Height reserved for the opt-in primary-issuance grant block
@@ -76,6 +81,13 @@ pub struct Node {
     /// SyncEngine inbox, spawned by `start_server` (ADR-0010). `None` until
     /// the server starts; the sync task and mining inherit it from here.
     pub inbox: Option<Inbox>,
+    /// S2-P19: connection orchestration (Noise accept/dial, bans, scoring).
+    pub peer_manager: Arc<strangecoin_net::PeerManager>,
+    /// S2-P19: per-peer gossip known-sets shared by the announcer and the
+    /// connection loops.
+    pub gossip_state: Arc<Mutex<strangecoin_net::GossipState>>,
+    /// S2-P19: shared Erlay reconciliation state (known-tx set + triggers).
+    pub reconciliation_state: Arc<Mutex<strangecoin_net::ReconciliationState>>,
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +106,7 @@ impl Node {
         event_bus: Arc<events::EventBus>,
         network_id: u32,
         rate_limit_config: crate::network::RateLimitConfig,
+        peer_manager: Arc<strangecoin_net::PeerManager>,
     ) -> Self {
         let blockchain = Arc::new(BlockchainFacade::with_event_bus(
             port,
@@ -103,6 +116,10 @@ impl Node {
         let peers = Arc::new(Mutex::new(vec![]));
         let rate_limiter = Arc::new(crate::network::RateLimiter::new(rate_limit_config));
         let shutdown = Arc::new(AtomicBool::new(false));
+        let gossip_state = Arc::new(Mutex::new(strangecoin_net::GossipState::new()));
+        let reconciliation_state = Arc::new(Mutex::new(
+            strangecoin_net::ReconciliationState::with_defaults(),
+        ));
         let node = Node {
             blockchain: blockchain.clone(),
             peers: peers.clone(),
@@ -116,12 +133,23 @@ impl Node {
             network_id,
             // Spawned by `start_server`.
             inbox: None,
+            peer_manager: peer_manager.clone(),
+            gossip_state: gossip_state.clone(),
+            reconciliation_state: reconciliation_state.clone(),
         };
         // ADR-0011: the mining worker is a tokio task. It is spawned with the
-        // same dual-mode rule as `sync_engine::spawn`: on a runtime it becomes
-        // a task; without one (plain `#[test]` threads) it runs on a dedicated
-        // thread with its own current-thread runtime.
-        spawn_mining_worker(mining_rx, peers.clone(), address.clone(), network_id);
+        // same dual-mode rule as the old `sync_engine::spawn`: on a runtime it
+        // becomes a task; without one (plain `#[test]` threads) it runs on a
+        // dedicated thread with its own current-thread runtime.
+        spawn_mining_worker(
+            mining_rx,
+            peers.clone(),
+            address.clone(),
+            network_id,
+            peer_manager,
+            gossip_state,
+            reconciliation_state,
+        );
         node
     }
 
@@ -259,45 +287,236 @@ impl Node {
             ));
         }
         let blockchain = Arc::clone(&self.blockchain);
-        let rate_limiter = Arc::clone(&self.rate_limiter);
         let shutdown = Arc::clone(&self.shutdown);
-        let network_id = self.network_id;
+        let peer_manager = Arc::clone(&self.peer_manager);
+        let rate_limiter = Arc::clone(&self.rate_limiter);
+        let gossip_state = Arc::clone(&self.gossip_state);
+        let reconciliation_state = Arc::clone(&self.reconciliation_state);
+        let inbox = self
+            .inbox
+            .clone()
+            .expect("SyncEngine inbox must be spawned before the server starts");
         let address = format!("0.0.0.0:{}", port);
         let listener = TcpListener::bind(&address)
             .await
             .expect("Не удалось запустить сервер");
-        let accept_task = tokio::spawn(async move {
-            loop {
-                if shutdown.load(Ordering::Relaxed) {
-                    info!("Shutdown signal received, stopping server");
-                    break;
-                }
-                // Accept with a tick-bounded timeout so the shutdown flag is
-                // observed even when no connection arrives (the legacy
-                // listener.incoming() only woke on a connection).
-                let accepted = match tokio::time::timeout(SYNC_TICK, listener.accept()).await {
-                    Ok(result) => result,
-                    Err(_) => continue,
-                };
-                match accepted {
-                    Ok((stream, peer_addr)) => {
-                        let blockchain = Arc::clone(&blockchain);
-                        let rate_limiter = Arc::clone(&rate_limiter);
-                        let shutdown = Arc::clone(&shutdown);
-                        tokio::spawn(handle_connection(
-                            stream,
-                            peer_addr,
-                            blockchain,
-                            rate_limiter,
-                            shutdown,
-                            network_id,
-                        ));
+
+        // S2-P19: the accept loop completes the Noise XX responder handshake
+        // + encrypted HELLO through `PeerManager::accept_inbound`, then hands
+        // the session to a `run_connection` worker (read → rate-limit →
+        // dispatch: sync serving, gossip, compact blocks, Erlay).
+        let accept_task = tokio::spawn(
+            async move {
+                loop {
+                    if shutdown.load(Ordering::Relaxed) {
+                        info!("Shutdown signal received, stopping server");
+                        break;
                     }
-                    Err(e) => error!(error = %e, "Ошибка обработки входящего соединения"),
+                    // Accept with a tick-bounded timeout so the shutdown flag
+                    // is observed even when no connection arrives.
+                    let accepted = match tokio::time::timeout(SYNC_TICK, listener.accept()).await {
+                        Ok(result) => result,
+                        Err(_) => continue,
+                    };
+                    match accepted {
+                        Ok((stream, peer_addr)) => {
+                            let ctx = strangecoin_net::ConnectionContext {
+                                peer_manager: Arc::clone(&peer_manager),
+                                blockchain: blockchain.clone(),
+                                inbox: inbox.clone(),
+                                gossip: Arc::clone(&gossip_state),
+                                rate_limiter: Arc::clone(&rate_limiter),
+                                reconciliation: Arc::clone(&reconciliation_state),
+                                shutdown: Arc::clone(&shutdown),
+                            };
+                            let pm = Arc::clone(&peer_manager);
+                            let sd = Arc::clone(&shutdown);
+                            tokio::spawn(
+                                async move {
+                                    if sd.load(Ordering::Relaxed) {
+                                        return;
+                                    }
+                                    match pm.accept_inbound(stream, peer_addr).await {
+                                        Ok(conn) => {
+                                            strangecoin_net::run_connection(conn, ctx).await;
+                                        }
+                                        Err(err) => {
+                                            debug!(
+                                                target = "net::accept",
+                                                peer = %peer_addr,
+                                                error = %err,
+                                                "inbound handshake/admission rejected"
+                                            );
+                                        }
+                                    }
+                                }
+                                .instrument(tracing::info_span!(
+                                    "net::connection",
+                                    peer = %peer_addr
+                                )),
+                            );
+                        }
+                        Err(e) => error!(error = %e, "Ошибка обработки входящего соединения"),
+                    }
                 }
             }
-        });
+            .instrument(tracing::info_span!("net::accept", port)),
+        );
         *self.accept_task.lock().unwrap() = Some(accept_task);
+
+        // S2-P19: outbound dial loop — keep long-lived gossip sessions to
+        // known peers (peer-store candidates + the legacy network.json list).
+        {
+            let pm = Arc::clone(&self.peer_manager);
+            let sd = Arc::clone(&self.shutdown);
+            let chain = Arc::clone(&self.blockchain);
+            let rate = Arc::clone(&self.rate_limiter);
+            let gossip = Arc::clone(&self.gossip_state);
+            let recon = Arc::clone(&self.reconciliation_state);
+            let engine_inbox = self
+                .inbox
+                .clone()
+                .expect("SyncEngine inbox must be spawned before the server starts");
+            let legacy_peers = Arc::clone(&self.peers);
+            let dial_task = tokio::spawn(
+                async move {
+                    let mut ticker = tokio::time::interval(DIAL_INTERVAL);
+                    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        ticker.tick().await;
+                        if sd.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        pm.set_local_height(chain.chain_len().saturating_sub(1) as u64);
+                        let mut targets: Vec<(SocketAddr, Option<strangecoin_net::NodeId>)> =
+                            Vec::new();
+                        for entry in pm.dial_candidates(128) {
+                            targets.push((entry.addr, Some(entry.node_id)));
+                        }
+                        for peer in legacy_peers.lock().expect("peers lock").iter() {
+                            if let Ok(addr) = peer.parse::<SocketAddr>() {
+                                targets.push((addr, None));
+                            }
+                        }
+                        let connected = pm.connected_peers();
+                        for (addr, expected) in targets {
+                            if sd.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            if expected.as_ref().is_some_and(|id| connected.contains(id)) {
+                                continue;
+                            }
+                            match pm.connect_to_peer(addr, expected).await {
+                                Ok(node_id) => {
+                                    let conn = match pm.connection(&node_id) {
+                                        Some(conn) => conn,
+                                        None => continue,
+                                    };
+                                    let ctx = strangecoin_net::ConnectionContext {
+                                        peer_manager: Arc::clone(&pm),
+                                        blockchain: chain.clone(),
+                                        inbox: engine_inbox.clone(),
+                                        gossip: Arc::clone(&gossip),
+                                        rate_limiter: Arc::clone(&rate),
+                                        reconciliation: Arc::clone(&recon),
+                                        shutdown: Arc::clone(&sd),
+                                    };
+                                    tokio::spawn(
+                                        strangecoin_net::run_connection(conn, ctx).instrument(
+                                            tracing::info_span!("net::connection", peer = %node_id),
+                                        ),
+                                    );
+                                }
+                                Err(err) => {
+                                    debug!(
+                                        target: "net::dial",
+                                        peer = %addr,
+                                        error = %err,
+                                        "dial failed (will retry)"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                .instrument(tracing::info_span!("net::dial")),
+            );
+            // Not stored on the node: the shutdown flag stops the loop; Drop
+            // only aborts accept/sync (both were pre-existing handles).
+            drop(dial_task);
+        }
+
+        // S2-P19: peer-store maintenance — ban expiry + score re-evaluation
+        // (ADR-0022).
+        {
+            let pm = Arc::clone(&self.peer_manager);
+            let sd = Arc::clone(&self.shutdown);
+            let tick_task = tokio::spawn(
+                async move {
+                    let mut ticker = tokio::time::interval(PEER_TICK_INTERVAL);
+                    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        ticker.tick().await;
+                        if sd.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let report = pm.tick();
+                        if report != strangecoin_net::TickReport::default() {
+                            debug!(
+                                target: "net::peer",
+                                expired = report.expired_bans,
+                                banned = report.newly_banned,
+                                warned = report.warned,
+                                "peer tick finished"
+                            );
+                        }
+                    }
+                }
+                .instrument(tracing::info_span!("net::peer_tick")),
+            );
+            drop(tick_task);
+        }
+
+        // S2-P19: gossip announcer — lifecycle events from the SyncEngine
+        // (via the EventBus) become INV / CompactBlock announces to the
+        // connected peers.
+        {
+            let mut events_rx = self.event_bus.subscribe_async(256);
+            let pm = Arc::clone(&self.peer_manager);
+            let sd = Arc::clone(&self.shutdown);
+            let chain = Arc::clone(&self.blockchain);
+            let gossip = Arc::clone(&self.gossip_state);
+            let recon = Arc::clone(&self.reconciliation_state);
+            let announce_task = tokio::spawn(
+                async move {
+                    let mut shutdown_tick = tokio::time::interval(SYNC_TICK);
+                    shutdown_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = shutdown_tick.tick() => {
+                                if sd.load(Ordering::Relaxed) {
+                                    break;
+                                }
+                            }
+                            event = events_rx.recv() => match event {
+                                Some(events::NodeEvent::BlockApplied { hash, .. }) => {
+                                    announce_new_block(&hash, &pm, &gossip, &chain);
+                                }
+                                Some(events::NodeEvent::TxAccepted { txid }) => {
+                                    announce_new_tx(&txid, &pm, &gossip, &recon);
+                                }
+                                Some(_) => {}
+                                None => break,
+                            }
+                        }
+                    }
+                }
+                .instrument(tracing::info_span!("net::announce")),
+            );
+            drop(announce_task);
+        }
+
         let duration = SystemTime::now()
             .duration_since(start_time)
             .unwrap()
@@ -316,6 +535,7 @@ impl Node {
         let inbox = self.inbox.clone();
         let network_id = self.network_id;
         let blockchain = Arc::clone(&self.blockchain);
+        let peer_manager = Arc::clone(&self.peer_manager);
         self.discover_peers();
         let peers: Vec<String> = self
             .peers
@@ -346,13 +566,16 @@ impl Node {
             // S1-P16: headers-first sync. Errors mean the peer does not
             // serve the binary protocol (pre-P16 peers never answer) — the
             // peer is then skipped for this round (S2-P18 removed the
-            // legacy `GET_BLOCKCHAIN` fallback that used to follow). An
+            // legacy `GET_BLOCKCHAIN` fallback that would have followed). An
             // enqueued candidate or "nothing better" both end the round for
             // this peer. ADR-0010: the candidate is adopted by the engine.
+            // S2-P19: the round runs over a short-lived Noise session (the
+            // peer's accept loop is the responder).
             let local_chain = blockchain.chain_snapshot();
             match crate::network::sync::sync_headers_first(
                 addr,
                 network_id,
+                peer_manager.identity(),
                 &local_chain,
                 &shutdown,
             )
@@ -438,210 +661,120 @@ impl Drop for Node {
     }
 }
 
-// ---------------------------------------------------- connection handling
+// ---------------------------------------------------------- gossip announce
 
-/// Classify an inbound wire message for per-class rate limiting
-/// (BUG-S1-005). Binary tags (0x01/0x03) are checked first — everything
-/// else (gossip tags, junk, a removed v0.8.6 text message) draws from the
-/// main bucket as [`MessageClass::Other`] (ADR-0023; the `ChainGossip`
-/// class went away with the text protocol in S2-P18).
-fn classify_request(request_bytes: &[u8]) -> crate::network::MessageClass {
-    use crate::network::protocol as proto;
-    use crate::network::MessageClass;
-    match request_bytes.first() {
-        Some(&proto::MSG_GET_HEADERS) => MessageClass::GetHeaders,
-        Some(&proto::MSG_GET_BLOCKS) => MessageClass::GetBlocks,
-        _ => MessageClass::Other,
+/// S2-P19 announcer: a new block was applied (SyncEngine → EventBus) —
+/// relay it to every connected, non-banned peer.
+///
+/// Peers that negotiated `Capability::CompactBlocks` get the BIP 152
+/// compact form (S2-P14 live wiring); everyone else gets a classic one-item
+/// `INV` and pulls the body through `GET_DATA`. Per-peer dedup via
+/// [`GossipState`] — a peer that already announced or was served the object
+/// is skipped.
+fn announce_new_block(
+    hash: &str,
+    peer_manager: &Arc<strangecoin_net::PeerManager>,
+    gossip_state: &Arc<Mutex<strangecoin_net::GossipState>>,
+    blockchain: &Arc<BlockchainFacade>,
+) {
+    use strangecoin_net::protocol::hello::Capability;
+    use strangecoin_net::{CompactBlock, Inv, InventoryItem};
+
+    let Some(block) = blockchain.block_by_hash(hash) else {
+        debug!(target: "net::announce", hash, "applied block not in canonical chain — skip announce");
+        return;
+    };
+    let hash_bytes: [u8; 32] = match hex::decode(hash)
+        .map_err(|e| e.to_string())
+        .and_then(|bytes| bytes.try_into().map_err(|_| "hash length".to_string()))
+    {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            warn!(target: "net::announce", hash, error = %err, "non-hex block hash — skip announce");
+            return;
+        }
+    };
+    let item = InventoryItem::block(hash_bytes);
+    let mut gossip = gossip_state.lock().expect("gossip state poisoned");
+    for peer in peer_manager.connected_peers() {
+        if peer_manager.is_banned(&peer) || gossip.knows(&peer, &item) {
+            continue;
+        }
+        let caps = peer_manager.peer_capabilities(&peer).unwrap_or(0);
+        let payload = if caps & Capability::CompactBlocks.bit() != 0 {
+            CompactBlock::from_block(&block).encode()
+        } else {
+            Inv { items: vec![item] }.encode()
+        };
+        match payload {
+            Ok(payload) => match peer_manager.send_to_peer(&peer, &payload) {
+                Ok(()) => gossip.mark_known(peer, item),
+                Err(err) => debug!(
+                    target: "net::announce",
+                    peer = %peer, error = %err, "block announce send failed"
+                ),
+            },
+            Err(err) => {
+                warn!(target: "net::announce", error = %err, "block announce encode failed")
+            }
+        }
     }
 }
 
-/// Serve one inbound peer connection (ADR-0011: runs as a tokio task; the
-/// legacy version was a dedicated `std::thread` per TCP stream).
-///
-/// Read-serving only: headers/blocks requests touch the facade through
-/// read-only calls; every other payload goes through
-/// [`decode_message`](crate::network::protocol::decode_message) — known
-/// non-request tags and unknown (future / removed v0.8.6) messages are
-/// logged and ignored, never crash (S2-P18).
-async fn handle_connection(
-    mut stream: tokio::net::TcpStream,
-    peer_addr: SocketAddr,
-    blockchain: Arc<BlockchainFacade>,
-    rate_limiter: Arc<crate::network::RateLimiter>,
-    shutdown: Arc<AtomicBool>,
-    network_id: u32,
+/// S2-P19 announcer: a new transaction entered the mempool — feed the Erlay
+/// known-set and broadcast `INV(tx)` (S2-P13 dedup per peer).
+fn announce_new_tx(
+    txid_hex: &str,
+    peer_manager: &Arc<strangecoin_net::PeerManager>,
+    gossip_state: &Arc<Mutex<strangecoin_net::GossipState>>,
+    reconciliation_state: &Arc<Mutex<strangecoin_net::ReconciliationState>>,
 ) {
-    if let Err(e) = rate_limiter.check(peer_addr) {
-        warn!(peer = %peer_addr, error = %e, "Rate limit exceeded, closing connection");
-        return;
-    }
-
-    // First message must be HELLO handshake (bounded by SYNC_IO_TIMEOUT).
-    let hello_bytes = match tokio::time::timeout(
-        SYNC_IO_TIMEOUT,
-        crate::network::protocol::read_length_prefixed_async(&mut stream),
-    )
-    .await
+    let txid: [u8; 32] = match hex::decode(txid_hex)
+        .map_err(|e| e.to_string())
+        .and_then(|bytes| bytes.try_into().map_err(|_| "txid length".to_string()))
     {
-        Ok(Ok(bytes)) => bytes,
-        Ok(Err(e)) => {
-            warn!(error = %e, "Failed to read HELLO handshake");
-            return;
-        }
-        Err(_) => {
-            warn!(peer = %peer_addr, "Timeout reading HELLO handshake");
+        Ok(bytes) => bytes,
+        Err(err) => {
+            warn!(target: "net::announce", txid = txid_hex, error = %err, "bad txid — skip announce");
             return;
         }
     };
-    let peer_network_id = match crate::network::protocol::parse_hello(&hello_bytes) {
-        Ok(id) => id,
-        Err(e) => {
-            warn!(error = %e, "Invalid HELLO message from peer");
-            return;
-        }
-    };
-
-    if peer_network_id != network_id {
-        warn!(
-            peer = %peer_addr,
-            expected = network_id,
-            got = peer_network_id,
-            "Peer rejected: foreign network_id"
-        );
-        rate_limiter.ban(peer_addr);
-        return;
-    }
-
-    debug!(peer_network_id, "HELLO handshake successful");
-
-    use crate::network::protocol as proto;
-
-    // S1-P16: one connection serves many requests — a headers-first client
-    // iterates GET_HEADERS / GET_BLOCKS on a single session. The read
-    // timeout bounds idle handlers; a client that just closes surfaces as
-    // EOF here.
-    loop {
-        if shutdown.load(Ordering::Relaxed) {
-            break;
-        }
-        let request_bytes = match tokio::time::timeout(
-            SYNC_IO_TIMEOUT,
-            proto::read_length_prefixed_async(&mut stream),
-        )
-        .await
-        {
-            Ok(Ok(bytes)) => bytes,
-            Ok(Err(e)) => {
-                debug!(error = %e, "Соединение закрыто после HELLO");
-                break;
-            }
-            Err(_) => {
-                debug!(peer = %peer_addr, "Timeout ожидания запроса после HELLO");
-                break;
-            }
-        };
-
-        // BUG-S1-005 (P13) / ADR-0023 (S2-P16): per-message rate limit —
-        // the accept-time check only throttles connection rate; a long-lived
-        // peer must not stream unlimited messages through one TCP session.
-        // Classified after the read (classification needs the message bytes).
-        // Exhaustion is fail-closed but graded: `Exceeded` drops the message
-        // (the violation counter keeps accumulating on this connection),
-        // `Ban` (threshold reached) closes the session.
-        let class = classify_request(&request_bytes);
-        match rate_limiter.check_class(peer_addr, class) {
-            Ok(()) => {}
-            Err(crate::network::RateLimitError::Exceeded) => {
-                warn!(peer = %peer_addr, ?class, "Rate limit exceeded, dropping message");
-                continue;
-            }
-            Err(crate::network::RateLimitError::Ban) => {
-                warn!(peer = %peer_addr, ?class, "Rate limit ban reached, closing connection");
-                break;
-            }
-        }
-
-        // Top-level dispatch (S2-P18): GET_HEADERS/GET_BLOCKS are served
-        // from the read-only facade; known non-request tags (gossip, ADDR,
-        // responses) and unknown — future or removed v0.8.6 — messages are
-        // logged and ignored (forward-compat: never crash, never ban).
-        match proto::decode_message(&request_bytes) {
-            Ok(proto::InboundMessage::GetHeaders(from_height)) => {
-                let payload = proto::encode_headers(
-                    &blockchain.headers_from_height(from_height, proto::MAX_HEADERS_BATCH),
-                )
-                .map_err(|e| {
-                    warn!(error = %e, "Не удалось закодировать заголовки");
-                });
-                match payload {
-                    Ok(payload) => {
-                        if let Err(e) =
-                            proto::write_length_prefixed_async(&mut stream, &payload).await
-                        {
-                            debug!(error = %e, "Не удалось отправить заголовки");
-                            break;
-                        }
-                    }
-                    Err(()) => break,
-                }
-                continue;
-            }
-            Ok(proto::InboundMessage::GetBlocks(hashes)) => {
-                let payload = proto::encode_blocks(
-                    &blockchain.blocks_by_hashes(&hashes, proto::MAX_BLOCKS_BATCH),
-                )
-                .map_err(|e| {
-                    warn!(error = %e, "Не удалось закодировать блоки");
-                });
-                match payload {
-                    Ok(payload) => {
-                        if let Err(e) =
-                            proto::write_length_prefixed_async(&mut stream, &payload).await
-                        {
-                            debug!(error = %e, "Не удалось отправить блоки");
-                            break;
-                        }
-                    }
-                    Err(()) => break,
-                }
-                continue;
-            }
-            Ok(proto::InboundMessage::KnownTag(tag)) => {
-                debug!(peer = %peer_addr, tag, "Известный не-sync тег — игнорируется");
-                continue;
-            }
-            Ok(proto::InboundMessage::UnknownMessage(payload)) => {
-                warn!(
-                    peer = %peer_addr,
-                    len = payload.len(),
-                    tag = ?payload.first(),
-                    "Неизвестный тип сообщения — игнорируется (forward-compat, S2-P18)"
-                );
-                continue;
-            }
-            Err(e) => {
-                warn!(error = %e, "Некорректный sync-запрос");
-                break;
-            }
-        }
-    }
+    reconciliation_state
+        .lock()
+        .expect("reconciliation state poisoned")
+        .note_new_tx(txid);
+    let gossip = gossip_state.lock().expect("gossip state poisoned");
+    strangecoin_net::announce_tx(txid, peer_manager, &gossip);
 }
 
 // ---------------------------------------------------------- mining worker
 
-/// Spawn the mining worker with the same dual-mode rule as
-/// `sync_engine::spawn` (ADR-0011): on a tokio runtime the worker is a task;
+/// Spawn the mining worker with the same dual-mode rule the sync engine
+/// used pre-S2-P19 (ADR-0011): on a tokio runtime the worker is a task;
 /// without one (plain `#[test]` threads) it runs on a dedicated thread with
-/// its own current-thread runtime.
+/// its own current-thread runtime. Mining stays on this hybrid path — full
+/// mining async migration is Stage 6+ (out of Stage 2 scope).
+#[allow(clippy::too_many_arguments)]
 fn spawn_mining_worker(
     mining_rx: tokio::sync::mpsc::UnboundedReceiver<MiningTask>,
     peers: Arc<Mutex<Vec<String>>>,
     address: String,
     network_id: u32,
+    peer_manager: Arc<strangecoin_net::PeerManager>,
+    gossip_state: Arc<Mutex<strangecoin_net::GossipState>>,
+    reconciliation_state: Arc<Mutex<strangecoin_net::ReconciliationState>>,
 ) {
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => {
-            handle.spawn(mining_worker_loop(mining_rx, peers, address, network_id));
+            handle.spawn(mining_worker_loop(
+                mining_rx,
+                peers,
+                address,
+                network_id,
+                peer_manager,
+                gossip_state,
+                reconciliation_state,
+            ));
         }
         Err(_) => {
             std::thread::Builder::new()
@@ -651,7 +784,15 @@ fn spawn_mining_worker(
                         .enable_all()
                         .build()
                         .expect("mining worker runtime");
-                    rt.block_on(mining_worker_loop(mining_rx, peers, address, network_id));
+                    rt.block_on(mining_worker_loop(
+                        mining_rx,
+                        peers,
+                        address,
+                        network_id,
+                        peer_manager,
+                        gossip_state,
+                        reconciliation_state,
+                    ));
                 })
                 .expect("mining worker thread");
         }
@@ -662,11 +803,15 @@ fn spawn_mining_worker(
 /// (which holds the facade write lock for the whole PoW search) run inside
 /// `spawn_blocking` so runtime workers are never blocked; status updates and
 /// the post-mine gossip round await between tasks.
+#[allow(clippy::too_many_arguments)]
 async fn mining_worker_loop(
     mut mining_rx: tokio::sync::mpsc::UnboundedReceiver<MiningTask>,
     peers: Arc<Mutex<Vec<String>>>,
     address: String,
     network_id: u32,
+    peer_manager: Arc<strangecoin_net::PeerManager>,
+    gossip_state: Arc<Mutex<strangecoin_net::GossipState>>,
+    reconciliation_state: Arc<Mutex<strangecoin_net::ReconciliationState>>,
 ) {
     info!("Фоновый воркер майнинга запущен (ADR-0011)");
     let mut mining_count = 0u64;
@@ -788,6 +933,9 @@ async fn mining_worker_loop(
                 event_bus: event_bus.clone(),
                 network_id,
                 inbox: inbox.clone(),
+                peer_manager: peer_manager.clone(),
+                gossip_state: gossip_state.clone(),
+                reconciliation_state: reconciliation_state.clone(),
             };
             sync_node.sync_blockchain().await;
             event_bus.publish(events::NodeEvent::BlockApplied {
@@ -1014,6 +1162,18 @@ pub async fn run_async() {
     let listen_addr = config.network.listen_addr;
     let port = listen_addr.port();
 
+    // S2-P19: the node's P2P identity (Ed25519, keystore/node/) + the
+    // PeerManager that owns connections, bans and scoring. The peer store
+    // persists next to the legacy network.json (known_peers/banned_peers).
+    let node_identity = wallet::load_or_create_node_keypair(&config.data_dir)
+        .expect("Не удалось загрузить или создать Ed25519 node keypair");
+    let mut peer_manager_config = config.peer_manager_config();
+    peer_manager_config.network_json_path = Some(network_path.clone());
+    let peer_manager = Arc::new(strangecoin_net::PeerManager::new(
+        peer_manager_config,
+        node_identity,
+    ));
+
     // Create shared shutdown signal for graceful shutdown
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_ctrlc = Arc::clone(&shutdown);
@@ -1025,6 +1185,7 @@ pub async fn run_async() {
         event_bus.clone(),
         config.network_id,
         config.rate_limit_config(),
+        Arc::clone(&peer_manager),
     );
     node.blockchain
         .set_allow_grant_blocks(config.allow_grant_blocks);
@@ -1044,6 +1205,9 @@ pub async fn run_async() {
     // The sync task shares the node's SyncEngine inbox (ADR-0010): pulled
     // candidates are enqueued, not adopted inline.
     let node_inbox = node.inbox.clone();
+    let node_peer_manager = Arc::clone(&node.peer_manager);
+    let node_gossip_state = Arc::clone(&node.gossip_state);
+    let node_reconciliation_state = Arc::clone(&node.reconciliation_state);
 
     let sync_task_handle = tokio::spawn(async move {
         let mut sync_node = Node {
@@ -1058,6 +1222,9 @@ pub async fn run_async() {
             event_bus: node_event_bus,
             network_id: config.network_id,
             inbox: node_inbox,
+            peer_manager: node_peer_manager,
+            gossip_state: node_gossip_state,
+            reconciliation_state: node_reconciliation_state,
         };
         // Tick at SYNC_TICK for prompt shutdown checks, but only sync every
         // SYNC_TICKS_PER_SYNC ticks to preserve the original ~1s sync period.
@@ -1095,6 +1262,9 @@ pub async fn run_async() {
             event_bus: Arc::clone(&node.event_bus),
             network_id: config.network_id,
             inbox: node.inbox.clone(),
+            peer_manager: Arc::clone(&node.peer_manager),
+            gossip_state: Arc::clone(&node.gossip_state),
+            reconciliation_state: Arc::clone(&node.reconciliation_state),
         },
         wallet_address: String::new(),
         password: String::new(),
@@ -1356,6 +1526,26 @@ pub mod test_support {
             .unwrap_or(false)
     }
 
+    /// Deterministic-per-process in-memory PeerManager for tests: a fixed
+    /// seed base combined with a per-call counter — every manager gets a
+    /// distinct Ed25519 identity (a shared identity would make one node's
+    /// sync dial look like a self-connection to the peer's accept path),
+    /// regtest network id, no network.json persistence (S2-P19).
+    pub fn test_peer_manager() -> Arc<strangecoin_net::PeerManager> {
+        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+        use strangecoin_net::{NodeKeypair, PeerManagerConfig};
+        static COUNTER: AtomicU32 = AtomicU32::new(1);
+        let counter = COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+        let mut seed = [0x53u8; 32];
+        seed[0..4].copy_from_slice(&counter.to_be_bytes());
+        let identity = NodeKeypair::from_seed(seed);
+        let config = PeerManagerConfig {
+            network_id: crate::consensus::CHAIN_ID_REGTEST,
+            ..PeerManagerConfig::default()
+        };
+        Arc::new(strangecoin_net::PeerManager::new(config, identity))
+    }
+
     pub fn create_node_for_test(
         bc: &Arc<BlockchainFacade>,
         port: u16,
@@ -1384,6 +1574,11 @@ pub mod test_support {
             network_id: crate::consensus::CHAIN_ID_REGTEST,
             // Spawned by `start_server` when the test starts a server.
             inbox: None,
+            peer_manager: test_peer_manager(),
+            gossip_state: Arc::new(Mutex::new(strangecoin_net::GossipState::new())),
+            reconciliation_state: Arc::new(Mutex::new(
+                strangecoin_net::ReconciliationState::with_defaults(),
+            )),
         };
         (node, peers)
     }
@@ -1407,6 +1602,11 @@ pub mod test_support {
             event_bus: bc.event_bus(),
             network_id: crate::consensus::CHAIN_ID_REGTEST,
             inbox,
+            peer_manager: test_peer_manager(),
+            gossip_state: Arc::new(Mutex::new(strangecoin_net::GossipState::new())),
+            reconciliation_state: Arc::new(Mutex::new(
+                strangecoin_net::ReconciliationState::with_defaults(),
+            )),
         }
     }
 

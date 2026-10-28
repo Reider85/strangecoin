@@ -5,18 +5,24 @@
 //! * [`scoring`] — the ADR-0022 weighted formula + ban band ladder
 //!   (S2-P17: `ScoringConfig`, `compute_score`, `update_score`).
 //! * [`manager`] — connection orchestration, ban state machine, periodic
-//!   tick, the outbound Noise+HELLO dial and the ADR-0023 `AddrSender` seam.
+//!   tick, the outbound Noise+HELLO dial, the inbound responder accept
+//!   (S2-P19) and the ADR-0023 `AddrSender` seam.
 //! * [`pool`] — live [`pool::Connection`]s with the per-IP-range Sybil cap
 //!   (threat V-17).
+//! * [`connection_loop`] — the async per-connection read worker (S2-P19):
+//!   decrypt → rate-limit → dispatch (sync serve, gossip, compact blocks,
+//!   Erlay).
 
+pub mod connection_loop;
 pub mod manager;
 pub mod pool;
 pub mod scoring;
 pub mod store;
 
+pub use connection_loop::{run_connection, ConnectionContext, IDLE_READ_TIMEOUT};
 pub use manager::{
-    PeerManager, PeerManagerConfig, TickReport, DEFAULT_MAX_CONNECTIONS,
-    DEFAULT_MAX_PER_IP_RANGE, TICK_INTERVAL,
+    PeerManager, PeerManagerConfig, TickReport, DEFAULT_MAX_CONNECTIONS, DEFAULT_MAX_PER_IP_RANGE,
+    TICK_INTERVAL,
 };
 pub use pool::{ip_range_key, Connection, ConnectionPool};
 pub use scoring::{

@@ -557,4 +557,12 @@ impl strangecoin_net::BlockchainView for BlockchainFacade {
     fn snapshot_wire(&self) -> ChainSnapshot {
         self.snapshot_wire()
     }
+
+    fn headers_from_height(&self, from_height: u64, max: usize) -> Vec<BlockHeader> {
+        self.headers_from_height(from_height, max)
+    }
+
+    fn blocks_by_hashes(&self, hashes: &[[u8; 32]], max: usize) -> Vec<Block> {
+        self.blocks_by_hashes(hashes, max)
+    }
 }

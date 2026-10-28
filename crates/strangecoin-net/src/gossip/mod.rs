@@ -36,7 +36,7 @@ pub use compact_blocks::{
     GetBlockTxn,
 };
 pub use erlay::{
-    create_sketch, decode_difference, fallback_full_relay, PeerReconciliation,
+    create_sketch, decode_difference, fallback_full_relay, ErlayReconcile, PeerReconciliation,
     ReconciliationConfig, ReconciliationState,
 };
 pub use get_data::{GetData, NotFound};
@@ -68,6 +68,9 @@ pub enum GossipMessage {
     GetBlockTxn(GetBlockTxn),
     /// `BLOCK_TXN [0x0C]` — the requested compact-block bodies (S2-P14).
     BlockTxn(BlockTxn),
+    /// `ERLAY_RECONCILE [0x0D]` — one reconciliation sketch envelope (S2-P15
+    /// library, S2-P19 wire carriage).
+    ErlayReconcile(erlay::ErlayReconcile),
 }
 
 impl GossipMessage {
@@ -84,6 +87,7 @@ impl GossipMessage {
             GossipMessage::CompactBlock(msg) => msg.encode(),
             GossipMessage::GetBlockTxn(msg) => msg.encode(),
             GossipMessage::BlockTxn(msg) => msg.encode(),
+            GossipMessage::ErlayReconcile(msg) => msg.encode(),
         }
     }
 
@@ -116,6 +120,9 @@ impl GossipMessage {
                 Ok(GossipMessage::GetBlockTxn(GetBlockTxn::parse(bytes)?))
             }
             compact_blocks::MSG_BLOCK_TXN => Ok(GossipMessage::BlockTxn(BlockTxn::parse(bytes)?)),
+            erlay::MSG_ERLAY_RECONCILE => Ok(GossipMessage::ErlayReconcile(
+                erlay::ErlayReconcile::parse(bytes)?,
+            )),
             other => Err(NetError::Protocol(format!(
                 "gossip: unknown message tag {other:#04x}"
             ))),

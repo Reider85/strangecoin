@@ -200,6 +200,29 @@ impl ReconciliationState {
         self.peer_state.get(peer)
     }
 
+    /// Build (and store) this node's sketch envelope for `peer` without
+    /// decoding anything — the *initiating* half of a reconciliation round
+    /// (S2-P19 wire carriage): the caller sends it as an [`ErlayReconcile`]
+    /// with `respond = true` and the peer's symmetric call answers with its
+    /// own sketch.
+    ///
+    /// [`ErlayReconcile`]: crate::gossip::erlay::ErlayReconcile
+    pub fn local_sketch(&mut self, peer: &NodeId) -> Vec<u8> {
+        let Self {
+            known_set,
+            peer_state,
+            config,
+            ..
+        } = self;
+        let record = peer_state
+            .entry(*peer)
+            .or_insert_with(|| PeerReconciliation::new(config));
+        let sketch = create_sketch(known_set, record.current_capacity);
+        record.last_sketch = sketch.clone();
+        record.last_set_size = known_set.len();
+        sketch
+    }
+
     /// Drop a disconnected peer's reconciliation record (bounded memory).
     pub fn forget_peer(&mut self, peer: &NodeId) {
         self.peer_state.remove(peer);

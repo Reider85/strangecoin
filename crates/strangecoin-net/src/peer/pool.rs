@@ -4,12 +4,18 @@
 //!
 //! One [`Connection`] owns one post-handshake TCP session: the
 //! [`NoiseTransport`] (behind a `Mutex` — Stage 2 Pitfalls: `TransportState`
-//! is not thread-safe, sharing needs a lock) plus the socket handle used for
-//! egress. Reads are driven by the caller's loop (S2-P19 lands the async
-//! read worker); everything this pool sends goes through
-//! [`Connection::send_payload`], which seals the payload with
-//! `encrypt_frame` and pushes the wire bytes out synchronously via
-//! `try_write` — the sync path is what the S2-P11 `AddrSender` trait needs.
+//! is not thread-safe, sharing needs a lock) plus the socket's write half.
+//! The socket is split at session creation ([`Connection::split_stream`]):
+//! the long-lived async read worker (S2-P19 `connection_loop`) takes the read
+//! half through [`Connection::take_read_half`], while every egress path
+//! ([`Connection::send_payload`]) shares the write half.
+//!
+//! **Send ordering (S2-P19)**: encrypt and socket write run inside ONE
+//! transport-lock critical section. Nonces are monotonic per direction, so
+//! two concurrent senders that interleave `encrypt` (nonce++) with `write`
+//! could put frame N+1 on the wire before frame N — the peer's decrypt then
+//! fails its nonce check. Holding the lock across both keeps
+//! encrypt-order == wire-order.
 //!
 //! **Determinism** (Stage 2 checklist #4): iteration for broadcast and for
 //! limit accounting is ordered by `node_id`/range key, never by time or
@@ -21,6 +27,7 @@ use crate::protocol::encrypt_frame;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex, MutexGuard};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 
 /// One authenticated, post-handshake peer session.
@@ -29,13 +36,23 @@ pub struct Connection {
     peer_addr: SocketAddr,
     capabilities: u32,
     transport: Mutex<NoiseTransport>,
-    stream: TcpStream,
+    write: OwnedWriteHalf,
+    /// Read half parked until the async read worker picks it up
+    /// (`connection_loop::run_connection`). Dropped unread when nobody
+    /// starts a worker (test setups that only broadcast).
+    read_half: Mutex<Option<OwnedReadHalf>>,
 }
 
 impl Connection {
+    /// Split a live `TcpStream` into the read/write halves a connection
+    /// hands to its two workers.
+    pub fn split_stream(stream: TcpStream) -> (OwnedReadHalf, OwnedWriteHalf) {
+        stream.into_split()
+    }
+
     pub fn new(
         transport: NoiseTransport,
-        stream: TcpStream,
+        write: OwnedWriteHalf,
         peer_addr: SocketAddr,
         node_id: NodeId,
         capabilities: u32,
@@ -45,8 +62,20 @@ impl Connection {
             peer_addr,
             capabilities,
             transport: Mutex::new(transport),
-            stream,
+            write,
+            read_half: Mutex::new(None),
         }
+    }
+
+    /// Park the socket's read half until the connection loop claims it.
+    pub fn park_read_half(&self, read: OwnedReadHalf) {
+        *lock_opt(&self.read_half) = Some(read);
+    }
+
+    /// Claim the parked read half (once). `None` = already claimed or never
+    /// parked — the caller cannot drive an inbound loop without it.
+    pub fn take_read_half(&self) -> Option<OwnedReadHalf> {
+        lock_opt(&self.read_half).take()
     }
 
     pub fn node_id(&self) -> NodeId {
@@ -62,24 +91,33 @@ impl Connection {
         self.capabilities
     }
 
+    /// Transport lock for the read path (the connection loop decrypts each
+    /// inbound frame under the same mutex `send_payload` holds for egress —
+    /// one transport, one nonce sequence, one lock).
+    pub(crate) fn transport_mutex(&self) -> MutexGuard<'_, NoiseTransport> {
+        lock_transport(&self.transport)
+    }
+
     /// Encrypt one payload into a self-contained wire frame and push it to
     /// the socket.
     ///
     /// Synchronous on purpose: `AddrSender::send_addr` (S2-P11) is a sync
-    /// trait, and `broadcast_message` drives the same path. Egress uses
-    /// `try_write` in a loop; `WouldBlock` (socket send buffer full) surfaces
-    /// as a transport error that broadcast logs and skips — full backpressure
-    /// handling and a dedicated write task arrive with the async connection
-    /// loop (S2-P19).
+    /// trait, and `broadcast_message` drives the same path. The transport
+    /// lock is held across encrypt **and** write (module docs: nonce
+    /// ordering); egress uses `try_write` in a loop and `WouldBlock` (socket
+    /// send buffer full) surfaces as a transport error that broadcast logs
+    /// and skips.
     pub fn send_payload(&self, payload: &[u8]) -> Result<(), NetError> {
         let mut frame = Vec::new();
-        {
-            let mut transport = lock_transport(&self.transport);
-            encrypt_frame(&mut transport, payload, &mut frame)?;
-        }
+        let mut transport = lock_transport(&self.transport);
+        encrypt_frame(&mut transport, payload, &mut frame)?;
+        // NOTE: the lock stays held through the write loop (module docs:
+        // encrypt-order must equal wire-order or the peer's nonce check
+        // fails). `try_write` never awaits, so this is safe under a
+        // std Mutex.
         let mut written = 0usize;
         while written < frame.len() {
-            match self.stream.try_write(&frame[written..]) {
+            match self.write.try_write(&frame[written..]) {
                 Ok(0) => {
                     return Err(NetError::Transport(
                         "socket closed while writing frame".to_string(),
@@ -101,6 +139,12 @@ impl Connection {
 fn lock_transport(mutex: &Mutex<NoiseTransport>) -> MutexGuard<'_, NoiseTransport> {
     // Poison → into_inner: the transport state stays consistent with the
     // frames already on the wire, deterministic recovery (FBP06 precedent).
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn lock_opt<T>(mutex: &Mutex<Option<T>>) -> MutexGuard<'_, Option<T>> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())

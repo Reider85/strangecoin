@@ -6,7 +6,9 @@
 //! low-latency announce path (S2-P13 INV) is untouched — ADR-0021: Erlay
 //! optimizes bulk divergence, never replaces INV.
 //!
-//! ## Round protocol (library level; live wiring lands with S2-P19)
+//! ## Round protocol (library level; wire carriage + scheduling landed in
+//! S2-P19 — [`ErlayReconcile`] envelopes ride the connection loop, gated on
+//! `Capability::Erlay`)
 //!
 //! ```text
 //! Peer A                                                Peer B
@@ -58,10 +60,11 @@
 //!    (the `tick_at` pattern) instead of a plain `Instant`; `Instant` is
 //!    read only to stamp the trigger, never in sketch/decode (determinism
 //!    checklist).
-//! 6. **Wire carriage of sketch envelopes is deferred to S2-P19** — the
-//!    prompt scopes S2-P15 to the library + tests; the connection loop does
-//!    not dispatch messages yet. The envelope itself is wire-ready
-//!    (self-describing, bounded parse).
+//! 6. **Wire carriage of sketch envelopes landed in S2-P19** ([`ErlayReconcile`]
+//!    tag `0x0D`) — the S2-P15 prompt scoped itself to the library + tests;
+//!    the connection loop now dispatches the envelope, schedules rounds on
+//!    the `ReconciliationConfig` trigger and falls back to full relay on any
+//!    decode failure.
 //!
 //! ## Determinism (Stage 2 checklist, threat V-21 extension)
 //!
@@ -89,6 +92,74 @@
 pub mod fallback;
 pub mod mincut;
 pub mod reconcile;
+
+use crate::error::NetError;
+
+/// First payload byte of an `ERLAY_RECONCILE` message (S2-P19 wire carriage;
+/// the tag continues the gossip byte space after `BLOCK_TXN [0x0C]`).
+pub const MSG_ERLAY_RECONCILE: u8 = 0x0D;
+
+/// Upper bound of one sketch envelope on the wire — the capacity-bounded
+/// stub encodes at most `MAX_SKETCH_CAPACITY` u64 elements plus a header;
+/// the cap rejects gross garbage before allocation (invariant #16).
+pub const MAX_ERLAY_SKETCH: usize = 1024 * 1024;
+
+/// `ERLAY_RECONCILE [0x0D] [respond: u8][envelope…]` — one reconciliation
+/// sketch envelope.
+///
+/// `respond` breaks the ping-pong: the initiator of a round sets it to `1`;
+/// the receiver reconciles against the sketch and, only when `respond` was
+/// set, replies with its own sketch carrying `respond = 0`. A `respond = 0`
+/// message is terminal — no further reply — so a round is exactly two
+/// messages and cannot loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErlayReconcile {
+    /// `true` = the sender asks for the peer's sketch in return.
+    pub respond: bool,
+    /// `create_sketch` envelope of the sender's known-tx set.
+    pub sketch: Vec<u8>,
+}
+
+impl ErlayReconcile {
+    pub fn encode(&self) -> Result<Vec<u8>, NetError> {
+        if self.sketch.len() > MAX_ERLAY_SKETCH {
+            return Err(NetError::Protocol(format!(
+                "erlay reconcile: sketch {} bytes > {MAX_ERLAY_SKETCH}",
+                self.sketch.len()
+            )));
+        }
+        let mut out = Vec::with_capacity(2 + self.sketch.len());
+        out.push(MSG_ERLAY_RECONCILE);
+        out.push(u8::from(self.respond));
+        out.extend_from_slice(&self.sketch);
+        Ok(out)
+    }
+
+    pub fn parse(bytes: &[u8]) -> Result<Self, NetError> {
+        if bytes.len() < 2 || bytes[0] != MSG_ERLAY_RECONCILE {
+            return Err(NetError::Protocol(
+                "erlay reconcile: bad framing".to_string(),
+            ));
+        }
+        let respond = match bytes[1] {
+            0 => false,
+            1 => true,
+            other => {
+                return Err(NetError::Protocol(format!(
+                    "erlay reconcile: respond flag {other} not 0/1"
+                )))
+            }
+        };
+        let sketch = bytes[2..].to_vec();
+        if sketch.len() > MAX_ERLAY_SKETCH {
+            return Err(NetError::Protocol(format!(
+                "erlay reconcile: sketch {} bytes > {MAX_ERLAY_SKETCH}",
+                sketch.len()
+            )));
+        }
+        Ok(Self { respond, sketch })
+    }
+}
 
 pub use fallback::fallback_full_relay;
 pub use mincut::{create_sketch, decode_difference, short_id};

@@ -22,8 +22,14 @@ use strangecoin::{Block, BlockchainFacade, ChainSnapshot};
 /// 1. identical branch twice → exactly one `BlockApplied`, no reorg;
 /// 2. worse fork twice → zero events, chain unchanged;
 /// 3. better fork twice → exactly one `BlockApplied` + one `BlockReorged`.
-#[test]
-fn concurrent_candidates_race_through_one_engine() {
+///
+/// S2-P19: the engine is spawned with `tokio::spawn` and requires a runtime;
+/// `multi_thread` with 2 workers keeps it running while the test body blocks
+/// on crossbeam `recv_timeout` (a current-thread runtime would starve the
+/// engine during those blocking drains). Worker count is pinned at 2 so the
+/// test is deterministic on single-core hosts too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_candidates_race_through_one_engine() {
     let main_dir = TestDir::new("engine_main");
     let a_dir = TestDir::new("engine_a");
     let b_dir = TestDir::new("engine_b");

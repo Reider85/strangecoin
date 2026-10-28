@@ -137,6 +137,18 @@ impl strangecoin_net::BlockchainView for TestView {
             total_work: U256::default(),
         }
     }
+
+    fn headers_from_height(
+        &self,
+        _from_height: u64,
+        _max: usize,
+    ) -> Vec<strangecoin_core::types::BlockHeader> {
+        Vec::new()
+    }
+
+    fn blocks_by_hashes(&self, _hashes: &[[u8; 32]], _max: usize) -> Vec<Block> {
+        Vec::new()
+    }
 }
 
 fn parse_gossip(payload: &[u8]) -> GossipMessage {
@@ -379,13 +391,16 @@ async fn make_connection(
 ) -> (Arc<Connection>, strangecoin_net::NoiseTransport, TcpStream) {
     let (transport_a, transport_b, peer_b) = transport_pair([node_seed; 32], [0xEE; 32]);
     let (client, server) = local_stream_pair().await;
+    let (read_half, write_half) = Connection::split_stream(client);
     let connection = Arc::new(Connection::new(
         transport_b,
-        client,
+        write_half,
         peer_addr,
         peer_b,
         strangecoin_net::protocol::hello::STAGE2_CAPABILITIES,
     ));
+    // The production loop would claim this; the test reads from `server`.
+    connection.park_read_half(read_half);
     (connection, transport_a, server)
 }
 

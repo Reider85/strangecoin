@@ -8,10 +8,10 @@
 //! connection flow directly into the manager (explicit decision, S2-P12 plan):
 //! [`connect_to_peer`](PeerManager::connect_to_peer) dials TCP, drives the
 //! Noise XX handshake (S2-P07..S2-P09) and the HELLO exchange (S2-P10), then
-//! registers the resulting [`Connection`]. The *inbound* read loop (app
-//! messages arriving after HELLO) is deliberately **not** here — it lands with
-//! the async connection workers in S2-P19; until then this module sends
-//! (`encrypt_frame` + `try_write`) but does not receive.
+//! registers the resulting [`Connection`]. S2-P19 lands the *inbound* flow
+//! ([`accept_inbound`](PeerManager::accept_inbound), responder side) and the
+//! async connection read loop (`peer::connection_loop`); the socket's read
+//! half is parked on the [`Connection`] for that worker to claim.
 //!
 //! Ban state machine per ADR-0022: `warn` (score < 0.4, stays connected) →
 //! `temp ban 1h` (score < `ban_threshold`, in-memory, expiry via
@@ -255,8 +255,9 @@ impl PeerManager {
     /// peer's authenticated `node_id` is known. On success the session is
     /// registered in the pool and the store (`verified = true`).
     ///
-    /// Returns the authenticated `node_id`. The *inbound* message loop for
-    /// this connection is S2-P19's job — S2-P12 sends but does not receive.
+    /// Returns the authenticated `node_id`. The socket's read half is parked
+    /// on the connection ([`Connection::take_read_half`]) for the S2-P19
+    /// connection loop to claim.
     pub async fn connect_to_peer(
         &self,
         addr: std::net::SocketAddr,
@@ -312,13 +313,15 @@ impl PeerManager {
             .peer_addr()
             .map_err(|err| NetError::Transport(err.to_string()))?;
 
+        let (read_half, write_half) = Connection::split_stream(stream);
         let connection = Arc::new(Connection::new(
             transport,
-            stream,
+            write_half,
             peer_addr,
             peer_node_id,
             capabilities,
         ));
+        connection.park_read_half(read_half);
         self.register_connection(connection)?;
         tracing::info!(
             target = "net::peer",
@@ -328,6 +331,108 @@ impl PeerManager {
             "outbound peer connection established"
         );
         Ok(peer_node_id)
+    }
+
+    /// Complete an *inbound* session: drive the Noise XX handshake as the
+    /// responder, exchange HELLO (S2-P10) and register the connection
+    /// (S2-P19).
+    ///
+    /// Admission is checked before the handshake and re-checked after it,
+    /// once the peer's authenticated `node_id` is known (same discipline as
+    /// [`connect_to_peer`](Self::connect_to_peer)). The read half is parked
+    /// on the returned connection for
+    /// [`run_connection`](crate::peer::connection_loop::run_connection).
+    pub async fn accept_inbound(
+        &self,
+        mut stream: TcpStream,
+        peer_addr: std::net::SocketAddr,
+    ) -> Result<Arc<Connection>, NetError> {
+        self.check_admission(peer_addr)?;
+
+        let mut handshake = NoiseHandshake::responder(
+            &self.identity.noise_static_private_key(),
+            &self.identity,
+            None,
+        )?;
+        drive_responder_handshake(&mut handshake, &mut stream).await?;
+        let (mut transport, peer_node_id) = handshake.into_transport()?;
+
+        if self.is_banned(&peer_node_id) {
+            return Err(NetError::Peer(format!("peer {peer_node_id} is banned")));
+        }
+        self.check_admission(peer_addr)?;
+
+        // The initiator wrote its HELLO first (symmetric to the dial side).
+        let peer_hello =
+            match read_hello_frame(&mut transport, &mut stream, self.config.network_id).await {
+                Ok(hello) => hello,
+                Err(err) => {
+                    // A HELLO that fails validation (old protocol version,
+                    // foreign network — invariant #10) is a protocol
+                    // violation. The session never reaches
+                    // `register_connection`, so land an *unverified* store
+                    // record first — otherwise the violation counter would
+                    // have nowhere to go and a repeat offender could never
+                    // be scored or banned by identity (ADR-0022).
+                    self.store()
+                        .add_peer(peer_node_id, peer_addr, false, Instant::now());
+                    self.record_protocol_violation(peer_node_id);
+                    return Err(err);
+                }
+            };
+        let capabilities =
+            negotiate_capabilities(self.config.local_capabilities, peer_hello.capabilities);
+        let hello = Hello::new(
+            self.config.network_id,
+            self.config.local_capabilities,
+            self.local_height.load(Ordering::Relaxed),
+        );
+        let mut out = Vec::new();
+        write_hello(&mut transport, &hello, &mut out)?;
+        timeout(IO_TIMEOUT, write_all_bytes(&mut stream, &out))
+            .await
+            .map_err(|_| NetError::Transport("HELLO write timed out".to_string()))??;
+
+        let (read_half, write_half) = Connection::split_stream(stream);
+        let connection = Arc::new(Connection::new(
+            transport,
+            write_half,
+            peer_addr,
+            peer_node_id,
+            capabilities,
+        ));
+        connection.park_read_half(read_half);
+        self.register_connection(connection.clone())?;
+        tracing::info!(
+            target = "net::peer",
+            peer = %peer_node_id,
+            addr = %peer_addr,
+            capabilities,
+            "inbound peer connection established"
+        );
+        Ok(connection)
+    }
+
+    /// This node's Ed25519 identity (sync dialers need it for the Noise
+    /// initiator handshake — S2-P19).
+    pub fn identity(&self) -> &NodeKeypair {
+        &self.identity
+    }
+
+    /// Negotiated capability bitfield of a connected peer, if any.
+    pub fn peer_capabilities(&self, node_id: &NodeId) -> Option<u32> {
+        self.pool()
+            .get_connection(node_id)
+            .map(|conn| conn.capabilities())
+    }
+
+    /// Dial candidates from the peer store (verified + unverified, not
+    /// banned), ordered deterministically by `node_id` (checklist #4).
+    pub fn dial_candidates(
+        &self,
+        max_count: usize,
+    ) -> Vec<crate::discovery::addr_gossip::AddrEntry> {
+        self.store_read().known_addr_entries(max_count)
     }
 
     /// Register an already-established session (post-handshake + HELLO).
@@ -354,6 +459,12 @@ impl PeerManager {
         self.store()
             .add_peer(node_id, connection.peer_addr(), true, Instant::now());
         Ok(node_id)
+    }
+
+    /// The live session for `node_id`, if registered (the dial loop claims
+    /// the parked read half through this — S2-P19).
+    pub fn connection(&self, node_id: &NodeId) -> Option<Arc<Connection>> {
+        self.pool().get_connection(node_id)
     }
 
     /// Drop the live session for `node_id`. The store record (score, ban
@@ -693,8 +804,9 @@ impl AddrSender for PeerManager {
 
 /// Drive the three XX round trips on the initiator side, length-prefixed
 /// framing per round (the same `[len][msg]` shape `sync.rs` uses on the
-/// plaintext protocol).
-async fn drive_initiator_handshake(
+/// plaintext protocol). `pub(crate)`: the Noise sync dialer (S2-P19) drives
+/// the same rounds.
+pub(crate) async fn drive_initiator_handshake(
     handshake: &mut NoiseHandshake,
     stream: &mut TcpStream,
 ) -> Result<(), NetError> {
@@ -718,9 +830,36 @@ async fn drive_initiator_handshake(
     Ok(())
 }
 
+/// Mirror of [`drive_initiator_handshake`] for the responder side (S2-P19
+/// inbound accept): read `e`, write `e, ee, s, es` + auth, read `s, se` + auth.
+pub(crate) async fn drive_responder_handshake(
+    handshake: &mut NoiseHandshake,
+    stream: &mut TcpStream,
+) -> Result<(), NetError> {
+    let mut buf = [0u8; HANDSHAKE_BUF];
+    let mut payload = [0u8; HANDSHAKE_BUF];
+
+    // Round 1: read the initiator's e.
+    let msg = read_bounded_handshake_msg(stream).await?;
+    handshake.read_message(&msg, &mut payload)?;
+
+    // Round 2: e, ee, s, es + auth blob.
+    let n = handshake.write_message(&[], &mut buf)?;
+    timeout(IO_TIMEOUT, write_length_prefixed_async(stream, &buf[..n]))
+        .await
+        .map_err(|_| NetError::Transport("handshake round 2 write timed out".to_string()))??;
+
+    // Round 3: read s, se + auth blob — finishes the handshake.
+    let msg = read_bounded_handshake_msg(stream).await?;
+    handshake.read_message(&msg, &mut payload)?;
+    Ok(())
+}
+
 /// Read one length-prefixed handshake message, rejecting anything above
 /// [`MAX_HANDSHAKE_MSG`] before it reaches `snow` (invariant #16 discipline).
-async fn read_bounded_handshake_msg(stream: &mut TcpStream) -> Result<Vec<u8>, NetError> {
+pub(crate) async fn read_bounded_handshake_msg(
+    stream: &mut TcpStream,
+) -> Result<Vec<u8>, NetError> {
     let msg = timeout(IO_TIMEOUT, read_length_prefixed_async(stream))
         .await
         .map_err(|_| NetError::Transport("handshake read timed out".to_string()))??;
@@ -735,7 +874,7 @@ async fn read_bounded_handshake_msg(stream: &mut TcpStream) -> Result<Vec<u8>, N
 
 /// Read one encrypted HELLO frame off the socket and validate it against the
 /// local network (S2-P10: version + network_id rejection rules).
-async fn read_hello_frame(
+pub(crate) async fn read_hello_frame(
     transport: &mut NoiseTransport,
     stream: &mut TcpStream,
     network_id: u32,
@@ -751,7 +890,7 @@ async fn read_hello_frame(
     read_hello(transport, &raw, network_id)
 }
 
-async fn write_all_bytes(stream: &mut TcpStream, bytes: &[u8]) -> Result<(), NetError> {
+pub(crate) async fn write_all_bytes(stream: &mut TcpStream, bytes: &[u8]) -> Result<(), NetError> {
     use tokio::io::AsyncWriteExt;
     stream
         .write_all(bytes)

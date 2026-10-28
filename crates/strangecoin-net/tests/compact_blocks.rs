@@ -170,6 +170,18 @@ impl BlockchainView for TestView {
             total_work: U256::default(),
         }
     }
+
+    fn headers_from_height(
+        &self,
+        _from_height: u64,
+        _max: usize,
+    ) -> Vec<strangecoin_core::types::BlockHeader> {
+        Vec::new()
+    }
+
+    fn blocks_by_hashes(&self, _hashes: &[[u8; 32]], _max: usize) -> Vec<Block> {
+        Vec::new()
+    }
 }
 
 // --------------------------------------------------------------------- tests

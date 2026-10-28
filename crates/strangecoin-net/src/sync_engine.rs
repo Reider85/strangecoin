@@ -268,10 +268,11 @@ impl SyncEngine {
 
 /// Spawn the engine and return the producer handle.
 ///
-/// On a tokio runtime (production: `start_server` under `run_async`) the
-/// engine becomes a task on that runtime; without one (plain `#[test]`
-/// threads) it runs on a dedicated thread with its own current-thread
-/// runtime.
+/// S2-P19: must be called **on** a tokio runtime — the engine becomes a
+/// task on it (`tokio::spawn`). The pre-S2-P19 dedicated-thread fallback for
+/// plain `#[test]` contexts is gone: the whole network stack is tokio now
+/// (ADR-0011 continuation), and callers without a runtime wrap their work in
+/// `#[tokio::test]` / `Runtime::block_on`.
 pub fn spawn(
     facade: Arc<dyn BlockchainView>,
     bus: Arc<dyn EventSink>,
@@ -295,23 +296,7 @@ pub fn spawn(
         sync_tx,
         shutdown,
     };
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
-            handle.spawn(engine.run());
-        }
-        Err(_) => {
-            std::thread::Builder::new()
-                .name("sync-engine".into())
-                .spawn(move || {
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .expect("sync engine runtime");
-                    rt.block_on(engine.run());
-                })
-                .expect("sync engine thread");
-        }
-    }
+    tokio::spawn(engine.run());
     inbox
 }
 
@@ -402,7 +387,9 @@ fn announce(
     sync_tx: &UnboundedSender<ChainSnapshot>,
     old_tip: String,
 ) {
-    let height = facade.chain_len() as u64 - 1;
+    // saturating_sub: a view whose add_block did not extend the chain (test
+    // stubs) must not underflow the announced height (S2-P19 hardening).
+    let height = (facade.chain_len() as u64).saturating_sub(1);
     let new_tip = facade.tip_hash();
     if new_tip != old_tip {
         let old_survives = facade.chain_contains_block(&old_tip);
@@ -543,5 +530,105 @@ mod tests {
         );
         assert!(inbox.push(candidate("tip", None)));
         assert_eq!(drain_count(&mut blocks_rx), 1);
+    }
+
+    // ---------------------------------------------------- clean shutdown
+
+    struct NoopView;
+
+    impl BlockchainView for NoopView {
+        fn tip_hash(&self) -> String {
+            String::new()
+        }
+        fn chain_len(&self) -> usize {
+            0
+        }
+        fn adopt_candidate(
+            &self,
+            _candidate_chain: Vec<Block>,
+            _candidate_balances: Option<std::collections::HashMap<String, AccountState>>,
+            _candidate_mempool_txs: Vec<Transaction>,
+            _candidate_difficulty: u32,
+        ) -> Result<bool, String> {
+            Ok(false)
+        }
+        fn apply_tx(&self, _transaction: Transaction) -> Result<(), String> {
+            Ok(())
+        }
+        fn add_block(&self, _block: Block) -> Result<(), String> {
+            Ok(())
+        }
+        fn chain_contains_tx(&self, _tx: &Transaction) -> bool {
+            false
+        }
+        fn mempool_contains(&self, _txid: &[u8; 32]) -> bool {
+            false
+        }
+        fn mempool_tx(&self, _txid: &[u8; 32]) -> Option<Transaction> {
+            None
+        }
+        fn mempool_txs(&self) -> Vec<Transaction> {
+            Vec::new()
+        }
+        fn block_by_hash(&self, _block_hash: &str) -> Option<Block> {
+            None
+        }
+        fn save_state(&self) {}
+        fn chain_contains_block(&self, _block_hash: &str) -> bool {
+            false
+        }
+        fn snapshot_wire(&self) -> strangecoin_core::types::ChainSnapshot {
+            unreachable!("shutdown test never snapshots")
+        }
+        fn headers_from_height(
+            &self,
+            _from_height: u64,
+            _max: usize,
+        ) -> Vec<strangecoin_core::types::BlockHeader> {
+            Vec::new()
+        }
+        fn blocks_by_hashes(&self, _hashes: &[[u8; 32]], _max: usize) -> Vec<Block> {
+            Vec::new()
+        }
+    }
+
+    struct NoopSink;
+
+    impl EventSink for NoopSink {
+        fn block_applied(&self, _height: u64, _hash: String) {}
+        fn block_reorged(&self, _old_tip: String, _new_tip: String) {}
+        fn tx_accepted(&self, _txid: String) {}
+        fn tx_rejected(&self, _txid: String, _reason: String) {}
+        fn state_persisted(&self, _height: u64) {}
+    }
+
+    /// S2-P19 (КГ «tokio runtime properly shut down»): the engine task exits
+    /// within a bounded time after the shutdown flag flips — no hung task
+    /// keeps the runtime alive.
+    #[tokio::test]
+    async fn run_stops_cleanly_on_shutdown_flag() {
+        let (headers_tx, headers_rx) = tokio::sync::mpsc::channel(HEADERS_INBOX_CAP);
+        let (blocks_tx, blocks_rx) = tokio::sync::mpsc::channel(BLOCKS_INBOX_CAP);
+        let (sync_tx, _sync_rx) = tokio::sync::mpsc::unbounded_channel();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let engine = SyncEngine {
+            headers_rx,
+            blocks_rx,
+            facade: Arc::new(NoopView),
+            bus: Arc::new(NoopSink),
+            sync_tx,
+            shutdown: Arc::clone(&shutdown),
+        };
+        let handle = tokio::spawn(engine.run());
+        // Let the engine reach its select loop, then request shutdown.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        shutdown.store(true, Ordering::Relaxed);
+        let joined = tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("engine task must finish within 2s of shutdown");
+        assert!(joined.is_ok(), "engine task must not panic");
+        // Keep the senders alive until after the join so the loop saw open
+        // lanes while running.
+        drop((headers_tx, blocks_tx));
     }
 }

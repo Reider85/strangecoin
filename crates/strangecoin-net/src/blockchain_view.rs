@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use strangecoin_core::types::{AccountState, Block, ChainSnapshot, Transaction};
+use strangecoin_core::types::{AccountState, Block, BlockHeader, ChainSnapshot, Transaction};
 
 /// Object-safe view of the local chain + mempool used by the sync engine.
 ///
@@ -57,4 +57,11 @@ pub trait BlockchainView: Send + Sync {
     fn chain_contains_block(&self, block_hash: &str) -> bool;
     /// Wire snapshot (balances + chain + mempool) for the GUI/sync channel.
     fn snapshot_wire(&self) -> ChainSnapshot;
+    /// Up to `max` canonical headers with `index >= from_height`, ascending
+    /// (S2-P19: the connection loop serves `GET_HEADERS` from read-only
+    /// facade calls — same method the monolith's plaintext handler used).
+    fn headers_from_height(&self, from_height: u64, max: usize) -> Vec<BlockHeader>;
+    /// Up to `max` canonical blocks matching `hashes` (S2-P19: `GET_BLOCKS`
+    /// serving over the Noise connection loop).
+    fn blocks_by_hashes(&self, hashes: &[[u8; 32]], max: usize) -> Vec<Block>;
 }

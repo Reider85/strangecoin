@@ -34,17 +34,18 @@ pub use blockchain_view::BlockchainView;
 pub use error::NetError;
 pub use gossip::{
     announce_block, announce_tx, apply_block_txn, create_sketch, decode_difference,
-    fallback_full_relay, fill_up, handle_get_block_txn, BlockTxn, CompactBlock, FillOutcome,
-    GetBlockTxn, GetData, GossipMessage, GossipState, Inv, InvKind, InventoryItem, NotFound,
-    PeerReconciliation, ReconciliationConfig, ReconciliationState,
+    fallback_full_relay, fill_up, handle_get_block_txn, BlockTxn, CompactBlock, ErlayReconcile,
+    FillOutcome, GetBlockTxn, GetData, GossipMessage, GossipState, Inv, InvKind, InventoryItem,
+    NotFound, PeerReconciliation, ReconciliationConfig, ReconciliationState,
 };
 pub use noise::{
     verify_node_id, NodeId, NodeKeypair, NodeKeystore, NoiseError, NoiseHandshake, NoiseRole,
     NoiseTransport,
 };
 pub use peer::{
-    BanDecision, BanReason, BanRecord, Connection, ConnectionPool, PeerManager,
-    PeerManagerConfig, PeerRecord, PeerStore, ScoringConfig, TickReport,
+    run_connection, BanDecision, BanReason, BanRecord, Connection, ConnectionContext,
+    ConnectionPool, PeerManager, PeerManagerConfig, PeerRecord, PeerStore, ScoringConfig,
+    TickReport,
 };
 pub use rate_limiter::{
     parse_rate_spec, BucketSpec, MessageClass, MessageType, RateLimitConfig, RateLimitError,
