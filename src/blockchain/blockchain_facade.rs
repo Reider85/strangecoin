@@ -112,6 +112,34 @@ impl BlockchainFacade {
         }
     }
 
+    /// Open a standalone chain at `db_path` for `chain_id` (S2-P20
+    /// shadow/staging replay, and the test-support constructor). Creates
+    /// the directory, opens storage, builds genesis and wraps the chain —
+    /// no port-based DB path, no event bus wiring. Validation is
+    /// regtest-permissive (`allow_grant_blocks`/`allow_zero_state_root`)
+    /// so replay tooling can exercise genesis and historical blocks;
+    /// strict mainnet-rule staging configs are a Stage 4 CLI concern.
+    pub fn open_local(db_path: &std::path::Path, chain_id: u32) -> Self {
+        std::fs::create_dir_all(db_path).expect("Failed to create local DB directory");
+        let storage = crate::storage::Storage::new(db_path).expect("Failed to open local DB");
+        let mut bc = Blockchain {
+            chain: vec![],
+            balances: StateCache::new(),
+            difficulty: 0,
+            mempool: crate::mempool::Mempool::new(chain_id),
+            storage,
+            allow_grant_blocks: true,
+            allow_zero_state_root: true,
+            total_work: strangecoin_core::consensus::U256::default(),
+            rules: ConsensusManager::new(),
+            chain_id,
+            codes: std::collections::HashMap::new(),
+            receipts: Vec::new(),
+        };
+        bc.create_genesis_block();
+        Self::from_blockchain(bc)
+    }
+
     pub fn event_bus(&self) -> Arc<crate::events::EventBus> {
         Arc::clone(&self.event_bus)
     }

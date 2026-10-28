@@ -1043,6 +1043,16 @@ pub async fn run_async() {
         crate::cli::print_genesis_hash();
         return;
     }
+    #[cfg(feature = "net")]
+    if args.len() > 2 && args[1] == "shadow" && args[2] == "replay" {
+        match crate::cli::shadow_replay(&args[3..]).await {
+            Ok(code) => std::process::exit(code),
+            Err(err) => {
+                eprintln!("shadow replay failed: {err}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     let exe_path =
         std::env::current_exe().expect("Не удалось определить путь к исполняемому файлу");
@@ -1399,25 +1409,10 @@ pub mod test_support {
 
     /// Test blockchain on `network_id` (BUG-S1-004): regtest by default;
     /// mainnet/testnet modes exercise the configured chain's rules.
+    /// Delegates to [`BlockchainFacade::open_local`] (S2-P20) — the same
+    /// standalone constructor the shadow-replay CLI uses.
     pub fn create_test_blockchain_for_network(db_path: &Path, network_id: u32) -> BlockchainFacade {
-        fs::create_dir_all(db_path).expect("Failed to create test DB directory");
-        let storage = crate::storage::Storage::new(db_path).expect("Failed to open test DB");
-        let mut bc = Blockchain {
-            chain: vec![],
-            balances: crate::blockchain::state_cache::StateCache::new(),
-            difficulty: 0,
-            mempool: crate::mempool::Mempool::new(network_id),
-            storage,
-            allow_grant_blocks: true,
-            allow_zero_state_root: true,
-            total_work: [0, 0, 0, 0],
-            rules: crate::blockchain::consensus_manager::ConsensusManager::new(),
-            chain_id: network_id,
-            codes: std::collections::HashMap::new(),
-            receipts: Vec::new(),
-        };
-        bc.create_genesis_block();
-        BlockchainFacade::from_blockchain(bc)
+        BlockchainFacade::open_local(db_path, network_id)
     }
 
     pub fn create_test_blockchain(db_path: &Path) -> BlockchainFacade {

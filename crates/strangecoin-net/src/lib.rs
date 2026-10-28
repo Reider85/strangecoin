@@ -14,8 +14,9 @@
 //! gossip in S2-P13 (`gossip`), BIP 152 compact blocks in S2-P14
 //! (`gossip::compact_blocks`), Erlay reconciliation in S2-P15
 //! (`gossip::erlay`), the token-bucket rate limiter in S2-P16
-//! (`rate_limiter`) and the ADR-0022 scoring formula in S2-P17
-//! (`peer::scoring`). The remaining stub modules are populated by
+//! (`rate_limiter`), the ADR-0022 scoring formula in S2-P17
+//! (`peer::scoring`) and the shadow replay tooling in S2-P20
+//! (`shadow`). The remaining stub modules are populated by
 //! the later Stage 2 prompts (see `analytics/prompt-stage2.md`).
 
 pub mod blockchain_view;
@@ -50,4 +51,8 @@ pub use peer::{
 pub use rate_limiter::{
     parse_rate_spec, BucketSpec, MessageClass, MessageType, RateLimitConfig, RateLimitError,
     RateLimiter, TokenBucket,
+};
+pub use shadow::{
+    compare, load_blocks_file, replay_blocks, BlockResult, BlockStatus, DivergenceReport,
+    ReplayConfig, ReplayReport,
 };
