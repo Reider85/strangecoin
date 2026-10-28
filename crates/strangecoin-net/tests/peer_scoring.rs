@@ -94,7 +94,10 @@ fn invalid_blocks_reach_temp_ban_for_one_hour() {
     for _ in 0..2 {
         manager.record_invalid_block(node_id(2));
     }
-    assert!(manager.is_banned(&node_id(2)), "temp banned at invalid = 10");
+    assert!(
+        manager.is_banned(&node_id(2)),
+        "temp banned at invalid = 10"
+    );
 
     let record = manager.get_peer(&node_id(2)).expect("record");
     assert_eq!(record.invalid_count, 10);

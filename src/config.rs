@@ -806,10 +806,7 @@ mod tests {
         assert_eq!(pm.scoring.w_uptime, 0.1);
         assert_eq!(pm.scoring.warn_threshold, 0.6);
         assert_eq!(pm.scoring.persistent_ban_threshold, 0.08);
-        assert_eq!(
-            pm.scoring.temp_ban_duration,
-            Duration::from_secs(1800)
-        );
+        assert_eq!(pm.scoring.temp_ban_duration, Duration::from_secs(1800));
         assert_eq!(
             pm.scoring.persistent_ban_duration,
             Duration::from_secs(86_400)

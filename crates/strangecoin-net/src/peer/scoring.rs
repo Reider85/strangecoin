@@ -139,14 +139,10 @@ pub enum BanDecision {
     Warn,
     /// `persistent_ban_threshold <= score < temp_ban_threshold` —
     /// connection dropped for `temp_ban_duration` (in-memory).
-    TempBan {
-        until: Instant,
-    },
+    TempBan { until: Instant },
     /// Score below the persistent threshold — 30 d, written to
     /// `network.json`, survives restart.
-    PersistentBan {
-        until: Instant,
-    },
+    PersistentBan { until: Instant },
 }
 
 /// Latency factor: `clamp(ms / 100, 0, 1)` (ADR-0022). ≥100 ms scores
@@ -182,8 +178,7 @@ pub fn uptime_norm(record: &PeerRecord) -> f32 {
 pub fn compute_score(record: &PeerRecord, config: &ScoringConfig) -> f32 {
     let grading_max = config.w_latency + config.w_uptime;
     let quality = if grading_max > 0.0 {
-        (config.w_latency * (1.0 - latency_norm(record))
-            + config.w_uptime * uptime_norm(record))
+        (config.w_latency * (1.0 - latency_norm(record)) + config.w_uptime * uptime_norm(record))
             / grading_max
     } else {
         0.0
@@ -251,7 +246,9 @@ pub fn note_message(record: &mut PeerRecord) {
 /// enters through the injected `now` only (checklist #1, `tick_at`
 /// pattern).
 pub fn accrue_uptime(record: &mut PeerRecord, now: Instant) {
-    let elapsed = now.saturating_duration_since(record.uptime_anchor).as_secs();
+    let elapsed = now
+        .saturating_duration_since(record.uptime_anchor)
+        .as_secs();
     if elapsed == 0 {
         return;
     }
@@ -325,10 +322,7 @@ mod tests {
         r.invalid_count = 10;
         let s = compute_score(&r, &cfg);
         assert!((s - 0.1667).abs() < 1e-3, "invalid 10 -> {s}");
-        assert!(matches!(
-            decide(s, &cfg, t0()),
-            BanDecision::TempBan { .. }
-        ));
+        assert!(matches!(decide(s, &cfg, t0()), BanDecision::TempBan { .. }));
         r.invalid_count = 12;
         assert_eq!(compute_score(&r, &cfg), 0.0);
         assert!(matches!(
@@ -346,10 +340,7 @@ mod tests {
         r.violation_count = 17;
         let s = compute_score(&r, &cfg);
         assert!((s - 0.15).abs() < 1e-4, "violations 17 -> {s}");
-        assert!(matches!(
-            decide(s, &cfg, t0()),
-            BanDecision::TempBan { .. }
-        ));
+        assert!(matches!(decide(s, &cfg, t0()), BanDecision::TempBan { .. }));
         r.violation_count = 20;
         assert_eq!(compute_score(&r, &cfg), 0.0);
     }

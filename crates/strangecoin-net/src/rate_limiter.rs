@@ -352,7 +352,10 @@ impl PeerRateLimiter {
     pub fn new(config: &RateLimitConfig, now: Instant) -> Self {
         let mut per_type_buckets = HashMap::new();
         per_type_buckets.insert(MessageType::Inv, TokenBucket::with_spec(config.inv, now));
-        per_type_buckets.insert(MessageType::Block, TokenBucket::with_spec(config.block, now));
+        per_type_buckets.insert(
+            MessageType::Block,
+            TokenBucket::with_spec(config.block, now),
+        );
         per_type_buckets.insert(MessageType::Tx, TokenBucket::with_spec(config.tx, now));
         PeerRateLimiter {
             main_bucket: TokenBucket::with_spec(config.main, now),
@@ -449,8 +452,7 @@ impl PeerRateLimiter {
             MessageClass::GetBlocks => {
                 self.main_bucket.refill_at(now);
                 self.sync_get_blocks_bucket.refill_at(now);
-                if self.main_bucket.available() >= 1
-                    && self.sync_get_blocks_bucket.available() >= 1
+                if self.main_bucket.available() >= 1 && self.sync_get_blocks_bucket.available() >= 1
                 {
                     self.main_bucket.take(1);
                     self.sync_get_blocks_bucket.take(1);
@@ -565,7 +567,11 @@ impl RateLimiter {
     }
 
     /// Typed charge: main bucket + `msg_type` sub-bucket (real clock).
-    pub fn check_rate(&self, addr: SocketAddr, msg_type: MessageType) -> Result<(), RateLimitError> {
+    pub fn check_rate(
+        &self,
+        addr: SocketAddr,
+        msg_type: MessageType,
+    ) -> Result<(), RateLimitError> {
         self.check_rate_at(Instant::now(), addr, msg_type)
     }
 
@@ -593,11 +599,7 @@ impl RateLimiter {
     }
 
     /// Legacy [`MessageClass`] charge (real clock).
-    pub fn check_class(
-        &self,
-        addr: SocketAddr,
-        class: MessageClass,
-    ) -> Result<(), RateLimitError> {
+    pub fn check_class(&self, addr: SocketAddr, class: MessageClass) -> Result<(), RateLimitError> {
         self.check_class_at(Instant::now(), addr, class)
     }
 
@@ -633,9 +635,7 @@ impl RateLimiter {
     /// addresses are not banned (no entry created).
     pub fn is_banned_at(&self, now: Instant, addr: SocketAddr) -> bool {
         let peers = self.peers.lock().unwrap();
-        peers
-            .get(&addr)
-            .is_some_and(|peer| peer.is_banned_at(now))
+        peers.get(&addr).is_some_and(|peer| peer.is_banned_at(now))
     }
 
     /// Violations recorded for `addr` (0 for unknown addresses) — the S2-P16
@@ -894,7 +894,9 @@ mod tests {
         );
         assert_eq!(limiter.violation_count(addr), 1);
         // Main bucket was only charged 100 of 1000: a main-only type works.
-        limiter.check_rate_at(now, addr, MessageType::Hello).unwrap();
+        limiter
+            .check_rate_at(now, addr, MessageType::Hello)
+            .unwrap();
     }
 
     #[test]
@@ -907,7 +909,9 @@ mod tests {
         let now = t0();
         let addr: SocketAddr = "10.0.0.4:8081".parse().unwrap();
         for _ in 0..200 {
-            limiter.check_rate_at(now, addr, MessageType::Hello).unwrap();
+            limiter
+                .check_rate_at(now, addr, MessageType::Hello)
+                .unwrap();
         }
         assert_eq!(limiter.violation_count(addr), 0);
 

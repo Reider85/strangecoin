@@ -54,12 +54,12 @@
 
 use crate::blockchain_view::BlockchainView;
 use crate::error::NetError;
+use siphasher::sip::SipHasher24;
 use strangecoin_core::serialize::{
-    deserialize_header, deserialize_transaction_signed, header_hash, merkle_root,
-    serialize_header, serialize_transaction_signed, txid,
+    deserialize_header, deserialize_transaction_signed, header_hash, merkle_root, serialize_header,
+    serialize_transaction_signed, txid,
 };
 use strangecoin_core::types::{Block, BlockHeader, Transaction};
-use siphasher::sip::SipHasher24;
 
 /// First payload byte of a `COMPACT_BLOCK` message.
 pub const MSG_COMPACT_BLOCK: u8 = 0x09;
@@ -192,9 +192,8 @@ impl CompactBlock {
         let header_bytes = serialize_header(&self.header);
         debug_assert_eq!(header_bytes.len(), HEADER_WIRE_LEN);
 
-        let mut out = Vec::with_capacity(
-            1 + HEADER_WIRE_LEN + 8 + 4 + self.short_ids.len() * SHORT_ID_LEN,
-        );
+        let mut out =
+            Vec::with_capacity(1 + HEADER_WIRE_LEN + 8 + 4 + self.short_ids.len() * SHORT_ID_LEN);
         out.push(MSG_COMPACT_BLOCK);
         out.extend_from_slice(&header_bytes);
         out.extend_from_slice(&self.nonce.to_be_bytes());

@@ -320,17 +320,13 @@ fn short_id_collision_or_tamper_falls_back_not_false_block() {
         block_hash: hash,
         txs: vec![transfer_tx(99)],
     };
-    assert!(
-        apply_block_txn(&compact, &req.missing_indices, &tampered, &receiver).is_err()
-    );
+    assert!(apply_block_txn(&compact, &req.missing_indices, &tampered, &receiver).is_err());
 
     // A short-ID mismatch is also caught before the merkle check.
     // Force a short-id mismatch by corrupting the compact block's committed id.
     let mut bad_compact = compact.clone();
     bad_compact.short_ids[1] = [0xAB; 8];
-    assert!(
-        apply_block_txn(&bad_compact, &req.missing_indices, &good_txn, &receiver).is_err()
-    );
+    assert!(apply_block_txn(&bad_compact, &req.missing_indices, &good_txn, &receiver).is_err());
 
     // The honest path still succeeds (sanity check for the negative cases above).
     assert!(apply_block_txn(&compact, &req.missing_indices, &good_txn, &receiver).is_ok());

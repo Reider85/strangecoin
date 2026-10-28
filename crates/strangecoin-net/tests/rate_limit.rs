@@ -184,7 +184,10 @@ fn per_type_block_cap_thirty_per_window() {
         "31 BLOCK/10s refused (window not yet elapsed, no refill)"
     );
     assert_eq!(limiter.violation_count(peer), 1);
-    assert!(!limiter.is_banned_at(now, peer), "1 violation < threshold 5");
+    assert!(
+        !limiter.is_banned_at(now, peer),
+        "1 violation < threshold 5"
+    );
 
     // Per-type isolation: TX has its own bucket — still fully open.
     for _ in 0..100 {
