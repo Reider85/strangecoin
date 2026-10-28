@@ -94,6 +94,7 @@ impl Node {
         port: u16,
         event_bus: Arc<events::EventBus>,
         network_id: u32,
+        rate_limit_config: crate::network::RateLimitConfig,
     ) -> Self {
         let blockchain = Arc::new(BlockchainFacade::with_event_bus(
             port,
@@ -101,7 +102,7 @@ impl Node {
             network_id,
         ));
         let peers = Arc::new(Mutex::new(vec![]));
-        let rate_limiter = Arc::new(crate::network::RateLimiter::new(10, 100));
+        let rate_limiter = Arc::new(crate::network::RateLimiter::new(rate_limit_config));
         let shutdown = Arc::new(AtomicBool::new(false));
         let node = Node {
             blockchain: blockchain.clone(),
@@ -652,15 +653,24 @@ async fn handle_connection(
             }
         };
 
-        // BUG-S1-005 (P13): per-message rate limit — the accept-time check
-        // only throttles connection rate; a long-lived peer must not stream
-        // unlimited messages through one TCP session. Classified after the
-        // read (classification needs the message bytes); exceeding the total
-        // or the per-class bucket bans the peer and closes the connection.
+        // BUG-S1-005 (P13) / ADR-0023 (S2-P16): per-message rate limit —
+        // the accept-time check only throttles connection rate; a long-lived
+        // peer must not stream unlimited messages through one TCP session.
+        // Classified after the read (classification needs the message bytes).
+        // Exhaustion is fail-closed but graded: `Exceeded` drops the message
+        // (the violation counter keeps accumulating on this connection),
+        // `Ban` (threshold reached) closes the session.
         let class = classify_request(&request_bytes);
-        if let Err(e) = rate_limiter.check_class(peer_addr, class) {
-            warn!(peer = %peer_addr, error = %e, "Rate limit exceeded, closing connection");
-            break;
+        match rate_limiter.check_class(peer_addr, class) {
+            Ok(()) => {}
+            Err(crate::network::RateLimitError::Exceeded) => {
+                warn!(peer = %peer_addr, ?class, "Rate limit exceeded, dropping message");
+                continue;
+            }
+            Err(crate::network::RateLimitError::Ban) => {
+                warn!(peer = %peer_addr, ?class, "Rate limit ban reached, closing connection");
+                break;
+            }
         }
 
         // Binary requests (S1-P16) — checked before the UTF-8 text path;
@@ -1153,6 +1163,7 @@ pub async fn run_async() {
         port,
         event_bus.clone(),
         config.network_id,
+        config.rate_limit_config(),
     );
     node.blockchain
         .set_allow_grant_blocks(config.allow_grant_blocks);
@@ -1489,12 +1500,20 @@ pub mod test_support {
         port: u16,
     ) -> (Node, Arc<Mutex<Vec<String>>>) {
         let peers = Arc::new(Mutex::new(vec![]));
+        // S2-P16: integration tests keep the Stage-1-equivalent budget
+        // (100 burst / 10 per s) instead of the ADR production default
+        // (1000/100) — `tests/rate_limit.rs` floods 200 junk messages and
+        // must reach the ban threshold inside that flood.
+        let test_rate_limit = crate::network::RateLimitConfig {
+            main: crate::network::BucketSpec::new(100, 10),
+            ..crate::network::RateLimitConfig::default()
+        };
         let node = Node {
             blockchain: Arc::clone(bc),
             peers: Arc::clone(&peers),
             address: format!("127.0.0.1:{}", port),
             sync_rx: tokio::sync::mpsc::unbounded_channel().1,
-            rate_limiter: Arc::new(crate::network::RateLimiter::new(10, 100)),
+            rate_limiter: Arc::new(crate::network::RateLimiter::new(test_rate_limit)),
             shutdown: Arc::new(AtomicBool::new(false)),
             accept_task: Arc::new(Mutex::new(None)),
             sync_task_handle: Arc::new(Mutex::new(None)),

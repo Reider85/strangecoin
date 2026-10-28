@@ -13,6 +13,22 @@ peer_ban_threshold = 0.2
 max_connections = 50
 # S2-P12 (V-17): max connections per IPv4 /24 or IPv6 /64 range.
 max_per_ip_range = 8
+# S2-P16 (ADR-0023): violations inside rate_limit_ban_window_sec that
+# trigger the fast-path rate-limit ban.
+rate_limit_ban_threshold = 5
+# S2-P16: rolling violation window (seconds).
+rate_limit_ban_window_sec = 60
+# S2-P16: fast-path ban duration (seconds; ADR-0023: 5 minutes).
+rate_limit_ban_duration_sec = 300
+# S2-P16 (ADR-0023): main token bucket — burst capacity in messages...
+rate_limit_main_capacity = 1000
+# ...and steady-state refill in messages per second (every inbound wire
+# message draws 1 token from the main bucket).
+rate_limit_main_refill = 100
+# S2-P16: per-message-type sub-buckets, spec = "capacity/window_secs"
+# (capacity 100, full refill in 10s => 10 tokens/s). get_headers/get_blocks
+# are the ADR-0023 legacy sync sub-buckets (Stage 1 carry-over).
+rate_limit_per_type = { inv = "100/10s", block = "30/10s", tx = "1000/10s", get_headers = "100/10s", get_blocks = "100/10s" }
 
 [storage]
 path = "./data/leveldb"

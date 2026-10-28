@@ -431,7 +431,7 @@ mod tests {
             headers: headers_tx,
             blocks: blocks_tx,
             seen: Arc::new(Mutex::new(SeenCache::default())),
-            rate_limiter: Arc::new(RateLimiter::new(10, 100)),
+            rate_limiter: Arc::new(RateLimiter::default()),
         };
         (inbox, blocks_rx, headers_rx)
     }

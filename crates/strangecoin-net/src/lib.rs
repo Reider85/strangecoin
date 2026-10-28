@@ -44,3 +44,7 @@ pub use peer::{
     BanReason, BanRecord, Connection, ConnectionPool, PeerManager, PeerManagerConfig, PeerRecord,
     PeerStore, TickReport,
 };
+pub use rate_limiter::{
+    parse_rate_spec, BucketSpec, MessageClass, MessageType, RateLimitConfig, RateLimitError,
+    RateLimiter, TokenBucket,
+};

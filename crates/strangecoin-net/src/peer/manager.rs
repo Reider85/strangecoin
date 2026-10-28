@@ -35,6 +35,7 @@ use crate::protocol::hello::{
     negotiate_capabilities, read_hello, write_hello, Hello, STAGE2_CAPABILITIES,
 };
 use crate::protocol::{read_length_prefixed_async, write_length_prefixed_async};
+use crate::rate_limiter::RateLimitError;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -406,6 +407,48 @@ impl PeerManager {
     /// `protocol_violations` penalty channel, banning under `RateLimit`.
     pub fn record_rate_violation(&self, node_id: NodeId) {
         self.record_event(node_id, BanReason::RateLimit, Counter::Violation);
+    }
+
+    /// Apply a rate-limiter verdict to the slow path (ADR-0023 §Integration,
+    /// S2-P16).
+    ///
+    /// * `Ok` — nothing to do.
+    /// * [`RateLimitError::Exceeded`] — one refused message = one violation:
+    ///   [`record_rate_violation`](Self::record_rate_violation) feeds the
+    ///   ADR-0022 `protocol_violations` penalty channel (score drops on the
+    ///   next tick → warn/temp/persistent ladder).
+    /// * [`RateLimitError::Ban`] — the same violation record **plus** an
+    ///   explicit [`ban_peer`](Self::ban_peer) under
+    ///   [`BanReason::RateLimit`] until `now + ban_duration`. The ban is
+    ///   written through to `network.json` immediately (`persistent = true`
+    ///   is the S2-P12 "durable write" flag — the ban still expires by
+    ///   `until`, it simply survives a restart for its remaining duration).
+    ///
+    /// The fast path (the address-keyed limiter) reacts in milliseconds; this
+    /// slow path converts repetition into reputation damage. Production call
+    /// sites arrive with the S2-P19 inbound read loop (node_id is only known
+    /// after the Noise auth round); S2-P16 wires and tests the seam.
+    ///
+    /// Note: [`record_rate_violation`](Self::record_rate_violation) ignores
+    /// unknown peers — the caller must have `learn_addrs`/`register_connection`
+    /// records for `node_id` (tests do this explicitly).
+    pub fn apply_rate_verdict(
+        &self,
+        node_id: NodeId,
+        verdict: &Result<(), RateLimitError>,
+        ban_duration: Duration,
+    ) {
+        let Err(err) = verdict else {
+            return;
+        };
+        // ADR-0023: each refused message is one violation — both verdict
+        // classes feed the scoring channel (Exceeded = the refusal itself,
+        // Ban = the refusal that crossed the threshold).
+        self.record_rate_violation(node_id);
+        if matches!(err, RateLimitError::Ban) {
+            let until = Instant::now() + ban_duration;
+            self.ban_peer(node_id, BanReason::RateLimit, until, true);
+        }
     }
 
     /// Feed one observed message-latency sample into the record's EWMA

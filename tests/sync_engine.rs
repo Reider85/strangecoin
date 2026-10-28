@@ -71,7 +71,7 @@ fn concurrent_candidates_race_through_one_engine() {
         main.event_bus(),
         sync_tx,
         Arc::clone(&shutdown),
-        Arc::new(strangecoin::network::RateLimiter::new(10, 100)),
+        Arc::new(strangecoin::network::RateLimiter::default()),
     );
 
     // Collect events until `quiet` passes with nothing new (bounded by `max`).

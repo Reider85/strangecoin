@@ -2,6 +2,7 @@ use crate::error::StrangecoinError;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -50,6 +51,30 @@ pub struct NetworkConfig {
     /// `strangecoin_net::peer::DEFAULT_MAX_PER_IP_RANGE`).
     #[serde(default = "default_max_per_ip_range")]
     pub max_per_ip_range: usize,
+    /// S2-P16 (`rate_limit_ban_threshold`, ADR-0023): violations inside
+    /// `rate_limit_ban_window_sec` that trigger the fast-path ban.
+    #[serde(default = "default_rate_limit_ban_threshold")]
+    pub rate_limit_ban_threshold: u32,
+    /// S2-P16 (`rate_limit_ban_window_sec`): rolling violation window.
+    #[serde(default = "default_rate_limit_ban_window_sec")]
+    pub rate_limit_ban_window_sec: u64,
+    /// S2-P16 (`rate_limit_ban_duration_sec`): fast-path ban duration
+    /// (ADR-0023 tuning surface — the prompt key list omits it, ADR
+    /// requires ban duration to be tunable).
+    #[serde(default = "default_rate_limit_ban_duration_sec")]
+    pub rate_limit_ban_duration_sec: u64,
+    /// S2-P16 (`rate_limit_main_capacity`, ADR-0023): main bucket burst.
+    #[serde(default = "default_rate_limit_main_capacity")]
+    pub rate_limit_main_capacity: u32,
+    /// S2-P16 (`rate_limit_main_refill`): main bucket tokens per second.
+    #[serde(default = "default_rate_limit_main_refill")]
+    pub rate_limit_main_refill: u32,
+    /// S2-P16 (`rate_limit_per_type`): per-message-type sub-bucket specs of
+    /// the form `"capacity/window_secs"` (e.g. `"100/10s"` = 100 burst,
+    /// 10 tokens/s). `get_headers`/`get_blocks` are the ADR-0023 legacy sync
+    /// sub-buckets (Stage 1 carry-over; beyond the prompt's 3-key list).
+    #[serde(default)]
+    pub rate_limit_per_type: RateLimitPerTypeConfig,
 }
 
 fn default_peer_ban_threshold() -> f32 {
@@ -64,6 +89,81 @@ fn default_max_per_ip_range() -> usize {
     8
 }
 
+fn default_rate_limit_ban_threshold() -> u32 {
+    5
+}
+
+fn default_rate_limit_ban_window_sec() -> u64 {
+    60
+}
+
+fn default_rate_limit_ban_duration_sec() -> u64 {
+    300
+}
+
+fn default_rate_limit_main_capacity() -> u32 {
+    1000
+}
+
+fn default_rate_limit_main_refill() -> u32 {
+    100
+}
+
+/// Per-type sub-bucket specs (`config.toml: rate_limit_per_type`), values in
+/// the `"capacity/window_secs"` format parsed by
+/// `strangecoin_net::rate_limiter::parse_rate_spec`. Every field falls back
+/// to the ADR-0023 initial table when the key (or the whole table) is absent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RateLimitPerTypeConfig {
+    /// `INV` — ADR-0023: 100 burst / 10 per s.
+    #[serde(default = "default_rl_inv")]
+    pub inv: String,
+    /// `BLOCK` — ADR-0023: 30 burst / 3 per s.
+    #[serde(default = "default_rl_block")]
+    pub block: String,
+    /// `TX` — ADR-0023: 1000 burst / 100 per s.
+    #[serde(default = "default_rl_tx")]
+    pub tx: String,
+    /// Legacy `GET_HEADERS` sync sub-bucket (ADR-0023 Stage 1 carry-over).
+    #[serde(default = "default_rl_get_headers")]
+    pub get_headers: String,
+    /// Legacy `GET_BLOCKS` sync sub-bucket (ADR-0023 Stage 1 carry-over).
+    #[serde(default = "default_rl_get_blocks")]
+    pub get_blocks: String,
+}
+
+fn default_rl_inv() -> String {
+    "100/10s".into()
+}
+
+fn default_rl_block() -> String {
+    "30/10s".into()
+}
+
+fn default_rl_tx() -> String {
+    "1000/10s".into()
+}
+
+fn default_rl_get_headers() -> String {
+    "100/10s".into()
+}
+
+fn default_rl_get_blocks() -> String {
+    "100/10s".into()
+}
+
+impl Default for RateLimitPerTypeConfig {
+    fn default() -> Self {
+        RateLimitPerTypeConfig {
+            inv: default_rl_inv(),
+            block: default_rl_block(),
+            tx: default_rl_tx(),
+            get_headers: default_rl_get_headers(),
+            get_blocks: default_rl_get_blocks(),
+        }
+    }
+}
+
 impl Default for NetworkConfig {
     fn default() -> Self {
         NetworkConfig {
@@ -73,6 +173,12 @@ impl Default for NetworkConfig {
             peer_ban_threshold: default_peer_ban_threshold(),
             max_connections: default_max_connections(),
             max_per_ip_range: default_max_per_ip_range(),
+            rate_limit_ban_threshold: default_rate_limit_ban_threshold(),
+            rate_limit_ban_window_sec: default_rate_limit_ban_window_sec(),
+            rate_limit_ban_duration_sec: default_rate_limit_ban_duration_sec(),
+            rate_limit_main_capacity: default_rate_limit_main_capacity(),
+            rate_limit_main_refill: default_rate_limit_main_refill(),
+            rate_limit_per_type: RateLimitPerTypeConfig::default(),
         }
     }
 }
@@ -130,6 +236,50 @@ impl Config {
                 "max_per_ip_range must be > 0".into(),
             ));
         }
+        if self.network.rate_limit_ban_threshold == 0 {
+            return Err(StrangecoinError::ConfigError(
+                "rate_limit_ban_threshold must be > 0".into(),
+            ));
+        }
+        if self.network.rate_limit_ban_window_sec == 0 {
+            return Err(StrangecoinError::ConfigError(
+                "rate_limit_ban_window_sec must be > 0".into(),
+            ));
+        }
+        if self.network.rate_limit_ban_duration_sec == 0 {
+            return Err(StrangecoinError::ConfigError(
+                "rate_limit_ban_duration_sec must be > 0".into(),
+            ));
+        }
+        if self.network.rate_limit_main_capacity == 0 {
+            return Err(StrangecoinError::ConfigError(
+                "rate_limit_main_capacity must be > 0".into(),
+            ));
+        }
+        if self.network.rate_limit_main_refill == 0 {
+            return Err(StrangecoinError::ConfigError(
+                "rate_limit_main_refill must be > 0".into(),
+            ));
+        }
+        // Spec parsing lives in strangecoin-net (feature `net`, mandatory on
+        // Stage 2 — same gate as `peer_manager_config`).
+        #[cfg(feature = "net")]
+        {
+            let pt = &self.network.rate_limit_per_type;
+            for (name, spec) in [
+                ("inv", &pt.inv),
+                ("block", &pt.block),
+                ("tx", &pt.tx),
+                ("get_headers", &pt.get_headers),
+                ("get_blocks", &pt.get_blocks),
+            ] {
+                if let Err(err) = strangecoin_net::rate_limiter::parse_rate_spec(spec) {
+                    return Err(StrangecoinError::ConfigError(format!(
+                        "rate_limit_per_type.{name}: {err}"
+                    )));
+                }
+            }
+        }
         if self.data_dir.as_os_str().is_empty() {
             return Err(StrangecoinError::ConfigError(
                 "data_dir must not be empty".into(),
@@ -168,6 +318,37 @@ impl Config {
             max_per_ip_range: self.network.max_per_ip_range,
             network_id: self.network_id,
             ..strangecoin_net::PeerManagerConfig::default()
+        }
+    }
+
+    /// Map the operator's `config.toml` `rate_limit_*` keys onto the network
+    /// crate's token-bucket tunables (S2-P16 / ADR-0023).
+    ///
+    /// Numeric keys map 1:1; the `rate_limit_per_type` specs
+    /// (`"capacity/window_secs"`) are re-parsed through
+    /// `parse_rate_spec` — `validate()` already rejected malformed specs at
+    /// load, so a parse failure here falls back to the ADR-0023 default for
+    /// that bucket (hand-built configs that skipped `validate`).
+    pub fn rate_limit_config(&self) -> strangecoin_net::RateLimitConfig {
+        use strangecoin_net::rate_limiter::{parse_rate_spec, BucketSpec, RateLimitConfig};
+
+        let defaults = RateLimitConfig::default();
+        let spec = |raw: &str, fallback: BucketSpec| parse_rate_spec(raw).unwrap_or(fallback);
+        let pt = &self.network.rate_limit_per_type;
+
+        RateLimitConfig {
+            main: BucketSpec::new(
+                self.network.rate_limit_main_capacity,
+                self.network.rate_limit_main_refill,
+            ),
+            get_headers: spec(&pt.get_headers, defaults.get_headers),
+            get_blocks: spec(&pt.get_blocks, defaults.get_blocks),
+            inv: spec(&pt.inv, defaults.inv),
+            block: spec(&pt.block, defaults.block),
+            tx: spec(&pt.tx, defaults.tx),
+            ban_threshold: self.network.rate_limit_ban_threshold,
+            ban_window: Duration::from_secs(self.network.rate_limit_ban_window_sec),
+            ban_duration: Duration::from_secs(self.network.rate_limit_ban_duration_sec),
         }
     }
 }
@@ -336,5 +517,145 @@ mod tests {
             pm.network_json_path.is_none(),
             "path is supplied at wiring time, not from config.toml"
         );
+    }
+
+    #[test]
+    fn rate_limit_defaults_when_missing_from_config_file() {
+        // Stage 1.5-era files (no rate_limit keys) must keep parsing and get
+        // the ADR-0023 initial table — S2-P16 serde defaults.
+        let toml = r#"
+            network_id = 3
+            node_mode = "full"
+            log_level = "info"
+            data_dir = "./data"
+
+            [network]
+            listen_addr = "127.0.0.1:8081"
+            seeds = []
+            max_peers = 50
+
+            [storage]
+            path = "./data/leveldb"
+        "#;
+        let cfg: Config = toml::from_str(toml).expect("legacy config must parse");
+        assert_eq!(cfg.network.rate_limit_ban_threshold, 5);
+        assert_eq!(cfg.network.rate_limit_ban_window_sec, 60);
+        assert_eq!(cfg.network.rate_limit_ban_duration_sec, 300);
+        assert_eq!(cfg.network.rate_limit_main_capacity, 1000);
+        assert_eq!(cfg.network.rate_limit_main_refill, 100);
+        assert_eq!(cfg.network.rate_limit_per_type.inv, "100/10s");
+        assert_eq!(cfg.network.rate_limit_per_type.block, "30/10s");
+        assert_eq!(cfg.network.rate_limit_per_type.tx, "1000/10s");
+        assert_eq!(cfg.network.rate_limit_per_type.get_headers, "100/10s");
+        assert_eq!(cfg.network.rate_limit_per_type.get_blocks, "100/10s");
+        cfg.validate().expect("defaults are valid");
+    }
+
+    #[test]
+    fn rate_limit_tunables_reject_invalid_values() {
+        let base = Config::default();
+
+        let zero_threshold = Config {
+            network: NetworkConfig {
+                rate_limit_ban_threshold: 0,
+                ..base.network.clone()
+            },
+            ..Config::default()
+        };
+        assert!(zero_threshold.validate().is_err());
+
+        let zero_capacity = Config {
+            network: NetworkConfig {
+                rate_limit_main_capacity: 0,
+                ..base.network.clone()
+            },
+            ..Config::default()
+        };
+        assert!(zero_capacity.validate().is_err());
+
+        let zero_refill = Config {
+            network: NetworkConfig {
+                rate_limit_main_refill: 0,
+                ..base.network.clone()
+            },
+            ..Config::default()
+        };
+        assert!(zero_refill.validate().is_err());
+
+        let zero_window = Config {
+            network: NetworkConfig {
+                rate_limit_ban_window_sec: 0,
+                ..base.network.clone()
+            },
+            ..Config::default()
+        };
+        assert!(zero_window.validate().is_err());
+    }
+
+    #[cfg(feature = "net")]
+    #[test]
+    fn rate_limit_per_type_rejects_malformed_specs() {
+        let base = Config::default();
+        let bad_spec = Config {
+            network: NetworkConfig {
+                rate_limit_per_type: RateLimitPerTypeConfig {
+                    inv: "abc".into(),
+                    ..RateLimitPerTypeConfig::default()
+                },
+                ..base.network.clone()
+            },
+            ..Config::default()
+        };
+        let err = bad_spec
+            .validate()
+            .expect_err("malformed inv spec must be rejected");
+        assert!(
+            err.to_string().contains("rate_limit_per_type.inv"),
+            "error names the offending key: {err}"
+        );
+    }
+
+    #[cfg(feature = "net")]
+    #[test]
+    fn rate_limit_config_maps_file_tunables() {
+        let cfg = Config {
+            network: NetworkConfig {
+                rate_limit_ban_threshold: 9,
+                rate_limit_ban_window_sec: 30,
+                rate_limit_ban_duration_sec: 120,
+                rate_limit_main_capacity: 5000,
+                rate_limit_main_refill: 50,
+                rate_limit_per_type: RateLimitPerTypeConfig {
+                    inv: "200/10s".into(),
+                    ..RateLimitPerTypeConfig::default()
+                },
+                ..Config::default().network
+            },
+            ..Config::default()
+        };
+        cfg.validate().expect("tunables are valid");
+        let rl = cfg.rate_limit_config();
+        assert_eq!(rl.main.capacity, 5000);
+        assert_eq!(rl.main.refill, 50);
+        assert_eq!(rl.ban_threshold, 9);
+        assert_eq!(rl.ban_window, Duration::from_secs(30));
+        assert_eq!(rl.ban_duration, Duration::from_secs(120));
+        assert_eq!(rl.inv.capacity, 200);
+        assert_eq!(rl.inv.refill, 20, "200/10s => 20 tokens/s");
+        // Untouched keys keep ADR-0023 defaults.
+        assert_eq!(rl.block.capacity, 30);
+        assert_eq!(rl.block.refill, 3);
+        assert_eq!(rl.tx.capacity, 1000);
+        assert_eq!(rl.tx.refill, 100);
+        assert_eq!(rl.get_headers.capacity, 100);
+        assert_eq!(rl.get_blocks.refill, 10);
+    }
+
+    #[cfg(feature = "net")]
+    #[test]
+    fn rate_limit_config_defaults_match_adr0023() {
+        let rl = Config::default().rate_limit_config();
+        let dflt = strangecoin_net::RateLimitConfig::default();
+        assert_eq!(rl, dflt);
     }
 }
