@@ -1,8 +1,9 @@
-# Strangecoin fuzzing (S1-P19, extended S1.5-P16)
+# Strangecoin fuzzing (S1-P19, extended S1.5-P16, S2-P21)
 
-Coverage-guided fuzzing (cargo-fuzz / libFuzzer) over the two attack
-surfaces the project has shipped so far: the canonical deserializers
-(S1-P19) and the Stage 1.5 VM host surface (S1.5-P16, threat V-21). Every
+Coverage-guided fuzzing (cargo-fuzz / libFuzzer) over the attack surfaces
+the project has shipped so far: the canonical deserializers (S1-P19), the
+Stage 1.5 VM host surface (S1.5-P16, threat V-21), and the Stage 2 network
+surface (S2-P21: Noise handshake, gossip INV, compact blocks, Erlay). Every
 target follows one contract: **a panic is a crash; a typed error or a
 deterministic value is a pass.**
 
@@ -15,6 +16,10 @@ deterministic value is a pass.**
 | `gas_metering` | raw bytes / mutated valid WAT / bounded-loop WAT / infinite-loop WAT under a random gas budget (S1.5-P16, threat V-21) | terminates in `Ok` (with `gas_used ≤ gas_limit`) or typed error; deterministic; infinite loops halt via `OutOfFuel` |
 | `storage_trie` | random write/delete/commit sequences through `ContractStorageOverlay` + `contract_storage_root` (S1.5-P16, invariant #4/#19 extension) | same op sequence ⇒ same root; undo/redo preserves the root |
 | `differential_wasmi_vs_wasmtime` | generated bounded import-free WAT executed in wasmi (pinned `=2.0.0`, our consensus runtime) and wasmtime `=49.0.3` (reference engine) (S1.5-P16) | same outcome class and return value in both engines; a success/failure split is a real bug |
+| `noise_handshake` | Noise XX state machine on arbitrary handshake bytes + honest roundtrip with fuzzer payloads (S2-P21, ADR-0020, threat V-24) | no panic (typed `NoiseError` only); deterministic round-1 for the same seed; honest handshake completes with matching `NodeId`s + working transport |
+| `gossip_inv` | `handle_inv` / `handle_get_data` on arbitrary INV/GET_DATA sequences over a mock mempool (S2-P21, S2-P13) | no panic; `handle_inv` only requests what the view lacks; `handle_get_data` only serves txs genuinely in the mempool (no false-positive announces) |
+| `compact_blocks_fill_up` | random block → `CompactBlock` → `fill_up` against a random mempool, plus wire-byte corruption before re-parse (S2-P21, S2-P14) | no panic; `Complete` ⇒ rebuilt `tx_root` matches its txs (never a false block); `Missing` ⇒ in-range indices and the `GET_BLOCK_TXN` round-trip completes |
+| `erlay_reconciliation` | two random tx sets (varying overlap) → `create_sketch` / `decode_difference` + `ReconciliationState::reconcile_at` + corrupted sketches (S2-P21, ADR-0021) | no panic; decode = exact sorted symmetric difference of short-ID sets; state-level delta = local-exclusive TxIds; ≥50% bandwidth reduction verified as math whenever overlap qualifies; failures are typed (fallback signal) |
 
 ### Differential methodology
 
@@ -32,7 +37,8 @@ engine construction (wasmtime Cranelift config) dominates otherwise.
 ## Running on CI (BUG-S0-023 / S1.5-P07 / S1.5-P16)
 
 The coverage-guided runs live in `.github/workflows/ci.yml`, job `fuzz`
-(a 5-way matrix, one job per target):
+(a 9-way matrix — S1-P19/S1.5-P16's five targets plus S2-P21's four network
+targets, one job per target):
 
 - triggers on **every push and pull request** (same `on:` as the rest of CI);
 - `ubuntu-latest`, Rust **nightly** (libFuzzer + ASan require it),
@@ -58,6 +64,10 @@ cargo fuzz run host_functions -- -max_total_time=600
 cargo fuzz run gas_metering -- -max_total_time=600
 cargo fuzz run storage_trie -- -max_total_time=600
 cargo fuzz run differential_wasmi_vs_wasmtime -- -max_total_time=600
+cargo fuzz run noise_handshake -- -max_total_time=600
+cargo fuzz run gossip_inv -- -max_total_time=600
+cargo fuzz run compact_blocks_fill_up -- -max_total_time=600
+cargo fuzz run erlay_reconciliation -- -max_total_time=600
 ```
 
 Requires a nightly toolchain; libFuzzer + ASan provide coverage guidance and
@@ -140,6 +150,25 @@ Coverage-guided evidence for the four new targets comes from the CI `fuzz`
 matrix; it is **not verified from this host** (no cargo-fuzz — reasons
 above), same as `canonical_decode` in S1-P19.
 
+### S2-P21: four network targets (type-check + zeroed-input smoke)
+
+Filled in by the S2-P21 verification run on the dev host (2026-10-29).
+Cargo-fuzz cannot build here (the `libfuzzer-sys` C++ runtime fails under
+GNU g++ — reason list above), so the executed fallback is the same stub
+approach S1.5-P16 used: the four targets compiled against a stub
+`fuzz_target!` macro (expanding to an ordinary `fn`), each run once on a
+zeroed `Unstructured` buffer:
+
+| Date | Command | Targets | Panics | Note |
+|------|---------|---------|--------|------|
+| 2026-10-29 | stub-harness `cargo check` | 4 | 0 | `noise_handshake`, `gossip_inv`, `compact_blocks_fill_up`, `erlay_reconciliation` compile clean |
+| 2026-10-29 | stub-harness zeroed-input run | 4 | 0 | one deterministic zeroed input per target; all bodies complete |
+
+**Not verified from this host:** the 10-minute coverage-guided soak per
+target (no cargo-fuzz — reasons above) and the CI matrix run (GitHub
+infrastructure this machine cannot observe); «CI extended» is verified by
+the `ci.yml` diff (9-target matrix), per the precedent in the CI section.
+
 ## Relationship to THREAT_MODEL.md
 
 - `host_functions` / `gas_metering` / `differential_*` → threat **V-21**
@@ -149,6 +178,13 @@ above), same as `canonical_decode` in S1-P19.
 - `storage_trie` → invariant **#4** (apply/unapply are clean inverses) and
   the Stage 1.5 extension of invariant **#19** (contract storage under the
   state root).
+- `noise_handshake` → threat **V-24** (network MITM): the XX state machine
+  must reject garbage with typed errors, stay deterministic for a given
+  seed, and authenticate the pinned `NodeId` (ADR-0020).
+- `gossip_inv` / `compact_blocks_fill_up` / `erlay_reconciliation` → threats
+  **V-14/V-17** (spam/flood via gossip) and invariant **#16** (wire parsing
+  never trusts input): handlers and codecs must fail cleanly, never serve
+  objects the node does not have, never reconstruct a false block.
 
 S1.5-P18 folds the outcomes into `docs/security/THREAT_MODEL.md`
 Monitoring.

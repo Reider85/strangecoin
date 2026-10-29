@@ -125,12 +125,18 @@ jobs:
       fail-fast: false
       matrix:
         # S1.5-P16: canonical decode (S1-P19) + four Stage 1.5 VM targets.
+        # S2-P21: + four Stage 2 network targets (noise/gossip/compact/erlay)
+        # — 9 targets total, one 600s run each.
         target:
           - canonical_decode
           - host_functions
           - gas_metering
           - storage_trie
           - differential_wasmi_vs_wasmtime
+          - noise_handshake
+          - gossip_inv
+          - compact_blocks_fill_up
+          - erlay_reconciliation
     steps:
       - uses: actions/checkout@v4
 

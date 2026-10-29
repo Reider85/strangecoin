@@ -10,12 +10,21 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
+# hex for hex-encoded block hashes in the fuzz-side mock views (same version
+# as strangecoin-net uses; S2-P21).
+hex = "0.4"
 
 [dependencies.strangecoin-core]
 path = "../crates/strangecoin-core"
 
 [dependencies.strangecoin-vm-wasm]
 path = "../crates/strangecoin-vm-wasm"
+
+# Network runtime (S2-P21): noise handshake, gossip INV, compact blocks,
+# Erlay reconciliation. Path dep, not published — same pin discipline as the
+# parent workspace (the crate's own Cargo.toml carries the Stage 2 `=` pins).
+[dependencies.strangecoin-net]
+path = "../crates/strangecoin-net"
 
 # Differential-testing oracle (S1.5-P16): raw engines on identical import-free
 # modules; fuel semantics intentionally differ between engines, so only
@@ -57,6 +66,37 @@ bench = false
 [[bin]]
 name = "differential_wasmi_vs_wasmtime"
 path = "fuzz_targets/differential_wasmi_vs_wasmtime.rs"
+test = false
+doc = false
+bench = false
+
+# S2-P21: four network targets (noise handshake, gossip INV, compact-block
+# fill-up, Erlay reconciliation).
+
+[[bin]]
+name = "noise_handshake"
+path = "fuzz_targets/noise_handshake.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gossip_inv"
+path = "fuzz_targets/gossip_inv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "compact_blocks_fill_up"
+path = "fuzz_targets/compact_blocks_fill_up.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "erlay_reconciliation"
+path = "fuzz_targets/erlay_reconciliation.rs"
 test = false
 doc = false
 bench = false
