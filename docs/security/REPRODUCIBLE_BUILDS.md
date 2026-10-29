@@ -120,6 +120,30 @@ slsa-verifier verify-artifact \
 1. Workflow-run status + job conclusions + published asset inventory + `SHA256SUMS.txt` contents — **verified** via unauthenticated GitHub REST API (`gh` CLI not installed on this Windows host; REST API used instead).
 2. `cosign verify-blob` + `slsa-verifier verify-artifact` — **not verified locally + reason**: `cosign`, `slsa-verifier`, and `gh` are not installed on the Windows verification host. Pipeline-level cosign/SLSA jobs were green in the same run. Reproduce independently with the commands in §«Verifying a Release» above, substituting `v<VERSION>` = `v1.5.0-stage1.5` (certificate identity: `https://github.com/Reider85/strangecoin/.github/workflows/release.yml@refs/tags/v1.5.0-stage1.5`).
 
+### v2.0.0-stage2 (2026-10-29) — Stage 2 gate release (S2-P24, procedure BUG-S1-001)
+
+- **Workflow run:** https://github.com/Reider85/strangecoin/actions/runs/40897214764
+- **Result:** green on all jobs — 13/13: 6 matrix builds (linux x86_64/aarch64, macOS x86_64/aarch64, windows x86_64/aarch64) + `aggregate-hashes` + `sign` + `SLSA Provenance` (detect-env/generator/upload-assets/final) + `Create Release`. Verified via GitHub REST API (`/repos/Reider85/strangecoin/actions/runs/40897214764/jobs`) on 2026-10-29 (`gh` CLI not installed; REST used instead — precedent FBP11).
+- **First attempt failed (transient):** run https://github.com/Reider85/strangecoin/actions/runs/40893905891 (2026-10-29T14:40:52Z) — 5/6 builds green, но `Build (macos-latest, x86_64-apple-darwin)` не получил runner (`runner_name` пуст, cancelled через 15 мин pending) → `aggregate-hashes`/`sign`/`SLSA`/`Create Release` skipped, run = failure. Никакие assets не опубликованы. Recovery: tag удалён с origin и повторно запушен тем же tag-объектом `2577f40` на тот же коммит `346e3c0` (история не изменена) → новый run success с первй же попытки (macos x86_64 получил runner `1000003554`).
+- **Release:** https://github.com/Reider85/strangecoin/releases/tag/v2.0.0-stage2 — 26 assets: 6 binaries, 6 `.sha256`, 6 `.cosign`, 6 `.cosign.pem`, `SHA256SUMS.txt`, `multiple.intoto.jsonl` (SLSA L3 provenance). Published 2026-10-29T15:09:20Z.
+- **Tag commit:** `346e3c065e26be388f15e76bdeb311dbc4e4cc7c` (annotated tag object `2577f406075369c8d1d127825c619e466d1c4ff3`, tagger Reider85; verified via `git ls-remote --tags origin`).
+
+**Published SHA256 (`SHA256SUMS.txt`):**
+
+| Artifact | SHA256 |
+|---|---|
+| strangecoin-linux-aarch64 | `002b22cc70eda23df6c1d7fb58d2b68de72cf6e23d8b7b4aff4cd9ef05ed4930` |
+| strangecoin-linux-x86_64 | `e6c18a104a744ac38ebff97f685422312789c03eb1fe8e3966889a216f47214e` |
+| strangecoin-macos-aarch64 | `76d6bc938197b1af695e61154469d760b25b734aea4fd2c72692578d1f36b6bd` |
+| strangecoin-macos-x86_64 | `8f9d2c860c8b08b5dcfb6a00e32481b068bb83558ee4a889bd6c0823bbdcd15b` |
+| strangecoin-windows-aarch64.exe | `f3485da6f855268db90e8fb8ec8e94c1f4ec3b377902eb6bf8448e51607f3084` |
+| strangecoin-windows-x86_64.exe | `d67bfce00417f8e5a5a181f2bee750c34898c3a28a650b9d25e59a32e8c8b13f` |
+
+**Independent verification status (2026-10-29):**
+
+1. Workflow-run status + job conclusions + published asset inventory + `SHA256SUMS.txt` contents — **verified** via unauthenticated GitHub REST API (`gh` CLI not installed on this Windows host; REST API used instead).
+2. `cosign verify-blob` + `slsa-verifier verify-artifact` — **not verified locally + reason**: `cosign`, `slsa-verifier`, and `gh` are not installed on the Windows verification host. Pipeline-level cosign/SLSA jobs were green in the same run. Reproduce independently with the commands in §«Verifying a Release» above, substituting `v<VERSION>` = `v2.0.0-stage2` (certificate identity: `https://github.com/Reider85/strangecoin/.github/workflows/release.yml@refs/tags/v2.0.0-stage2`).
+
 ## Building Locally (Reproducibility Check)
 
 To verify that a locally built binary matches the release:

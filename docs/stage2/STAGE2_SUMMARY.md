@@ -1,7 +1,7 @@
 # Stage 2 DoD Verification (S2-P24)
 
 **Document**: `docs/stage2/STAGE2_SUMMARY.md`
-**Status**: Complete ✅ (pending tag `v2.0.0-stage2` — tag ставится этим коммитом)
+**Status**: Complete ✅ (tag `v2.0.0-stage2` — annotated, pushed; release pipeline verified — §7)
 **Date**: 2026-10-29
 **Prompt**: S2-P24 — Definition of Done verification for Stage 2 (production-grade P2P)
 **Prompt refs**: S2-P01..S2-P24 (`analytics/prompt-stage2.md`)
@@ -186,17 +186,27 @@ SCIP-0001 + BUG-S1-013/015 (✗ — ops, вне Stage 2 scope).
 
 ---
 
-## 7. Release (S2-P24)
+## 7. Release (S2-P24, verified 2026-10-29)
 
-- **Tag**: annotated `v2.0.0-stage2` — ставится на коммит `[S2-P24] docs: stage2 dod
-  verification + summary + tag v2.0.0-stage2`, push в origin (задачи 9–10).
-- **Release pipeline**: `release.yml` (trigger `push: tags: ['v*']`) — Actions run URL
-  + artifact SHA256 + verify commands будут записаны здесь **после** завершения CI
-  (задача 12; верификация через GitHub REST API, прецедент FBP11).
-- **Independent cosign/SLSA blob verification**: будет зафиксировано как
-  «не верифицировано локально + причина» (`cosign`/`slsa-verifier`/`gh` не
-  установлены на Windows-хосте), если CI к этому моменту не завершится —
-  прецедент FBP08/FBP11.
+- **Tag**: annotated `v2.0.0-stage2` → commit `346e3c065e26be388f15e76bdeb311dbc4e4cc7c` (tag object `2577f406075369c8d1d127825c619e466d1c4ff3`, tagger Reider85; pushed to origin, verified via `git ls-remote --tags origin`).
+- **Release**: https://github.com/Reider85/strangecoin/releases/tag/v2.0.0-stage2 — published 2026-10-29T15:09:20Z, 26 assets (6 binaries, 6 `.sha256`, 6 `.cosign`, 6 `.cosign.pem`, `SHA256SUMS.txt`, `multiple.intoto.jsonl` SLSA L3).
+- **Workflow run**: https://github.com/Reider85/strangecoin/actions/runs/40897214764 — **success, 13/13 jobs** (6 matrix builds + `aggregate-hashes` + `sign` + `SLSA Provenance` ×5 + `Create Release`). Verified via GitHub REST API 2026-10-29 (`gh` CLI not installed on host; REST used instead — прецедент FBP11).
+- **First attempt failed (transient, задокументировано)**: run https://github.com/Reider85/strangecoin/actions/runs/40893905891 — 5/6 builds green, `Build (macos-latest, x86_64-apple-darwin)` не получил runner (cancelled через 15 мин pending) → downstream jobs skipped, run = failure, assets не опубликованы. Recovery: tag удалён с origin и повторно запушен тем же tag-объектом на тот же коммит (история/содержимое не изменены) → новый run success с первой же попытки.
+- **SHA256**: 6 published checksums зафиксированы в `docs/security/REPRODUCIBLE_BUILDS.md` §Verified Release Runs (v2.0.0-stage2, procedure BUG-S1-001).
+- **Independent cosign/SLSA blob verification**: не верифицировано локально + причина — `cosign`/`slsa-verifier`/`gh` не установлены на Windows-хосте; pipeline-level jobs (`sign`, `SLSA Provenance`) green в том же ране. Verify commands (procedure BUG-S1-001):
+  ```bash
+  cosign verify-blob --signature strangecoin-windows-x86_64.exe.cosign \
+    --certificate strangecoin-windows-x86_64.exe.cosign.pem \
+    --certificate-identity "https://github.com/Reider85/strangecoin/.github/workflows/release.yml@refs/tags/v2.0.0-stage2" \
+    --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+    strangecoin-windows-x86_64.exe
+
+  slsa-verifier verify-artifact strangecoin-windows-x86_64.exe \
+    --provenance-path multiple.intoto.jsonl \
+    --source-uri github.com/Reider85/strangecoin \
+    --source-tag v2.0.0-stage2
+  ```
+- **CI (ci.yml, push master)**: run 40893883063 на момент записи — in progress (fuzz jobs 600s); предыдущие master-runs падали на beta-channel clippy / coverage / 2 fuzz targets — pre-existing, вне КГ S2-P24 (КГ требует release.yml — он green, см. выше).
 
 ---
 

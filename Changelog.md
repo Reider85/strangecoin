@@ -2,7 +2,7 @@
 
 ## 2.0.0 — production-grade P2P (Noise, gossip, compact blocks, Erlay, peer scoring)
 
-**Status**: Complete (pending tag S2-P24)  
+**Status**: Complete (tag `v2.0.0-stage2` pushed; release pipeline run https://github.com/Reider85/strangecoin/actions/runs/40897214764 — success 13/13, artifacts published + SHA256 recorded in `docs/security/REPRODUCIBLE_BUILDS.md` §Verified Release Runs; cosign/SLSA blob verification — not run locally, причина: инструменты не установлены на Windows-хосте, pipeline jobs green — прецедент FBP11)  
 **Date**: 2026-10-29  
 **Prompts**: S2-P01..S2-P24 (`analytics/prompt-stage2.md`)
 
