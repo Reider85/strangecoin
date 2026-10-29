@@ -1,5 +1,42 @@
 # Changelog
 
+## 2.0.0 — production-grade P2P (Noise, gossip, compact blocks, Erlay, peer scoring)
+
+**Status**: Complete (pending tag S2-P24)  
+**Date**: 2026-10-29  
+**Prompts**: S2-P01..S2-P24 (`analytics/prompt-stage2.md`)
+
+### Что сделано
+
+- **ADRs**: ADR-0020 (Noise Protocol Framework), ADR-0021 (Erlay), ADR-0022 (peer scoring), ADR-0023 (rate limiting) — нумерация переименована с ROADMAP3-плана 0016..0019 (ADR-0016 занят Receipts Root in Block Header, Stage 1.5 FBP07).
+- **`crates/strangecoin-net/` создан** (S2-P05): workspace member, feature `net` default-on; сеть перенесена из `src/network/*` (S2-P06, strangler pattern + re-export shim + trait `BlockchainView`/`EventSink` cycle break).
+- **Noise Protocol Framework** (S2-P07..S2-P09): handshake XX (snow `=0.10.0`, 3 round trips), transport ChaCha20-Poly1305 (`encrypt_frame`/`decrypt_frame`, monotonic nonces, anti-replay, rekey), Ed25519 `node_id` auth (`keystore/node/`, детерминированные ephemeral-ключи из long-term seed через HKDF — чек-лист детерминизма).
+- **HELLO + capabilities** (S2-P10): `MIN_PROTO_VERSION = 2`, network_id mismatch → drop.
+- **Peer discovery** (S2-P11): hard-coded seed IPs + DNSSEC (hickory-resolver `=0.26.3`) + ADDR gossip + multi-source bootstrap (≥8 peers за ≤30s DoD).
+- **Peer management** (S2-P12): `peer/{store,manager,pool}.rs` split, ban state machine (warn→temp→persistent в `network.json`), `connect_to_peer` = TCP+Noise+HELLO, per-IP-range Sybil cap.
+- **Gossip** (S2-P13): INV/GET_DATA/TX/BLOCK/NOTFOUND, `GossipState` per-peer dedup, announce/broadcast.
+- **Compact blocks BIP 152** (S2-P14): siphash short IDs, детерминированный nonce из block hash, fill-up из mempool.
+- **Erlay reconciliation** (S2-P15): mincut sketches + fallback на INV; активная impl — documented capacity-bounded stub (`impl_id=0`; full minisketch-rs SCIP-gated).
+- **Rate limiting** (S2-P16): token bucket per peer + per-message caps + violation window + ban threshold (ADR-0023).
+- **Peer scoring** (S2-P17): 4-factor weighted formula + ban ladder + latency EWMA (ADR-0022).
+- **Deprecated messages cleanup** (S2-P18): текстовый протокол `GET_BLOCKCHAIN`/`UPDATE_BLOCKCHAIN:` (legacy v0.8.6) вырезан из wire, `MessageClass::ChainGossip` снят; `InboundMessage::UnknownMessage` — forward-compat (неизвестный тип → log + ignore, никогда crash/бан). **Consensus/protocol-breaking** (mainnet не запущен; после тега `v2.0.0-stage2` — только через SCIP + activation height).
+- **Async migration** (S2-P19): thread-fallback из `sync_engine::spawn` удалён (`tokio::spawn` only); production connection loop: Noise accept/dial, sync serving, gossip/compact/Erlay dispatch, rate-limit verdicts.
+- **Shadow network tooling** (S2-P20): `shadow/{replay,compare}.rs` — `replay_blocks` + divergence detector, CLI `sc shadow replay` (Stage 6 prep).
+- **Fuzzing harness** (S2-P21): 4 network targets (`noise_handshake`, `gossip_inv`, `compact_blocks_fill_up`, `erlay_reconciliation`) + CI matrix 9 targets × 600s.
+- **Integration tests** (S2-P22): 6 новых файлов `tests/net_{noise_handshake,gossip,compact_blocks,erlay,peer_scoring,rate_limit_integration}.rs` + `tests/common/net_helpers.rs`.
+- **Invariants**: **22/22 enforced** (3 расширены: #16 Noise framing, #17 rate limit + scoring, #22 release pipeline; #20 fee-split deferred Stage 5) — `docs/stage2/INVARIANTS_ENFORCED.md` (S2-P23).
+- **Threat model**: V-1/V-2/V-14/V-15/V-17/V-24 mitigated — `docs/stage2/THREAT_MODEL_STAGE2.md`, `docs/security/THREAT_MODEL.md` v3.2 (S2-P23); residual risks — `docs/stage2/RESIDUAL_RISKS_STAGE3_PLUS.md`.
+- **DoD verification**: `docs/stage2/STAGE2_SUMMARY.md` — 12/12 критериев ROADMAP3 Этап 2 ✅ (S2-P24).
+- **Version**: root + `strangecoin-core` → **2.0.0**; `strangecoin-vm-wasm` 0.2.0 (unchanged — VM не трогался), `strangecoin-net` 0.1.0 (first release).
+
+### Not in this change
+
+- 2 ops-gate (**BUG-S1-013** PGP-key offline keygen, **BUG-S1-015** offline genesis key air-gapped keygen) — mainnet freeze gates, не код; **не блокируют** Stage 2/3/4 (regtest/devnet scope).
+- **SCIP-0001** (genesis key replacement) — отдельный ops+code трек; после S2-P24 — единственный блокер mainnet.
+- Stage 3 (RocksDB, Verkle, pruning, snapshot sync, Block-STM), Stage 4 (SDK/devnet/indexer/JSON-RPC/faucet), Stage 5+ (AA, EIP-1559, fee market), Stage 6 (audit, TLA+ network), Stage 7 (PoS, BLS) — см. `docs/stage2/STAGE2_SUMMARY.md` §4–5.
+
+---
+
 ## 1.5.6 — release: tag v1.5.0-stage1.5 + release pipeline verified (S1.5-FBP11)
 
 **Status**: Done  
