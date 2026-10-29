@@ -388,7 +388,7 @@ Stage 3 начинается с создания `crates/strangecoin-storage/` (
      - `tx_index_key(txid: &[u8;32])` → (height, index); `tx_raw_key(txid)` 
      - `contract_storage_key(address: &str, slot: &[u8])`
      - `mempool_key(sender: &str, nonce: u64)` — BE nonce; `mempool_sender_prefix(sender)`
-   - Value-типы (canonical bytes через core-serialize? — core-dep запрещён: storage не зависит от core (независимые крейты). Решение: storage хранит **opaque bytes**; encode/decode блоков/tx/state — на стороне monolith (S3-P07). Schema-кодек отвечает только за KEY structure)
+   - Value-типы: storage хранит **opaque bytes**; encode/decode блоков/tx/state — на стороне monolith (S3-P07). Schema-кодек отвечает только за KEY structure. Зависимость storage→core **допустима** (core — pure, 0 I/O; нужна snapshot'ам S3-P13 и witness S3-P11), запрещена обратная (core→storage) — ADR-0024 §Decision; сам `schema.rs` core-типы НЕ использует (pure byte functions)
    - `pub fn encode_schema_version(v: u32) -> [u8;4]` / decode
 2. Тесты: round-trip key-функций; **order test** (height BE: key(9) < key(10)); sender-prefix мемпула (все nonce одного sender — contiguous); fuzz-style proptest на address/slot bytes (нет коллизий между CF-кодеками).
 3. `lib.rs`: `pub mod schema;` уже есть — ре-экспорт key-конструкторов.
@@ -402,7 +402,7 @@ Stage 3 начинается с создания `crates/strangecoin-storage/` (
 - [ ] BE-height ordering протестирован (lexicographic == numeric)
 - [ ] Mempool sender-prefix contiguity протестирована
 - [ ] SCHEMA_VERSION=1 + encode/decode протестированы
-- [ ] Нет зависимости storage→core (opaque bytes) — проверено grep'ом
+- [ ] `schema.rs` не использует core-типы (pure byte encoding); зависимость crate-level storage→core допустима per ADR-0024, обратная (core→storage) запрещена — проверено grep'ом
 - [ ] `cargo test -p strangecoin-storage` зелёный; clippy green
 - [ ] Коммит `[S3-P05] schema: KeyPrefix encoding + schema versioning v1`
 

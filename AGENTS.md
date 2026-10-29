@@ -1,39 +1,80 @@
 # AGENTS.md — Strangecoin Developer Guide
 
-> **NOTE — Stage 2 complete.** Этот файл ведётся инкрементально по правилу FBP10 из retro §8.1 (`prompt-stage2.md` §6.5): Stage 2 секции добавлялись только в тех же коммитах, где уже существовали соответствующие артефакты (см. §Forbidden Updates). Секции §Active Stage, §Stage 2 Dependency Map, §Stage 2 Pin Policy, §Stage 2 Determinism Checklist, §Stage 2 Pitfalls **активны** (артефакты S2-P01..S2-P24 существуют: ADR-0020..0023 + `crates/strangecoin-net/` scaffolding + миграция network-модулей + Noise handshake/transport/auth `noise/{mod,handshake,transport,auth,ephemeral}.rs` (`encrypt_frame`/`decrypt_frame`, `wallet::load_or_create_node_keypair`) + HELLO `protocol/hello.rs` + discovery `discovery/{mod,seeds,dnssec,addr_gossip}.rs` + peer management `peer/{mod,store,manager,pool,connection_loop}.rs` + gossip `gossip/{mod,inv,get_data,broadcast}.rs` + compact blocks `gossip/compact_blocks.rs` + Erlay `gossip/erlay/{mod,reconcile,mincut,fallback}.rs` (wire carriage `ErlayReconcile` [0x0D]) + token-bucket rate limiter `rate_limiter.rs` + peer scoring `peer/scoring.rs` + production wiring connection loop (Noise accept/dial, sync serving, gossip/compact/Erlay dispatch, rate-limit verdicts) + async migration S2-P19 + shadow tooling S2-P20 `shadow/{mod,replay,compare}.rs` + CLI `shadow replay` + fuzz S2-P21 + integration tests S2-P22 + invariants/threat S2-P23 + DoD summary `docs/stage2/STAGE2_SUMMARY.md` S2-P24 + annotated tag `v2.0.0-stage2`).
+> **NOTE — Stage 3 in progress (S3-P01 done).** Этот файл ведётся инкрементально по правилу FBP10 из retro §8.1 (`prompt-stage2.md` §6.5, `prompt-stage3.md` §5): секции добавляются только в тех же коммитах, где уже существуют соответствующие артефакты (см. §Forbidden Updates). **Stage 2 — COMPLETE** (тег `v2.0.0-stage2`; артефакты S2-P01..S2-P24: ADR-0020..0023 + `crates/strangecoin-net/` + Noise/gossip/compact/Erlay/scoring/rate-limit + shadow + fuzz + интеграционные тесты + `docs/stage2/` + tag). **Stage 3 — ACTIVE** (`analytics/prompt-stage3.md`, 15 промптов S3-P01..S3-P15; закрыт S3-P01: `docs/ADR/0024-storage-schema-and-engine.md` — storage schema + StorageEngine trait, аменда ADR-0008; следующий — S3-P02 ADR-0025). Секции §Active Stage, §Stage 3 Dependency Map, §Stage 3 Pin Policy, §Stage 3 Determinism Checklist **активны**; Stage 2 секции (§Stage 2 Dependency Map, §Stage 2 Pin Policy, §Stage 2 Determinism Checklist, §Stage 2 Pitfalls, §Stage 2 DoD, §Stage 2 Threat/Invariant Extensions) остаются как историческая справка и будут slimmed в S3-P15.
 
 ## Project Overview
 
-Strangecoin — Rust cryptocurrency (**v2.0.0**, edition 2021): PoW blockchain с secp256k1 подписями, blake3 хешированием, LevelDB хранилищем. **Stage 1.5 завершён** (tag `v1.5.0-stage1.5` на origin → commit `1f133c7`, подтверждён через `git ls-remote --tags origin`): WASM smart contracts через `crates/strangecoin-vm-wasm` (wasmi `=2.0.0`, 13 host functions, 7 precompiles, JSON ABI, gas metering, reentrancy guard, limits, receipts/events, contract storage в SMT). **Stage 2 завершён** (`analytics/prompt-stage2.md`, 24 промпта S2-P01..S2-P24 закрыты, DoD 12/12 ✅ в `docs/stage2/STAGE2_SUMMARY.md`): production-grade P2P в `crates/strangecoin-net/` — Noise Protocol Framework (XX handshake + ChaCha20-Poly1305 + Ed25519 auth), gossip через INV, compact blocks BIP 152, Erlay reconciliation, peer discovery + DNSSEC + ADDR gossip, peer scoring + rate limiting, deprecated v0.8.6 messages cleanup, async migration network workers, shadow network tooling; exit gate — annotated tag `v2.0.0-stage2`. **Stage 1** завершён ранее (tag `v1.1.0-stage1`, `docs/stage1/STAGE1_SUMMARY.md`): pure core, Sparse Merkle state root, headers-first sync, EventBus, bech32, tokio, 5-component blockchain split. Stage 0 закрыт через debt prompts D01–D03 (`docs/stage0/STAGE0_SUMMARY.md`).
+Strangecoin — Rust cryptocurrency (**v2.0.0**, edition 2021): PoW blockchain с secp256k1 подписями, blake3 хешированием, LevelDB хранилищем (миграция на RocksDB — Stage 3). **Stage 3 стартовал** (`analytics/prompt-stage3.md`, 15 промптов S3-P01..S3-P15; precondition — тег `v2.0.0-stage2` verified; S3-P01 done: ADR-0024 storage schema): storage crate `crates/strangecoin-storage/` (RocksDB, column families, schema versioning, индексы, batch/crash-recovery), stateless validation wire-witnesses, state pruning (EIP-4444 analog), snapshot sync; exit gate — annotated tag `v3.0.0-stage3`. **Stage 1.5 завершён** (tag `v1.5.0-stage1.5` на origin → commit `1f133c7`, подтверждён через `git ls-remote --tags origin`): WASM smart contracts через `crates/strangecoin-vm-wasm` (wasmi `=2.0.0`, 13 host functions, 7 precompiles, JSON ABI, gas metering, reentrancy guard, limits, receipts/events, contract storage в SMT). **Stage 2 завершён** (`analytics/prompt-stage2.md`, 24 промпта S2-P01..S2-P24 закрыты, DoD 12/12 ✅ в `docs/stage2/STAGE2_SUMMARY.md`): production-grade P2P в `crates/strangecoin-net/` — Noise Protocol Framework (XX handshake + ChaCha20-Poly1305 + Ed25519 auth), gossip через INV, compact blocks BIP 152, Erlay reconciliation, peer discovery + DNSSEC + ADDR gossip, peer scoring + rate limiting, deprecated v0.8.6 messages cleanup, async migration network workers, shadow network tooling; exit gate — annotated tag `v2.0.0-stage2`. **Stage 1** завершён ранее (tag `v1.1.0-stage1`, `docs/stage1/STAGE1_SUMMARY.md`): pure core, Sparse Merkle state root, headers-first sync, EventBus, bech32, tokio, 5-component blockchain split. Stage 0 закрыт через debt prompts D01–D03 (`docs/stage0/STAGE0_SUMMARY.md`).
 
 **Residual obligations остаются**: `docs/stage2/RESIDUAL_RISKS_STAGE3_PLUS.md` (Stage 3+ deferred: RocksDB, Verkle, pruning, snapshot sync, Block-STM, Erlay full minisketch SCIP-gated, TLA+ network Stage 6) + `docs/stage1.5/STAGE1_5_SUMMARY.md` §4 (2 ops-gates для mainnet freeze: BUG-S1-013 PGP-key offline keygen, BUG-S1-015 offline genesis key air-gapped keygen — НЕ блокируют Stage 2/3/4, regtest/devnet scope; SCIP-0001 — единственный блокер mainnet, отдельный ops+code трек) и `docs/stage1/STAGE1_SUMMARY.md` §6. Stage 2 DoD закрыт — S2-P24 (`docs/stage2/STAGE2_SUMMARY.md`, tag `v2.0.0-stage2` — Gate для Stage 3 RocksDB и Stage 4 dev-experience).
 
-**Key docs**: `analytics/prompt-stage0.md`, `analytics/prompt-stage1.md`, `analytics/prompt-stage1.5.md`, `analytics/prompt-stage2.md` (Stage 2 backlog, 24 промпта — все закрыты), `analytics/ARCHITECT3.md`, `analytics/ROADMAP3.md` (de-facto Stage 2 backlog т.к. `analytics/BACKLOG3.md` не существует), `docs/ADR/`, **`docs/stage2/STAGE2_SUMMARY.md`** (Stage 2 DoD evidence, 12/12), **`docs/stage2/INVARIANTS_ENFORCED.md`** (22/22 Stage 2), **`docs/stage2/THREAT_MODEL_STAGE2.md`** (V-1/V-2/V-14/V-15/V-17/V-24), **`docs/stage2/RESIDUAL_RISKS_STAGE3_PLUS.md`**, `docs/stage1.5/STAGE1_5_SUMMARY.md`, `docs/stage1.5/INVARIANTS_ENFORCED.md`, `docs/stage1.5/THREAT_MODEL_STAGE1_5.md`, `docs/stage1.5/RESIDUAL_RISKS_STAGE2_PLUS.md`, `docs/security/THREAT_MODEL.md` (v3.2 после S2-P23), `docs/spec/consensus.tla` (TLA+ baseline, 35,207 состояний PASS, 10 инвариантов incl. `ReceiptsRootMatch`).
+**Key docs**: `analytics/prompt-stage0.md`, `analytics/prompt-stage1.md`, `analytics/prompt-stage1.5.md`, `analytics/prompt-stage2.md` (Stage 2 backlog, 24 промпта — все закрыты), **`analytics/prompt-stage3.md`** (Stage 3 backlog, 15 промптов S3-P01..S3-P15 — активен), `analytics/ARCHITECT3.md`, `analytics/ROADMAP3.md` (de-facto Stage 3 backlog т.к. `analytics/BACKLOG3.md` не существует), `docs/ADR/`, **`docs/ADR/0024-storage-schema-and-engine.md`** (S3-P01 done — storage schema + StorageEngine trait, аменда ADR-0008), **`docs/stage2/STAGE2_SUMMARY.md`** (Stage 2 DoD evidence, 12/12), **`docs/stage2/INVARIANTS_ENFORCED.md`** (22/22 Stage 2), **`docs/stage2/THREAT_MODEL_STAGE2.md`** (V-1/V-2/V-14/V-15/V-17/V-24), **`docs/stage2/RESIDUAL_RISKS_STAGE3_PLUS.md`**, `docs/stage1.5/STAGE1_5_SUMMARY.md`, `docs/stage1.5/INVARIANTS_ENFORCED.md`, `docs/stage1.5/THREAT_MODEL_STAGE1_5.md`, `docs/stage1.5/RESIDUAL_RISKS_STAGE2_PLUS.md`, `docs/security/THREAT_MODEL.md` (v3.2 после S2-P23), `docs/spec/consensus.tla` (TLA+ baseline, 35,207 состояний PASS, 10 инвариантов incl. `ReceiptsRootMatch`).
 
 ---
 
-## Active Stage: Stage 2 (Сетевая зрелость) — COMPLETE
+## Active Stage: Stage 3 (Хранение и масштабируемость) — ACTIVE
 
-**Status**: complete (tag `v2.0.0-stage2` — Gate Stage 3 RocksDB / Stage 4 dev-experience открыт; DoD 12/12 ✅ в `docs/stage2/STAGE2_SUMMARY.md`, verification S2-P24 2026-10-29).
+**Status**: active (`analytics/prompt-stage3.md` v1.0 от 2026-10-30; precondition — тег `v2.0.0-stage2` verified на origin → `346e3c0`).
 
-**Next prompt**: Stage 2 закрыт. Следующий этап — Stage 3 (RocksDB storage crate, Verkle/stateless, pruning, snapshot sync; мягкая зависимость) и/или Stage 4 (dev-experience: SDK, devnet, indexer, JSON-RPC eth_*, faucet; жёсткая зависимость от Stage 2 — выполнена). SCIP-0001 (genesis key replacement) остаётся отдельным ops+code треком.
+**Next prompt**: S3-P02 (ADR-0025: State pruning strategy, EIP-4444 analog). ADR-трек S3-P01..S3-P03 параллелен после tag gate — S3-P01 закрыт, S3-P02/S3-P03 свободны; crate-трек (S3-P04) стартует после S3-P01 (✅ выполнен гейт).
 
-**Prompts done**: 24 / 24 (S2-P01..S2-P24).
+**Prompts done**: 1 / 15 (S3-P01).
 
-**Track status** (см. §Stage 2 Dependency Map ниже для деталей):
-- [x] ADRs track: S2-P01 (ADR-0020) / S2-P02 (ADR-0021) / S2-P03 (ADR-0022) / S2-P04 (ADR-0023) — done
-- [x] Crate track: S2-P05 (scaffolding `crates/strangecoin-net/` + workspace member + feature `net` default-on) / S2-P06 (migration `src/network/*` → strangecoin-net + re-export shim + `BlockchainView`/`EventSink` cycle break) — done
-- [x] Noise track: S2-P07 (handshake `NoiseHandshake`, XX 3 round trips, `expect_remote_static`) / S2-P08 (transport `NoiseTransport`: encrypt/decrypt, monotonic nonces, `NoiseError::Replay`, rekey; framing `encrypt_frame`/`decrypt_frame`, chunking >65519 B) / S2-P09 (Ed25519 `NodeId` auth: `noise/auth.rs`, auth blob `[pubkey||sig]` в rounds 2/3, `into_transport → (NoiseTransport, NodeId)`, `wallet::load_or_create_node_keypair`, детерминированный ephemeral `noise/ephemeral.rs`) — done
-- [x] Peer track: S2-P10 (HELLO + capabilities negotiation, `protocol/hello.rs`) / S2-P11 (discovery: `discovery/{mod,seeds,dnssec,addr_gossip}.rs`, `AddrBook`/`AddrSender` + bootstrap) / S2-P12 (peer mgmt: `peer/{mod,store,manager,pool}.rs`, ban state machine, `connect_to_peer` = TCP+Noise XX+HELLO, `impl AddrSender for PeerManager`, network.json `known_peers`/`banned_peers`, config.toml peer tunables) — done
-- [x] Gossip track: S2-P13 (INV: `gossip/{mod,inv,get_data,broadcast}.rs`, `GossipState` per-peer dedup, `BlockchainView::mempool_tx`/`block_by_hash`, `PeerManager::send_to_peer`, tests 100-peer ≤1s + real-socket announce) / S2-P14 (compact blocks) / S2-P15 (Erlay: `gossip/erlay/{mod,reconcile,mincut,fallback}.rs`, minisketch stub + fallback, tests 800/1000 → 200 delta) — done
-- [x] Limits track: S2-P16 (rate limiting: token bucket + per-message caps + ban threshold, ADR-0023) / S2-P17 (peer scoring: `peer/scoring.rs`, ADR-0022 weighted formula + ban ladder + `peer_scoring_*` config) — done
-- [x] Cleanup track: S2-P18 (deprecated v0.8.6 messages: текстовый протокол `GET_BLOCKCHAIN`/`UPDATE_BLOCKCHAIN:` удалён из wire, `MessageClass::ChainGossip` снят per ADR-0023, `InboundMessage::UnknownMessage` forward-compat) / S2-P19 (async migration: thread-fallback из `sync_engine::spawn` удалён, spans + production wiring Noise accept/dial, gossip/compact/Erlay dispatch, rate-limit verdicts в `peer/connection_loop.rs`) — done
-- [x] Shadow track: S2-P20 (shadow/{mod,replay,compare}.rs: `replay_blocks` + `compare` divergence detector + CLI `shadow replay` + `NetError::Replay`) — done
-- [x] Verification track: S2-P21 (fuzz: 4 network targets + CI matrix 9) / S2-P22 (integration tests: 6 `tests/net_*.rs` + helpers, 15 tests) / S2-P23 (invariants 22/22 + THREAT_MODEL v3.2 + RESIDUAL_RISKS) / S2-P24 (DoD 12/12 + STAGE2_SUMMARY + version 2.0.0 + tag `v2.0.0-stage2`) — done
+**Track status** (см. §Stage 3 Dependency Map ниже):
+- [x] ADRs track: S3-P01 (ADR-0024: storage schema + StorageEngine trait, аменда ADR-0008) — done
+- [ ] ADRs track: S3-P02 (ADR-0025: state pruning) / S3-P03 (ADR-0026: snapshot sync format) — pending
+- [ ] Crate track: S3-P04 (scaffolding `crates/strangecoin-storage/` + workspace member + trait) → S3-P05 (schema.rs KeyPrefix/versioning) → S3-P06 (RocksDbEngine + pin rocksdb) — pending
+- [ ] Migration track: S3-P07 (monolith → strangecoin-storage, per-block keys, mempool delete, config wiring) → S3-P08 (migrations.rs LevelDB→RocksDB + leveldb removal) → S3-P09 (indices) → S3-P10 (batch/crash/LRU perf) — pending
+- [ ] Feature track (∥ после S3-P10): S3-P11 (stateless wire witnesses + light client e2e) / S3-P12 (pruning height-window + archival) / S3-P13 (snapshot export/import + commitment verify) — pending
+- [ ] Verification track: S3-P14 (invariants + threat model Stage 3) → S3-P15 (DoD 11/11 + Changelog 3.0.0 + tag `v3.0.0-stage3`) — pending
 
-**Exit gate**: annotated tag `v2.0.0-stage2` (S2-P24) — **поставлен**. Stage 3 (RocksDB) и Stage 4 (dev-experience: SDK, devnet, indexer, JSON-RPC eth_*, faucet) могут стартовать. Stage 4 требует Stage 2 завершённым (network для dev-experience — выполнено); Stage 3 — мягкая зависимость (может идти параллельно с Stage 4 согласно ROADMAP3).
+**Exit gate**: annotated tag `v3.0.0-stage3` (S3-P15) — Gate Stage 4 (dev-experience) и Stage 5+. Storage — implementation detail (не consensus); Verkle/state-expiry/receipts-prune — SCIP-gated (ADR-0024/0025).
 
 ---
+
+## Stage 3 Dependency Map
+
+7 жёстких гейтов (`prompt-stage3.md` §3):
+
+1. **Tag gate = Gate Stage 3**: ни один промпт S3-P01+ не начинается до подтверждения тега `v2.0.0-stage2`. ✅ Precondition verified 2026-10-30.
+2. **ADR до кода**: S3-P04 не без S3-P01 (✅); S3-P12 не без S3-P02; S3-P13 не без S3-P03. ADR-0008 — superseded-in-part ADR-0024 (не перезаписывается).
+3. **Crate scaffolding до schema/backend**: S3-P05 не без S3-P04; S3-P06 не без S3-P05.
+4. **Backend до миграции**: S3-P07 не без S3-P06; S3-P08 не без S3-P07 (мигратор пишет в новую схему); S3-P09 не без S3-P08; S3-P10 не без S3-P09.
+5. **Feature-track после storage core**: S3-P11/S3-P12/S3-P13 — после S3-P10, параллельны между собой.
+6. **All proper до verification**: S3-P14 не без S3-P11..S3-P13; S3-P15 не без S3-P14.
+7. **S3-P15 = Gate Stage 4/5**: Stage 4 (dev-experience) не начинается до тега `v3.0.0-stage3` (indexer/JSON-RPC требуют storage crate).
+
+Параллельные треки: (a) ADRs S3-P01..S3-P03 — parallel after tag gate; (b) Crate S3-P04 → S3-P05 → S3-P06 sequential; (c) Migration S3-P07 → S3-P08 → S3-P09 → S3-P10 sequential; (d) Feature S3-P11 ∥ S3-P12 ∥ S3-P13 после S3-P10; (e) Verification S3-P14 → S3-P15 strictly after all.
+
+---
+
+## Stage 3 Pin Policy
+
+**Правило** (продолжение Stage 2 Pin Policy): все crate-зависимости, затрагивающие data layout / consensus-adjacent persistence / криптографию, — **pinned через `=`**. Обновление pinned версии — только через SCIP + activation height после mainnet freeze.
+
+| Crate | Pin | ADR | Промпт | Назначение |
+|-------|-----|-----|---------|------------|
+| `rocksdb` (rust-rocksdb) | `=x.y.z` — **версия резолвится в S3-P06** по актуальному стабильному релизу, затем фиксируется здесь и в ADR-0024 §Decision | ADR-0008 + ADR-0024 | S3-P06 | RocksDB storage engine (C++ via cc-rs; API churn между минорами; data layout) |
+| `lru` (если выбран в S3-P10) | `=x.y.z` (резолв в S3-P10) | ADR-0024 | S3-P10 | block-read cache (capacity-bounded) |
+
+**Почему pin**: rust-rocksdb меняет API между минорами (0.21→0.22 CF-handle смена, 0.23 DefaultThreadMode) и сидит на data-layout пути (WAL/compaction semantics — crash-recovery инвариант S3-P10); C++ toolchain-поведение чувствительно к версии. После mainnet freeze любая смена = SCIP с activation height (синхронное обновление всех узлов обязательно — расхождение recovery-семантик = форк на restart).
+
+---
+
+## Stage 3 Determinism Checklist
+
+**V-21 extension для storage layer** (`prompt-stage3.md` §5): каждая новая storage-функция обязана быть детерминированной — одинаковый input → одинаковый output. Применяется к key-encoding (S3-P05), pruning sweep (S3-P12), snapshot export (S3-P13), witness codec (S3-P11).
+
+1. **Нет `SystemTime::now()` / `Instant::now()` в encoding/pruning/snapshot-путях**. Триггеры (pruning sweep, snapshot cadence) — по block height, инжектируемому параметру (паттерн `tick_at` Stage 2).
+2. **Нет `thread_rng()` / `OsRng` нигде в storage-крейте**. Checksums — blake3 (детерминированный).
+3. **Key encoding — pure functions**: BE `u64` для heights/nonces; lexicographic order == numeric order; sorted `iterate_prefix` — deterministic order.
+4. **Snapshot content детерминирован**: accounts/slots сортируются lexicographically перед записью; двойной экспорт одного состояния → byte-identical файл (кроме header timestamp, если добавится — вынести из body).
+5. **`cargo test` воспроизводим**: round-trip/codec/pruning тесты не зависят от wall clock или порядка HashMap-итерации (sorted перед сравнением).
+
+Ревью на детерминизм — обязательный пункт КГ S3-P05/S3-P11/S3-P12/S3-P13.
+
+---
+
 
 ## Stage 2 Dependency Map
 
@@ -316,6 +357,7 @@ src/                  # node monolith (orchestrator)
 - **Grant blocks**: only with `allow_grant_blocks=true` (regtest / legacy migration)
 - **wasmi pinned** `=2.0.0`; gas constants hardcoded (ADR-0014/0015) — post-freeze changes via SCIP only
 - **Stage 2 network dependencies pinned** (см. §Stage 2 Pin Policy): `snow`, `ed25519-dalek =2.0`, `minisketch-rs`, `siphasher`, `hickory-resolver` — все через `=`, update via SCIP only
+- **Stage 3 storage dependencies pinned** (см. §Stage 3 Pin Policy): `rocksdb` (версия резолвится S3-P06, затем `=`), `lru` (S3-P10, если выбран) — data layout + crash-recovery semantics, update via SCIP only
 - **Stage 2 protocol version**: HELLO `MIN_PROTO_VERSION = 2` (`crates/strangecoin-net/src/protocol/hello.rs`, S2-P10; Stage 1.5 = 1) — peers с version < 2 отвергаются; mismatched `network_id` → drop connection (инвариант #10); capabilities = bitfield, negotiation = `local & remote`. **S2-P19**: единый транспорт = Noise — plaintext `HELLO:<network_id>` кодек (`encode_hello`/`parse_hello`) и plaintext accept-путь монолита удалены; Stage 1.5 plaintext-клиенты несовместимы до тега `v2.0.0-stage2`
 
 **Stage 2 IN-SCOPE** (это Stage 2 work, НЕ anti-goals — устраняет двусмысленность формулировки «Noise/Erlay Stage 2»):
@@ -412,11 +454,12 @@ src/                  # node monolith (orchestrator)
 2. Stage 1 prompts: `analytics/prompt-stage1.md` (done, S1-P01–S1-P22)
 3. Stage 1.5 prompts: `analytics/prompt-stage1.5.md` (done, S1.5-P01–S1.5-P19; P12 gap closed 2026-10-18)
 4. **Stage 2 prompts: `analytics/prompt-stage2.md`** (done, S2-P01–S2-P24, все 24 закрыты 2026-10-29; tag `v2.0.0-stage2` — Gate Stage 3/4 открыт)
-5. Each prompt: Windows host preamble (PATH, см. §Build & Test Commands) → implement → ровно команды из КГ промпта + `cargo test --workspace` → verify КГ (критерии готовности) → commit. НЕ расширять верификацию без запроса (release ≈30 мин, повторные полные прогоны ≈10–12 мин каждый — измерено на S2-P05)
-6. **Do not commit unless explicitly asked**
-7. **ADR before code** that changes architecture; Changelog only after artifacts exist (FBP10 rule, see §Forbidden Updates)
-8. **§0 «Общий контекст» блок** из `prompt-stage2.md` — НЕ дублировать в каждом промпте; AGENTS.md уже содержит эквивалентную информацию (§Project Overview + §Active Stage + §Stage 2 Dependency Map + §Key Constraints). Промпты Stage 2 содержат только prompt-specific блок (Цель / Контекст / Задачи / Артефакты / КГ / Коммит) — экономия ~3K токенов на промпт × 24 = ~70K токенов.
-9. Stage 3 (RocksDB) / Stage 4 (dev-experience: SDK, devnet, indexer, JSON-RPC eth_*, faucet) — стартовали после тега `v2.0.0-stage2` (S2-P24 поставлен 2026-10-29).
+5. **Stage 3 prompts: `analytics/prompt-stage3.md`** (active, S3-P01–S3-P15; precondition тег `v2.0.0-stage2` verified 2026-10-30; S3-P01 done — ADR-0024)
+6. Each prompt: Windows host preamble (PATH, см. §Build & Test Commands) → implement → ровно команды из КГ промпта + `cargo test --workspace` → verify КГ (критерии готовности) → commit. НЕ расширять верификацию без запроса (release ≈30 мин, повторные полные прогоны ≈10–12 мин каждый — измерено на S2-P05)
+7. **Do not commit unless explicitly asked**
+8. **ADR before code** that changes architecture; Changelog only after artifacts exist (FBP10 rule, see §Forbidden Updates)
+9. **§0 «Общий контекст» блок** из `prompt-stage2.md`/`prompt-stage3.md` — НЕ дублировать в каждом промпте; AGENTS.md уже содержит эквивалентную информацию (§Project Overview + §Active Stage + §Stage 3 Dependency Map + §Key Constraints). Промпты содержат только prompt-specific блок (Цель / Контекст / Задачи / Артефакты / КГ / Коммит) — экономия токенов (прецедент Stage 2: ~70K на 24 промпта).
+10. Stage 4 (dev-experience: SDK, devnet, indexer, JSON-RPC eth_*, faucet) — стартует после тега `v3.0.0-stage3` (S3-P15); Stage 5+ (fee market, AA) — после Stage 4.
 
 ---
 
@@ -443,8 +486,9 @@ src/                  # node monolith (orchestrator)
 
 | File | Purpose |
 |------|---------|
-| **`analytics/prompt-stage2.md`** | **Stage 2 task breakdown (S2-P01..S2-P24)** — актуальный backlog, 24 промпта с КГ |
-| `analytics/ROADMAP3.md` | Этапный план — de-facto Stage 2 backlog (BACKLOG3.md не существует); см. «Этап 2 — Сетевая зрелость» |
+| **`analytics/prompt-stage2.md`** | **Stage 2 task breakdown (S2-P01..S2-P24)** — закрытый backlog, 24 промпта с КГ |
+| **`analytics/prompt-stage3.md`** | **Stage 3 task breakdown (S3-P01..S3-P15)** — активный backlog, 15 промптов с КГ (storage crate, stateless, pruning, snapshot) |
+| `analytics/ROADMAP3.md` | Этапный план — de-facto Stage 3 backlog (BACKLOG3.md не существует); см. «Этап 3 — Хранение и масштабируемость» |
 | `analytics/ARCHITECT3.md` | Целевая архитектура; см. §3.6 network/p2p, §4.2 sync, §5 инварианты, §6 угрозы, §10.4 strangler Stage 2, §13 headless, §14 network_id, §15 anti-goals, §17 PR-checklist |
 | `analytics/prompt-stage1.5.md` | Stage 1.5 task breakdown (template/формат для Stage 2) |
 | `analytics/bugfixes-stage1.5.md` | Stage 1.5 bugfix prompts (11/11 fixed, precondition для Stage 2) |
@@ -460,6 +504,7 @@ src/                  # node monolith (orchestrator)
 | `docs/ADR/0021-erlay-integration.md` | **S2-P02 done** — Erlay (mincut reconciliation + fallback) |
 | `docs/ADR/0022-peer-scoring-algorithm.md` | **S2-P03 done** — peer scoring (weighted sum, ban state machine) |
 | `docs/ADR/0023-rate-limiting-strategy.md` | **S2-P04 done** — rate limiting (token bucket per peer, ban on exceed) |
+| `docs/ADR/0024-storage-schema-and-engine.md` | **S3-P01 done** — storage schema (7 CF, versioning, per-block keys) + StorageEngine trait, аменда ADR-0008 |
 | `docs/stage2/STAGE2_SUMMARY.md` | **S2-P24 done** — 12 DoD критериев с evidence + residual obligations + release section |
 | `docs/stage2/INVARIANTS_ENFORCED.md` | **S2-P23 done** — 22/22 Stage 2 (3 extensions: #16/#17/#22) |
 | `docs/stage2/THREAT_MODEL_STAGE2.md` | **S2-P23 done** — V-1/V-2/V-14/V-15/V-17/V-24 mitigations |
