@@ -10,6 +10,13 @@ pub use strangecoin::test_support::*;
 #[cfg(feature = "vm-wasm")]
 pub mod vm_helpers;
 
+// S2-P22 Stage 2 network integration helpers: compiled into every test
+// binary that declares `mod common;`, but only the `net_*` binaries reach
+// them — same allow pattern as vm_helpers (BUG-S1-012).
+#[allow(dead_code)]
+#[cfg(feature = "net")]
+pub mod net_helpers;
+
 /// Replay `prefix` from an empty state with the pure core executor — the same
 /// reconstruction `StateCache::rebuild_from_chain` performs on adoption.
 // Called by craft_child below; the allow covers the test binaries that
