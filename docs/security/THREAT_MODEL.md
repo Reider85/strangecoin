@@ -1,10 +1,10 @@
 # THREAT_MODEL.md — Strangecoin Threat Model (STRIDE)
 
-**Версия:** 3.1 (S1.5-P18)
-**Дата:** 2026-10-17
-**Статус:** Stage 1.5 — актуализирован в S1.5-P18 (Stage 1 — S1-P21; Stage 0 — D02)
-**Источник:** `analytics/ARCHITECT3.md` §6 (25 векторов атак) + `analytics/retro-stage0.md` (§4.3, §4.4, §8.2) + `analytics/prompt-stage1.md` S1-P21 (векторы Stage 1) + `analytics/prompt-stage1.5.md` S1.5-P18 (V-18..V-21 митигации Stage 1.5)
-**Связанные документы:** `INCIDENT_RESPONSE.md`, `ARCHITECT3.md`, `ROADMAP3.md`, `docs/stage1/INVARIANTS_ENFORCED.md`, `docs/stage1.5/INVARIANTS_ENFORCED.md`, `docs/stage1.5/THREAT_MODEL_STAGE1_5.md`, `fuzz/README.md`
+**Версия:** 3.2 (S2-P23)
+**Дата:** 2026-10-29
+**Статус:** Stage 2 — актуализирован в S2-P23 (Stage 1.5 — S1.5-P18; Stage 1 — S1-P21; Stage 0 — D02)
+**Источник:** `analytics/ARCHITECT3.md` §6 (25 векторов атак) + `analytics/retro-stage0.md` (§4.3, §4.4, §8.2) + `analytics/prompt-stage1.md` S1-P21 (векторы Stage 1) + `analytics/prompt-stage1.5.md` S1.5-P18 (V-18..V-21 митигации Stage 1.5) + `analytics/prompt-stage2.md` S2-P23 (V-1/V-2/V-14/V-15/V-16/V-17/V-24 митигации Stage 2)
+**Связанные документы:** `INCIDENT_RESPONSE.md`, `ARCHITECT3.md`, `ROADMAP3.md`, `docs/stage1/INVARIANTS_ENFORCED.md`, `docs/stage1.5/INVARIANTS_ENFORCED.md`, `docs/stage1.5/THREAT_MODEL_STAGE1_5.md`, `docs/stage2/INVARIANTS_ENFORCED.md`, `docs/stage2/THREAT_MODEL_STAGE2.md`, `docs/stage2/RESIDUAL_RISKS_STAGE3_PLUS.md`, `fuzz/README.md`
 
 ---
 
@@ -47,11 +47,27 @@
 - **Contract storage:** SMT sub-trie per contract, `storage_root` в account leaf, block gas limit (S1.5-P15, инвариант #19 extension / #15)
 - **Fuzzing:** host_functions / gas_metering / storage_trie / differential wasmi-vs-wasmtime (S1.5-P16)
 
+**Stage 2 (добавлено в S2-P23):**
+- **strangecoin-net:** network runtime вынесен в отдельный крейт `crates/strangecoin-net/` (strangler, S2-P05/S2-P06)
+- **Noise Protocol Framework:** XX handshake (snow crate), ChaCha20-Poly1305 transport, monotonic nonces anti-replay, forward secrecy (S2-P07/S2-P08; ADR-0020)
+- **Ed25519 node identity:** internal P2P auth (`NodeId = blake3(pubkey)`, auth blob в handshake rounds 2/3; S2-P09) — segregated от secp256k1 wallet keys
+- **HELLO capabilities:** `MIN_PROTO_VERSION=2`, network_id + capability bitfield (S2-P10)
+- **Peer discovery:** hard-coded seed IPs + DNSSEC validation (hickory-resolver) + ADDR gossip, multi-source bootstrap (S2-P11; V-16)
+- **Peer management:** peer_store / peer_manager / connection_pool split, per-IP-range Sybil cap, ban state machine + persistent bans в network.json (S2-P12/S2-P17; ADR-0022)
+- **Gossip:** INV / GET_DATA / TX / BLOCK announce + broadcast, per-peer dedup (S2-P13)
+- **Compact blocks:** BIP 152 siphash short IDs + fill-up из mempool (S2-P14)
+- **Erlay:** mincut reconciliation + fallback full relay (S2-P15; ADR-0021)
+- **Rate limiting:** token bucket per peer + per-message caps + ban threshold, wiring в connection loop (S2-P16; ADR-0023)
+- **Peer scoring:** weighted 4-factor formula, warn → temp ban → persistent ban ladder (S2-P17)
+- **Cleanup/async:** deprecated v0.8.6 messages удалены (S2-P18); network workers на `tokio::spawn` (S2-P19)
+- **Shadow tooling:** replay + consensus divergence detector (S2-P20)
+- **Fuzzing + интеграционные тесты:** 4 network fuzz targets (S2-P21); `tests/net_*.rs` (S2-P22)
+
 ### 1.2 Assumptions
 
 1. **Сеть:** асинхронная, доставка сообщений не гарантирована, задержки переменны
 2. **Узлы:** некоторые узлы могут быть враждебными (Byzantine fault tolerant)
-3. **Каналы:** TCP соединения перехватываются (plaintext на Stage 0, Noise Protocol с Stage 2)
+3. **Каналы:** TCP соединения перехватываются (plaintext на Stage 0/1/1.5; **Noise Protocol XX + ChaCha20-Poly1305 с Stage 2** — S2-P07/S2-P08; residual: первое соединение к unpinned peer — TOFU, pinning через node_id)
 4. **Время:** системные часы узлов могут быть смещены (±几小时)
 5. **Хранилище:** локальный диск может быть скомпрометирован (physical access)
 6. **Адаптер:** обладает вычислительными ресурсами <50% от общей мощности сети
@@ -128,11 +144,12 @@ Reproducible builds + cosign signatures для верификации бинар
 | **Описание** | Изоляция целевого узла от честной сети. Атакующий контролирует все входящие и исходящие соединения узла, что позволяет: (1) показывать ложную цепочку, (2) предотвращать получение актуальных блоков, (3) melakukan double-spend через отставшую цепочку. |
 | **Stage 0 Mitigation** | Peer discovery через seed nodes + addr gossip; min 8 outgoing + 8 incoming connections; peer diversity (разные подсети); `peer_manager` scoring. Реализовано в P13 (rate limiting), P12 (size limits). |
 | **Stage 1 Amendment (BUG-S1-005, 2026-10-11)** | Per-message rate limiting enforced: каждый входящий message в `handle_connection` request-loop проходит `RateLimiter::check_class` (total + per-class bucket: GetHeaders/GetBlocks=100, ChainGossip/Other=30 за 10 s); превышение → бан + закрытие соединения. Ранее check был только на уровне TCP-коннекта — long-lived peer мог стримить неограниченный поток сообщений. |
-| **Stage** | P13 |
-| **Residual Risk** | Средний. На Stage 0 нет Noise Protocol (P24), поэтому MITM возможен. Peer diversity ограничена отсутствием DNSSEC. Rate-limit bucket ключируется по полному `SocketAddr` (ephemeral port), не per-IP — multi-connection флуд из-под одного IP не ограничен (Stage 2). |
-| **Monitoring** | Мониторинг количества активных пиров; alert при падении ниже 8 outgoing; логирование новых/потерянных соединений; ban-rate per peer (rate limiter). |
-| **Код** | `src/network/rate_limiter.rs` (`check`, `check_class`, `MessageClass`, `CLASS_LIMITS`), `src/lib.rs::handle_connection` (per-message `check_class`), `src/lib.rs::classify_request` |
-| **Тест** | `tests/rate_limit.rs::per_message_flood_bans_peer_on_single_connection` (flood 200 → EOF + ban); unit-тесты `rate_limiter.rs` (8); `tests/network.rs::real_network_three_nodes` |
+| **Stage 2 Amendment (S2-P23, 2026-10-29)** | **Усилен.** (1) Multi-source bootstrap: ≥3 источников параллельно (hard-coded seed IPs + DNSSEC-validated DNS + ADDR gossip), union ≥8 peers за ≤30s (`discovery/{mod,seeds,dnssec,addr_gossip}.rs`, S2-P11) — eclipse через подмену одного источника больше не изолирует узел. (2) Peer scoring (ADR-0022): weighted 4-factor formula + ban ladder (S2-P17) — враждебные пиры деградируют и банятся. (3) Per-IP-range connection cap (IPv4 /24, IPv6 /64, `DEFAULT_MAX_PER_IP_RANGE=8`, `peer/pool.rs::count_by_ip_range`, S2-P12) — attacker не может занять все слоты одного диапазона. (4) Noise XX + Ed25519 node_id auth (S2-P07/S2-P09) — подменённый peer не может притвориться доверенным node_id (MITM → NodeId mismatch → drop). |
+| **Stage** | P13 (Stage 0/1); S2-P11/S2-P12/S2-P17 (Stage 2) |
+| **Residual Risk** | Низкий-средний. Ручная ротация seed-адресов (автоматическая rotation — отложена); per-IP limits неидеальны (NAT/VPN/Tor); unpinned first contact — TOFU (pinning по node_id после первого успеха). |
+| **Monitoring** | Мониторинг количества активных пиров; alert при падении ниже 8 outgoing; логирование новых/потерянных соединений; ban-rate per peer; handshake-failure rate (Stage 2). |
+| **Код** | `crates/strangecoin-net/src/discovery/{mod,seeds,dnssec,addr_gossip}.rs`, `peer/pool.rs` (per-IP cap), `peer/scoring.rs` + `peer/manager.rs` (ban ladder), `noise/handshake.rs` (auth) |
+| **Тест** | `tests/net_peer_scoring.rs` (3: invalid-block ban, latency false-positive, persistent ban restart); `tests/net_helpers.rs` (multi-source bootstrap); `tests/net_noise_handshake.rs` (MITM drop); regression: `tests/rate_limit.rs`, `tests/network.rs` |
 
 ---
 
@@ -145,8 +162,9 @@ Reproducible builds + cosign signatures для верификации бинар
 | **STRIDE** | Denial of Service |
 | **Описание** | Разделение сети на несколько изолированных частей. Атакующий перехватывает или блокирует сообщения между группами узлов, создавая два или более изолированных консенсуса. |
 | **Stage 0 Mitigation** | Cross-checking chain tips с multiple peers; `sync_engine` запрашивает headers у ≥3 пиров; alert при расхождении chain tip > 1 блока. |
-| **Stage** | P13 |
-| **Residual Risk** | Средний. На Stage 0 без Noise Protocol возможен targeted MITM для partition. Централизация seed nodes — residual risk. |
+| **Stage 2 Amendment (S2-P23, 2026-10-29)** | **Усилен (regression).** sync_engine ≥3 peers — без изменений (S2-P06 миграция в strangecoin-net без behavioral changes; regression `tests/sync_engine.rs` + `tests/sync_headers.rs`). Noise-транспорт (S2-P08) убирает plaintext MITM как инструмент принудительного partition: подмена/ретрай сообщений между сегментами требует possession Ed25519 node_id обеих сторон (V-24). Headers-first sync поверх encrypted сессий (S2-P19). |
+| **Stage** | P13; S2-P19 (wire) |
+| **Residual Risk** | Низкий-средний. Физический partition (BGP/сетевые сегментации) остаётся вне протокольного контроля; централизация seed nodes — residual (см. V-01 Stage 2). |
 | **Monitoring** | Мониторинг chain tip divergence между пирами; alert при расхождении > 1; мониторинг seed node availability. |
 
 ---
@@ -342,9 +360,12 @@ Reproducible builds + cosign signatures для верификации бинар
 | **STRIDE** | Denial of Service |
 | **Описание** | Атакующий отправляет миллионы мусорных транзакций, заполняя mempool и перегружая валидацию. Это предотвращает включение легитимных tx в блоки. |
 | **Stage 0 Mitigation** | `mempool` rate limit per sender (P13); `min_relay_fee` (Stage 5); `mempool.eviction` по feerate (P14); MAX_PENDING_TXS limit (P14). |
-| **Stage** | P13, P14 |
-| **Residual Risk** | Низкий. Rate limiting + mempool cap adequately mitigate spam. |
-| **Monitoring** | Мониторинг mempool size; alert при > 80% capacity; мониторинг rejected tx rate per peer. |
+| **Stage 2 Amendment (S2-P23, 2026-10-29)** | **Усилен.** Token bucket per peer + per-message-type caps (ADR-0023, S2-P16): main bucket 1000/100 tok/s + саб-бакеты (INV 100/10s, BLOCK 30/10s, TX 1000/10s); violation window (5 за 60s) → бан; production wiring в `peer/connection_loop.rs` (`check_rate` → `apply_rate_verdict` → `record_rate_violation` + `ban_peer`, persistent в network.json). Gossip-announced TX проходят тот же mempool insert (S2-P13) — спам-INV/TX фильтруется до validation. Интеграция со peer scoring (ADR-0022): rate violations снижают score → ban ladder. |
+| **Stage** | P13, P14; S2-P13/S2-P16/S2-P17 (Stage 2) |
+| **Residual Risk** | Низкий. Mempool cap + rate limiting + scoring adequately mitigate spam; fee=0 (до Stage 5) оставляет дешёвый spam при наличии PoW-доступа — rate limit на relay-слойе остаётся первичной линией. |
+| **Monitoring** | Мониторинг mempool size; alert при > 80% capacity; rejected tx rate per peer; rate-limit ban rate (Stage 2). |
+| **Код** | `crates/strangecoin-net/src/rate_limiter.rs`, `peer/connection_loop.rs:216-244`, `peer/manager.rs::apply_rate_verdict` |
+| **Тест** | `tests/net_rate_limit_integration.rs::spammer_1000_inv_per_second_banned_after_five_violations_and_persists`, `::legitimate_peer_under_100_inv_per_10s_never_banned`; `rate_limiter.rs` unit; regression `tests/two_clients.rs`, `tests/rbf.rs` |
 
 ---
 
@@ -357,9 +378,12 @@ Reproducible builds + cosign signatures для верификации бинар
 | **STRIDE** | Denial of Service |
 | **Описание** | Пиров атакует invalid блоками. Каждый invalid block требует expensive validation (signature verification, PoW check). Это перегружает CPU узла. |
 | **Stage 0 Mitigation** | `peer_manager` scoring; ban после N invalid blocks; `chain_selector` не применяет блоки до валидации (P13). |
-| **Stage** | P13 |
-| **Residual Risk** | Низкий. Ban policy + scoring adequately mitigate invalid block spam. |
-| **Monitoring** | Alert при ban; мониторинг invalid block rate per peer. |
+| **Stage 2 Amendment (S2-P23, 2026-10-29)** | **Mitigated.** Peer scoring (ADR-0022, S2-P17): `invalid_blocks_txs_sent` — доминирующий фактор (weight 0.5); weighted score < threshold → warn → temp ban 1h → persistent ban 30d; `PeerManager::record_invalid_block` + `tick_at` ban expiry; persistent баны переживают рестарт (`network.json: banned_peers`, ADR-0022 schema). Rate limiting (S2-P16) дополнительно ограничивает поток invalid-блоков до validation. Block/tx size caps (инвариант #7) + Noise framing (инвариант #16 ext) — pre-allocation reject. |
+| **Stage** | P13; S2-P16/S2-P17 (Stage 2) |
+| **Residual Risk** | Низкий. Ban-after-N + scoring adequately mitigate invalid block spam; false-positive path (high latency but valid) — не банится (`tests/net_peer_scoring.rs::high_latency_but_valid_peer_is_never_banned`). |
+| **Monitoring** | Alert при ban; мониторинг invalid block rate per peer; scoring-distribution snapshot. |
+| **Код** | `crates/strangecoin-net/src/peer/scoring.rs` (compute_score/decide, ADR-0022), `peer/manager.rs::record_invalid_block:516`, `peer/store.rs::ban_peer` |
+| **Тест** | `tests/net_peer_scoring.rs::malicious_peer_banned_after_configured_invalid_block_threshold`, `::persistent_ban_survives_restart_via_network_json`; regression: `tests/block_executor.rs` (reject-матрица), `tests/sync_headers.rs` |
 
 ---
 
@@ -376,9 +400,12 @@ Reproducible builds + cosign signatures для верификации бинар
 | **STRIDE** | Spoofing |
 | **Описание** | Атакующий отравляет DNS-записи seed nodes, перенаправляя узлы на враждебные ноды. Это подготавливает eclipse attack (V-01). |
 | **Stage 0 Mitigation** | Hard-coded seed IPs (not just DNS); DNSSEC validation; rotation of seeds. |
-| **Stage** | P01 (seeds configuration) |
-| **Residual Risk** | Средний. Hard-coded IPs help, но не все种子节点 доступны по IP. DNSSEC не везде. |
-| **Monitoring** | Мониторинг seed node availability; alert при неудачных подключениях к seeds. |
+| **Stage 2 Amendment (S2-P23, 2026-10-29)** | **Усилен.** DNSSEC validation реализована (S2-P11): `DnssecResolver` (hickory-resolver `=0.26.3`, `opts.validate`) + `apply_dnssec_policy` — reject не-Secure answers; multi-source bootstrap параллельно опрашивает hard-coded IPs + DNS + ADDR gossip — отравленный DNS-источник один не изолирует узел (union ≥8 peers). |
+| **Stage** | P01; S2-P11 (Stage 2) |
+| **Residual Risk** | Средний-низкий. Автоматическая rotation seeds не реализована (ручная через network.json); DNSSEC полагается на доверие к root KSI; hard-coded IPs могут устареть. |
+| **Monitoring** | Мониторинг seed node availability; alert при неудачных подключениях к seeds; alert на DNSSEC validation failures. |
+| **Код** | `crates/strangecoin-net/src/discovery/{seeds,dnssec}.rs` |
+| **Тест** | `tests/net_helpers.rs` (multi-source bootstrap determinism); discovery unit-тесты (dnssec policy, bootstrap merges) |
 
 ---
 
@@ -392,9 +419,12 @@ Reproducible builds + cosign signatures для верификации бинар
 | **Описание** | Атакующий создает множество фейковых пиров для: (1) eclipse attack, (2) увеличения влияния на gossip, (3) перегрузки peer management. |
 | **Stage 0 Mitigation** | `peer_manager` scoring; limit on connections per IP range; ban on protocol violations (P13); connection limits (max_peers config). |
 | **Stage 1 Amendment (BUG-S1-005)** | Per-message ban усиливает Sybil-митигацию: сообщения каждого соединения ограничены total + per-class bucket'ами; спам-соединение банится по message rate, а не только по protocol violation. Per-IP connection limits по-прежнему gap (peer_manager не реализован). |
-| **Stage** | P13 |
-| **Residual Risk** | Средний. IP-based limits не идеальны (NAT, VPN, Tor). Более продвинутыеmeasures (proof of work for connections) — Stage 2+. |
-| **Monitoring** | Мониторинг connections per IP; alert при > 3 connections с одного /24 subnet. |
+| **Stage 2 Amendment (S2-P23, 2026-10-29)** | **Mitigated (gap закрыт).** (1) Connection pool per-IP-range Sybil cap: `ConnectionPool::count_by_ip_range` (IPv4 /24, IPv6 /64), `DEFAULT_MAX_PER_IP_RANGE=8`, config `max_per_ip_range` (S2-P12, `peer/pool.rs:209`); `connect_to_peer`/`accept_inbound` отклоняют при cap. (2) Peer scoring + ban ladder (S2-P17) — сибил-набор быстро деградирует по score. (3) Token bucket + violation ban (S2-P16) — спам-соединения банятся по rate. (4) Ed25519 node_id (S2-P09) — каждый Sybil-узел требует own keypair; auth-fail rate виден в scoring. |
+| **Stage** | P13; S2-P12/S2-P16/S2-P17 (Stage 2) |
+| **Residual Risk** | Средний-низкий. IP-based limits не идеальны (NAT, VPN, Tor); proof-of-work для connections — отложен (Stage 6+). |
+| **Monitoring** | Мониторинг connections per IP range; alert при > max_per_ip_range; Sybil-probe: множество handshake-fail с одного диапазона. |
+| **Код** | `crates/strangecoin-net/src/peer/pool.rs` (count_by_ip_range), `peer/manager.rs` (DEFAULT_MAX_PER_IP_RANGE=8), `peer/scoring.rs`, `rate_limiter.rs` |
+| **Тест** | `tests/net_peer_scoring.rs` (3); `tests/net_rate_limit_integration.rs` (2); pool unit-тесты (per-IP cap reject) |
 
 ---
 
@@ -517,9 +547,12 @@ Reproducible builds + cosign signatures для верификации бинар
 | **STRIDE** | Spoofing / Information Disclosure |
 | **Описание** | Перехват TCP трафика между узлами. Атакующий может: (1) читать все сообщения (gossip, tx, blocks), (2) модифицировать сообщения, (3) подменять пиры. |
 | **Stage 0 Mitigation** | Noise Protocol Framework (Stage 2) — handshake XX, ephemeral keys, forward secrecy. **На Stage 0: plaintext TCP, нет encryption.** |
-| **Stage** | Stage 2 |
-| **Residual Risk** | Высокий на Stage 0. Все P2P трафик plaintext. MITM возможен в любой момент. |
-| **Monitoring** | Мониторинг unexpected disconnects; alert при подозрительных patterns. |
+| **Stage 2 Amendment (S2-P23, 2026-10-29)** | **Mitigated (S2-P07/S2-P08/S2-P09, ADR-0020).** (1) Noise XX handshake (`snow =0.10.0`): mutual auth без PKI, 3 round trips, static X25519-ключи; эфемерные ключи — forward secrecy (`noise/handshake.rs`; детерминированный вывод из long-term seed через HKDF — `noise/ephemeral.rs`, чек-лист детерминизма). (2) Transport: ChaCha20-Poly1305 AEAD framing (`encrypt_frame`/`decrypt_frame`, `MAX_MESSAGE_SIZE` до аллокации), monotonic nonces + `NoiseError::Replay` anti-replay, rekey primitive (`noise/transport.rs`). (3) Ed25519 node identity: `NodeId = blake3(pubkey)`, auth blob `[pubkey||sig]` в rounds 2/3, `into_transport → (NoiseTransport, NodeId)` (`noise/auth.rs`); MITM со своими ключами → NodeId mismatch → drop. (4) Единый транспорт = Noise (S2-P19): plaintext-путь монолита удалён — Stage 1.5 plaintext-клиенты несовместимы до тега `v2.0.0-stage2`. |
+| **Stage** | Stage 2 (S2-P07, S2-P08, S2-P09, S2-P19) |
+| **Residual Risk** | Низкий. (1) Unpinned first contact — TOFU: unpinned handshake принимается как unverified (`tests/net_noise_handshake.rs::unpinned_first_contact_is_accepted_as_unverified`), pinning — по node_id после первого успеха; opportunistic MITM на первой встрече возможен (как Bitcoin bloom-era peer exchange). (2) Ephemeral-ключи выводятся из long-term seed (reproducibility, §Determinism) — компрометация seed раскрывает записанные сессии этого узла (trade-off зафиксирован S2-P09). (3) snow — не formally verified; version pinned (`=0.10.0`). |
+| **Monitoring** | Handshake-failure rate; NodeId mismatch drops; unexpected disconnects; alert на Replay-детекты (potential replay attack or nonce desync). |
+| **Код** | `crates/strangecoin-net/src/noise/{handshake,transport,auth,ephemeral}.rs`, `protocol.rs::encrypt_frame:427`/`decrypt_frame:471`, `peer/manager.rs::connect_to_peer`/`accept_inbound` |
+| **Тест** | `tests/net_noise_handshake.rs` (4: two-node roundtrip, `mitm_with_own_keys_is_dropped_on_node_id_mismatch`, unpinned-TOFU, transport pair); crate unit-тесты handshake/transport/auth; fuzz `fuzz/fuzz_targets/noise_handshake.rs` (S2-P21; CI-side) |
 
 ---
 
@@ -883,16 +916,37 @@ Reproducible builds + cosign signatures для верификации бинар
 | **S1.5-P17** | V-18 (e2e reentrancy attack rejected), V-20/V-21 (e2e gas exhaustion) |
 | **S1.5-P18** | V-18..V-21 (документирование митигаций этого раздела; regression 22 инвариантов) |
 
+### 6.2c Prompt → Vector Mapping (Stage 2, добавлено S2-P23)
+
+| Prompt | Векторы, которые он mitigates |
+|--------|------------------------------|
+| **S2-P07** | V-24 (Noise XX handshake state machine, forward secrecy) |
+| **S2-P08** | V-24 (ChaCha20-Poly1305 transport, anti-replay nonces), V-13 adjacent (framing size check до аллокации — инвариант #16 ext) |
+| **S2-P09** | V-24 (Ed25519 node_id auth — MITM detection), V-17 adjacent (Sybil требует per-node keypair) |
+| **S2-P10** | V-39 regression (HELLO network_id, MIN_PROTO_VERSION=2), V-01 adjacent (capabilities gating) |
+| **S2-P11** | V-01 (multi-source bootstrap), V-16 (DNSSEC validation + hard-coded IPs + ADDR gossip) |
+| **S2-P12** | V-17 (per-IP-range connection cap), V-01 (peer store/manager + ban state machine) |
+| **S2-P13** | V-14 adjacent (INV dedup ограничивает gossip-flood), V-41 adjacent (per-peer dedup) |
+| **S2-P14** | V-13 adjacent (compact-block size caps), инвариант #7 regression |
+| **S2-P15** | Erlay reconciliation (bandwidth scaling; fallback full relay — no tx loss) |
+| **S2-P16** | V-14 (token bucket + per-message caps + ban threshold, ADR-0023) |
+| **S2-P17** | V-15 (invalid_blocks factor + ban ladder), V-17 (scoring + bans), V-01 (scoring), ADR-0022 |
+| **S2-P18** | V-13 adjacent (deprecated plaintext-сообщения удалены — меньше attack surface) |
+| **S2-P19** | V-24 (единый Noise-транспорт, plaintext-путь удалён), V-02 (sync через encrypted сессии) |
+| **S2-P21** | Fuzz 4 network targets: noise_handshake / gossip_inv / compact_blocks_fill_up / erlay_reconciliation (V-24/V-13/V-14 adjacent, CI-side) |
+| **S2-P22** | Интеграционные тесты: V-01/V-14/V-15/V-17/V-24 (`tests/net_*.rs`) |
+| **S2-P23** | V-1/V-2/V-14/V-15/V-16/V-17/V-24 (документирование митигаций этого раздела; regression 22 инвариантов — `docs/stage2/INVARIANTS_ENFORCED.md`) |
+
 ### 6.3 Coverage Matrix
 
-| STRIDE Category | Covered by Stage 0 | Covered by Stage 1 | Covered by Stage 1.5 | Residual (deferred) |
-|-----------------|--------------------|--------------------|----------------------|---------------------|
-| **Spoofing** | P05 (chain_id), P13 (peer limits) | S1-P14 (network_id HELLO), S1-P15 (bech32 HRP) | — | V-06 (long-range → Stage 7), V-24 (MITM → Stage 2) |
-| **Tampering** | P06 (serialization), P07 (txid), P08-P09 (difficulty/time) | S1-P06 (state_root), S1-P08 (tx_root), S1-P05 (consensus_version), S1-P16 (headers) | V-18 (reentrancy guard), V-19 (checked arith + modexp + MAX_CODE_SIZE), V-21 (wasmi sandbox + host whitelist + gas) | V-07 (nothing-at-stake → Stage 7) |
-| **Repudiation** | P07 (txid commitment) | — | Receipts (#18): audit trail каждого VM-call | — |
-| **Information Disclosure** | P04 (keystore), P15 (config) | S1-P07 (witness minimality) | — | V-08, V-10 (MEV → Stage 5) |
-| **Denial of Service** | P12 (size limits), P13 (rate limiting), P14 (mempool) | S1-P17 (RBF limits), S1-P18 (inbox bounded) | V-20 (storage cap 1MB + block gas limit 1M), V-21 (memory/stack/depth caps) | V-09 (censoring → Stage 7); global state growth без rent → Stage 3+ |
-| **Elevation of Privilege** | P05 (nonce), P10 (genesis) | S1-P01 (grant flag), S1-P05 (version enforce) | V-21 (sandbox: no host I/O вне whitelist) | V-05 (51% → monitoring), V-23 (key compromise → Stage 5 AA) |
+| STRIDE Category | Covered by Stage 0 | Covered by Stage 1 | Covered by Stage 1.5 | Covered by Stage 2 | Residual (deferred) |
+|-----------------|--------------------|--------------------|----------------------|--------------------|---------------------|
+| **Spoofing** | P05 (chain_id), P13 (peer limits) | S1-P14 (network_id HELLO), S1-P15 (bech32 HRP) | — | V-24 (Noise XX + Ed25519 node_id auth), V-01 (multi-source bootstrap + scoring), V-16 (DNSSEC), V-17 (per-IP cap + scoring) | V-06 (long-range → Stage 7) |
+| **Tampering** | P06 (serialization), P07 (txid), P08-P09 (difficulty/time) | S1-P06 (state_root), S1-P08 (tx_root), S1-P05 (consensus_version), S1-P16 (headers) | V-18 (reentrancy guard), V-19 (checked arith + modexp + MAX_CODE_SIZE), V-21 (wasmi sandbox + host whitelist + gas) | V-24 (AEAD transport — сообщения не модифицируемы без детекта) | V-07 (nothing-at-stake → Stage 7) |
+| **Repudiation** | P07 (txid commitment) | — | Receipts (#18): audit trail каждого VM-call | — | — |
+| **Information Disclosure** | P04 (keystore), P15 (config) | S1-P07 (witness minimality) | — | V-24 (P2P трафик зашифрован; MEV sniffing на relay-слойе закрыт) | V-08, V-10 (MEV on-chain → Stage 5) |
+| **Denial of Service** | P12 (size limits), P13 (rate limiting), P14 (mempool) | S1-P17 (RBF limits), S1-P18 (inbox bounded) | V-20 (storage cap 1MB + block gas limit 1M), V-21 (memory/stack/depth caps) | V-14 (token bucket + scoring), V-15 (scoring ban ladder), V-17 (conn cap + scoring), V-41 (gossip dedup) | V-09 (censoring → Stage 7); global state growth без rent → Stage 3+ |
+| **Elevation of Privilege** | P05 (nonce), P10 (genesis) | S1-P01 (grant flag), S1-P05 (version enforce) | V-21 (sandbox: no host I/O вне whitelist) | — | V-05 (51% → monitoring), V-23 (key compromise → Stage 5 AA) |
 
 ### 6.4 Mitigations → Test Coverage Map
 
@@ -900,8 +954,8 @@ Reproducible builds + cosign signatures для верификации бинар
 
 | Вектор | Модуль/Функция | Тест | Статус |
 |--------|---------------|------|--------|
-| V-01 (Eclipse) | network/rate_limiter | `tests/network.rs::real_network_three_nodes`; `tests/rate_limit.rs::per_message_flood_bans_peer_on_single_connection` (per-message ban, BUG-S1-005) | ✅ D01 + BUG-S1-005 |
-| V-02 (Partition) | network/protocol | `tests/network.rs::real_network_three_nodes` | ✅ D01 |
+| V-01 (Eclipse) | discovery (multi-source) + peer scoring + pool per-IP cap + rate_limiter | `tests/net_peer_scoring.rs` (3), `tests/net_helpers.rs` (bootstrap); regression: `tests/network.rs::real_network_three_nodes`, `tests/rate_limit.rs` | ✅ D01 + BUG-S1-005 + **S2-P11/P12/P17** |
+| V-02 (Partition) | sync_engine ≥3 peers + Noise transport | `tests/sync_engine.rs`, `tests/sync_headers.rs` (regression); `tests/net_noise_handshake.rs` (encrypted sessions) | ✅ D01 + **S2-P19** |
 | V-03 (Selfish mining) | consensus/monitoring | gap: нет теста на orphan rate | ⚠️ gap |
 | V-04 (Time-warp) | consensus (MTP, retarget) | `tests/time.rs::mtp_rejection`, `tests/time.rs::future_timestamp_rejection`; `tests/block_executor.rs::rejects_timestamp_*` | ✅ D01 + S1-P12 |
 | V-05 (51% attack) | consensus (difficulty) | `tests/pow.rs::mining_and_validation`; `tests/block_executor.rs::rejects_proof_of_work_above_target` | ✅ D01 + S1-P12 |
@@ -913,17 +967,17 @@ Reproducible builds + cosign signatures для верификации бинар
 | V-11 (Cross-chain replay) | consensus (chain_id) + network (HELLO) | `tests/network_id.rs::foreign_network_id_is_rejected_and_banned`; proptest `chain_id_validation` | ✅ S1-P14/S1-P19 |
 | V-12 (Intra-chain replay) | mempool (nonce) | `tests/double_spend.rs::double_spend_rejected` | ✅ D01 |
 | V-13 (OOM) | network (framing) + serialize (bounds-checked readers) | unit-тесты `src/network/`, `src/mempool/`; soak S1-P19 (fuzz) | ✅ Stage 0 + S1-P19 |
-| V-14 (Spam txs) | mempool (cap) | `tests/two_clients.rs` (нагрузочный) | ✅ D01 |
-| V-15 (Invalid blocks) | peer_manager (ban) + HeaderCache + block_executor | `tests/block_executor.rs` (reject-матрица), `tests/sync_headers.rs` (bad header не доходит до tip); ban-after-N — частично | ⚠️ частично |
-| V-16 (DNS poisoning) | config (seeds) | gap: нет теста на DNS | ⚠️ gap |
-| V-17 (Sybil) | peer_manager (limits) + rate_limiter (per-message ban) | gap: нет теста на connection limits; per-message ban покрыт `tests/rate_limit.rs` (BUG-S1-005) | ⚠️ gap (connection limits) |
+| V-14 (Spam txs) | rate_limiter (token bucket, S2-P16) + peer scoring + mempool (cap) | `tests/net_rate_limit_integration.rs` (2), `rate_limiter.rs` unit; regression: `tests/two_clients.rs` | ✅ D01 + **S2-P16/S2-P17** |
+| V-15 (Invalid blocks) | peer scoring (invalid_blocks factor + ban ladder) + HeaderCache + block_executor | `tests/net_peer_scoring.rs::malicious_peer_banned_after_configured_invalid_block_threshold`, `::persistent_ban_survives_restart_via_network_json`; regression: `tests/block_executor.rs`, `tests/sync_headers.rs` | ✅ **S2-P17** (gap ban-after-N закрыт) |
+| V-16 (DNS poisoning) | discovery (DNSSEC + hard-coded IPs + ADDR gossip) | `tests/net_helpers.rs` (multi-source bootstrap); discovery unit (dnssec policy) | ✅ **S2-P11** (gap закрыт) |
+| V-17 (Sybil) | pool per-IP-range cap + peer scoring + rate_limiter | `tests/net_peer_scoring.rs` (3), `tests/net_rate_limit_integration.rs` (2), pool unit (per-IP reject); regression: `tests/rate_limit.rs` | ✅ **S2-P12/S2-P16/S2-P17** (gap connection limits закрыт) |
 | V-18 (Reentrancy) | vm-wasm (call_stack + `non_reentrant` ABI) + core limits | `tests/vm_reentrancy_attack.rs::reentrancy_attack_end_to_end_is_rejected`; vm-wasm `tests/reentrancy_and_limits.rs::self_call_with_non_reentrant_abi_is_rejected`, `::cross_contract_reentrancy_is_rejected` | ✅ S1.5-P13/P17 |
 | V-19 (Integer overflow) | core limits (MAX_CODE_SIZE) + precompiles (modexp) + Rust checked arith | `tests/reentrancy_and_limits.rs::create_code_size_over_limit_rejected`; `tests/precompiles.rs::modexp_*` (10) | ✅ S1.5-P11/P13 |
 | V-20 (Storage exhaustion) | vm-wasm storage_write (1MB cap) + block gas limit | `tests/reentrancy_and_limits.rs::storage_cap_at_limit_accepted`, `::storage_cap_exceeded_rejected`; `tests/vm_gas_exhaustion.rs`; `tests/contract_storage.rs` (>1MB → Failed) | ✅ S1.5-P13/P15 |
 | V-21 (Code injection) | wasmi sandbox + host whitelist + gas metering + resource limits | `tests/reentrancy_and_limits.rs::memory_*`, `::runaway_recursion_hits_stack_limit`; `tests/events_and_receipts.rs::register_code_rejects_invalid_wasm`; `tests/gas_metering.rs`; fuzz `differential_wasmi_vs_wasmtime.rs` | ✅ S1.5-P06/P09/P10/P16 |
 | V-22 (Compromised build) | CI/CD (P24) | gap: GitHub Actions run не верифицирован | ⚠️ gap (→ first v* tag) |
 | V-23 (Key compromise) | wallet (keystore) | unit-тесты wallet | ✅ Stage 0 |
-| V-24 (MITM) | N/A (Stage 2) | N/A | Deferred |
+| V-24 (MITM) | noise (XX handshake + ChaCha20-Poly1305 + Ed25519 node_id auth) | `tests/net_noise_handshake.rs` (4: roundtrip, MITM NodeId mismatch drop, unpinned TOFU); crate unit-тесты noise/*; fuzz `noise_handshake.rs` (CI-side) | ✅ **S2-P07/S2-P08/S2-P09** (deferred → mitigated) |
 | V-25 (Validator collusion) | N/A (Stage 7) | N/A | Deferred |
 | V-26 (Testnet low-diff) | consensus (chain_id) | `tests/pow.rs::mining_and_validation` | ✅ D01 |
 | V-27 (Keystore theft) | wallet (AES-GCM) | unit-тесты wallet | ✅ Stage 0 |
@@ -943,9 +997,12 @@ Reproducible builds + cosign signatures для верификации бинар
 | V-41 (SyncEngine flooding) | network/sync_engine | `tests/sync_engine.rs::concurrent_candidates_race_through_one_engine`; unit-тесты `src/network/sync_engine.rs::duplicate_candidate_is_dropped_at_the_inbox`, `::full_pull_lane_drops_without_ban`, `::full_inbound_lane_bans_the_producer`, `::headers_lane_is_separate_from_blocks`; `tests/network.rs::real_network_fast_registration_race` | ✅ S1-P18 |
 | V-42 (HRP confusion) | core address (bech32) | core `src/address.rs::test_round_trip`, `::test_checksum_error`, `::test_hrp_validation`, `::test_network_id_hrp_mapping`; `tests/two_clients.rs::bech32_address_transfer`; `tests/address_migration.rs::legacy_base64_balances_migrate_to_bech32_on_open` | ✅ S1-P15 |
 
-**Итого gaps:** 5 векторов без полных тестов (V-03, V-15, V-16, V-17, V-28). Из них:
-- V-03, V-16, V-17, V-28 — требуют интеграционных/unit-тестов (не закрыты Stage 1/1.5)
-- V-15 — частично закрыт reject-тестами block_executor/sync; ban-after-N остаётся gap
+**Итого gaps:** 2 вектора без полных тестов (V-03, V-28). Из них:
+- V-03, V-28 — требуют интеграционных/unit-тестов (не закрыты Stage 1/1.5/2)
+- ~~V-15~~ — **closed (S2-P17, 2026-10-28)**: ban-after-N через peer scoring + `tests/net_peer_scoring.rs`
+- ~~V-16~~ — **closed (S2-P11, 2026-10-26)**: DNSSEC validation + multi-source bootstrap
+- ~~V-17~~ — **closed (S2-P12/S2-P16/S2-P17, 2026-10-28)**: per-IP-range connection cap + scoring + rate-limit bans
+- ~~V-24~~ — **closed (S2-P07/S2-P08/S2-P09/S2-P19, 2026-10-26..28)**: Noise XX + AEAD transport + Ed25519 auth; `tests/net_noise_handshake.rs`
 - ~~V-31~~ — **closed code-side** (S1.5-P01): тест genesis без секрета в коде; residual ops (offline key) — SCIP-0001 pre-mainnet
 - ~~V-22/V-33~~ — **closed** (BUG-S1-001, 2026-10-10): первый release-run на GitHub Actions верифицирован (run 38071514479)
 - ~~V-35 zero-root вектор (3)~~ — **closed** (BUG-S1-002, 2026-10-11): zero-root opt-out удалён (SCIP-0002); mainnet/testnet обязателен commitment
@@ -963,12 +1020,13 @@ Reproducible builds + cosign signatures для верификации бинар
 | MEV (V-08, V-09, V-10) | Stage 5 | No threshold encryption | High |
 | ~~Smart Contract Attacks (V-18-V-21)~~ | ~~Stage 1.5+~~ | **Closed S1.5-P13/P17 (2026-10-17)** — см. §3.7; residual ниже в §7.1b | N/A |
 | PoS-Specific Attacks (V-06, V-07, V-25) | Stage 7 | No PoS | N/A |
-| Network MITM (V-24) | Stage 2 | No Noise Protocol | High |
+| ~~Network MITM (V-24)~~ | ~~Stage 2~~ | **Closed S2-P07/P08/P09 (2026-10-26..28)** — Noise XX + ChaCha20-Poly1305 + Ed25519 auth; residual: TOFU unpinned first contact + seed-derived ephemeral trade-off (§3.8 V-24) | N/A |
 | Account Abstraction (V-23) | Stage 5 | No social recovery | Medium |
 | Inclusion Lists (V-09) | Stage 7 | No censorship resistance | Medium |
-| Light client / SPV (V-36 wire) | Stage 2+ | Witness API только в ядре, не в протоколе | Medium |
+| Light client / SPV (V-36 wire) | Stage 3+ | Witness API только в ядре, не в протоколе (stateless validation wire — Stage 3) | Medium |
 | TLA+ model: Verkle/state root/reorg | Stage 1 (spec update) | `docs/spec/README.md`: свойства state root/reorg — вне scope skeleton | Low |
-| Gossip/Noise/Erlay (усиливают V-01, V-34, V-41) | Stage 2 | Планируется | Medium |
+| ~~Gossip/Noise/Erlay~~ | ~~Stage 2~~ | **Closed S2-P13/S2-P14/S2-P15/S2-P07..P09 (2026-10-26..28)** — INV gossip, compact blocks, Erlay reconciliation, Noise transport | N/A |
+| TLA+ formal verification of network protocol | Stage 6 | Stage 2 не расширяет TLA+ для network (residual зафиксирован в `docs/stage2/RESIDUAL_RISKS_STAGE3_PLUS.md`) | Medium |
 
 ### 7.1b Stage 1.5 Residual Risks (после закрытия V-18..V-21)
 
@@ -982,6 +1040,22 @@ Reproducible builds + cosign signatures для верификации бинар
 | wasmi interpreter 0-days | continuous (fuzz S1.5-P16 + CI) | Differential testing wasmi vs wasmtime; fuzz-таргеты; formally verified VM — Stage 6+ (K-framework obligation) | Medium |
 | Контракт-level бизнес-логика (rug-pull, ABI misuse) | Stage 4+ (SDK, audits) | Sandbox не защищает от «легитимно злонамеренного» кода | Medium |
 
+### 7.1c Stage 2 Residual Risks (после закрытия V-24 / V-01 / V-14..V-17 amendments, добавлено S2-P23)
+
+Полный перечень — `docs/stage2/RESIDUAL_RISKS_STAGE3_PLUS.md` (S2-P23). Ключевые строки:
+
+| Risk | Deferred To | Mitigation Status (Stage 2) | Impact |
+|------|-------------|-----------------------------|--------|
+| Snapshot sync | Stage 3 | Нет; новый attack surface (trusting snapshot без полной replay-верификации) | Medium |
+| RocksDB migration | Stage 3 | LevelDB остаётся; crash-recovery testing — Stage 3 | Medium |
+| Block-STM parallel execution | Stage 3+ | Serial execution; deterministic parallelISM design required | Medium |
+| Stateless validation witnesses (wire) | Stage 3 | Witness API в ядре (S1-P07), не в протоколе; witness forgery — Stage 3 attack surface | Medium |
+| Erlay minisketch full impl (PinSketch) | SCIP-gated (Stage 3+) | Documented stub (`impl_id=0`); minisketch-rs optional default-off (нет libclang на Windows-хосте) | Low |
+| TLA+ формальная верификация network protocol | Stage 6 | `consensus.tla` только для консенсуса; network-протокол не формализован | Medium |
+| Seed rotation (автоматическая) | Stage 6+ (или SCIP) | Ручная ротация через network.json; auto-rotation отложена (V-16 residual) | Low |
+| Ephemeral из long-term seed (forward-secrecy trade-off) | Continuous (S2-P09 зафиксирован) | Компрометация seed раскрывает записанные сессии узла; reproducibility выбран осознанно | Low |
+| Plaintext-клиенты Stage 1.5 несовместимы | До тега `v2.0.0-stage2` (S2-P24) | Единый Noise-транспорт (S2-P19); допустимо до mainnet freeze | Low |
+
 ### 7.2 Risks Accepted (Stage 0 + Stage 1)
 
 | Risk | Reason | Mitigation |
@@ -990,14 +1064,14 @@ Reproducible builds + cosign signatures для верификации бинар
 | 51% attack (V-05) | Small network; low hash rate | Monitoring + alert |
 | Testnet 51% (V-26) | Low testnet difficulty by design (fast blocks); chain_id protects mainnet | **Obligation: retarget hardening via SCIP post-mainnet-freeze + Stage 6 audit; testnet residual accepted** |
 | Weak password (V-27) | User responsibility | PBKDF2 ≥210k iters |
-| Plaintext P2P (V-24) | Noise Protocol deferred to Stage 2 | Accept; mitigate with monitoring |
+| ~~Plaintext P2P (V-24)~~ | ~~Noise Protocol deferred to Stage 2~~ **closed S2-P07/P08/P09/P19 (2026-10-26..28)**: единый Noise-транспорт; residual TOFU — §3.8 V-24 | Noise XX + AEAD + Ed25519 auth |
 | Genesis key from public string (V-31) | Testnet/regtest only; secret removed from code (S1.5-P01); pubkey remains burned | **Obligation: offline key + SCIP-0001 before mainnet freeze** |
 | Grant blocks (V-32) | Flag-gated (S1-P01); must stay off on mainnet | Flag default false + tests |
 | Release pipeline (V-33) | ~~Workflow fixed (D03); GitHub Actions run pending~~ **closed 2026-10-10 (BUG-S1-001)**: run 38071514479 green, cosign/SLSA verified | First-run evidence: REPRODUCIBLE_BUILDS.md §Verified Release Runs |
 | cargo-fuzz не запускается на dev-хосте (Windows, нет MSVC/ASan) | ASan unsupported on `x86_64-pc-windows-gnu`; no MSVC; libFuzzer needs clang/MSVC | Fallback soak runner (S1-P19) нашёл и закрыл OOB-баг; измеренный 10-min soak clean (2026-10-09). **Obligation закрыта (BUG-S0-023, 2026-10-09): job `fuzz-canonical-decode` — cargo-fuzz 600s на Linux CI, каждый push/PR**; residual — результат первого CI-прогона |
 | Zero state_root tolerated (opt-in no commitment) | Явное поведение для совместимости | Узлы с enforced commitments отклоняют zero root; документировано |
 | RBF при fee=0 (feerate = proxy по размеру) | Fee market — Stage 5 | RBF_MIN_DELTA + MAX_RBF_REPLACEMENTS + rate limiter |
-| DNS poisoning (V-16) | Stage 0 residual | Hard-coded seeds; DNSSEC — Stage 2 |
+| ~~DNS poisoning (V-16)~~ | ~~Stage 0 residual~~ **closed S2-P11 (2026-10-26)**: DNSSEC validation (hickory-resolver) + multi-source bootstrap + hard-coded IPs | DNSSEC policy reject не-Secure answers; `tests/net_helpers.rs` |
 
 ### 7.3 Risk Acceptance签字
 
@@ -1036,6 +1110,14 @@ Reproducible builds + cosign signatures для верификации бинар
 | OutOfGas / Failed receipt rate | Anomalous vs baseline | Warning | Malicious or broken contract (V-21); check gas weights |
 | Block gas limit rejects | Spike | Warning | Gas-limit DoS or mispriced weights (invariant #15) |
 | wasmi trap (non-OutOfGas, unexpected) | Any | Critical | Sandbox escape attempt or interpreter bug (V-21) |
+| Noise handshake failures | Spike per peer/period | Warning | MITM attempt or protocol drift (V-24) |
+| NodeId mismatch drops | Recurring | Warning | MITM or misconfigured peer keys (V-24) |
+| Noise `Replay` detects | Any sustained | Critical | Replay attack or nonce desync (V-24, invariant #16 ext) |
+| Rate-limit bans (token bucket) | Spike per IP range | Warning | Spam flood / Sybil (V-14/V-17, invariant #17 ext) |
+| Scoring bans (warn/temp/persistent) | Any on live network | Warning | Malicious peer or scoring misconfiguration (V-15/V-17) |
+| Erlay fallback rate (full relay) | Sustained high | Warning | Sketch mismatch DoS or impl drift (ADR-0021) |
+| DNSSEC validation failures | Spike | Warning | DNS poisoning attempt (V-16) |
+| Per-IP-range connection rejections | Spike | Warning | Sybil connection flood (V-17) |
 
 ### 8.2 Monitoring Tools
 
@@ -1081,6 +1163,13 @@ Reproducible builds + cosign signatures для верификации бинар
 - [x] **S1.5-P18:** Residual risks Stage 2+ (Block-STM, AA, EIP-1559, state rent) зафиксированы в §7.1b
 - [x] **S1.5-P18:** Monitoring plan дополнен VM-метриками (§8.1)
 - [x] Инварианты 1-22 enforce по актуализированной таблице `docs/stage1.5/INVARIANTS_ENFORCED.md` (S1.5-P18; №15, №18 — впервые enforced; №19 extension)
+- [x] **S2-P23:** V-01/V-02/V-14/V-15/V-16/V-17/V-24 переведены в Mitigated/усилены с Stage 2 Amendment + Код/Тест (§3.1/§3.5/§3.6/§3.8)
+- [x] **S2-P23:** Coverage Matrix (§6.3) получила колонку Covered by Stage 2; Mitigations Map (§6.4) обновлён; gaps сокращены до V-03/V-28
+- [x] **S2-P23:** Prompt → Vector Mapping Stage 2 (§6.2c: S2-P07..S2-P23) добавлен
+- [x] **S2-P23:** Residual risks Stage 3+ (snapshot sync, RocksDB, Block-STM, witnesses, Erlay stub, TLA+ network) зафиксированы в §7.1c + `docs/stage2/RESIDUAL_RISKS_STAGE3_PLUS.md`
+- [x] **S2-P23:** Monitoring plan дополнен network-метриками (handshake/NodeId/Replay/rate-limit/scoring/Erlay/DNSSEC — §8.1)
+- [x] **S2-P23:** Regression 22 инвариантов — `docs/stage2/INVARIANTS_ENFORCED.md` (22/22, extensions #16/#17)
+- [x] **S2-P23:** Network fuzz targets (S2-P21) + интеграционные тесты (S2-P22) — fuzz CI-side (9 targets), tests локально green
 
 ### 9.2 Stage 0遗留 Review Checklist (D02)
 
@@ -1106,14 +1195,18 @@ Reproducible builds + cosign signatures для верификации бинар
 | `analytics/prompt-stage1.md` D02 | Debt prompt execution |
 | `analytics/prompt-stage1.md` S1-P19 | Fuzz target + soak result |
 | `analytics/prompt-stage1.md` S1-P21 | Stage 1 threat model update |
-| `analytics/prompt-stage1.5.md` S1.5-P18 | Stage 1.5 threat model update (this revision: V-18..V-21) |
+| `analytics/prompt-stage1.5.md` S1.5-P18 | Stage 1.5 threat model update (V-18..V-21) |
+| `analytics/prompt-stage2.md` S2-P23 | Stage 2 threat model update (this revision: V-01/V-02/V-14/V-15/V-16/V-17/V-24) |
 | `analytics/retro-stage0.md` §4.3, §4.4, §8.2 | Genesis key, Changelog lie, remediation |
 | `docs/security/INCIDENT_RESPONSE.md` | Incident response plan (v3.0, Stage 1 alert sources) |
 | `docs/stage1/INVARIANTS_ENFORCED.md` | 22 invariants re-audit (S1-P20; historical Stage 1) |
 | `docs/stage1.5/INVARIANTS_ENFORCED.md` | 22 invariants Stage 1.5 (S1.5-P18: 21/1, №15/№18 enforced, №19 extension) |
 | `docs/stage1.5/THREAT_MODEL_STAGE1_5.md` | Stage 1.5 threat-модель: краткое резюме V-18..V-21 + residual |
+| `docs/stage2/INVARIANTS_ENFORCED.md` | 22 invariants Stage 2 (S2-P23: 22/22, extensions #16/#17) |
+| `docs/stage2/THREAT_MODEL_STAGE2.md` | Stage 2 network-layer threat-модель: V-01/V-02/V-14/V-15/V-16/V-17/V-24 + residual |
+| `docs/stage2/RESIDUAL_RISKS_STAGE3_PLUS.md` | Stage 3+ residual risks (snapshot sync, RocksDB, Block-STM, witnesses, Erlay stub, TLA+ network) |
 | `docs/spec/README.md` | TLC model checker результат (D02) |
-| `fuzz/README.md` | Fuzz target + soak run log (S1-P19; S1.5-P16 vm-таргеты) |
+| `fuzz/README.md` | Fuzz target + soak run log (S1-P19; S1.5-P16 vm-таргеты; S2-P21 network-таргеты) |
 | `docs/ADR/0001-secp256k1-vs-ed25519.md` | Cryptographic decisions |
 | `docs/ADR/0002-tail-emission-vs-halving.md` | Economic decisions |
 | `docs/ADR/0003-hybrid-pow-pos.md` | Consensus decisions |
@@ -1124,6 +1217,10 @@ Reproducible builds + cosign signatures для верификации бинар
 | `docs/ADR/0012-wasm-wasmi-vs-risc-v.md` | WASM runtime decision (V-21) |
 | `docs/ADR/0014-gas-metering-strategy.md` | Gas metering (V-20/V-21) |
 | `docs/ADR/0015-precompiles-list.md` | Precompiles (V-19 modexp) |
+| `docs/ADR/0020-noise-protocol-framework.md` | Noise XX + snow crate (V-24) |
+| `docs/ADR/0021-erlay-integration.md` | Erlay mincut reconciliation + fallback |
+| `docs/ADR/0022-peer-scoring-algorithm.md` | Peer scoring + ban ladder (V-15/V-17) |
+| `docs/ADR/0023-rate-limiting-strategy.md` | Token bucket rate limiting (V-14/V-17) |
 
 ---
 
