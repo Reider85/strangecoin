@@ -1,0 +1,51 @@
+# Vendored copy of minisketch-rs 0.1.9 (registry: crates.io), used as an
+# optional path dependency by strangecoin-net (feature `minisketch`,
+# SCIP-gated full Erlay implementation, ADR-0021 escape hatch).
+#
+# WHY VENDORED (deviation recorded in the S3-P04 deps commit, 2026-10-30):
+# upstream 0.1.9 is the latest release and its build-dependency `bindgen
+# 0.49` pulls `clang-sys 0.28`, while `librocksdb-sys` (rocksdb 0.25.0,
+# Stage 3 storage backend) pulls `bindgen 0.72` -> `clang-sys 1.9.1`.
+# BOTH clang-sys packages declare `links = "clang"`, and cargo allows only
+# one `links` provider in a dependency graph — so the registry crate can
+# never coexist with rocksdb in the workspace lockfile. The vendored copy
+# differs from upstream in exactly one build-dependency line (bindgen
+# pinned to the same 0.72 line librocksdb-sys uses, so clang-sys unifies)
+# plus the two builder-method renames that bindgen made between 0.49 and
+# 0.72 (whitelist_* -> allowlist_*, see build.rs). Runtime sources
+# (src/, minisketch/ C++ library) are byte-identical to upstream 0.1.9.
+#
+# A build of this package still requires libclang (bindgen) + a C++11
+# compiler; it is default-OFF in strangecoin-net and only compiles when
+# the SCIP-gated `minisketch` feature is enabled.
+
+[package]
+edition = "2018"
+name = "minisketch-rs"
+version = "0.1.9"
+authors = ["Evgenii P. <eupn@protonmail.com>"]
+build = "build.rs"
+links = "minisketch"
+description = "Rust interface to Pieter Wuille's minisketch library for efficient set reconciliation (vendored 0.1.9, bindgen 0.72)"
+documentation = "https://docs.rs/minisketch_rs"
+readme = "README.md"
+keywords = ["minisketch", "set", "reconciliation"]
+categories = ["api-bindings"]
+license = "Apache-2.0"
+repository = "https://github.com/eupn/minisketch-rs"
+
+[[example]]
+name = "simple"
+
+[[example]]
+name = "bisect"
+[dependencies.libc]
+version = "0.2"
+# VENDORED DIFF #1 (upstream: "0.49"): unified with the bindgen line of
+# librocksdb-sys 0.19.0 (bindgen 0.72 -> clang-sys 1.9.1, links = "clang").
+# See the provenance comment at the top of this file.
+[build-dependencies.bindgen]
+version = "=0.72.1"
+
+[build-dependencies.cc]
+version = "1.0"

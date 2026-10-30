@@ -73,7 +73,7 @@ open.**
 | Write path | adopt-block writes **O(changed records)**: changed accounts → `state`, block → `blocks`, txs → `transactions` + `mempool` deletes, touched pre-state → `state_history`; no full-chain or full-state rewrite |
 | Config surface | `storage.engine` (`"rocksdb"` default; `"leveldb"` transitional until S3-P08, then removed), `storage.path` **wired for real** (default `./data/rocksdb`); legacy `<exe_dir>/blockchain_db_{port}` detected for auto-migration (S3-P08) |
 | Derived data | receipts, VM codes and `total_work` remain **derived** (rebuild-from-chain, invariant #1); not persisted in Stage 3 |
-| Pin policy | `rocksdb` pinned via `=` (version resolved in S3-P06 against the current stable `rust-rocksdb`, then recorded here and in AGENTS.md); update path = SCIP after mainnet freeze |
+| Pin policy | `rocksdb = "=0.25.0"` — version resolved 2026-10-30 in S3-P04 against the then-current stable `rust-rocksdb` (recorded here and in AGENTS.md §Stage 3 Pin Policy); update path = SCIP after mainnet freeze |
 
 ### Column families
 

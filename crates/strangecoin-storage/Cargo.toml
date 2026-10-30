@@ -1,0 +1,43 @@
+[package]
+name = "strangecoin-storage"
+version = "0.1.0"
+edition = "2021"
+description = "Strangecoin storage crate: StorageEngine trait, versioned key schema, RocksDB backend (Stage 3)"
+
+[dependencies]
+# Stage 3 storage backend (ADR-0008 engine decision + ADR-0024 schema), S3-P04.
+# Pinned exact per Stage 3 Pin Policy (AGENTS.md): the version was resolved
+# 2026-10-30 against the current stable rust-rocksdb 0.25.0; the crate sits on
+# the data-layout path (WAL/compaction semantics = S3-P10 crash-recovery
+# invariant) and its API churns between minors (0.21->0.22 CF handle change,
+# 0.23 DefaultThreadMode). Bumps go through SCIP after mainnet freeze only.
+#
+# Optional + default-ON (feature `rocksdb`): --no-default-features builds get
+# the pure trait/schema layer without the C++ toolchain (Windows: cc-rs needs
+# the msys64 preamble; librocksdb-sys additionally runs bindgen at build time
+# and needs libclang.dll on PATH -> C:\msys64\mingw64\bin\libclang.dll,
+# provided by the msys64 mingw-w64-x86_64-clang-libs package).
+rocksdb = { version = "=0.25.0", optional = true }
+# Error enum convention matches strangecoin-core / strangecoin-net (NetError).
+thiserror = "1"
+tracing = "0.1"
+# Snapshot manifest types only (ADR-0026 optional JSON sidecar, S3-P13) —
+# NEVER for hot-path encoding: blocks/state/txs go through canonical binary
+# serialization on the monolith edge (ADR-0024 §Decision "Values").
+serde = { version = "1.0", features = ["derive"] }
+# Whole-file snapshot checksums (ADR-0026 trailer) — blake3 is the
+# deterministic hash of the whole codebase (Stage 3 determinism checklist #2).
+blake3 = "1"
+
+[features]
+default = ["rocksdb"]
+# Enables the RocksDbEngine backend (S3-P06) and StorageError's
+# From<rocksdb::Error> conversion. Default-on per S3-P04 spec; turning it off
+# leaves a pure trait + schema layer (no C++ build).
+rocksdb = ["dep:rocksdb"]
+
+[dev-dependencies]
+# Temp-dir fixtures for the real backend tests (S3-P06). Pinned exact per
+# Stage 3 Pin Policy process rule (new storage-crate deps are pinned);
+# resolution 2026-10-30 -> 3.27.0.
+tempfile = "=3.27.0"

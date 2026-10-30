@@ -41,16 +41,26 @@ siphasher = "=1.0.4"
 # msys64 preamble, aws-lc-rs would need cmake on the Windows host.
 hickory-resolver = { version = "=0.26.3", features = ["dnssec-ring"] }
 # Erlay PinSketch sketches (ADR-0021), S2-P15. Pinned exact per Stage 2 Pin
-# Policy (AGENTS.md): the crate sits on the reconciliation wire path; bumps go
-# through SCIP after mainnet freeze only.
+# Policy (AGENTS.md): the crate sits on the reconciliation wire path; bumps
+# go through SCIP after mainnet freeze only.
+#
+# The registry crate is replaced by the vendored copy at `vendor/minisketch-rs`
+# through `[patch.crates-io]` in the root Cargo.toml (S3-P04, 2026-10-30):
+# upstream 0.1.9's build-dep bindgen 0.49 pulls clang-sys 0.28 while
+# librocksdb-sys (rocksdb 0.25.0, storage backend) pulls bindgen 0.72 ->
+# clang-sys 1.9.1; both declare `links = "clang"` and cargo admits only one —
+# the registry crate cannot coexist with rocksdb in the lockfile. The vendored
+# copy differs from upstream 0.1.9 in exactly two lines (bindgen =0.72.1 +
+# allowlist_* renames, see its Cargo.toml provenance note).
 #
 # Optional + default-OFF (documented stub, ADR-0021 «Fallback dependency»
-# escape hatch): minisketch-rs 0.1.9 builds libminisketch via cc-rs + bindgen
-# 0.49, and bindgen needs libclang — absent on this Windows host (checked
-# 2026-10-27: no LLVM, LIBCLANG_PATH unset). The ACTIVE implementation is the
-# capacity-bounded pure-Rust stub in `gossip/erlay/mincut.rs` (contract-compatible
-# with libminisketch: same envelope, same decode-failure semantics). The
-# feature is reserved for the SCIP-gated full impl; nothing enables it today.
+# escape hatch): minisketch-rs builds libminisketch via cc-rs + bindgen, and
+# bindgen needs libclang (present on this host since S3-P04: msys64
+# mingw-w64-x86_64-clang-libs provides mingw64/bin/libclang.dll). The ACTIVE
+# implementation is the capacity-bounded pure-Rust stub in
+# `gossip/erlay/mincut.rs` (contract-compatible with libminisketch: same
+# envelope, same decode-failure semantics). The feature is reserved for the
+# SCIP-gated full impl; nothing enables it today.
 minisketch-rs = { version = "=0.1.9", optional = true }
 
 [features]

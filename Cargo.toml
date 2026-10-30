@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/strangecoin-core", "crates/strangecoin-vm-wasm", "crates/strangecoin-net"]
+members = [".", "crates/strangecoin-core", "crates/strangecoin-vm-wasm", "crates/strangecoin-net", "crates/strangecoin-storage"]
 resolver = "2"
 
 [package]
@@ -86,3 +86,15 @@ strip = true
 
 [dev-dependencies]
 proptest = "1"
+
+# Vendored minisketch-rs 0.1.9 (S3-P04, 2026-10-30): the registry crate's
+# build-dep bindgen 0.49 (clang-sys 0.28, links = "clang") conflicts with
+# librocksdb-sys's bindgen 0.72 (clang-sys 1.9.1, same links key) — cargo
+# admits one links provider, so the registry crate cannot coexist with the
+# rocksdb 0.25.0 storage backend in one lockfile. The vendored copy is
+# upstream-identical except the bindgen line + two allowlist_* renames (see
+# vendor/minisketch-rs/Cargo.toml provenance note); it is default-OFF
+# (strangecoin-net feature `minisketch`, SCIP-gated, ADR-0021) and never
+# builds unless that feature is enabled. See `vendor/README.md`.
+[patch.crates-io]
+minisketch-rs = { path = "vendor/minisketch-rs" }
