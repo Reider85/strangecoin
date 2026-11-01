@@ -27,5 +27,5 @@ fi
 echo "commit-msg: warning — message does not match [<prompt-id>] format:" >&2
 echo "  $first_line" >&2
 echo "  Expected e.g. '[S1-P13] blockchain: facade …' or '[BUG-S0-002] docs: …'" >&2
-echo "  See docs/CONTRIBUTING.md (Git Hooks) and analytics/retro-stage0.md §8.1." >&2
+echo "  See CONTRIBUTING.md (Git Hooks) and analytics/retro-stage0.md §8.1." >&2
 exit 0
