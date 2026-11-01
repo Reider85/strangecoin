@@ -1,4 +1,4 @@
-# ?? Strangecoin
+# Strangecoin
 
 **A from-scratch, Rust-native cryptocurrency — blockchain, P2P network, WASM VM and an `egui` desktop wallet, all in one Cargo workspace.**
 
@@ -11,11 +11,11 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
 [![Stars](https://img.shields.io/github/stars/Reider85/strangecoin?style=social)](https://github.com/Reider85/strangecoin/stargazers)
 
-? [Introduction](#introduction) · ? [Quick Start](#quick-start) · ? [Testing](#testing) · ?? [Architecture](#architecture) · ? [Roadmap](#roadmap) · ? [Contributing](#contributing)
+Navigation: [Introduction](#introduction) · [Quick Start](#quick-start) · [Testing](#testing) · [Architecture](#architecture) · [Roadmap](#roadmap) · [Contributing](#contributing)
 
 ---
 
-> ?? **TESTNET-ONLY — BURNED GENESIS KEY** (`BUG-S0-015` / `SCIP-0001`)
+> Warning: **TESTNET-ONLY — BURNED GENESIS KEY** (`BUG-S0-015` / `SCIP-0001`)
 >
 > Strangecoin is currently **testnet-only**. The genesis allocation (1e9 SC) was historically controlled by a key derived from a **public** seed string — that key is **burned**. Anyone knowing the seed (or reading old git history) controls the genesis allocation.
 >
@@ -27,15 +27,15 @@
 
 ### What is Strangecoin?
 
-Strangecoin is a **full cryptocurrency written from scratch in Rust**. It is not a fork of any existing coin — the address format (`rsc1…` bech32), chain IDs, genesis block, consensus parameters, network protocol and improvement process are all native to this project.
+Strangecoin is a **full cryptocurrency written from scratch in Rust**. It is not a fork of any existing coin — the address format (`rsc1...` bech32), chain IDs, genesis block, consensus parameters, network protocol and improvement process are all native to this project.
 
 What makes it interesting is **scope**: most educational blockchains stop at a toy in-memory chain with a CLI. Strangecoin goes further and ships, in a single Cargo workspace:
 
-- ? a **PoW blockchain** with persistent LevelDB storage
-- ? a **tokio-driven P2P layer** — Noise handshake, gossip, compact blocks, Erlay-style set reconciliation
-- ? an **in-protocol WASM virtual machine** for smart contracts
-- ?? an **`eframe`/`egui` desktop wallet** — click-to-send, no CLI required
-- ? an **ADR + SCIP governance trail** — every non-trivial decision is recorded
+- a **PoW blockchain** with persistent LevelDB storage
+- a **tokio-driven P2P layer** — Noise handshake, gossip, compact blocks, Erlay-style set reconciliation
+- an **in-protocol WASM virtual machine** for smart contracts
+- an **`eframe`/`egui` desktop wallet** — click-to-send, no CLI required
+- an **ADR + SCIP governance trail** — every non-trivial decision is recorded
 
 It is small enough to read in a weekend, and serious enough to study how production cryptocurrencies are actually structured.
 
@@ -60,40 +60,40 @@ Strangecoin is the answer to one question:
 
 ---
 
-## ? Features
+## Features
 
-### ? Blockchain & Consensus
+### Blockchain & Consensus
 - **Proof-of-Work** — hash must start with the required zero bits (regtest difficulty = 2)
 - **Persistent storage** — LevelDB (`rusty-leveldb`), survives restarts
 - **Balance-checked txs** — insufficient funds are rejected before block inclusion
-- **Bech32 addresses** — native `rsc1…` on regtest (`network_id = 3`)
+- **Bech32 addresses** — native `rsc1...` on regtest (`network_id = 3`)
 - **secp256k1 + ECDSA** signatures
 - **Chain validation** — `validate_chain()` runs after every block
 
-### ? P2P Networking
+### P2P Networking
 - **Noise-encrypted handshakes** — authenticated peer-to-peer
 - **Gossip protocol** — transaction & block propagation
 - **Compact blocks** — BIP-152-style relay
 - **Erlay set reconciliation** — `minisketch`-based
-- **Peer scoring** — latency / invalid / violation weights ? temp & persistent bans
+- **Peer scoring** — latency / invalid / violation weights -> temp & persistent bans
 - **Token-bucket rate limiting** — per-message-type sub-buckets
 
-### ? Smart Contracts
+### Smart Contracts
 - **In-protocol WASM VM** — deploy & call on-chain
 - **Gas metering** — `vm_gas_exhaustion` test
 - **Reentrancy protection** — `vm_reentrancy_attack` test
 - **Precompiles** — `vm_precompiles_integration` test
 - **Contract-to-contract calls** — `vm_transfer_to_contract`
 
-### ?? Desktop Wallet (egui)
+### Desktop Wallet (egui)
 - **`eframe`/`egui` UI** — native, immediate-mode GUI
 - **Wallet view** — address, balance, recipient, amount, Send button
 - **Password gate** — regtest default `password`
 - **Two-node demo** — runs on `8081` and `8082` simultaneously
 - **Graceful shutdown** — `Drop` impls + `SIGTERM`/`SIGINT`
 
-### ? Developer Experience
-- **Event bus** — crossbeam ? tokio bridge fans `NodeEvent`s (block applied, peer connected, …) to sync + GUI consumers
+### Developer Experience
+- **Event bus** — crossbeam -> tokio bridge fans `NodeEvent`s (block applied, peer connected, ...) to sync + GUI consumers
 - **Fuzzing harness** — `cargo-fuzz` targets for `noise`, `gossip`, `compact_blocks`, `erlay`
 - **ADR-governed** — every protocol change is an Architecture Decision Record under `docs/ADR/`
 - **SCIP process** — Strangecoin Improvement Proposals under `docs/SCIP/`
@@ -101,12 +101,12 @@ Strangecoin is the answer to one question:
 
 ---
 
-## ?? Architecture
+## Architecture
 
 ```
 ??????????????????????????????????????????????????????????????????????
 ?                    strangecoin  (binary / GUI)                      ?
-?       src/main.rs  ?  eframe wallet  +  tokio runtime  +  bus      ?
+?       src/main.rs  ->  eframe wallet  +  tokio runtime  +  bus      ?
 ??????????????????????????????????????????????????????????????????????
                ?                                    ?
    ????????????????????????             ????????????????????????
@@ -137,7 +137,7 @@ Strangecoin is the answer to one question:
 | `economics`   | Emission schedule, grants                                                    |
 | `governance`  | On-chain flags                                                               |
 | `api`         | JSON-RPC surface for the GUI                                                 |
-| `events`      | `NodeEvent` bus (crossbeam ? tokio)                                          |
+| `events`      | `NodeEvent` bus (crossbeam <-> tokio)                                          |
 | `config`      | `config.toml` parsing                                                        |
 
 ---
@@ -159,7 +159,7 @@ No external services, databases, or runtime daemons are required — everything is
 
 ---
 
-## ? Installation
+## Installation
 
 ```bash
 # 1. Clone the repo
@@ -180,19 +180,19 @@ cargo build --release --no-default-features --features net
 
 | Feature   | Enables                                       | Default |
 | --------- | --------------------------------------------- | ------- |
-| `net`     | `strangecoin-net` — P2P networking            | ? |
-| `vm-wasm` | `strangecoin-vm-wasm` — on-chain smart contracts | ? |
-| `gui`     | `eframe` + `winapi` — the egui desktop wallet | ? |
+| `net`     | `strangecoin-net` — P2P networking            | yes |
+| `vm-wasm` | `strangecoin-vm-wasm` — on-chain smart contracts | yes |
+| `gui`     | `eframe` + `winapi` — the egui desktop wallet | yes |
 
 ### Key dependencies
 
 `tokio` (multi-thread runtime) · `secp256k1` · `blake3` · `aes-gcm` · `pbkdf2` · `eframe`/`egui 0.22` · `rusty-leveldb` · `tracing` + `tracing-subscriber` · `crossbeam-channel` · `serde`/`serde_json` · `toml` · `hex`
 
-> **Windows build note.** `eframe 0.22` depends on `winapi` without declaring the features it needs (`winuser`, `commctrl`, `shellapi`, …). This repo declares them explicitly. Do not strip them.
+> **Windows build note.** `eframe 0.22` depends on `winapi` without declaring the features it needs (`winuser`, `commctrl`, `shellapi`, ...). This repo declares them explicitly. Do not strip them.
 
 ---
 
-## ? Quick Start
+## Quick Start
 
 ### Run the GUI wallet client
 
@@ -204,10 +204,10 @@ cargo run --release --bin strangecoin -- --config config.toml
 
 You should see:
 
-1. ?? An egui window titled **Strangecoin**.
-2. ? A login screen — wallet address + password (regtest default: `password`).
-3. ? The wallet view: your `rsc1…` address, current balance, recipient + amount fields, **Send** button.
-4. ? The node simultaneously listens on `127.0.0.1:8081` and runs the sync loop in the background.
+1. An egui window titled **Strangecoin**.
+2. A login screen — wallet address + password (regtest default: `password`).
+3. The wallet view: your `rsc1...` address, current balance, recipient + amount fields, **Send** button.
+4. The node simultaneously listens on `127.0.0.1:8081` and runs the sync loop in the background.
 
 To quit: close the window or send `SIGINT`/`SIGTERM` (`Ctrl+C`) — the `Drop` impl cancels the sync task cleanly.
 
@@ -239,7 +239,7 @@ cargo run --release --no-default-features --features net -- \
 
 ---
 
-## ?? Configuration
+## Configuration
 
 All runtime knobs live in [`config.toml`](config.toml). Highlights:
 
@@ -250,7 +250,7 @@ log_level   = "info"
 data_dir    = "./data"
 
 [network]
-listen_addr = "127.0.0.1:8081"   # ? change to :8082 for the second client
+listen_addr = "127.0.0.1:8081"   # <- change to :8082 for the second client
 seeds       = []                  # add ["127.0.0.1:8081"] to bootstrap
 max_peers   = 50
 
@@ -272,7 +272,7 @@ Genesis templates: [`genesis.json`](genesis.json) (mainnet template) and [`genes
 
 ---
 
-## ? Testing
+## Testing
 
 Strangecoin ships with **~35 integration tests** in [`tests/`](tests/), plus unit tests inside each crate. They cover consensus, networking, the VM, reorgs, RBF, rate limiting, peer scoring, and the event bus.
 
@@ -305,7 +305,7 @@ What each subtest verifies:
 | --- | --- |
 | `hundred_transactions_five_wallets` | 100 sequential transfers across 5 wallets settle to `[0,0,0,0,10000]`; all chains reach length 102 and pass `validate_chain()`. |
 | `bech32_address_transfer` | Addresses use `rsc1` regtest HRP; a 1000-SC transfer lands and both chains are valid (length 3). |
-| `node_runs_on_tokio_and_shuts_down_cleanly` | A `BlockApplied` event crosses the crossbeam?tokio bridge; the sync task observes the shutdown flag and `Node::drop` is clean. |
+| `node_runs_on_tokio_and_shuts_down_cleanly` | A `BlockApplied` event crosses the crossbeam->tokio bridge; the sync task observes the shutdown flag and `Node::drop` is clean. |
 
 ### Other test suites
 
@@ -331,7 +331,7 @@ cargo test --release --test vm_deploy_call --test vm_gas_exhaustion \
 cargo test --release --test chain_selector_proptest
 ```
 
-### ? Fuzzing
+### Fuzzing
 
 The `fuzz/` directory contains `cargo-fuzz` targets for the network surface:
 
@@ -345,26 +345,30 @@ cargo +nightly fuzz run erlay
 
 ---
 
-## ? Screenshots
+## Screenshots
 
-> The GUI is an `eframe`/`egui` desktop window. To enable the screenshots below, capture them with your platform's screenshot tool, save as PNG under `docs/screenshots/`, and add image links as shown.
->
-> What each screen contains:
-> - **Login** — wallet address input + password field (regtest default `password`).
-> - **Wallet view** — `rsc1…` address (read-only), confirmed balance, recipient + amount inputs, **Send** button. Balance refreshes on every `BlockApplied` event.
-> - **Two clients** — follow the [Quick Start ? two clients](#run-two-clients-on-ports-8081--8082) recipe and capture both windows side by side.
+The GUI is an `eframe`/`egui` desktop window. Drop PNG captures under `docs/screenshots/` and the images below will render automatically.
 
-Screenshot links to add once images exist:
+What each screen contains:
+- **Login** — wallet address input + password field (regtest default `password`).
+- **Wallet view** — `rsc1...` address (read-only), confirmed balance, recipient + amount inputs, **Send** button. Balance refreshes on every `BlockApplied` event.
+- **Two clients** — follow the [Quick Start -> two clients](#run-two-clients-on-ports-8081--8082) recipe and capture both windows side by side.
 
-```
-![Login](docs/screenshots/login.png)
-![Wallet](docs/screenshots/wallet.png)
-![Two clients](docs/screenshots/two_clients.png)
-```
+### Login screen
+
+![Login screen](docs/screenshots/login.png)
+
+### Wallet view (address, balance, send form)
+
+![Wallet view](docs/screenshots/wallet.png)
+
+### Two clients running side by side (8081 / 8082)
+
+![Two clients side by side](docs/screenshots/two_clients.png)
 
 ---
 
-## ? Project Structure
+## Project Structure
 
 ```
 strangecoin/
@@ -379,7 +383,7 @@ strangecoin/
 ?   ??? mempool/              # tx pool, RBF, double-spend
 ?   ??? network/              # tokio P2P runtime
 ?   ??? storage/              # LevelDB fa?ade
-?   ??? address.rs            # bech32 addresses (rsc1…)
+?   ??? address.rs            # bech32 addresses (rsc1...)
 ?   ??? config.rs             # config.toml parsing
 ?   ??? events.rs             # NodeEvent bus
 ?   ??? main.rs               # entry point
@@ -415,30 +419,30 @@ strangecoin/
 
 ---
 
-## ? Roadmap
+## Roadmap
 
 Strangecoin is developed in numbered stages. Current release line: **`2.0.0-stage2`**.
 
 | Stage | Theme | Status |
 | --- | --- | --- |
-| **0** | Repo setup, LICENSE, ADR-0004/0005, genesis seed | ? done |
-| **1** | Core chain, PoW, wallet, mempool, bech32 | ? done |
-| **1.5** | Receipts root, fork-choice hardening, SCIP-0001 | ? done |
-| **2** | P2P: Noise, gossip, compact blocks, Erlay, peer scoring, rate limit, fuzz | ? done — tagged `v2.0.0-stage2` |
-| **3** | Storage crate, `StorageEngine` trait, schema (ADR-0024) | ? in progress |
-| **4+** | Light-node `--no-default-features` builds, mainnet readiness (post-SCIP-0001) | ? planned |
+| **0** | Repo setup, LICENSE, ADR-0004/0005, genesis seed | done |
+| **1** | Core chain, PoW, wallet, mempool, bech32 | done |
+| **1.5** | Receipts root, fork-choice hardening, SCIP-0001 | done |
+| **2** | P2P: Noise, gossip, compact blocks, Erlay, peer scoring, rate limit, fuzz | done — tagged `v2.0.0-stage2` |
+| **3** | Storage crate, `StorageEngine` trait, schema (ADR-0024) | in progress |
+| **4+** | Light-node `--no-default-features` builds, mainnet readiness (post-SCIP-0001) | planned |
 
 **Next milestones:**
 
-- ? **SCIP-0001** — replace the burned genesis key with an offline-generated one. **Blocks mainnet.**
-- ?? **Stage 3** — land `strangecoin-storage` and migrate the LevelDB fa?ade onto the `StorageEngine` trait.
-- ? **Stage 4** — light-node / SPV build profiles and the first non-regtest network ID.
+- **SCIP-0001** — replace the burned genesis key with an offline-generated one. **Blocks mainnet.**
+- **Stage 3** — land `strangecoin-storage` and migrate the LevelDB fa?ade onto the `StorageEngine` trait.
+- **Stage 4** — light-node / SPV build profiles and the first non-regtest network ID.
 
 See [`docs/stage2/`](docs/stage2/) for the stage-2 definition-of-done, and [`Changelog.md`](Changelog.md) for the release history.
 
 ---
 
-## ? Contributing
+## Contributing
 
 Contributions are welcome — but please read the conventions first, they are non-trivial.
 
@@ -453,7 +457,7 @@ See [`AGENTS.md`](AGENTS.md) for the contributor agent notes that the maintainer
 
 ---
 
-## ? License
+## License
 
 Licensed under the **Apache License, Version 2.0** — see [`LICENSE`](LICENSE) and <https://www.apache.org/licenses/LICENSE-2.0>.
 
@@ -463,11 +467,11 @@ SPDX-License-Identifier: Apache-2.0
 
 The `license` field in [`Cargo.toml`](Cargo.toml) declares `Apache-2.0` for crates.io compatibility.
 
-> ?? The Apache-2.0 license covers the **source code**. It does **not** grant any right to operate a mainnet — the genesis key is burned (see the warning at the top), and mainnet is gated behind [SCIP-0001](docs/SCIP/scip-0001-genesis-key-replacement.md).
+> The Apache-2.0 license covers the **source code**. It does **not** grant any right to operate a mainnet — the genesis key is burned (see the warning at the top), and mainnet is gated behind [SCIP-0001](docs/SCIP/scip-0001-genesis-key-replacement.md).
 
 ---
 
-## ? Acknowledgements
+## Acknowledgements
 
 Strangecoin stands on the shoulders of many open-source projects and protocol designs:
 
@@ -483,6 +487,4 @@ Protocol design decisions are recorded as ADRs under [`docs/ADR/`](docs/ADR) and
 
 ---
 
-**? If Strangecoin helped you learn or build, please [star the repo](https://github.com/Reider85/strangecoin/stargazers) — it really helps.**
-
-Made with ? in Rust
+If Strangecoin helped you learn or build, please [star the repo](https://github.com/Reider85/strangecoin/stargazers).
