@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/Reider85/strangecoin/actions/workflows/ci.yml/badge.svg)](https://github.com/Reider85/strangecoin/actions/workflows/ci.yml)
 [![Release](https://github.com/Reider85/strangecoin/actions/workflows/release.yml/badge.svg)](https://github.com/Reider85/strangecoin/actions/workflows/release.yml)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.74%2B-orange.svg)](https://www.rust-lang.org)
 [![Version](https://img.shields.io/badge/version-v2.0.0--stage2-success)](Changelog.md)
 
@@ -118,7 +118,7 @@ Each stage is a tagged release with a full changelog entry, a definition-of-done
 
 ## Contribute
 
-Strangecoin is open source under the MIT license. Pull requests are welcome; the bar is "matches an existing ADR or proposes a new one, passes `cargo clippy -D warnings` and `cargo fmt --check`, and doesn't regress the 22 invariants." Read [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) for the full workflow, and `docs/security/SECURITY.md` for how to report a vulnerability (PGP key, 48h SLA, 90-day coordinated disclosure, paid bug bounty).
+Strangecoin is open source under the Apache License, Version 2.0. Pull requests are welcome; the bar is "matches an existing ADR or proposes a new one, passes `cargo clippy -D warnings` and `cargo fmt --check`, and doesn't regress the 22 invariants." Read [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full workflow, and `docs/security/SECURITY.md` for how to report a vulnerability (PGP key, 48h SLA, 90-day coordinated disclosure, paid bug bounty).
 
 If you find a bug, a fuzz panic, or a divergence between wasmi and wasmtime, the bounty table wants to hear from you.
 

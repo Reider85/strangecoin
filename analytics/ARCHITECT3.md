@@ -31,7 +31,7 @@ PoW без подписей) до production-grade криптовалюты. В 
 - **Governance:** SCIP процесс + activation height с Stage 1.
 - **Dev-experience:** SDK, devnet, indexer, explorer, faucet, JSON-RPC eth_*
   compatibility как first-class архитектурные компоненты.
-- **License:** MIT/Apache-2.0 с Stage 0.
+- **License:** Apache-2.0 (ADR-0027; Stage 0 — dual MIT OR Apache-2.0, superseded).
 
 Уровень абстракции: блоки/подсистемы и их связи, без деталей каждой функции.
 Соглашения по границам данных описаны на уровне «что проходит через границу».
@@ -724,7 +724,7 @@ strangecoin/
 │   ├── contract.rs             # пример контракта на Rust
 │   └── devnet.rs               # пример запуска devnet
 ├── Cargo.toml                  # workspace
-├── LICENSE                     # MIT/Apache-2.0 (Stage 0, first commit)
+├── LICENSE                     # Apache-2.0 (ADR-0027; Stage 0 — MIT OR Apache-2.0)
 ├── README.md
 ├── CONTRIBUTING.md
 └── ARCHITECT3.md               # этот документ
@@ -970,7 +970,7 @@ height»).
 [ ] Governance: SCIP + activation height для изменений консенсуса
 [ ] Security: TLA+ spec актуализирован, fuzzing targets добавлены
 [ ] Anti-goals respected (см. §15)
-[ ] License: MIT/Apache-2.0, LICENSE файл в корне
+[ ] License: Apache-2.0, LICENSE файл в корне
 [ ] Reproducible builds: CI gate, cosign signature для release
 [ ] Strangler pattern: перенос подсистемы в отдельный крейт (если применимо)
 [ ] Tests: unit + property (proptest) + integration (two_clients, reorg, double_spend)

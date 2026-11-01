@@ -1,7 +1,7 @@
 # ADR-0004: License Selection — Dual MIT OR Apache-2.0
 
 ## Status
-Accepted
+Accepted — **Superseded by [ADR-0027](0027-license-change-to-apache-2.0.md) (2026-11-01)**: the project is now licensed under Apache-2.0 only. This text is preserved as the historical Stage 0 record.
 
 ## Context
 Strangecoin is an open-source cryptocurrency project written in Rust. We need to choose a license that:

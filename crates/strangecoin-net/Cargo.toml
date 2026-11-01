@@ -2,6 +2,7 @@
 name = "strangecoin-net"
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
 description = "Strangecoin network crate: P2P protocol, Noise transport, gossip, compact blocks, Erlay, peer management (Stage 2)"
 
 [dependencies]
