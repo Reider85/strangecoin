@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Strangecoin Architecture</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+          --text: #0F172A;
+          --text-sub: #475569;
+          --text-muted: #64748B;
+          --bg: #FFFFFF;
+          --surface: #F8FAFC;
+          --border: #E2E8F0;
+          --accent: #2563EB;
+          --accent-dark: #1E3A8A;
+          --connector: #94A3B8;
+          --warn: #D97706;
+        }
+
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', system-ui, sans-serif;
+          background: var(--bg);
+          color: var(--text);
+          -webkit-font-smoothing: antialiased;
+        }
+
+        #root {
+          width: fit-content;
+          min-width: 1280px;
+          margin: 0 auto;
+          padding: 40px 48px 32px;
+        }
+
+        .diagram-title {
+          font-size: 26px;
+          font-weight: 800;
+          color: var(--text);
+          letter-spacing: -0.3px;
+          margin-bottom: 4px;
+        }
+        .diagram-sub {
+          font-size: 14px;
+          color: var(--text-sub);
+          margin-bottom: 28px;
+          font-weight: 400;
+        }
+        .diagram-sub code {
+          font-family: 'DejaVu Sans Mono', Consolas, monospace;
+          background: var(--surface);
+          border: 1px solid var(--border);
+          padding: 1px 6px;
+          border-radius: 4px;
+          font-size: 12.5px;
+          color: var(--accent-dark);
+        }
+
+        /* Layer card — same blue-gray family, brightness progression */
+        .layer {
+          background: #F8FAFC;
+          border-radius: 14px;
+          padding: 20px 24px 22px;
+          border: 1px solid var(--border);
+        }
+        .layer-header {
+          display: flex;
+          align-items: baseline;
+          gap: 10px;
+          margin-bottom: 14px;
+        }
+        .layer-num {
+          display: inline-block;
+          width: 26px; height: 26px;
+          line-height: 26px;
+          text-align: center;
+          border-radius: 50%;
+          font-size: 12px;
+          font-weight: 700;
+          background: #DBEAFE;
+          color: var(--accent-dark);
+        }
+        .layer-title {
+          font-size: 16px;
+          font-weight: 700;
+          color: var(--text);
+        }
+        .layer-tag {
+          font-size: 12px;
+          font-weight: 500;
+          color: var(--text-muted);
+          background: white;
+          border: 1px solid var(--border);
+          padding: 2px 9px;
+          border-radius: 4px;
+          font-family: 'DejaVu Sans Mono', Consolas, monospace;
+        }
+        .layer-desc {
+          font-size: 13px;
+          color: var(--text-sub);
+          margin-left: auto;
+          font-weight: 400;
+        }
+
+        /* Node grid */
+        .node-row {
+          display: grid;
+          gap: 12px;
+        }
+        .row-6 { grid-template-columns: repeat(6, 1fr); }
+        .row-4 { grid-template-columns: repeat(4, 1fr); }
+        .row-8 { grid-template-columns: repeat(8, 1fr); }
+
+        .node {
+          background: white;
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          padding: 10px 12px;
+          text-align: left;
+        }
+        .node .node-name {
+          font-size: 13.5px;
+          font-weight: 600;
+          color: var(--text);
+          margin-bottom: 3px;
+          font-family: 'DejaVu Sans Mono', Consolas, monospace;
+        }
+        .node .node-desc {
+          font-size: 11.5px;
+          color: var(--text-sub);
+          line-height: 1.35;
+          font-weight: 400;
+        }
+
+        /* Crates (layer 2) — slightly bigger, accent border */
+        .crate {
+          background: white;
+          border: 1px solid #BFDBFE;
+          border-left: 3px solid var(--accent);
+          border-radius: 8px;
+          padding: 12px 14px;
+        }
+        .crate .crate-name {
+          font-family: 'DejaVu Sans Mono', Consolas, monospace;
+          font-size: 13px;
+          font-weight: 700;
+          color: var(--accent-dark);
+          margin-bottom: 4px;
+        }
+        .crate .crate-desc {
+          font-size: 11.5px;
+          color: var(--text-sub);
+          line-height: 1.4;
+          font-weight: 400;
+        }
+
+        /* Dependency chips */
+        .dep {
+          background: white;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          padding: 8px 10px;
+          text-align: center;
+        }
+        .dep .dep-name {
+          font-family: 'DejaVu Sans Mono', Consolas, monospace;
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--text);
+        }
+        .dep .dep-ver {
+          font-size: 10.5px;
+          color: var(--text-muted);
+          margin-top: 2px;
+          font-weight: 400;
+        }
+
+        /* Cross-cutting ribbon */
+        .ribbon {
+          background: #FFFBEB;
+          border: 1px solid #FCD34D;
+          border-radius: 12px;
+          padding: 14px 20px;
+          display: flex;
+          align-items: center;
+          gap: 18px;
+        }
+        .ribbon-label {
+          flex-shrink: 0;
+          font-size: 13px;
+          font-weight: 700;
+          color: var(--warn);
+          letter-spacing: 0.2px;
+          text-transform: uppercase;
+        }
+        .ribbon-items {
+          display: flex;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+        .ribbon-item {
+          background: white;
+          border: 1px solid #FCD34D;
+          border-radius: 4px;
+          padding: 4px 10px;
+          font-size: 12px;
+          color: var(--text);
+          font-weight: 500;
+        }
+        .ribbon-item b {
+          font-weight: 700;
+          color: var(--warn);
+        }
+
+        /* Connector arrows between layers */
+        .arrow {
+          text-align: center;
+          color: var(--connector);
+          font-size: 22px;
+          line-height: 1;
+          margin: 10px 0;
+          font-weight: 300;
+        }
+        .arrow-label {
+          display: inline-block;
+          font-size: 11px;
+          color: var(--text-muted);
+          background: var(--bg);
+          padding: 0 8px;
+          margin-top: -6px;
+          font-weight: 500;
+        }
+
+        .footer-note {
+          margin-top: 22px;
+          text-align: center;
+          font-size: 11.5px;
+          color: var(--text-muted);
+          font-weight: 400;
+        }
+        .footer-note code {
+          font-family: 'DejaVu Sans Mono', Consolas, monospace;
+          color: var(--text-sub);
+        }
+    </style>
+</head>
+<body>
+<div id="root">
+    <div class="diagram-title">Strangecoin — Layered Architecture</div>
+    <div class="diagram-sub">Pure core, impure shell. <code>strangecoin-core</code> has zero I/O (no tokio, no std::net, no std::fs) — enforced by CI source-gates.</div>
+
+    <!-- Layer 1: Node binary -->
+    <div class="layer">
+        <div class="layer-header">
+            <span class="layer-num">1</span>
+            <span class="layer-title">Node Binary</span>
+            <span class="layer-tag">src/</span>
+            <span class="layer-desc">the user-facing process — CLI, GUI, wallet, mempool, API</span>
+        </div>
+        <div class="node-row row-6">
+            <div class="node"><div class="node-name">cli</div><div class="node-desc">sc run / shadow replay / wallet commands</div></div>
+            <div class="node"><div class="node-name">gui</div><div class="node-desc">eframe / egui desktop client</div></div>
+            <div class="node"><div class="node-name">wallet</div><div class="node-desc">secp256k1 keystore, PBKDF2 + AES-256-GCM</div></div>
+            <div class="node"><div class="node-name">mempool</div><div class="node-desc">Replace-By-Fee, dedup by txid</div></div>
+            <div class="node"><div class="node-name">api</div><div class="node-desc">node RPC + EventBus surface</div></div>
+            <div class="node"><div class="node-name">events</div><div class="node-desc">deterministic EventBus broadcast</div></div>
+        </div>
+    </div>
+
+    <div class="arrow">↓<div class="arrow-label">calls</div></div>
+
+    <!-- Layer 2: Workspace crates -->
+    <div class="layer">
+        <div class="layer-header">
+            <span class="layer-num">2</span>
+            <span class="layer-title">Workspace Crates</span>
+            <span class="layer-tag">crates/</span>
+            <span class="layer-desc">four focused crates — pure core, three thin shells</span>
+        </div>
+        <div class="node-row row-4">
+            <div class="crate">
+                <div class="crate-name">strangecoin-core</div>
+                <div class="crate-desc">Pure consensus, state, economics, governance. Sparse Merkle Trie (depth 256), PoW retarget, emission curve. <b>Zero I/O.</b></div>
+            </div>
+            <div class="crate">
+                <div class="crate-name">strangecoin-vm-wasm</div>
+                <div class="crate-desc">wasmi 2.0 runtime. EOAs + contract accounts, transfer/create/call, 13 host fns, 7 precompiles, gas via fuel.</div>
+            </div>
+            <div class="crate">
+                <div class="crate-name">strangecoin-net</div>
+                <div class="crate-desc">Noise XX + ChaCha20-Poly1305. BIP-152 compact blocks, Erlay, gossip, 4-factor peer scoring, rate limiting.</div>
+            </div>
+            <div class="crate">
+                <div class="crate-name">strangecoin-storage</div>
+                <div class="crate-desc">RocksDB backend (Stage 3, default-on). State pruning, snapshot sync — Stage 3 roadmap.</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="arrow">↓<div class="arrow-label">depends on (exact-pinned, SCIP-gated)</div></div>
+
+    <!-- Layer 3: External dependencies -->
+    <div class="layer">
+        <div class="layer-header">
+            <span class="layer-num">3</span>
+            <span class="layer-title">Pinned External Dependencies</span>
+            <span class="layer-tag">exact versions</span>
+            <span class="layer-desc">only move via SCIP after mainnet freeze</span>
+        </div>
+        <div class="node-row row-8">
+            <div class="dep"><div class="dep-name">wasmi</div><div class="dep-ver">2.0 · no_std</div></div>
+            <div class="dep"><div class="dep-name">snow</div><div class="dep-ver">0.10 · Noise XX</div></div>
+            <div class="dep"><div class="dep-name">secp256k1</div><div class="dep-ver">0.29 · recovery</div></div>
+            <div class="dep"><div class="dep-name">blake3</div><div class="dep-ver">1 · consensus hash</div></div>
+            <div class="dep"><div class="dep-name">ed25519-dalek</div><div class="dep-ver">node_id auth</div></div>
+            <div class="dep"><div class="dep-name">hickory</div><div class="dep-ver">DNSSEC seeds</div></div>
+            <div class="dep"><div class="dep-name">minisketch-rs</div><div class="dep-ver">vendored · Erlay</div></div>
+            <div class="dep"><div class="dep-name">tokio</div><div class="dep-ver">1 · async rt</div></div>
+        </div>
+    </div>
+
+    <!-- Cross-cutting ribbon -->
+    <div class="ribbon" style="margin-top: 20px;">
+        <div class="ribbon-label">Cross-cutting</div>
+        <div class="ribbon-items">
+            <div class="ribbon-item"><b>STRIDE</b> threat model · 42 vectors</div>
+            <div class="ribbon-item"><b>TLA+</b> consensus spec · 35,207 states</div>
+            <div class="ribbon-item"><b>22</b> ARCHITECT3 invariants</div>
+            <div class="ribbon-item"><b>9</b> cargo-fuzz targets × 600s</div>
+            <div class="ribbon-item"><b>SLSA L3</b> + cosign provenance</div>
+            <div class="ribbon-item"><b>SCIP</b> governance · 26 ADRs</div>
+        </div>
+    </div>
+
+    <div class="footer-note">
+        Design rule: every consensus rule, every signature, every handshake is written, fuzzed, and formally specified in-house — <code>not a fork, not a wrapper, not a demo</code>.
+    </div>
+</div>
+</body>
+</html>
