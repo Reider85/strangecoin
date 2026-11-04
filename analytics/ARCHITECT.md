@@ -31,6 +31,13 @@ PoW без подписей) до production-grade криптовалюты. В 
 - **Governance:** SCIP процесс + activation height с Stage 1.
 - **Dev-experience:** SDK, devnet, indexer, explorer, faucet, JSON-RPC eth_*
   compatibility как first-class архитектурные компоненты.
+- **AI-agent orientation (§19):** Strangecoin позиционируется как криптовалюта
+  для ИИ-агентов — agent identity = wallet identity, состояние цепи экспонируется
+  через MCP (Model Context Protocol), agent-to-agent платежи и координация
+  задач — через ACP (Agent Communication Protocol) поверх Noise P2P, demo-UI
+  заменяется на профессиональный. Зафиксировано в ADR-0028/0029/0030/0031;
+  промпты — в `prompt-stage3.md` §8 (extension prompts `AI-P01`..`AI-P05`,
+  `UI-P01`..`UI-P05`).
 - **License:** Apache-2.0 (ADR-0027; Stage 0 — dual MIT OR Apache-2.0, superseded).
 
 Уровень абстракции: блоки/подсистемы и их связи, без деталей каждой функции.
@@ -989,6 +996,176 @@ height»).
 - `ANALYSIS.md` — критический разбор всех четырёх документов (см. `ANALYSIS.md`).
 - `prompt.md` — 117 промптов для Stage 0 (для AI-агентов; требует обновления с
   учётом решений в ARCHITECT3.md).
-- `docs/ADR/` — Architecture Decision Records (детали решений).
+- `docs/ADR/` — Architecture Decision Records (детали решений; включая
+  ADR-0028 «Strangecoin as cryptocurrency for AI agents», ADR-0029 «MCP server»,
+  ADR-0030 «ACP agent communication protocol», ADR-0031 «Professional UI replacement»).
 - `docs/spec/consensus.tla` — TLA+ спецификация консенсуса.
+- `docs/spec/agent_integration.md` — общая спецификация интеграции AI-агентов.
+- `docs/spec/mcp_server.md` — спецификация MCP-сервера (tools/resources/transports).
+- `docs/spec/acp_messages.md` — спецификация ACP-сообщений (negotiate/task/settle/revoke).
+- `docs/spec/ui_professional.md` — спецификация профессионального UI (design system, screens).
+- `analytics/BACKLOG.md` — сквозной бэклог проекта (включая AI/MCP/ACP/UI work items).
 - `docs/security/THREAT_MODEL.md` — детальный threat model (расширение §6).
+
+---
+
+## 19. AI Agent orientation (Strangecoin как криптовалюта для ИИ-агентов)
+
+**Ключевое позиционирование:** Strangecoin — это криптовалюта для ИИ-агентов.
+Layer-1, в котором автономные экономические агенты являются первоклассными
+участниками, а не надстройкой над человеческим кошельком. Решение зафиксировано
+в `docs/ADR/0028-strangecoin-as-cryptocurrency-for-ai-agents.md` (Proposed →
+Accepted после S3E/AI-P01); конкретные механизмы — в ADR-0029 (MCP server),
+ADR-0030 (ACP), ADR-0031 (Professional UI). Промпты для реализации — в
+`analytics/prompt-stage3.md` §8 (extension prompts `AI-P01`..`AI-P05`,
+`UI-P01`..`UI-P05`).
+
+### 19.1. Принципы AI-agent orientation (дополнение к §1)
+
+1. **Agent identity = wallet identity.** Каждый ИИ-агент владеет `secp256k1`
+   keypair (та же кривая, что у MetaMask/Ledger), с опциональной HD-деривацией
+   `m/44'/1234'/<agent_id>'` для sub-agents и rotating session keys. Никакого
+   отдельного «agent registry» на L1 — агентом считается любой EOA, который
+   подписывает транзакции; регистрация — off-chain (indexer, MCP `agent_*`
+   методы).
+2. **Chain state — для чтения машиной.** Состояние цепи экспонируется через MCP
+   (Model Context Protocol) как tools и resources, читаемые любым
+   MCP-совместимым LLM (Claude, GPT, Gemini, open-weight через `mcp-cli`).
+   Никакого custom-plugin контракта с каждой моделью — одно MCP-описание на
+   всех.
+3. **Agent-to-agent — без центра.** ACP (Agent Communication Protocol) —
+   семейство wire-сообщений поверх существующего Noise-authenticated P2P-слоя:
+   negotiate/task/settle/revoke. Agенты договариваются о задачах, котируют и
+   платят за услуги, эскроуят micropayments — без централизованного
+   marketplace. ACP-сообщение ссылается on-chain txid для escrow.
+4. **Tx-features для агентов — без consensus-слоя.** Batched tx (одна подпись,
+   N вызовов), sponsored gas (paymaster), programmable policy wallets (multisig
+   / session-key validators) — реализуются Stage 1.5 WASM-контрактами, не
+   трогая консенсус base layer.
+5. **JSON-RPC agent_* namespaced.** Stage 4 JSON-RPC surface расширяется
+   методами `agent_getSession`, `agent_signAndSubmitBatch`, `agent_sponsorTx`
+   (paymaster hook, Stage 5), `agent_estimateTaskCost`, `agent_getActivity` —
+   рядом с `eth_*` (Ethereum tooling interop сохраняется).
+6. **UI для операторов и agентов.** Demo-wallet на `eframe`/`egui` заменяется
+   на профессиональный UI: design system, dark/light themes, WCAG AA
+   accessibility, dashboard для node-операторов, agent activity feed,
+   transaction detail с receipts и witness proofs. Migration — через
+   ADR-0031 + spec `docs/spec/ui_professional.md`.
+
+### 19.2. Контекстная диаграмма — дополнение к §2
+
+К существующей контекстной диаграмме добавляются три новых внешних актора:
+
+```
+              ┌─────────────────────┐
+              │  AI Agent runtime   │
+              │  (LLM + tools loop) │
+              └──────────┬──────────┘
+                         │ MCP (stdio | HTTP+SSE)
+                         ▼
+        ┌────────────────────────────────────────────┐
+        │           Strangecoin full node            │
+        │  ┌──────────────────────────────────────┐  │
+        │  │ MCP server (Stage 4)                 │  │
+        │  │  tools: get_block, get_balance,      │  │
+        │  │   submit_tx, call_contract,          │  │
+        │  │   estimate_fee, subscribe_events     │  │
+        │  │  resources: chain://tip              │  │
+        │  │   chain://block/{h}                  │  │
+        │  │   chain://tx/{txid}                  │  │
+        │  │   chain://contract/{addr}            │  │
+        │  └──────────────────────────────────────┘  │
+        │  ┌──────────────────────────────────────┐  │
+        │  │ JSON-RPC (eth_* + agent_*)           │  │
+        │  └──────────────────────────────────────┘  │
+        │  ┌──────────────────────────────────────┐  │
+        │  │ ACP message handlers (Stage 4)       │  │
+        │  │  negotiate / task / settle / revoke  │  │
+        │  └──────────────────────────────────────┘  │
+        └─────────────────┬──────────────────────────┘
+                          │ Noise P2P (Stage 2)
+                          ▼
+        ┌────────────────────────────────────────────┐
+        │   Peer Strangecoin node (agent-controlled  │
+        │   or operator-controlled)                  │
+        └────────────────────────────────────────────┘
+```
+
+### 19.3. Функциональные подсистемы — дополнение к §3
+
+К существующим подсистемам (blockchain/consensus/mempool/network/storage/VM/
+wallet/economics/governance/api/events) добавляются:
+
+| Подсистема | Crate / модуль | Ответственность | Stage |
+|------------|----------------|-----------------|-------|
+| **MCP server** | `crates/strangecoin-mcp` (новый, Stage 4) | Экспонирование chain state как MCP tools и resources; stdio + HTTP+SSE transports; auth via agent keypair (Noise-XX reuse) | 4 |
+| **ACP transport** | `crates/strangecoin-net` (расширение, Stage 4) | Семейство wire-сообщений `ACP_*` поверх Noise; escrow ссылается on-chain txid; replay protection + rate limit — reuse Stage 2 infra | 4 |
+| **Agent JSON-RPC** | `src/api/` (расширение, Stage 4) | `agent_*` namespaced методы: getSession, signAndSubmitBatch, sponsorTx, estimateTaskCost, getActivity | 4 |
+| **Agent SDK** | `crates/strangecoin-sdk` (новый, Stage 4) | Rust + TypeScript SDK для ИИ-агентов: wallet, sign, submit, MCP-client helpers, ACP-client helpers | 4 |
+| **Professional UI** | `src/gui/` (переписать, Stage 4) | design system + component library + screens (wallet, dashboard, agent activity, tx detail, settings) | 4 |
+| **Agent devnet + faucet** | `cargo-strangecoin agent devnet` (Stage 4) | One-command local agent network, faucet funds N agent wallets из seed, готов к multi-agent orchestration tests | 4 |
+
+### 19.4. Модульная карта (workspace) — дополнение к §9
+
+К workspace members (`"."`, `crates/strangecoin-core`, `-vm-wasm`, `-net`,
+`-storage`) Stage 4 добавляет:
+
+```
+crates/
+├── strangecoin-storage/   (Stage 3)
+├── strangecoin-mcp/       (Stage 4 — ADR-0029) NEW
+├── strangecoin-sdk/       (Stage 4 — ADR-0028) NEW
+├── strangecoin-ui/        (Stage 4 — ADR-0031) NEW  (headless component lib + render backends)
+└── strangecoin-net/       (Stage 4 — расширение: ACP message handlers)
+```
+
+`src/gui/` становится тонким launcher'ом поверх `strangecoin-ui` (strangler
+pattern, §10) — аналогично тому, как `src/storage/` мигрирует на
+`strangecoin-storage` в Stage 3.
+
+### 19.5. Инварианты — дополнение к §5
+
+Новые инварианты (расширение к 22 существующим, нумерация продолжается):
+
+| # | Инвариант | Enforcement |
+|---|-----------|-------------|
+| 23 | **MCP tool output determinism.** Одинаковый `get_block(h)` на всех узлах (без local time / network jitter) — output чистая функция от chain state. | Pure-core reuse; MCP handler — тонкая shell, не считает ничего сама. |
+| 24 | **ACP escrow txid real.** Каждое `ACP_SETTLE` ссылается на txid, который реально существует в chain (иначе reject). | ACP handler проверяет через `StorageEngine::get_tx(txid)` перед accept. |
+| 25 | **ACP replay protection.** Каждое `ACP_NEGOTIATE`/`ACP_TASK` несёт монотонный `agent_nonce` per `(agent_id, counterparty)`; reject при `<= last_seen`. | In-memory `agent_nonce` map (per peer), backed by RocksDB `meta` CF. |
+| 26 | **Agent key isolation.** MCP/ACP handlers не имеют доступа к operator wallet keys; sponsor-key — отдельный keystore entry. | Wallet trait scope (`OperatorKeystore` vs `AgentKeystore`); compile-time enforcement. |
+| 27 | **Professional UIWCAG AA.** Все экраны нового UI проходят automated accessibility audit (axe-core в CI). | CI gate `cargo test -p strangecoin-ui --features a11y-audit`. |
+
+### 19.6. Threat model — дополнение к §6
+
+Новые векторы атаки (расширение STRIDE):
+
+| ID | Vector | Mitigation |
+|----|--------|------------|
+| V-43 | MCP tool poisoning — подмена output MCP-сервером, чтобы LLM принял ложное состояние. | Determinism (#23); MCP responses signed by node_id Ed25519 key; client verifies. |
+| V-44 | ACP spam — флуд `ACP_NEGOTIATE` для истощения peer. | Rate limit (reuse Stage 2 token-bucket); per-peer nonce window. |
+| V-45 | ACP escrow fraud — `ACP_SETTLE` ссылается на несуществующий/чужой txid. | Invariant #24; reject + ban peer (Stage 2 peer scoring extension). |
+| V-46 | Agent key theft — компрометация agent keypair через MCP stdio pipe. | Stdio transport только локально; HTTP+SSE требует Noise-XX auth; key isolation (#26). |
+| V-47 | UI accessibility regression — новый UI теряет WCAG AA. | CI gate (#27); axe-core в CI. |
+| V-48 | Sponsor paymaster DoS — агент спамит sponsor-tx, истощая paymaster balance. | Stage 5 paymaster rate limit + per-agent quota (config). |
+
+### 19.7. Anti-goals — дополнение к §15
+
+| Anti-goal | Причина |
+|-----------|---------|
+| On-chain agent registry | Агент = любой EOA; регистрация off-chain (indexer, MCP). Консенсус не знает про «agентов». |
+| Custom LLM-plugin protocol | MCP — единый стандарт; один раз описали tools, любой MCP-client работает. |
+| ACP поверх plain TCP (без Noise) | Noise XX + ChaCha20-Poly1305 уже на Stage 2; не дублировать crypto. |
+| Смена кривой EOA для агентов | secp256k1 — совместимость с MetaMask/Ledger; agents используют тот же key format. |
+| Wallet-DRM / agent identity attestation | Не lock-in; agents анонимны, как и EOA; репутация — off-chain (indexer, optional). |
+
+### 19.8. Open questions — дополнение к §16
+
+1. **MCP transport default:** stdio-only или HTTP+SSE-by-default? Stdio безопаснее
+   (no network), HTTP+SSE удобнее для remote agents. Решение — ADR-0029 amendment.
+2. **ACP escrow model:** on-chain escrow contract (WASM) vs off-chain HTLC-style?
+   On-chain — дороже gas, но публично верифицируемо; off-chain — дешевле, но
+   trust в indexer. Решение — ADR-0030 amendment.
+3. **Agent session key rotation:** rotating session keys (короткий TTL) vs
+   long-lived agent keypair + per-task sub-keys? Решение — ADR-0028 amendment.
+4. **UI rendering backend:** retain eframe/egui (immediate-mode) vs migrate на
+   Tauri+Web (HTML/CSS) vs iced (retained Elm-style)? Решение — ADR-0031.

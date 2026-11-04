@@ -21,7 +21,11 @@ Verkle Trie, RocksDB, strangler pattern migration, threat model + TLA+ с Stage 
 - явно проектирует PoW→PoS миграцию на Stage 7;
 - использует secp256k1/BLS12-381 и tail emission;
 - закладывает TLA+/threat model/reproducible builds/license с Stage 0;
-- фиксирует все 22 invariants из `ARCHITECT3.md` §5 как day-1 requirements.
+- фиксирует все 22 invariants из `ARCHITECT3.md` §5 как day-1 requirements;
+- **добавляет (Stage 4, ADR-0028..0031) AI-agent orientation:** MCP-сервер,
+  ACP-сообщения, agent-native JSON-RPC, профессиональный UI — Strangecoin
+  позиционируется как криптовалюта для ИИ-агентов. Расширение инвариантов
+  (#23..#27) и threat-векторов (V-43..V-48) — в `ARCHITECT.md` §19.
 
 ---
 
@@ -667,14 +671,19 @@ nodes + addr gossip, peer scoring. Перенести сеть в `crates/strang
 
 ---
 
-## Этап 4 — Dev-experience (SDK, devnet, indexer, JSON-RPC eth_*)
+## Этап 4 — Dev-experience + AI agents (SDK, devnet, indexer, JSON-RPC eth_*, MCP, ACP, professional UI)
 
 ### Цели
 
-Создать экосистему инструментов для разработчиков: `cargo-strangecoin` SDK
-(foundry-аналог), local devnet (anvil-аналог), indexer (Subgraph/sqd-аналог),
+Создать экосистему инструментов для разработчиков и ИИ-агентов: `cargo-strangecoin`
+SDK (foundry-аналог), local devnet (anvil-аналог), indexer (Subgraph/sqd-аналог),
 web block explorer, testnet faucet, JSON-RPC eth_* compatibility для
-MetaMask/WalletConnect.
+MetaMask/WalletConnect. **Дополнительно (ADR-0028):** позиционировать
+Strangecoin как криптовалюту для ИИ-агентов — agent identity = wallet identity,
+MCP-сервер для чтения chain state любым MCP-совместимым LLM, ACP-сообщения для
+agent-to-agent платежей и координации задач, профессиональный UI вместо
+demo-egui-wallet. Промпты — `analytics/prompt-stage3.md` §8 (extension prompts
+`AI-P01`..`AI-P05`, `UI-P01`..`UI-P05`).
 
 ### Зависимости
 
@@ -730,7 +739,70 @@ MetaMask/WalletConnect.
 - [ ] GraphQL API для дApps.
 - [ ] Indexing of contract events.
 - [ ] Custom subgraphs (declarative mapping).
+- [ ] Indexing of agent activity (ACP messages, batched txs, sponsor txs) для
+      `agent_getActivity` JSON-RPC method.
 - [ ] `crates/strangecoin-indexer/`.
+
+**MCP (Model Context Protocol) server — ADR-0029:**
+- [ ] `crates/strangecoin-mcp/` (новый крейт).
+- [ ] MCP tools: `get_block`, `get_balance`, `get_nonce`, `submit_tx`,
+      `call_contract`, `estimate_fee`, `subscribe_events`.
+- [ ] MCP resources: `chain://tip`, `chain://block/{h}`, `chain://tx/{txid}`,
+      `chain://contract/{addr}`.
+- [ ] Transports: stdio (локально) + HTTP+SSE (remote, Noise-XX auth).
+- [ ] Output determinism (#23): все tool outputs — pure functions от chain
+      state, без local time/network jitter.
+- [ ] MCP responses signed by node_id Ed25519 key (V-43 mitigation).
+- [ ] `tests/mcp_server.rs` (round-trip с `mcp-cli` reference client).
+
+**ACP (Agent Communication Protocol) transport — ADR-0030:**
+- [ ] Wire-сообщения `ACP_NEGOTIATE`, `ACP_TASK`, `ACP_SETTLE`, `ACP_REVOKE`
+      поверх Noise P2P (reuse Stage 2 transport).
+- [ ] Escrow ссылки на on-chain txid (#24): reject при невалидном txid.
+- [ ] Replay protection (#25): monotonic `agent_nonce` per
+      `(agent_id, counterparty)`; backed by RocksDB `meta` CF.
+- [ ] Rate limit (reuse Stage 2 token-bucket, V-44 mitigation).
+- [ ] `tests/acp_messages.rs` (двухagентная сессия: negotiate → task → settle).
+- [ ] `docs/spec/acp_messages.md` — спецификация message format.
+
+**Agent JSON-RPC surface:**
+- [ ] `agent_getSession` — открыть session с agent keypair, вернуть session_id.
+- [ ] `agent_signAndSubmitBatch` — подписать и submit'нуть N txs одним вызовом.
+- [ ] `agent_sponsorTx` — sponsor gas для agent tx через paymaster hook
+      (Stage 5 full impl, Stage 4 — stub).
+- [ ] `agent_estimateTaskCost` — оценить gas + ACP escrow cost для задачи.
+- [ ] `agent_getActivity` — recent agent txs + ACP messages (из indexer).
+- [ ] `tests/agent_rpc.rs`.
+
+**Agent SDK — ADR-0028:**
+- [ ] `crates/strangecoin-sdk/` — Rust SDK (wallet, sign, submit,
+      MCP-client helpers, ACP-client helpers).
+- [ ] TypeScript SDK (генерируется из Rust через `wasm-bindgen` или `ts-rs`).
+- [ ] Python SDK (для ML/agent frameworks: LangChain, AutoGen, CrewAI).
+- [ ] `examples/agent_*` — cookbook: single-agent on-chain read, multi-agent
+      ACP task settlement, sponsored tx через paymaster.
+
+**Agent devnet + faucet:**
+- [ ] `cargo strangecoin agent devnet` — one-command local agent network.
+- [ ] Faucet funds N agent wallets из seed (default N=10, 1000 SC each).
+- [ ] Multi-agent orchestration tests (3 agents, ACP task chain, on-chain
+      settle).
+- [ ] `tools/devnet/agent/`.
+
+**Professional UI — ADR-0031:**
+- [ ] `crates/strangecoin-ui/` — design system + component library
+      (headless, render-backend-agnostic).
+- [ ] Render backend: retain eframe/egui (selected via ADR-0031; alternatives —
+      Tauri+Web, iced — рассмотрены и отклонены).
+- [ ] Screens: wallet (send/history/contracts), node dashboard (peers/sync/
+      mempool/blocks), agent activity feed (ACP messages, batched txs),
+      transaction detail (receipts, witness proofs), settings (network/peers/
+      keystore/config).
+- [ ] Dark/light themes, WCAG AA accessibility (#27), i18n (en/ru/zh).
+- [ ] `tests/ui_a11y.rs` — axe-core audit в CI gate.
+- [ ] Strangler migration: `src/gui/` → тонкий launcher поверх
+      `strangecoin-ui` (по образцу `src/storage/` → `strangecoin-storage`).
+- [ ] `docs/spec/ui_professional.md` — design system + screen specs.
 
 **IDE support:**
 - [ ] Rust analyzer для контрактов (Rust + WASM target).
@@ -757,11 +829,31 @@ MetaMask/WalletConnect.
 - [ ] Faucet работает (test: request testnet tokens).
 - [ ] Indexer работает (test: GraphQL query returns contract events).
 - [ ] Metrics exposed (test: `curl /metrics` returns Prometheus format).
-- [ ] `crates/strangecoin-api/`, `strangecoin-sdk/`, `strangecoin-indexer/` созданы.
-- [ ] `tools/devnet/`, `tools/explorer/`, `tools/faucet/` созданы.
-- [ ] ADR-0023: "Why JSON-RPC eth_* compatibility" написан.
-- [ ] ADR-0024: "SDK design (foundry-аналог)" написан.
-- [ ] `Changelog.md` обновлён: `4.0.0 — dev-experience ecosystem`.
+- [ ] **MCP server работает** (test: `mcp-cli` reference client reads
+      `chain://tip` и вызывает `get_balance(addr)` — output deterministic #23).
+- [ ] **ACP transport работает** (test: two-agent session negotiate → task →
+      settle, escrow txid real #24, replay rejected #25).
+- [ ] **Agent JSON-RPC работает** (test: `agent_signAndSubmitBatch` — 3 txs в
+      одном вызове, `agent_getActivity` возвращает recent batch + ACP messages).
+- [ ] **Agent SDK работает** (test: Rust + TS + Python SDK — `examples/agent_*`
+      cookbook проходит).
+- [ ] **Agent devnet работает** (test: `cargo strangecoin agent devnet` — 10
+      agent wallets funded, 3-agent ACP task chain settles on-chain).
+- [ ] **Professional UI работает** (test: `cargo run --bin strangecoin` — все 5
+      screens рендерятся, axe-core audit passes WCAG AA #27, dark/light themes
+      switch).
+- [ ] `crates/strangecoin-api/`, `strangecoin-sdk/`, `strangecoin-indexer/`,
+      `strangecoin-mcp/`, `strangecoin-ui/` созданы.
+- [ ] `tools/devnet/`, `tools/devnet/agent/`, `tools/explorer/`, `tools/faucet/`
+      созданы.
+- [ ] ADR-0028: "Strangecoin as cryptocurrency for AI agents" написан.
+- [ ] ADR-0029: "MCP server design" написан.
+- [ ] ADR-0030: "ACP agent communication protocol" написан.
+- [ ] ADR-0031: "Professional UI replacement" написан.
+- [ ] ADR-0023: "Why JSON-RPC eth_* compatibility" написан (legacy slot).
+- [ ] ADR-0024: "SDK design (foundry-аналог)" написан (legacy slot).
+- [ ] `Changelog.md` обновлён: `4.0.0 — dev-experience + AI agents + MCP + ACP +
+      professional UI`.
 
 ### Риски
 
@@ -772,6 +864,19 @@ MetaMask/WalletConnect.
   features iteratively.
 - **Risk: Indexer performance.** Mitigation: column families for event index;
   pagination; caching.
+- **Risk: MCP tool output non-determinism (V-43).** Mitigation: pure-core reuse;
+  MCP handler — thin shell; responses signed by node_id; CI fuzz target
+  `mcp_determinism` (same `get_block(h)` across N nodes).
+- **Risk: ACP escrow fraud (V-45).** Mitigation: invariant #24; reject + ban
+  peer via Stage 2 peer scoring extension; `tests/acp_fraud.rs`.
+- **Risk: Agent key theft via MCP stdio pipe (V-46).** Mitigation: stdio только
+  локально; HTTP+SSE требует Noise-XX auth; key isolation (#26) — separate
+  `OperatorKeystore` vs `AgentKeystore`.
+- **Risk: UI accessibility regression (V-47).** Mitigation: CI gate (#27);
+  axe-core audit per screen; блокирующий PR-gate.
+- **Risk: Professional UI migration breaks two-node demo.** Mitigation:
+  strangler pattern (§10.5) — `src/gui/` остаётся launcher, new `strangecoin-ui`
+  crate параллельно; `tests/two_clients.rs` остаётся зелёным весь migration.
 
 ### ADRs required
 
@@ -779,6 +884,10 @@ MetaMask/WalletConnect.
 - ADR-0024: SDK design (foundry-аналог)
 - ADR-0025: Devnet architecture (anvil-аналог)
 - ADR-0026: Indexer design (Subgraph/sqd-аналог)
+- **ADR-0028: Strangecoin as cryptocurrency for AI agents**
+- **ADR-0029: MCP server design (Model Context Protocol)**
+- **ADR-0030: ACP agent communication protocol**
+- **ADR-0031: Professional UI replacement (design system + screens)**
 
 ---
 

@@ -836,3 +836,734 @@ Stage 3 начинается с создания `crates/strangecoin-storage/` (
 - `docs/SCIP/scip-0000-process.md` — SCIP process (для Verkle/expiry/prune после mainnet freeze).
 - `Changelog.md` — секции 2.0.0 (Stage 2); Stage 3 добавит 3.0.0 (S3-P15).
 - `AGENTS.md` — Stage 2 complete; Stage 3 sections добавит S3-P15 (FBP10).
+
+---
+
+# 8. Extension prompts — AI Agent orientation + Professional UI (Stage 3+ / Stage 4)
+
+**Версия расширения:** 1.0
+**Дата добавления:** 2026-11-04
+**Заказчик:** pivot позиционирования — Strangecoin как «криптовалюта для ИИ-агентов».
+**Статус:** design-time only — промпты ниже НЕ являются частью DoD Stage 3 (S3-P01..S3-P15, §4) и НЕ блокируют тег `v3.0.0-stage3`. Это forward-looking design track, который фиксирует ADRs, спецификации и промпты для Stage 4 (AI agents / MCP / ACP / professional UI), чтобы дизайн был settled ДО открытия Stage 4 implementation gate. Все промпты имеют префикс `AI-P##` (agent integration) или `UI-P##` (professional UI) — нумерация НЕ пересекается с `S3-P##`.
+
+**Мотивация расширения (из обновлённых `README.md` / `analytics/ARCHITECT.md` §19 / `analytics/ROADMAP.md` Этап 4):** Strangecoin позиционируется как L1, в котором автономные ИИ-агенты — первоклассные экономические акторы. Agent identity = wallet identity (secp256k1, как у MetaMask/Ledger), chain state экспонируется через **MCP (Model Context Protocol)** — любой MCP-совместимый LLM (Claude, GPT, Gemini, open-weight) читает блоки и сабмитит транзакции без custom-plugin, agent-to-agent платежи и координация задач — через **ACP (Agent Communication Protocol)** поверх существующего Noise P2P (Stage 2), demo-UI `eframe`/`egui` заменяется на профессиональный. Расширение инвариантов (#23..#27) и threat-векторов (V-43..V-48) зафиксировано в `ARCHITECT.md` §19.5/§19.6.
+
+**Замечание про `analytics/BACKLOG.md`:** создан этим же патчем (см. §13) — сквозной бэклог AI/UI work items, который обновляется по мере закрытия `AI-P##` / `UI-P##`. До этого «бэклог Stage 4» жил в `ROADMAP.md` §«Этап 4» (de-facto), теперь — отдельный файл для traceability.
+
+## 8.1. Общий контекст расширения (вставлять в начало каждого AI-P## / UI-P## промпта)
+
+```
+Проект: Strangecoin, Rust, edition 2021, версия 3.0.0 (после S3-P15, ожидаемо).
+Позиционирование: криптовалюта для ИИ-агентов (ADR-0028).
+Архитектурный baseline:
+  - Stage 0..2 done (v2.0.0-stage2): PoW + secp256k1 EOA + bech32 + SMT state root
+    + WASM VM (wasmi) + Noise P2P + BIP-152 compact blocks + Erlay + peer scoring
+    + rate limit + 22 invariants enforced.
+  - Stage 3 (в работе, S3-P01..S3-P15): RocksDB migration + stateless witnesses
+    (wire StateWitness) + state pruning (EIP-4444 analog, height-window) + snapshot
+    sync (file-based, commitment-verified) + O(1) indices + schema versioning.
+  - Stage 4 (target этого расширения): SDK + devnet + indexer + JSON-RPC eth_* +
+    agent_* + MCP server + ACP transport + professional UI + agent devnet/faucet.
+Workspace (после Stage 3): ["." , crates/strangecoin-core, -vm-wasm, -net,
+  -storage]. Stage 4 добавит: crates/strangecoin-mcp, -sdk, -ui (новые); -net
+  расширяется ACP message handlers; src/api/ расширяется agent_* JSON-RPC;
+  src/gui/ становится тонким launcher'ом поверх strangecoin-ui (strangler).
+AI-agent design baseline (ADR-0028..0031, ARCHITECT.md §19):
+  - Agent identity = wallet identity (secp256k1 EOA, HD path m/44'/1234'/agent_id').
+  - MCP server (ADR-0029): tools get_block/get_balance/get_nonce/submit_tx/
+    call_contract/estimate_fee/subscribe_events; resources chain://tip,
+    chain://block/{h}, chain://tx/{txid}, chain://contract/{addr}; transports
+    stdio (local) + HTTP+SSE (remote, Noise-XX auth); output determinism #23
+    (pure-core reuse, signed by node_id Ed25519).
+  - ACP (ADR-0030): wire messages ACP_NEGOTIATE / ACP_TASK / ACP_SETTLE /
+    ACP_REVOKE поверх Noise P2P; escrow ссылается on-chain txid (#24); replay
+    protection monotonic agent_nonce per (agent_id, counterparty) (#25);
+    rate limit reuse Stage 2 token-bucket (V-44).
+  - Agent JSON-RPC: agent_getSession, agent_signAndSubmitBatch,
+    agent_sponsorTx (Stage 5 full, Stage 4 stub), agent_estimateTaskCost,
+    agent_getActivity.
+  - Professional UI (ADR-0031): crates/strangecoin-ui — design system +
+    component library + 5 screens (wallet, node dashboard, agent activity,
+    tx detail, settings); dark/light themes; WCAG AA accessibility (#27,
+    axe-core CI gate); strangler migration src/gui/ → launcher.
+Invariants baseline: 22 (Stage 0..2) + extensions #23..#27 (ARCHITECT.md §19.5).
+Threat vectors: V-1..V-42 (Stage 0..2) + extensions V-43..V-48 (ARCHITECT.md
+  §19.6).
+Теги: v2.0.0-stage2 (verified, target 346e3c0); v3.0.0-stage3 (expected after
+  S3-P15); v4.0.0-stage4 (expected after AI-P05 + UI-P05 + Stage 4 core).
+Формат коммитов: [S4-AI-P##] <area>: <short description> (areas: ai-adr,
+  mcp, acp, agent-rpc, agent-sdk, agent-devnet, ui-adr, ui-design-system,
+  ui-screen, ui-migration, release).
+```
+
+## 8.2. Карта зависимостей промптов расширения
+
+```
+AI-P01 (ADR-0028: vision + agent account model)
+   │
+   ├──▶ AI-P02 (ADR-0029 + MCP server scaffold + tools/resources/transports)
+   │       │
+   │       └──▶ UI-P03..UI-P05 (UI screens потребляют MCP для agent activity feed)
+   │
+   ├──▶ AI-P03 (ADR-0030 + ACP wire messages + escrow + replay protection)
+   │       │
+   │       └──▶ AI-P04 (agent_* JSON-RPC зависит от ACP escrow txid)
+   │
+   ├──▶ AI-P04 (agent_* JSON-RPC: getSession, signAndSubmitBatch, sponsorTx stub,
+   │            estimateTaskCost, getActivity)
+   │       │
+   │       └──▶ AI-P05 (SDK + agent devnet + multi-agent test использует все
+   │                    agent_* методы + ACP)
+   │
+   └──▶ AI-P05 (Rust + TS + Python SDK; agent devnet + faucet; 3-agent ACP chain
+                settle e2e test)
+
+UI-P01 (ADR-0031: render backend selection + design system principles)
+   │
+   ├──▶ UI-P02 (design system + component library + design tokens)
+   │       │
+   │       ├──▶ UI-P03 (wallet screen migration)
+   │       ├──▶ UI-P04 (node dashboard + tx detail)
+   │       └──▶ UI-P05 (agent activity + settings + a11y audit + strangler closeout)
+   │
+   └──▶ UI-P05 (strangler closeout: src/gui/ → launcher; tests/two_clients.rs
+                остаётся зелёным)
+```
+
+**Параллельность:** `AI-P02` и `AI-P03` — параллельны после `AI-P01`. `AI-P04` — после `AI-P03` (нужен ACP escrow txid). `AI-P05` — после `AI-P04`. `UI-P02` — после `UI-P01`. `UI-P03..UI-P05` — параллельны после `UI-P02`, но `UI-P05` закрывает strangler migration (нужны `UI-P03` + `UI-P04` готовы).
+
+## 8.3. Жёсткие гейты расширения
+
+1. **Stage 3 gate:** ни один `AI-P##` / `UI-P##` не начинается до тега `v3.0.0-stage3` (S3-P15). Stage 4 design track (ADRs + specs + промпты) можно писать параллельно Stage 3 implementation, но код — только после тега. Exception: ADRs `0028`..`0031` и spec-файлы (`docs/spec/agent_integration.md`, `mcp_server.md`, `acp_messages.md`, `ui_professional.md`) могут быть созданы во время Stage 3 как design-only artefacts — без зависимостей от кода.
+2. **ADR до кода:** `AI-P02` код не пишет без `AI-P01` (ADR-0028) и `AI-P02` (ADR-0029). `AI-P03` — без `AI-P01` и своего ADR-0030. `UI-P02..UI-P05` — без `UI-P01` (ADR-0031).
+3. **Pure-core boundary:** MCP handler и ACP message handler — тонкие shell'ы над pure-core; вся business logic — в `strangecoin-core` (extending trait bound `McpBackend` / `AcpBackend` impl'ится в `-net`/`-mcp`, не в core). MCP output determinism (#23) — pure-function requirement.
+4. **No consensus change:** `AI-P##` / `UI-P##` промпты НЕ трогают consensus rules. Если промпт случайно затрагивает — остановить и переориентировать на SCIP (как Stage 3 §6 anti-goal precedent).
+5. **`tests/two_clients.rs` green:** UI migration (`UI-P03..UI-P05`) НЕ ломает headline test. Strangler pattern — `src/gui/` остаётся launcher, `tests/two_clients.rs` не переписывается.
+6. **WCAG AA gate:** `UI-P05` не закрывается без axe-core audit ≥ WCAG AA (#27) в CI.
+7. **AI-P05 = Stage 4 agent-track gate:** Stage 5 paymaster full impl не начинается до `AI-P05` (stub достаточно для Stage 4, full impl — Stage 5).
+
+## 8.4. Что НЕ входит в extension scope (явно отложено)
+
+- **On-chain agent registry** — agent = любой EOA; регистрация off-chain (indexer, MCP). Консенсус не знает про «агентов». (anti-goal ARCHITECT.md §19.7)
+- **Custom LLM-plugin protocol** — MCP — единый стандарт; один раз описали tools, любой MCP-client работает. (anti-goal §19.7)
+- **ACP поверх plain TCP (без Noise)** — Noise XX + ChaCha20-Poly1305 уже Stage 2; не дублировать crypto. (anti-goal §19.7)
+- **Paymaster full impl** — Stage 5 (Stage 4 — stub `agent_sponsorTx`, returns "not implemented").
+- **Account Abstraction full impl** — Stage 5 (Stage 4 — только batched tx через WASM contract, без AA protocol-level).
+- **EIP-1559 fee market** — Stage 5 (`agent_estimateTaskCost` на Stage 4 использует fixed gas price).
+- **Wire ACP-over-gossip (relay через third peer)** — Stage 4 — direct peer-to-peer только; relayed ACP — Stage 5+ research.
+- **ZK-proofs для ACP escrow** — Stage 6+ research; Stage 4 — on-chain txid verification только.
+- **Multi-language SDK (Go, Java, C++)** — Stage 5+; Stage 4 — Rust + TS + Python только.
+- **Mobile UI (iOS/Android)** — Stage 5+; Stage 4 — desktop only (retain eframe/egui per ADR-0031).
+- **PoS validator agent integration** — Stage 7 (PoS миграция); Stage 4 — agent = EOA, не validator.
+
+---
+
+## 9. AI Agent integration prompts (AI-P01..AI-P05)
+
+### AI-P01. ADR-0028: Strangecoin as cryptocurrency for AI agents (vision + account model)
+
+**Цель:** зафиксировать архитектурное решение «Strangecoin — криптовалюта для ИИ-агентов»: agent identity = wallet identity (secp256k1 EOA, без отдельного registry), HD-деривация для sub-agents/session keys, key isolation (operator vs agent keystore), batched/sponsored tx через WASM-контракты (без consensus change), агент-нативные политики (multisig / session-key validators) — off-chain / contract-layer. Это решение определяет AI-P02..AI-P05 и UI-P03..UI-P05: без него MCP/ACP/UI пишутся «на ощупь», а смена account model позже потребует consensus-change.
+
+**Контекст:** Stage 0..2 доставили secp256k1 EOA + bech32 + SMT state root + WASM VM (Stage 1.5) + Noise P2P (Stage 2). Stage 1.5 уже даёт batched tx через WASM (один `call` вызывает N внутренних `call`s) и programmable policy wallets через contract code. Не хватает: (1) явного позиционирования — agents как first-class actors; (2) HD-деривации для sub-agents (BIP-44 path `m/44'/1234'/<agent_id>'`); (3) key isolation — operator wallet (node-оператор) vs agent wallets (программные); (4) session-key pattern (короткий TTL, scoped permissions); (5) agent-tx features surfaced в JSON-RPC и MCP. Альтернативы: (1) **On-chain agent registry** — consensus-breaking, требует нового account type, отклонено (anti-goal §19.7); (2) **Custom LLM-plugin protocol per vendor** — lock-in, отклонено (§19.7); (3) **Separate agent chain (L2/sidechain)** — adds bridge risk, отклонено для Stage 4 (research Stage 6+); (4) **Account Abstraction protocol-level** — Stage 5, не Stage 4. Решение: agent = EOA с HD-деривацией + WASM-contract policy wallets + off-chain registry (indexer/MCP), без consensus change.
+
+**Задачи:**
+
+1. Создать `docs/ADR/0028-strangecoin-as-cryptocurrency-for-ai-agents.md` по шаблону ADR-0001:
+   - Status: Accepted (после review; Proposed → Accepted по факту land'а AI-P02)
+   - Context: Stage 0..2 baseline (secp256k1 EOA, WASM, Noise, peer scoring); отсутствие agent-orientation в current state; market pull (MCP, A2A, ACP frameworks); Stage 1.5 WASM-contract capability для batched/sponsored tx без consensus change; threat vectors V-43..V-48 (ARCHITECT.md §19.6)
+   - Decision:
+     - **Agent identity = wallet identity.** Agent — это secp256k1 EOA, owned by agent runtime (не operator). Никакого нового account type, никакого on-chain registry.
+     - **HD derivation.** BIP-44 path `m/44'/1234'/<agent_id>'/0/<sub_id>` для sub-agents и rotating session keys. `coin_type = 1234` (SLIP-44 registered — placeholder; S4-AI-P05 обрабатывает SLIP-44 registration).
+     - **Key isolation.** Wallet trait делится на `OperatorKeystore` (доступ к node-оператор wallet) и `AgentKeystore` (доступ к agent keys, sandboxed). MCP/ACP handlers НЕ имеют доступа к `OperatorKeystore`. Compile-time enforcement через Rust type system (separate types, no shared trait object).
+     - **Session keys.** Optional pattern: agent derives short-TTL session keypair (`m/44'/1234'/agent_id'/1/<session_id>`), scoped to specific contracts/methods/max-value, signed by master agent key. Validated by on-chain WASM policy wallet (Stage 1.5 contract).
+     - **Batched tx.** One signature, N contract calls — implemented as WASM contract `BatchExecutor` that takes signed calldata batch and executes N internal `call`s. No consensus change.
+     - **Sponsored tx (paymaster).** Stage 5 full impl; Stage 4 — stub `agent_sponsorTx` returns "not implemented". Paymaster contract pattern: WASM contract pays gas for agent tx, agent signs intended action, paymaster signs sponsorship.
+     - **Off-chain agent registry.** Indexer (Stage 4) indexes agent activity (ACP messages, batched txs, sponsor txs); MCP `agent_getActivity` reads it. No on-chain registry.
+   - Consequences: Positive (no consensus change, agent = EOA → MetaMask/Ledger compat preserved, MCP/ACP ride on existing Stage 2 transport, SDK reuses existing wallet primitives); Negative (HD-derivation adds key-management complexity для agent runtimes, session-key WASM contract needs audit, off-chain indexer becomes trust-source для agent reputation); Neutral (agent reputation — out of scope; indexer может быть replaced/swapped)
+   - Alternatives considered: on-chain agent registry (consensus-breaking, отклонено); custom LLM-plugin protocol per vendor (lock-in, отклонено); separate agent L2 (bridge risk, Stage 6+ research); AA protocol-level (Stage 5)
+   - Related: ADR-0029 (MCP server), ADR-0030 (ACP), ADR-0031 (Professional UI), ARCHITECT.md §19, ROADMAP.md Этап 4
+2. Создать `docs/spec/agent_integration.md` — high-level spec: agent identity, HD path, key isolation, session keys, batched tx, sponsored tx (stub), off-chain registry, relationship к MCP (ADR-0029) / ACP (ADR-0030) / agent_* JSON-RPC (AI-P04) / SDK (AI-P05) / UI (ADR-0031).
+3. Pin policy:HD derivation через `bip32` crate (или `secp256k1` builtin) — pinned `=x.y.z` (резолв в AI-P05, фиксация в этом ADR + AGENTS.md Pin Policy).
+4. Зафиксировать в ADR явные отклонения от возможных альтернатив (FBP-прецедент): no AA protocol-level (Stage 5), no L2 (Stage 6+), no on-chain registry (never).
+
+**Артефакты:**
+- `docs/ADR/0028-strangecoin-as-cryptocurrency-for-ai-agents.md`
+- `docs/spec/agent_integration.md`
+
+**КГ:**
+- [ ] ADR-0028 создан по template ADR-0001 (Status/Context/Decision/Consequences/Alternatives/Related)
+- [ ] Agent identity = wallet identity зафиксировано (no new account type, no on-chain registry)
+- [ ] HD path `m/44'/1234'/agent_id'` зафиксирован (с placeholder SLIP-44, AI-P05 обработает registration)
+- [ ] Key isolation `OperatorKeystore` vs `AgentKeystore` зафиксировано (compile-time enforcement)
+- [ ] Session-key pattern зафиксирован (TTL, scoped, WASM policy wallet)
+- [ ] Batched tx — через WASM contract `BatchExecutor` (no consensus change) зафиксировано
+- [ ] Sponsored tx — Stage 5 full, Stage 4 stub — зафиксировано
+- [ ] Off-chain agent registry (indexer/MCP) зафиксировано
+- [ ] `docs/spec/agent_integration.md` создан, cross-link к MCP/ACP/agent_*/SDK/UI specs
+- [ ] Threat vectors V-43..V-48 referenced (ARCHITECT.md §19.6)
+- [ ] Коммит `[S4-AI-P01] ai-adr-0028: strangecoin as cryptocurrency for ai agents + spec`
+
+---
+
+### AI-P02. ADR-0029 + MCP server scaffold (tools/resources/transports)
+
+**Цель:** реализовать MCP (Model Context Protocol) сервер в новом крейте `crates/strangecoin-mcp/` — экспонирование chain state как MCP tools (`get_block`, `get_balance`, `get_nonce`, `submit_tx`, `call_contract`, `estimate_fee`, `subscribe_events`) и resources (`chain://tip`, `chain://block/{h}`, `chain://tx/{txid}`, `chain://contract/{addr}`), с двумя transport'ами — stdio (local, для LLM IDE plugins) и HTTP+SSE (remote, Noise-XX auth reusing Stage 2 transport). Output determinism (#23) — pure functions от chain state, signed by node_id Ed25519 key (V-43 mitigation).
+
+**Контекст:** MCP (modelcontextprotocol.io) — открытый стандарт Anthropic, поддерживаемый Claude, GPT (via MCP-bridge), Gemini, open-weight LLMs через `mcp-cli`. JSON-RPC 2.0 base, three primitives: tools (callable functions), resources (read-only URIs), prompts (templates — опционально, отложить). Strangecoin node уже имеет JSON-RPC surface (Stage 4 вводит eth_* + agent_*); MCP — дополнительный facade, не replacement. Pure-core (Stage 1) уже даёт `Block`, `AccountState`, `Transaction`, `Receipt` — MCP handler только сериализует их в MCP-compatible JSON. Noise-XX handshake (Stage 2, ADR-0020) уже имплементирован в `crangecoin-net` — reuse для HTTP+SSE auth. Альтернативы: (1) **MCP-over-stdio only** — безопаснее (no network), но не работает для remote agents; (2) **MCP-over-HTTP+SSE only** — универсальнее, но требует auth; (3) **Custom JSON-RPC schema (non-MCP)** — теряем LLM ecosystem interop; (4) **MCP-over-WebSocket** — дополнительно к HTTP+SSE, но spec MCP 2024-11-05 fixирует stdio + HTTP+SSE — WebSocket не в spec. Решение: оба transport'а (stdio default для local IDE, HTTP+SSE для remote agents), auth через Noise-XX reuse для HTTP+SSE.
+
+**Задачи:**
+
+1. Создать `docs/ADR/0029-mcp-server.md`:
+   - Status: Accepted (после AI-P02 implementation)
+   - Context: MCP standard (modelcontextprotocol.io, spec version 2024-11-05), LLM ecosystem interop, pure-core reuse, Noise-XX auth reuse, output determinism requirement (#23), V-43 threat (MCP tool poisoning)
+   - Decision:
+     - **New crate** `crates/strangecoin-mcp/` (workspace member, feature `mcp` default-on Stage 4)
+     - **Tools** (7): `get_block(height)`, `get_balance(address)`, `get_nonce(address)`, `submit_tx(signed_tx_bytes)`, `call_contract(address, method, args)`, `estimate_fee(tx)`, `subscribe_events(filter)` (SSE stream)
+     - **Resources** (4): `chain://tip` (latest block header), `chain://block/{height_or_hash}`, `chain://tx/{txid}`, `chain://contract/{address}` (code + storage root)
+     - **Transports**: stdio (default, local only, no auth — relies on process isolation), HTTP+SSE (remote, requires Noise-XX handshake reuse from Stage 2 `strangecoin-net::noise`)
+     - **Output determinism (#23)**: every tool output is a pure function of chain state — no `SystemTime::now()`, no random, no peer-state. Same `get_block(h)` returns byte-identical JSON on every node. Enforced by `cargo test -p strangecoin-mcp --features determinism-fuzz` (N-node cross-check).
+     - **Response signing (V-43)**: every MCP response carries `signature: Ed25519(node_id, canonical_json(response))` — client verifies against peer's advertised node_id (Stage 2 `HELLO` message). Unsigned responses — rejected by spec-compliant client.
+     - **MCP spec compliance**: implement MCP `initialize`/`initialized`/`tools/list`/`tools/call`/`resources/list`/`resources/read`/`notifications/*` lifecycle; reference impl `mcp-cli` passes round-trip
+     - **Auth for HTTP+SSE**: reuse Noise-XX handshake (ADR-0020) — agent presents its `node_id` (or ephemeral key derived from agent keypair), node responds with Noise-XX, transport encrypted with ChaCha20-Poly1305
+   - Consequences: Positive (LLM ecosystem interop без custom-plugin, pure-core reuse сохраняет determinism, Noise-XX reuse без new crypto); Negative (stdio — local only, HTTP+SSE требует running server, MCP spec churn risk — spec 2024-11-05 может смениться); Neutral (MCP не replacement для JSON-RPC eth_* — параллельный facade для LLM-consumers)
+   - Alternatives considered: stdio-only, HTTP+SSE-only, custom non-MCP schema, MCP-over-WebSocket
+   - Related: ADR-0028 (agent vision), ADR-0020 (Noise), ARCHITECT.md §19.3
+2. Создать `crates/strangecoin-mcp/`:
+   - `Cargo.toml`: `strangecoin-mcp = { version = "0.1.0", features = ["stdio", "http-sse"] }`, deps `strangecoin-core = { path = "../strangecoin-core" }`, `serde_json`, `tokio` (for SSE), `snow` (Noise-XX reuse, pin policy from Stage 2)
+   - `src/lib.rs`: `McpBackend` trait (impl in `McpNode` over `Arc<BlockchainFacade>`); `McpServer` — JSON-RPC 2.0 handler, dispatches tools/resources
+   - `src/stdio.rs`: stdio transport (tokio stdin/stdout, newline-delimited JSON-RPC)
+   - `src/http_sse.rs`: HTTP+SSE transport (axum or hyper, SSE for `subscribe_events`)
+   - `src/tools/{get_block,get_balance,get_nonce,submit_tx,call_contract,estimate_fee,subscribe_events}.rs` — pure functions over `McpBackend` trait
+   - `src/resources/{tip,block,tx,contract}.rs` — URI handlers
+   - `src/auth.rs`: Noise-XX reuse from `strangecoin-net::noise`, agent keypair → ephemeral session key
+3. Создать `docs/spec/mcp_server.md` — spec: tool schemas (JSON), resource URI schemes, transport details, auth flow, determinism requirement, response signing, lifecycle (`initialize`/`initialized`/etc.)
+4. Создать `tests/mcp_server.rs`:
+   - `mcp_stdio_get_block_round_trip` — stdio transport, `tools/call get_block(1)` → JSON response, byte-identical across N=3 nodes (#23)
+   - `mcp_http_sse_auth` — HTTP+SSE requires Noise-XX; reject unauthenticated
+   - `mcp_response_signature` — every response carries Ed25519 signature; client verifies
+   - `mcp_cli_reference_compat` — round-trip с reference `mcp-cli` client (документировать setup)
+5. CI: `cargo test -p strangecoin-mcp` green; `cargo clippy -p strangecoin-mcp -- -D warnings` green; `cargo +nightly fuzz run mcp_determinism -- -max_total_time=600` (target: N-node cross-check determinism)
+
+**Артефакты:**
+- `docs/ADR/0029-mcp-server.md`
+- `docs/spec/mcp_server.md`
+- `crates/strangecoin-mcp/Cargo.toml`, `src/{lib,stdio,http_sse,auth}.rs`, `src/tools/*.rs`, `src/resources/*.rs`
+- `tests/mcp_server.rs`
+- `fuzz/fuzz_targets/mcp_determinism.rs`
+
+**КГ:**
+- [ ] ADR-0029 создан по template; Status: Accepted
+- [ ] `crates/strangecoin-mcp/` — workspace member; `cargo build -p strangecoin-mcp` green
+- [ ] 7 tools + 4 resources реализованы; schemas в `docs/spec/mcp_server.md`
+- [ ] stdio + HTTP+SSE transports работают; auth для HTTP+SSE через Noise-XX reuse
+- [ ] Output determinism (#23) — `cargo test --features determinism-fuzz` green; 3-node cross-check
+- [ ] Response signing Ed25519 (#V-43 mitigation) — `tests/mcp_server.rs::mcp_response_signature` green
+- [ ] `mcp-cli` reference client round-trip проходит (documented setup)
+- [ ] `cargo clippy -p strangecoin-mcp -- -D warnings` green
+- [ ] `cargo +nightly fuzz run mcp_determinism -- -max_total_time=600` no panic
+- [ ] Pin policy: `snow` pinned (Stage 2 precedent); `serde_json` pinned (storage precedent)
+- [ ] Коммит `[S4-AI-P02] mcp: server scaffold + 7 tools + 4 resources + stdio/http-sse transports`
+
+---
+
+### AI-P03. ADR-0030 + ACP (Agent Communication Protocol) wire messages + escrow + replay protection
+
+**Цель:** реализовать ACP — семейство wire-сообщений `ACP_NEGOTIATE` / `ACP_TASK` / `ACP_SETTLE` / `ACP_REVOKE` поверх существующего Noise-authenticated P2P-слоя (Stage 2, `strangecoin-net`), чтобы агенты могли peer-to-peer договариваться о задачах, котировать и платить за услуги, эскроуить micropayments — без централизованного marketplace. Escrow ссылается on-chain txid (#24); replay protection monotonic `agent_nonce` per `(agent_id, counterparty)` (#25); rate limit reuse Stage 2 token-bucket (V-44).
+
+**Контекст:** Stage 2 доставил Noise-XX + ChaCha20-Poly1305 transport с peer scoring + rate limit. ACP — application-layer поверх этого transport, не новый transport. Сообщения reference on-chain txid для escrow (agent A платит agent B за задачу: `ACP_NEGOTIATE` (quote) → `ACP_TASK` (assignment + escrow txid) → `ACP_SETTLE` (release escrow) или `ACP_REVOKE` (refund escrow после timeout/dispute)). Replay protection — monotonic `agent_nonce` per `(agent_id, counterparty)` (in-memory map, backed by RocksDB `meta` CF). Альтернативы: (1) **On-chain escrow (WASM contract)** — publicly verifiable, но gas cost per message недопустим для micropayments; (2) **Off-chain HTLC-style** — дешевле, но требует indexer trust; (3) **Centralized marketplace** — отклонено (anti-goal §19.7 — без центра); (4) **ACP-over-plain-TCP без Noise** — отклонено (anti-goal §19.7). Решение: ACP-over-Noise (Stage 2 transport), escrow reference on-chain txid (verification через `StorageEngine::get_tx(txid)`, invariant #24), off-chain settlement (HTLC-like optional Stage 5+).
+
+**Задачи:**
+
+1. Создать `docs/ADR/0030-acp-agent-communication-protocol.md`:
+   - Status: Accepted (после AI-P03 implementation)
+   - Context: Stage 2 Noise transport, agent-to-agent use cases (task delegation, micropayment, escrow), threat V-44 (ACP spam), V-45 (escrow fraud), invariants #24/#25, anti-goal §19.7 (no central marketplace, no plain TCP)
+   - Decision:
+     - **Message family** (4): `ACP_NEGOTIATE` (agent A → B: «what's your quote for task T?»), `ACP_TASK` (A → B: «assigned T, escrow txid=X, deadline=D»), `ACP_SETTLE` (A → B: «task done, release escrow to B»), `ACP_REVOKE` (A or B: «cancel, refund escrow to A»)
+     - **Wire format**: extend `strangecoin-net::protocol` enum with `ACP_NEGOTIATE/ACP_TASK/ACP_SETTLE/ACP_REVOKE` variants; payload: serde canonical JSON (signed by agent keypair Ed25519/secp256k1, NOT node_id); `agent_nonce: u64` per `(agent_id, counterparty)`; `escrow_txid: Option<[u8;32]>` for SETTLE/REVOKE
+     - **Transport**: ACP-over-Noise (reuse Stage 2 `strangecoin-net::transport`); ACP messages ride existing peer connection (no new handshake); rate limit reuse Stage 2 token-bucket per-message-type sub-bucket for `ACP_*` (V-44)
+     - **Escrow verification (#24)**: handler validates `escrow_txid` via `StorageEngine::get_tx(txid)` — must exist, must be `transfer` tx from agent A to escrow contract (WASM `EscrowVault` Stage 4 deliverable) with `amount ≥ quote`; reject + ban peer via Stage 2 peer scoring extension (V-45)
+     - **Replay protection (#25)**: in-memory `HashMap<(agent_id, counterparty), last_nonce>`; reject if `agent_nonce <= last_seen`; backed by RocksDB `meta` CF (key `acp_nonce:{agent_id}:{counterparty}`) for restart-survival
+     - **Settlement flow**: `ACP_SETTLE` → on-chain tx from EscrowVault → agent B (release); `ACP_REVOKE` → on-chain tx from EscrowVault → agent A (refund, after `deadline` timeout or mutual signature)
+     - **No on-chain ACP message storage** — ACP messages are transport-layer only; indexer (Stage 4) indexes them off-chain for `agent_getActivity`
+   - Consequences: Positive (no central marketplace, micropayments feasible, escrow publicly verifiable via txid, Stage 2 transport reuse без new crypto); Negative (EscrowVault WASM contract needs audit, ACP message loss → escrow lock until timeout, in-memory nonce map state loss без RocksDB backup); Neutral (ACP — application layer, not consensus; agents могут не использовать ACP и платить напрямую)
+   - Alternatives considered: on-chain escrow (gas cost), off-chain HTLC (indexer trust), central marketplace (anti-goal), ACP-over-plain-TCP (anti-goal)
+   - Related: ADR-0028 (agent vision), ADR-0020 (Noise), ADR-0022 (peer scoring), ARCHITECT.md §19.3/§19.5/§19.6
+2. Расширить `crates/strangecoin-net/src/protocol/`:
+   - `acp.rs` (new): `AcpMessage` enum, `AcpNegotiate`/`AcpTask`/`AcpSettle`/`AcpRevoke` structs, canonical serialization (serde + signed bytes)
+   - `mod.rs`: extend `Message` enum with `ACP_*` variants; dispatch to `AcpHandler`
+3. Создать `crates/strangecoin-net/src/acp/handler.rs`:
+   - `AcpHandler` — processes incoming `ACP_*` messages, validates escrow txid (#24), checks nonce (#25), updates peer score on violation
+   - Backed by `Arc<Mutex<HashMap<(AgentId, AgentId), u64>>>` for nonce map + `Arc<StorageEngine>` for txid lookup + `Arc<EscrowVaultContract>` for settle/revoke
+4. Создать `crates/strangecoin-vm-wasm/examples/escrow_vault.rs` — WASM contract `EscrowVault`:
+   - `deposit(agent_a, agent_b, amount, deadline) → escrow_id` (called by agent A)
+   - `release(escrow_id, signature_a, signature_b) → transfer to agent_b` (called by AcpHandler on SETTLE)
+   - `refund(escrow_id, signature_a OR deadline_passed) → transfer to agent_a` (called by AcpHandler on REVOKE)
+5. Создать `docs/spec/acp_messages.md` — spec: message schemas, wire format, escrow flow diagrams, replay protection semantics, rate limit policy, peer scoring extensions
+6. Создать `tests/acp_messages.rs`:
+   - `acp_negotiate_task_settle_e2e` — two-agent session: A negotiates, B quotes, A assigns + escrows, B fulfills, A settles → on-chain release to B
+   - `acp_revoke_after_timeout` — A assigns, B no response, deadline passes, A revokes → on-chain refund to A
+   - `acp_escrow_fraud_rejected` — A sends SETTLE with fake txid → rejected + peer banned (#24, V-45)
+   - `acp_replay_rejected` — A replays old `ACP_NEGOTIATE` with stale nonce → rejected (#25)
+   - `acp_spam_rate_limited` — A floods `ACP_NEGOTIATE` → rate-limited by Stage 2 token-bucket (V-44)
+7. CI: `cargo test -p strangecoin-net --features acp` green; `cargo clippy -p strangecoin-net -- -D warnings` green; `cargo +nightly fuzz run acp_handler -- -max_total_time=600`
+
+**Артефакты:**
+- `docs/ADR/0030-acp-agent-communication-protocol.md`
+- `docs/spec/acp_messages.md`
+- `crates/strangecoin-net/src/protocol/acp.rs`
+- `crates/strangecoin-net/src/acp/handler.rs`
+- `crates/strangecoin-vm-wasm/examples/escrow_vault.rs`
+- `tests/acp_messages.rs`
+- `fuzz/fuzz_targets/acp_handler.rs`
+
+**КГ:**
+- [ ] ADR-0030 создан по template; Status: Accepted
+- [ ] 4 message types (`ACP_NEGOTIATE/TASK/SETTLE/REVOKE`) реализованы; canonical serialization
+- [ ] Escrow txid verification (#24) — `tests/acp_messages.rs::acp_escrow_fraud_rejected` green
+- [ ] Replay protection (#25) — `tests/acp_messages.rs::acp_replay_rejected` green
+- [ ] Rate limit reuse Stage 2 (V-44) — `tests/acp_messages.rs::acp_spam_rate_limited` green
+- [ ] EscrowVault WASM contract компилируется, unit tests pass
+- [ ] `tests/acp_messages.rs::acp_negotiate_task_settle_e2e` green (full flow)
+- [ ] Peer scoring extension для ACP violations — documented в ADR + `src/peer/scoring.rs` updated
+- [ ] `docs/spec/acp_messages.md` создан, message schemas + flow diagrams
+- [ ] `cargo clippy -p strangecoin-net -- -D warnings` green
+- [ ] `cargo +nightly fuzz run acp_handler -- -max_total_time=600` no panic
+- [ ] Коммит `[S4-AI-P03] acp: wire messages + handler + escrow vault + tests + spec`
+
+---
+
+### AI-P04. Agent-native JSON-RPC surface (agent_* methods + batched/sponsored tx helpers)
+
+**Цель:** расширить Stage 4 JSON-RPC surface (`src/api/`) namespaced-методами `agent_*`: `agent_getSession`, `agent_signAndSubmitBatch`, `agent_sponsorTx` (Stage 5 full impl, Stage 4 — stub returning "not implemented"), `agent_estimateTaskCost`, `agent_getActivity`. Методы сосуществуют с `eth_*` (Ethereum tooling interop сохраняется) и `sc_*` (Strangecoin-specific). Reuse: `agent_signAndSubmitBatch` — thin wrapper над `BatchExecutor` WASM contract (AI-P01); `agent_estimateTaskCost` — gas estimator + ACP escrow cost (AI-P03); `agent_getActivity` — indexer query.
+
+**Контекст:** Stage 4 core deliverable включает JSON-RPC `eth_*` (`eth_sendTransaction`, `eth_getBalance`, `eth_call`, `eth_getLogs`, `eth_subscribe`). Agent-runtime consumers (LangChain, AutoGen, CrewAI agents, custom Python/Rust agents) не хотят возиться с low-level eth_* + signing — им нужен high-level API: открыть session, submit batch одним вызовом, оценить cost, посмотреть свою активность. MCP (AI-P02) даёт LLM-friendly facade; JSON-RPC `agent_*` — programmatic facade для code-first agents. Альтернативы: (1) **Только MCP, без agent_*** — теряем code-first ergonomics; MCP optimized для LLM tool-calling, не для programmatic loops; (2) **Extend eth_* instead of new namespace** — ломает Ethereum tooling compat (`eth_*` должен соответствовать Ethereum schema); (3) **Separate port/server для agent_*** — ops complexity, no reuse JSON-RPC server; (4) **gRPC вместо JSON-RPC** — terяем browser/wget compatibility. Решение: тот же JSON-RPC server, новый namespace `agent_*`, methods reuse existing infra (signing, mempool, indexer).
+
+**Задачи:**
+
+1. Расширить `src/api/mod.rs` (или `crates/strangecoin-api/`, если Stage 4 уже вынес в крейт):
+   - `agent_getSession(agent_keypair_pubkey) → session_id` — открыть session для agent, return session_id (random u128, scoped to agent pubkey + TTL default 1h, config `agent.session_ttl_sec`). Session даёт доступ к `agent_signAndSubmitBatch` / `agent_sponsorTx` / `agent_estimateTaskCost` / `agent_getActivity`. Auth: caller подписывает challenge своим agent keypair, server verifies secp256k1.
+   - `agent_signAndSubmitBatch(session_id, [unsigned_tx; N]) → [txid; N]` — server использует `BatchExecutor` WASM contract (AI-P01): caller specifies N `unsigned_tx` (transfer / call / create); server constructs batch calldata, signs с agent keypair (session-scoped subkey), submits одним on-chain tx. Returns N txids (one per internal call, derived via `txid = blake3(batch_tx || index)`). Caller не подписывает каждый tx отдельно — одно signature на batch.
+   - `agent_sponsorTx(session_id, unsigned_tx, paymaster_address) → txid | "not implemented"` — Stage 4: stub, returns `{"code": -32601, "message": "agent_sponsorTx not implemented until Stage 5 paymaster"}`. Stage 5: full impl через paymaster contract pattern.
+   - `agent_estimateTaskCost(session_id, task_spec) → { gas_units, fee_sc, acp_escrow_cost_sc, total_sc }` — gas estimation через existing `eth_estimateGas` logic + ACP escrow overhead (deposit gas + settle gas, см. AI-P03 EscrowVault).
+   - `agent_getActivity(session_id, agent_address, [filter]) → [activity_item; N]` — queries Stage 4 indexer (AI-P05 dependencies: indexer indexes agent txs + ACP messages off-chain); returns recent activity (transfers, batched txs, ACP negotiates/tasks/settles, sponsor txs).
+2. Создать `src/api/agent/session.rs` — `SessionStore` (in-memory `HashMap<SessionId, AgentSession>`, TTL eviction via background task), `AgentSession { agent_pubkey, subkey_pubkey, expires_at, scope }`
+3. Создать `src/api/agent/batch.rs` — `BatchExecutor` client (calls WASM contract `BatchExecutor.execute(calldata_batch, signature)` — deployed в AI-P05 devnet)
+4. Создать `src/api/agent/activity.rs` — `ActivityQuery` (delegates to indexer `crates/strangecoin-indexer`)
+5. Создать `tests/agent_rpc.rs`:
+   - `agent_get_session_auth` — open session with valid secp256k1 signature, get session_id
+   - `agent_get_session_reject_wrong_sig` — reject session с invalid signature
+   - `agent_sign_and_submit_batch_3_txs` — submit 3-tx batch, verify 3 txids on-chain, all 3 settle correctly
+   - `agent_sponsor_tx_stub` — Stage 4 stub returns "not implemented"
+   - `agent_estimate_task_cost` — estimate gas for `transfer 100 SC + ACP escrow deposit 50 SC` — returns `{ gas_units, fee_sc, acp_escrow_cost_sc, total_sc }` matching on-chain actuals
+   - `agent_get_activity` — submit batch + ACP settle, then `agent_getActivity` returns both items
+6. CI: `cargo test --test agent_rpc` green; `cargo clippy -- -D warnings` green
+
+**Артефакты:**
+- `src/api/agent/{mod,session,batch,activity}.rs` (или `crates/strangecoin-api/src/agent/`)
+- `tests/agent_rpc.rs`
+
+**КГ:**
+- [ ] 5 методов `agent_*` реализованы (getSession, signAndSubmitBatch, sponsorTx stub, estimateTaskCost, getActivity)
+- [ ] Session auth через secp256k1 signature, TTL eviction
+- [ ] `agent_signAndSubmitBatch` — `BatchExecutor` WASM contract reuse (AI-P01), N txids returned
+- [ ] `agent_sponsorTx` — Stage 4 stub returns -32601 "not implemented"
+- [ ] `agent_estimateTaskCost` — gas + ACP escrow cost accurate (test cross-checks with on-chain actuals)
+- [ ] `agent_getActivity` — delegates to indexer, returns transfers + batched txs + ACP messages
+- [ ] `eth_*` methods остаются byte-identical (Ethereum tooling compat preserved)
+- [ ] `tests/agent_rpc.rs` — all 6 tests green
+- [ ] `cargo clippy -- -D warnings` green
+- [ ] JSON-RPC schema documented в `docs/spec/agent_integration.md` (updated by AI-P01 → cross-link)
+- [ ] Коммит `[S4-AI-P04] agent-rpc: 5 agent_* methods + session store + batch executor + activity query`
+
+---
+
+### AI-P05. Agent SDK (Rust + TS + Python) + agent devnet + faucet + multi-agent e2e test
+
+**Цель:** доставить agent SDK в трёх языках (Rust canonical, TypeScript и Python — generated из Rust через `ts-rs` / `pyo3`), one-command agent devnet (`cargo strangecoin agent devnet`) с faucet, который funds N agent wallets из seed, и end-to-end multi-agent test: 3 agents выполняют ACP task chain (A → B → C) с on-chain settle. Закрывает Stage 4 agent-track gate (§8.3 hard gate #7): Stage 5 paymaster full impl не начинается до закрытия AI-P05.
+
+**Контекст:** Stage 4 доставил MCP server (AI-P02), ACP transport (AI-P03), `agent_*` JSON-RPC (AI-P04). Agent-runtime consumers (LangChain/AutoGen/CrewAI на Python, custom TypeScript/Node agents, Rust-native agents) хотят SDK: high-level classes/functions вместо raw JSON-RPC calls. Cookbook examples нужны для onboarding. Multi-agent e2e test нужен для regression — что весь stack (wallet + signing + batch + ACP + indexer) работает end-to-end. Альтернативы: (1) **Rust SDK только** — теряем Python ML ecosystem (LangChain/CrewAI) и TypeScript web ecosystem; (2) **Manual wrappers per language** — divergence risk, no single source of truth; (3) **No devnet, manual node setup** — agent onboarding friction; (4) **Skip multi-agent e2e** — regression risk. Решение: Rust canonical + TS/Python generated, one-command devnet, e2e multi-agent test.
+
+**Задачи:**
+
+1. Создать `crates/strangecoin-sdk/`:
+   - `Cargo.toml`: `strangecoin-sdk = "0.1.0"`, features `["rust", "ts", "python"]`; deps `strangecoin-core`, `secp256k1`, `tokio`, `reqwest` (for JSON-RPC client), `serde_json`
+   - `src/lib.rs`: `AgentClient` struct (high-level: open session, sign batch, submit, estimate, get activity), `AgentWallet` (HD derivation, key isolation `AgentKeystore`)
+   - `src/rust/` — Rust-native API (canonical)
+   - `src/ts/` — TypeScript bindings via `ts-rs` (`#[derive(TS)]` on shared types)
+   - `src/python/` — Python bindings via `pyo3` (PyO3 wrapper around `AgentClient`)
+   - `src/mcp_client.rs` — MCP client helpers (для agents, которые хотят MCP вместо JSON-RPC)
+   - `src/acp_client.rs` — ACP client helpers (для agents, которые хотят peer-to-peer без JSON-RPC)
+2. Создать `tools/devnet/agent/`:
+   - `cargo-strangecoin-agent-devnet` binary: `cargo strangecoin agent devnet --agents N --fund 1000SC`
+   - Spins up local Strangecoin node (regtest), derives N agent wallets from seed `m/44'/1234'/{0..N}'`, funds each from faucet (coinbase tx), prints agent pubkeys + RPC endpoints
+   - Faucet: reuses Stage 4 faucet infra (`tools/faucet/`), but auto-requests for devnet agent wallets
+3. Создать `examples/agent_cookbook/`:
+   - `rust/single_agent_on_chain_read.rs` — agent reads `get_balance` via MCP, logs result
+   - `rust/batch_submit.rs` — agent submits 3-tx batch via `agent_signAndSubmitBatch`
+   - `rust/acp_task_settle.rs` — agent A negotiates with agent B, escrows, settles
+   - `ts/single_agent_on_chain_read.ts` — TypeScript equivalent
+   - `ts/acp_task_settle.ts` — TypeScript ACP example
+   - `python/single_agent_on_chain_read.py` — Python (LangChain tool wrapper)
+   - `python/multi_agent_crewai.py` — CrewAI integration: 3 CrewAI agents coordinate via ACP, settle on Strangecoin
+4. Создать `tests/agent_e2e_multi_agent.rs`:
+   - `three_agent_acp_chain_settle` — A→B→C task chain: A assigns task to B (ACP_NEGOTIATE → ACP_TASK with escrow), B fulfills and assigns sub-task to C (ACP_NEGOTIATE → ACP_TASK with sub-escrow), C fulfills, B settles with C, A settles with B; verify on-chain: escrow released B→C, escrow released A→B, all three agent balances correct
+   - `agent_devnet_one_command` — `cargo strangecoin agent devnet --agents 5 --fund 1000SC` — verify 5 wallets funded with 1000 SC each, RPC endpoints reachable
+5. SLIP-44 registration: open PR to [satoshilabs/slips#slip-44](https://github.com/satoshilabs/slips) for `coin_type = 1234` (Strangecoin placeholder from ADR-0028). Document in ADR-0028 amendment if accepted, else use unregistered placeholder with explicit note.
+6. CI: `cargo test -p strangecoin-sdk` green; `cargo test --test agent_e2e_multi_agent` green; `npm test` in `examples/agent_cookbook/ts/` green; `pytest examples/agent_cookbook/python/` green
+
+**Артефакты:**
+- `crates/strangecoin-sdk/Cargo.toml`, `src/{lib,rust,ts,python,mcp_client,acp_client}.rs`
+- `tools/devnet/agent/` (binary `cargo-strangecoin-agent-devnet`)
+- `examples/agent_cookbook/{rust,ts,python}/`
+- `tests/agent_e2e_multi_agent.rs`
+- SLIP-44 registration PR (external; reference link in ADR-0028 amendment)
+
+**КГ:**
+- [ ] `crates/strangecoin-sdk/` — workspace member; `cargo build -p strangecoin-sdk --all-features` green
+- [ ] `AgentClient` high-level API в Rust: open session, sign batch, submit, estimate, get activity
+- [ ] TypeScript bindings via `ts-rs` — `npm run build` в `examples/agent_cookbook/ts/` green
+- [ ] Python bindings via `pyo3` — `pytest examples/agent_cookbook/python/` green
+- [ ] `cargo strangecoin agent devnet --agents 5 --fund 1000SC` — one-command, 5 wallets funded
+- [ ] `examples/agent_cookbook/` — ≥6 examples (3 rust + 2 ts + 2 python, including CrewAI integration)
+- [ ] `tests/agent_e2e_multi_agent.rs::three_agent_acp_chain_settle` green (A→B→C, all settles on-chain)
+- [ ] `tests/agent_e2e_multi_agent.rs::agent_devnet_one_command` green
+- [ ] SLIP-44 PR открыт (link в ADR-0028 amendment), либо placeholder documented
+- [ ] `cargo clippy -p strangecoin-sdk -- -D warnings` green
+- [ ] Коммит `[S4-AI-P05] agent-sdk: rust+ts+python + devnet + faucet + 3-agent e2e + cookbook`
+
+---
+
+## 10. Professional UI prompts (UI-P01..UI-P05)
+
+### UI-P01. ADR-0031: Professional UI replacement (render backend + design system principles)
+
+**Цель:** зафиксировать архитектурное решение о замене demo-UI `eframe`/`egui` на профессиональный UI: выбор render backend (retain eframe/egui vs Tauri+Web vs iced — выбрано retain eframe/egui), new crate `crates/strangecoin-ui/` (headless design system + component library + render-backend-agnostic core), strangler migration `src/gui/` → launcher (по образцу `src/storage/` → `strangecoin-storage` Stage 3), WCAG AA accessibility CI gate (#27), dark/light themes, i18n (en/ru/zh). Это решение определяет UI-P02..UI-P05.
+
+**Контекст:** Current state (verified): `src/gui/` — `eframe`/`egui 0.22` immediate-mode GUI; login screen + wallet view (address, balance, recipient, amount, Send button); Windows `winapi` features declared explicitly. Pain points: demo-only aesthetic, no node operator dashboard (peers/sync/mempool/blocks), no agent activity view, no transaction detail with receipts/witness proofs, no settings screen, no accessibility audit, no theme/i18n. ROADMAP.md Этап 4 явно требует «professional UI». Альтернативы render backend: (1) **Retain eframe/egui** — Rust-native, immediate-mode, existing team expertise, no new deps, но accessibility support ограничен (no native screen reader hooks, manual tab-order); (2) **Tauri+Web (HTML/CSS)** — best accessibility (browser a11y tree), best design ecosystem (Tailwind, shadcn), но massive new dependency (webview), non-trivial IPC bridge Rust↔JS, builds heavier; (3) **iced (retained Elm-style)** — Rust-native, retained mode (better for complex state), accessibility via platform APIs, но smaller ecosystem, learning curve, less battle-tested; (4) **slint** — declarative Rust-native, но commercial license for some features. Решение: **retain eframe/egui**, invest в custom design system + component library поверх egui, manual WCAG AA compliance via axe-core audit на rendered screenshots (headless render + DOM-emulation for a11y check). Trade-off: accessibility effort manual, но no new heavyweight dep.
+
+**Задачи:**
+
+1. Создать `docs/ADR/0031-professional-ui-replacement.md`:
+   - Status: Accepted (после UI-P01 land'а)
+   - Context: current egui demo state, pain points (no dashboard/a11y/themes/i18n), ROADMAP.md Этап 4 requirement, threat V-47 (accessibility regression), invariant #27 (WCAG AA CI gate)
+   - Decision:
+     - **Render backend: retain eframe/egui 0.22+** — Rust-native, no new heavyweight dep; upgrade path tracked в ADR (if egui accessibility story matures → adopt; if not → Stage 5+ consider Tauri+Web migration as separate ADR)
+     - **New crate** `crates/strangecoin-ui/` — headless design system + component library, render-backend-agnostic core (trait `UiBackend` with `eframe_egui` impl)
+     - **Design system**: design tokens (color, spacing, typography, radius, shadow), light/dark themes (config `ui.theme = "light" | "dark" | "system"`), i18n (`en`, `ru`, `zh` — initial set, extensible via `fluent` crate)
+     - **Screens (5)**: Wallet (send/history/contracts), Node Dashboard (peers/sync/mempool/blocks), Agent Activity (ACP messages, batched txs, sponsor txs — from indexer via AI-P04 `agent_getActivity`), Transaction Detail (receipts, witness proofs — from AI-P03 wire witnesses Stage 3), Settings (network/peers/keystore/config/MCP/ACP toggles)
+     - **Strangler migration** (§10.5 precedent): `src/gui/` → thin launcher (`egui::App` impl делегирует в `strangecoin-ui::App`); `tests/two_clients.rs` остаётся зелёным весь migration (гейт §8.3 #5)
+     - **WCAG AA accessibility (#27)**: axe-core audit в CI gate (`cargo test -p strangecoin-ui --features a11y-audit`); headless render to screenshot + DOM-emulation for axe-core; manual tab-order, focus indicators, color contrast ≥ 4.5:1, keyboard navigation all screens
+     - **i18n**: `fluent` crate (L20n-style), locale files в `crates/strangecoin-ui/locales/{en,ru,zh}/main.ftl`; `ui.locale = "en" | "ru" | "zh" | "system"` config
+   - Consequences: Positive (no new heavyweight dep, Rust-native story preserved, team expertise reuse, deterministic builds unchanged); Negative (accessibility effort manual, axe-core requires DOM-emulation layer, i18n adds translation workflow); Neutral (design system — reusable для future explorer/faucet web UIs Stage 5+)
+   - Alternatives considered: Tauri+Web (heavyweight dep, IPC complexity), iced (smaller ecosystem, learning curve), slint (license risk)
+   - Related: ADR-0028 (agent vision — Agent Activity screen), ADR-0029 (MCP — Settings toggles), ADR-0030 (ACP — Agent Activity screen), ARCHITECT.md §19.3/§19.5/§19.6, ROADMAP.md Этап 4
+2. Создать `docs/spec/ui_professional.md` — spec: design tokens (color palette, spacing scale, typography scale, radius, shadow), component list (Button, Input, Card, Table, Modal, Drawer, Toast, Tabs, Breadcrumb, Badge, Avatar, Stat, Chart, CodeBlock, etc.), screen layouts (wireframes в ASCII or mermaid), accessibility checklist (WCAG AA criteria per screen), i18n workflow, theme switcher semantics
+3. Pin policy: `eframe`/`egui` — pinned `=0.22.x` (Stage 2 precedent; upgrade requires ADR amendment); `fluent` — pinned `=x.y.z`; `axe-core` (via `cargo test` headless audit) — dev-dep only
+
+**Артефакты:**
+- `docs/ADR/0031-professional-ui-replacement.md`
+- `docs/spec/ui_professional.md`
+
+**КГ:**
+- [ ] ADR-0031 создан по template; Status: Accepted
+- [ ] Render backend choice (retain eframe/egui) зафиксирован с rationale + alternatives
+- [ ] 5 screens перечислены (Wallet, Dashboard, Agent Activity, Tx Detail, Settings)
+- [ ] Design system principles (tokens, themes, i18n) зафиксированы
+- [ ] WCAG AA CI gate (#27) зафиксирован (axe-core audit approach)
+- [ ] Strangler migration plan (`src/gui/` → launcher, `tests/two_clients.rs` green) зафиксирован
+- [ ] `docs/spec/ui_professional.md` создан (design tokens, component list, screen wireframes, a11y checklist, i18n workflow)
+- [ ] Pin policy: eframe/egui/fluent зафиксированы
+- [ ] Коммит `[S4-UI-P01] ui-adr-0031: professional ui replacement + spec`
+
+---
+
+### UI-P02. Design system + component library + design tokens (crates/strangecoin-ui/)
+
+**Цель:** реализовать `crates/strangecoin-ui/` — headless design system + component library поверх eframe/egui: design tokens (color palette, spacing scale, typography scale, radius, shadow), light/dark themes, 12+ reusable components (Button, Input, Card, Table, Modal, Drawer, Toast, Tabs, Breadcrumb, Badge, Avatar, Stat, Chart, CodeBlock), i18n setup (`fluent` crate, locales en/ru/zh). Render-backend-agnostic core (trait `UiBackend`) с `eframe_egui` impl.
+
+**Контекст:** ADR-0031 (UI-P01) зафиксировал retain eframe/egui, new crate `crates/strangecoin-ui/`, design system principles. UI-P02 реализует foundation: tokens, components, themes, i18n — без которых UI-P03..UI-P05 (screen migration) невозможны. Альтернативы: (1) **Skip design system, write screens ad-hoc** — divergence risk, no theme consistency, accessibility per-screen ad-hoc (V-47 risk); (2) **Use external design system** — нет готовых Rust-native egui design systems (для web есть shadcn/MUI, для egui — нет); (3) **Generate design system from Figma tokens** — adds Figma dependency, not in repo workflow. Решение: hand-roll design system в `crates/strangecoin-ui/`, design tokens в `tokens.rs` (single source of truth), components в `src/components/`.
+
+**Задачи:**
+
+1. Создать `crates/strangecoin-ui/`:
+   - `Cargo.toml`: `strangecoin-ui = "0.1.0"`, features `["eframe_egui", "a11y-audit"]`; deps `eframe = "=0.22.x"`, `egui = "=0.22.x"`, `fluent = "=x.y.z"`, `fluent-bundle`, `unic-langid`
+   - `src/lib.rs`: `UiBackend` trait (render-backend-agnostic core); `EframeEguiBackend` impl; `App` struct (top-level entry, manages screen routing, theme, locale)
+   - `src/tokens.rs`: design tokens — `ColorPalette` (primary, secondary, accent, success, warning, error, neutral — 10 shades each), `SpacingScale` (4/8/12/16/24/32/48/64 px), `TypographyScale` (xs/sm/base/lg/xl/2xl, font family, weight, line-height), `Radius` (none/sm/md/lg/full), `Shadow` (none/sm/md/lg)
+   - `src/theme.rs`: `Theme` enum (Light/Dark/System), `ThemeManager` (resolve `System` via `eframe::Visuals::dark()`, persist to config `ui.theme`)
+   - `src/i18n.rs`: `Localization` struct (loads `locales/{locale}/main.ftl` via `fluent-bundle`), `tr(key, args)` method; locale files в `locales/{en,ru,zh}/main.ftl`
+   - `src/components/{button,input,card,table,modal,drawer,toast,tabs,breadcrumb,badge,avatar,stat,chart,codeblock}.rs` — 14 reusable components, each with: light/dark variants, focus indicators (WCAG 2.4.7), min touch target 44×44 px (WCAG 2.5.5), ARIA-like labels via `egui::Widget::id()` + accessibility metadata
+2. Создать `crates/strangecoin-ui/locales/{en,ru,zh}/main.ftl` — initial translation strings for all UI labels (≥100 strings: button labels, screen titles, error messages, etc.)
+3. Создать `crates/strangecoin-ui/tests/a11y_audit.rs` — axe-core audit harness: headless render of each component to screenshot + DOM-emulation, run `axe-core` ruleset, fail CI on WCAG AA violations
+4. Создать `crates/strangecoin-ui/tests/component_snapshot.rs` — snapshot tests for each component (light/dark variants) — catches visual regressions
+5. Создать `crates/strangecoin-ui/examples/gallery.rs` — design system gallery (renders all components in light/dark, all locales) — для visual review
+6. CI: `cargo test -p strangecoin-ui` green (incl. a11y-audit feature); `cargo clippy -p strangecoin-ui -- -D warnings` green; snapshot tests green
+
+**Артефакты:**
+- `crates/strangecoin-ui/Cargo.toml`, `src/{lib,tokens,theme,i18n}.rs`, `src/components/*.rs` (14 files)
+- `crates/strangecoin-ui/locales/{en,ru,zh}/main.ftl`
+- `crates/strangecoin-ui/tests/{a11y_audit,component_snapshot}.rs`
+- `crates/strangecoin-ui/examples/gallery.rs`
+
+**КГ:**
+- [ ] `crates/strangecoin-ui/` — workspace member; `cargo build -p strangecoin-ui` green
+- [ ] `UiBackend` trait + `EframeEguiBackend` impl — render-backend-agnostic core
+- [ ] Design tokens: `ColorPalette` (10 shades × 7 hues), `SpacingScale` (8 steps), `TypographyScale` (6 sizes), `Radius` (5), `Shadow` (4)
+- [ ] 14 components: Button, Input, Card, Table, Modal, Drawer, Toast, Tabs, Breadcrumb, Badge, Avatar, Stat, Chart, CodeBlock — each with light/dark variants, focus indicators, 44×44 min touch target
+- [ ] `Theme` enum (Light/Dark/System) + `ThemeManager` (persists to config)
+- [ ] `Localization` via `fluent` — locales en/ru/zh, ≥100 strings, `tr(key, args)` method
+- [ ] `tests/a11y_audit.rs` — axe-core audit, all components pass WCAG AA (#27)
+- [ ] `tests/component_snapshot.rs` — snapshot tests green (light + dark)
+- [ ] `examples/gallery.rs` — design system gallery renders all components
+- [ ] `cargo clippy -p strangecoin-ui -- -D warnings` green
+- [ ] Коммит `[S4-UI-P02] ui: design system + 14 components + tokens + themes + i18n + a11y audit`
+
+---
+
+### UI-P03. Wallet screen migration (send / history / contracts)
+
+**Цель:** мигрировать wallet screen из demo-`src/gui/` в новый `crates/strangecoin-ui/`: три таба — Send (recipient, amount, fee, submit), History (recent txs с status, gas, block height), Contracts (deployed contracts list, call interface, ABI viewer). Reuse design system (UI-P02). WCAG AA compliant. Replaces existing login+wallet-view demo screens.
+
+**Контекст:** Current wallet screen (verified): single egui view — address (read-only), balance, recipient + amount inputs, Send button. No history, no contracts tab, no fee control, no ABI viewer. ROADMAP.md Этап 4 явно требует wallet migration. ADR-0031 (UI-P01) зафиксировал strangler pattern: `src/gui/` → launcher. UI-P03 мигрирует wallet screen first (most-used screen). Альтернативы: (1) **Rewrite from scratch, no migration** — теряем working code, no fallback; (2) **Migrate all screens at once (UI-P03+UI-P04+UI-P05 in one PR)** — too big, regression risk; (3) **Keep demo wallet, add new screens alongside** — UX confusion. Решение: incremental migration, wallet first (UI-P03), then dashboard + tx detail (UI-P04), then agent activity + settings + strangler closeout (UI-P05).
+
+**Задачи:**
+
+1. Создать `crates/strangecoin-ui/src/screens/wallet/`:
+   - `mod.rs` — `WalletScreen` struct, manages tab state (Send/History/Contracts)
+   - `send.rs` — Send tab: recipient input (bech32 validation), amount input (SC + atomic units), fee input (default = estimate from `agent_estimateTaskCost` AI-P04), Submit button (calls JSON-RPC `eth_sendTransaction` or `agent_signAndSubmitBatch`), success/error toast
+   - `history.rs` — History tab: table of recent txs (columns: txid, type, from, to, amount, fee, status, block height), filter (sent/received/failed), pagination, click row → tx detail (UI-P04)
+   - `contracts.rs` — Contracts tab: list of deployed contracts (address, name, ABI), click → call interface (method selector, args inputs, "Read" / "Write" buttons calling `eth_call` / `eth_sendTransaction`), ABI viewer (JSON)
+2. Wire wallet screen to JSON-RPC client (`crates/strangecoin-api` или inline `src/api/`):
+   - `eth_getBalance` for balance display
+   - `eth_getTransactionByHash` for history
+   - `eth_call` / `eth_sendTransaction` for contract interaction
+   - `agent_signAndSubmitBatch` for batch send (AI-P04)
+3. Migrate `src/gui/` → thin launcher:
+   - `src/gui/mod.rs` — `egui::App` impl delegates to `strangecoin_ui::App`
+   - Remove old `src/gui/wallet_view.rs` etc. (replaced by `strangecoin-ui/src/screens/wallet/`)
+   - `tests/two_clients.rs` remains green (гейт §8.3 #5)
+4. WCAG AA: tab-order logical, focus indicators on all inputs, color contrast ≥ 4.5:1, keyboard navigation (Tab/Enter/Esc), screen reader labels via `egui::Widget::id()` + metadata
+5. i18n: all labels localized via `fluent` (`wallet.send.recipient`, `wallet.send.amount`, `wallet.history.title`, etc.)
+6. Создать `crates/strangecoin-ui/tests/screens/wallet_a11y.rs` — axe-core audit for wallet screen (Send/History/Contracts tabs)
+
+**Артефакты:**
+- `crates/strangecoin-ui/src/screens/wallet/{mod,send,history,contracts}.rs`
+- `crates/strangecoin-ui/tests/screens/wallet_a11y.rs`
+- `src/gui/mod.rs` (thin launcher)
+
+**КГ:**
+- [ ] `WalletScreen` с 3 tabs (Send/History/Contracts) реализован
+- [ ] Send tab: bech32 validation, amount + fee inputs, submit → JSON-RPC `eth_sendTransaction` (or batch via `agent_signAndSubmitBatch`)
+- [ ] History tab: table с filter + pagination, click row → tx detail (wire к UI-P04)
+- [ ] Contracts tab: list + call interface + ABI viewer
+- [ ] `src/gui/` — thin launcher (delegates to `strangecoin_ui::App`); old wallet_view.rs removed
+- [ ] `tests/two_clients.rs` green (гейт §8.3 #5 — strangler migration не ломает headline test)
+- [ ] WCAG AA: tab-order, focus indicators, contrast ≥ 4.5:1, keyboard nav — `tests/screens/wallet_a11y.rs` green (#27)
+- [ ] i18n: all labels localized (en/ru/zh)
+- [ ] `cargo clippy -p strangecoin-ui -- -D warnings` green
+- [ ] Коммит `[S4-UI-P03] ui: wallet screen migration (send/history/contracts) + strangler launcher`
+
+---
+
+### UI-P04. Node operator dashboard + transaction detail (receipts / witness proofs)
+
+**Цель:** реализовать Node Dashboard screen — operator-facing view (peers, sync status, mempool, blocks) — и Transaction Detail screen (receipts, witness proofs, gas breakdown, event logs). Node Dashboard даёт operator visibility в running node; Tx Detail — auditability для любой транзакции (на чем основана её валидность).
+
+**Контекст:** ROADMAP.md Этап 4 + ADR-0031 требуют dashboard и tx detail. Tx Detail критичен для agent txs — agents хотят видеть receipts (success/fail, gas used, logs) и witness proofs (stateless verification — Stage 3 deliverable S3-P11) для своих batched/sponsored txs. Node Dashboard закрывает operator pain: сейчас operator не видит peers/sync/mempool/blocks без логов. Reuse: `NodeEvent` bus (Stage 1) → UI subscription; `StorageEngine` indices (Stage 3 S3-P09) → tx lookup; `StateWitness` wire (Stage 3 S3-P11) → witness proof display. Альтернативы: (1) **Dashboard как separate binary (sc-dashboard)** — ops complexity, no shared state с GUI; (2) **Tx Detail как modal only** — limited for complex txs (batched); (3) **Skip witness proofs** — теряем stateless verification visibility. Решение: dashboard как screen в main UI app, tx detail как full screen (navigated from history row click).
+
+**Задачи:**
+
+1. Создать `crates/strangecoin-ui/src/screens/dashboard/`:
+   - `mod.rs` — `DashboardScreen` struct
+   - `peers.rs` — Peers panel: table (peer_id, addr, latency EWMA, score, direction, capabilities), color-coded score (green > 0.5, yellow 0.2-0.5, red < 0.2 — Stage 2 peer scoring bands)
+   - `sync.rs` — Sync panel: current height, tip height, sync %, headers/blocks queue depth, sync engine state (idle/headers-first/blocks/catch-up)
+   - `mempool.rs` — Mempool panel: tx count, total fee, sorted-by-fee table (top 10), RBF conflicts highlighted
+   - `blocks.rs` — Blocks panel: recent 10 blocks (height, hash, tx count, gas used, miner, timestamp), click → block detail modal
+2. Создать `crates/strangecoin-ui/src/screens/tx_detail/`:
+   - `mod.rs` — `TxDetailScreen` struct, takes `txid` param
+   - `overview.rs` — Overview: txid, type (transfer/call/create), from, to, amount, fee, gas used, status, block height, timestamp
+   - `receipt.rs` — Receipt panel: status (success/fail), gas used, gas limit, logs (decoded ABI events), revert reason (if fail)
+   - `witness.rs` — Witness panel: `StateWitness` wire proof (Stage 3 S3-P11 deliverable) — account proof (Merkle path to state_root), contract storage proof (Merkle path to contract_storage_root); "Verify" button — calls `verify_block_stateless` (Stage 1 + Stage 3 wire) client-side
+   - `events.rs` — Events panel: decoded event logs (using ABI from indexer)
+3. Wire screens to data sources:
+   - Dashboard: `NodeEvent` bus subscription (Stage 1) → live updates
+   - Tx Detail: `StorageEngine::get_tx(txid)` (Stage 3 S3-P09 indices) + `get_receipt(txid)` + `get_witness(txid)` (Stage 3 S3-P11)
+4. WCAG AA: tab-order, focus indicators, keyboard nav, color contrast (incl. color-coded peer score — must have text label too, not color-only — WCAG 1.4.1)
+5. i18n: all labels localized
+6. Создать `crates/strangecoin-ui/tests/screens/{dashboard,tx_detail}_a11y.rs` — axe-core audits
+
+**Артефакты:**
+- `crates/strangecoin-ui/src/screens/dashboard/{mod,peers,sync,mempool,blocks}.rs`
+- `crates/strangecoin-ui/src/screens/tx_detail/{mod,overview,receipt,witness,events}.rs`
+- `crates/strangecoin-ui/tests/screens/{dashboard,tx_detail}_a11y.rs`
+
+**КГ:**
+- [ ] `DashboardScreen` с 4 panels (Peers, Sync, Mempool, Blocks) реализован
+- [ ] Peers panel: live updates via `NodeEvent` bus, color-coded score + text label (WCAG 1.4.1)
+- [ ] Sync panel: current/tip height, sync %, sync engine state
+- [ ] Mempool panel: tx count, top-10-by-fee table, RBF conflicts highlighted
+- [ ] Blocks panel: recent 10 blocks, click → block detail modal
+- [ ] `TxDetailScreen` с 4 panels (Overview, Receipt, Witness, Events) реализован
+- [ ] Witness panel: `StateWitness` proof display + "Verify" button calling `verify_block_stateless`
+- [ ] Tx Detail navigated from Wallet History row click (UI-P03 wire)
+- [ ] WCAG AA — `tests/screens/{dashboard,tx_detail}_a11y.rs` green (#27)
+- [ ] i18n: all labels localized (en/ru/zh)
+- [ ] `cargo clippy -p strangecoin-ui -- -D warnings` green
+- [ ] Коммит `[S4-UI-P04] ui: node dashboard + tx detail (receipts/witness proofs)`
+
+---
+
+### UI-P05. Agent activity feed + settings + accessibility audit + strangler closeout
+
+**Цель:** реализовать Agent Activity screen (ACP messages, batched txs, sponsor txs from indexer via AI-P04 `agent_getActivity`) и Settings screen (network/peers/keystore/config/MCP/ACP toggles). Запустить full axe-core audit на всех 5 screens, закрыть strangler migration (`src/gui/` → pure launcher, no business logic remains), обновить `tests/two_clients.rs` для использования new UI launcher (если нужно), обновить Changelog и AGENTS.md.
+
+**Контекст:** UI-P03 (wallet) + UI-P04 (dashboard + tx detail) мигрированы. UI-P05 закрывает migration: Agent Activity (depends on AI-P04 `agent_getActivity` + AI-P03 ACP messages + AI-P02 MCP), Settings (operator config surface), strangler closeout (`src/gui/` → pure launcher), a11y audit (all 5 screens), Changelog 4.0.0. Альтернативы: (1) **Skip Agent Activity screen** — теряем agent-monitoring UX; (2) **Settings via config.toml only, no UI** — operator friction; (3) **Skip full a11y audit** — V-47 risk. Решение: full impl, closeout.
+
+**Задачи:**
+
+1. Создать `crates/strangecoin-ui/src/screens/agent_activity/`:
+   - `mod.rs` — `AgentActivityScreen` struct
+   - `feed.rs` — Activity feed: chronological list of (timestamp, agent_address, event_type, details) — event types: ACP_NEGOTIATE/ACP_TASK/ACP_SETTLE/ACP_REVOKE, batched_tx, sponsor_tx (stub), transfer; click → tx detail (UI-P04) or ACP message detail modal
+   - `filter.rs` — Filter sidebar: by agent_address, by event_type, by time range
+2. Создать `crates/strangecoin-ui/src/screens/settings/`:
+   - `mod.rs` — `SettingsScreen` struct
+   - `network.rs` — Network settings: listen_addr, seeds, max_peers, network_id (read-only after start)
+   - `peers.rs` — Peer management: list, ban/unban, add seed
+   - `keystore.rs` — Keystore management: list wallets (operator + agents), import/export, password change; key isolation (`OperatorKeystore` vs `AgentKeystore` — ADR-0028) reflected в UI (separate tabs)
+   - `config.rs` — Raw config.toml editor (advanced users; with validation on save)
+   - `mcp.rs` — MCP toggles (ADR-0029): enable/disable, transport select (stdio/HTTP+SSE), view connected MCP clients
+   - `acp.rs` — ACP toggles (ADR-0030): enable/disable, view active ACP sessions, ban agent
+3. Strangler closeout:
+   - Audit `src/gui/` — ensure no business logic remains, only launcher (`egui::App` impl delegates to `strangecoin_ui::App`)
+   - Remove any leftover demo files (`src/gui/wallet_view.rs`, etc.)
+   - `tests/two_clients.rs` — verify still green (гейт §8.3 #5); if test breaks due to UI changes, fix test to use new launcher (but do not regress test coverage)
+4. Full axe-core a11y audit:
+   - Run `cargo test -p strangecoin-ui --features a11y-audit` — must pass all 5 screens (Wallet, Dashboard, Tx Detail, Agent Activity, Settings)
+   - Document any WCAG AA criteria requiring manual review (e.g., dynamic content live-regions) in `docs/spec/ui_professional.md`
+5. Update `Changelog.md`:
+   - `4.0.0 — dev-experience + AI agents + MCP + ACP + professional UI`
+   - List breaking changes (if any): `src/gui/` API removed (use `strangecoin-ui` crate)
+   - List new features: 5 screens, MCP server, ACP transport, agent_* JSON-RPC, SDK (Rust/TS/Python)
+6. Update `AGENTS.md`:
+   - Stage 4 sections — only facts confirmed by commits (FBP10 precedent from Stage 3)
+   - Pin policy updated: eframe/egui, fluent, snow (Stage 2 carry), bip32 (AI-P01)
+   - Common gotchas: eframe/egui upgrade requires ADR amendment; MCP spec version churn (pin to 2024-11-05)
+
+**Артефакты:**
+- `crates/strangecoin-ui/src/screens/agent_activity/{mod,feed,filter}.rs`
+- `crates/strangecoin-ui/src/screens/settings/{mod,network,peers,keystore,config,mcp,acp}.rs`
+- `crates/strangecoin-ui/tests/screens/{agent_activity,settings}_a11y.rs`
+- `src/gui/` — pure launcher (audit confirms no business logic)
+- `Changelog.md` — `4.0.0` section
+- `AGENTS.md` — Stage 4 sections
+
+**КГ:**
+- [ ] `AgentActivityScreen` реализован: feed (ACP/batched/sponsor/transfer), filter sidebar, click → tx detail / ACP modal
+- [ ] `SettingsScreen` реализован: 7 sub-screen (network/peers/keystore/config/mcp/acp), key isolation reflected (OperatorKeystore vs AgentKeystore separate tabs)
+- [ ] `src/gui/` audit confirms pure launcher (no business logic); old demo files removed
+- [ ] `tests/two_clients.rs` green (гейт §8.3 #5)
+- [ ] Full a11y audit: `cargo test -p strangecoin-ui --features a11y-audit` — all 5 screens pass WCAG AA (#27)
+- [ ] Manual WCAG AA review items documented в `docs/spec/ui_professional.md`
+- [ ] `Changelog.md` 4.0.0 section added (breaking changes + new features listed)
+- [ ] `AGENTS.md` Stage 4 sections added (facts only, FBP10 precedent)
+- [ ] Pin policy updated: eframe/egui, fluent, bip32 added; snow (Stage 2 carry)
+- [ ] `cargo clippy -p strangecoin-ui -- -D warnings` green
+- [ ] Коммит `[S4-UI-P05] ui: agent activity + settings + a11y audit + strangler closeout + changelog 4.0.0`
+
+---
+
+## 11. Покрытие DoD Stage 4 (расширение ROADMAP.md «Этап 4») после AI-P01..AI-P05 + UI-P01..UI-P05
+
+| # | Критерий (из обновлённого ROADMAP.md «Этап 4» DoD) | Промпт | Evidence (после закрытия) |
+|---|----------------------------------------------------|--------|----------------------------|
+| 1 | JSON-RPC eth_* работает с MetaMask | (Stage 4 core, не extension) | `tests/eth_rpc.rs` (Stage 4 core track) |
+| 2 | HD Wallet работает (BIP-39/44) | (Stage 4 core) | `tests/hd_wallet.rs` |
+| 3 | SDK работает (cargo strangecoin new → deploy → call) | (Stage 4 core) | `tests/sdk_e2e.rs` |
+| 4 | Devnet работает | (Stage 4 core) | `tests/devnet.rs` |
+| 5 | Explorer работает | (Stage 4 core) | manual + `tools/explorer/` |
+| 6 | Faucet работает | (Stage 4 core) | `tests/faucet.rs` |
+| 7 | Indexer работает | (Stage 4 core, extension: agent activity) | `tests/indexer.rs` + `tests/agent_rpc.rs::agent_get_activity` |
+| 8 | Metrics exposed | (Stage 4 core) | `curl /metrics` smoke |
+| 9 | **MCP server работает** (deterministic #23) | AI-P02 | `tests/mcp_server.rs` + `mcp-cli` round-trip |
+| 10 | **ACP transport работает** (escrow #24, replay #25) | AI-P03 | `tests/acp_messages.rs` |
+| 11 | **Agent JSON-RPC работает** (5 agent_* methods) | AI-P04 | `tests/agent_rpc.rs` |
+| 12 | **Agent SDK работает** (Rust + TS + Python) | AI-P05 | `examples/agent_cookbook/` + `tests/agent_e2e_multi_agent.rs` |
+| 13 | **Agent devnet работает** (N wallets, ACP chain settle) | AI-P05 | `tests/agent_e2e_multi_agent.rs::three_agent_acp_chain_settle` |
+| 14 | **Professional UI работает** (5 screens, WCAG AA #27) | UI-P02..UI-P05 | `tests/screens/*_a11y.rs` + `tests/two_clients.rs` green |
+| 15 | **crates/strangecoin-mcp/ создан** | AI-P02 | workspace member + `cargo build -p strangecoin-mcp` green |
+| 16 | **crates/strangecoin-sdk/ создан** | AI-P05 | workspace member + `cargo build -p strangecoin-sdk --all-features` green |
+| 17 | **crates/strangecoin-ui/ создан** | UI-P02 | workspace member + `cargo build -p strangecoin-ui` green |
+| 18 | **ADR-0028 (cryptocurrency for AI agents) написан** | AI-P01 | `docs/ADR/0028-strangecoin-as-cryptocurrency-for-ai-agents.md` |
+| 19 | **ADR-0029 (MCP server) написан** | AI-P02 | `docs/ADR/0029-mcp-server.md` |
+| 20 | **ADR-0030 (ACP) написан** | AI-P03 | `docs/ADR/0030-acp-agent-communication-protocol.md` |
+| 21 | **ADR-0031 (Professional UI) написан** | UI-P01 | `docs/ADR/0031-professional-ui-replacement.md` |
+| 22 | **specs: agent_integration / mcp_server / acp_messages / ui_professional созданы** | AI-P01..AI-P03, UI-P01 | `docs/spec/{agent_integration,mcp_server,acp_messages,ui_professional}.md` |
+| 23 | **BACKLOG.md создан и обновляется** | (этот патч) | `analytics/BACKLOG.md` (см. §12) |
+| 24 | `Changelog.md` обновлён: `4.0.0 — dev-experience + AI agents + MCP + ACP + professional UI` | UI-P05 | Changelog 4.0.0 + tag `v4.0.0-stage4` |
+
+**Stage 4 closure tag:** `v4.0.0-stage4` ставится после закрытия **всех** Stage 4 core DoD + extension DoD (AI-P01..AI-P05 + UI-P01..UI-P05). Tag-gate для Stage 5 (fee market + AA + paymaster full impl) — soft dependency: Stage 5 paymaster full impl требует `AI-P05` closed (stub sufficient до Stage 5).
+
+---
+
+## 12. Связь с BACKLOG.md
+
+Файл `analytics/BACKLOG.md` создан этим же патчем (см. ниже) — сквозной бэклог AI/UI work items, который обновляется по мере закрытия `AI-P##` / `UI-P##`. Структура BACKLOG.md:
+
+- **§1 Active work items** — `AI-P##` / `UI-P##` в работе (status: in-progress), owner, ETA
+- **§2 Next up** — upcoming prompts (queued, not started)
+- **§3 Blocked** — prompts blocked on dependency (e.g., AI-P05 blocked on AI-P04)
+- **§4 Done** — closed prompts with commit hash + close date
+- **§5 Stage 4 residual obligations** — carry-over to Stage 5+ (paymaster full impl, AA protocol-level, EIP-1559, mobile UI, multi-lang SDK Go/Java/C++, relayed ACP, ZK-proofs for ACP escrow)
+- **§6 Cross-stage carry-over** — SCIP-0001 (genesis key), BUG-S1-013/015 (ops-gates), Stage 3 residuals (Verkle/SMT, state expiry, receipts prune, Block-STM, wire snapshot sync)
+
+До этого патча «бэклог Stage 3» жил в `ROADMAP3.md` (referenced в `prompt-stage3.md` §0 Замечание про BACKLOG3.md), «бэклог Stage 4» — в `ROADMAP.md` §«Этап 4» (de-facto). Теперь AI/UI work items живут в `analytics/BACKLOG.md` для traceability — single source of truth для agent-track и UI-track.
+
+---
+
+## 13. Связь с другими документами (расширение §7)
+
+К существующему списку (§7) добавляются:
+
+- `analytics/BACKLOG.md` — сквозной бэклог AI/UI work items (см. §12).
+- `docs/ADR/0028-strangecoin-as-cryptocurrency-for-ai-agents.md` — ADR для AI-agent vision (AI-P01).
+- `docs/ADR/0029-mcp-server.md` — ADR для MCP server (AI-P02).
+- `docs/ADR/0030-acp-agent-communication-protocol.md` — ADR для ACP (AI-P03).
+- `docs/ADR/0031-professional-ui-replacement.md` — ADR для professional UI (UI-P01).
+- `docs/spec/agent_integration.md` — high-level spec для AI agent integration (AI-P01).
+- `docs/spec/mcp_server.md` — spec для MCP server tools/resources/transports (AI-P02).
+- `docs/spec/acp_messages.md` — spec для ACP message family (AI-P03).
+- `docs/spec/ui_professional.md` — spec для professional UI design system + screens (UI-P01).
+- `analytics/ARCHITECT.md` §19 — AI Agent orientation (principles, context diagram, subsystems, invariants #23..#27, threat vectors V-43..V-48, anti-goals, open questions).
+- `analytics/ROADMAP.md` §«Этап 4» (расширенный) — Stage 4 tasks/DoD/risks/ADRs required с AI/MCP/ACP/UI work items.
+- `README.md` (root) — обновлён: AI-agent orientation в intro + AI agents feature subsection + roadmap row Stage 4 «+ AI agents» + project structure (new ADRs/specs/BACKLOG.md) + acknowledgements footer.
+- `docs/security/THREAT_MODEL.md` — STRIDE v3.3 → v3.4 (extension: V-43..V-48, AI/UI attack surface; обновляется в UI-P05 closeout или отдельным security-patch).
+
+---
+
+## 14. Stage 4 gate closure (tag `v4.0.0-stage4`)
+
+**Precondition:** Stage 4 closure требует:
+
+1. Stage 4 core DoD closed (JSON-RPC eth_*, HD wallet, SDK core, devnet, explorer, faucet, indexer, metrics — из оригинального ROADMAP.md «Этап 4» DoD, не extension).
+2. Extension DoD closed (§11 этой секции, AI-P01..AI-P05 + UI-P01..UI-P05).
+3. All Stage 0..3 invariants (#1..#22) still enforced (`docs/stage4/INVARIANTS_ENFORCED.md`, расширение до #27).
+4. Threat model v3.4 (`docs/stage4/THREAT_MODEL_STAGE4.md`, V-1..V-48).
+5. `cargo test --workspace` (чанками по precedent Stage 3 §5 #11) + `cargo clippy --all-targets -- -D warnings` green ДО тега.
+6. Annotated tag `v4.0.0-stage4` создан и запушен; `git ls-remote --tags origin` подтверждает.
+7. Changelog 4.0.0 (breaking changes перечислены: `src/gui/` API removed).
+8. AGENTS.md Stage 4 sections — только факты, подтверждённые коммитами (FBP10 precedent).
+
+**Soft gates (Stage 5):**
+
+- Stage 5 paymaster full impl не начинается до `AI-P05` closed (stub sufficient до Stage 5).
+- Stage 5 AA protocol-level не начинается до `AI-P04` closed (batched tx via WASM contract sufficient до Stage 5).
+- Stage 5 EIP-1559 не начинается до Stage 4 core `eth_estimateGas` stable.
+
+**Hard gates (Stage 6+):**
+
+- Stage 6 external audit не начинается до `v4.0.0-stage4`.
+- Stage 6 TLA+ network spec не начинается до ACP transport formally specified (AI-P03 spec → TLA+ model).
+- Stage 7 PoS migration не начинается до `v4.0.0-stage4` + SCIP-0001 closed (genesis key replacement).
+
+---
+
+*Конец расширения §8..§14 (добавлено 2026-11-04). Оригинальный Stage 3 content (§0..§7, S3-P01..S3-P15) сохранён без изменений.*
