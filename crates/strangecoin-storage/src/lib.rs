@@ -9,7 +9,10 @@
 //!   decision of `docs/ADR/0008-rocksdb-plan.md`); the raw DB handle never
 //!   leaves this crate.
 //! - [`schema`] — pure key-encoding functions and schema versioning
-//!   (`KeyPrefix` constructors, `SCHEMA_VERSION`), implemented in S3-P05.
+//!   (S3-P05): [`schema::SCHEMA_VERSION`], [`schema::KeyPrefix`] tags for
+//!   index sub-keyspaces, per-CF key constructors (big-endian heights /
+//!   nonces) and their decoders. Pure byte functions — no I/O, no clock,
+//!   no RNG; key *structure* only, values stay opaque bytes.
 //! - `RocksDbEngine` (S3-P06, feature `rocksdb`) — the production backend.
 //!
 //! Division of labor (ADR-0024 §Decision "Values"): the engine stores
@@ -25,4 +28,11 @@
 pub mod engine;
 pub mod schema;
 
-pub use engine::{StorageEngine, StorageError, WriteBatchOp};
+pub use engine::{KvPair, StorageEngine, StorageError, WriteBatchOp};
+pub use schema::{
+    block_by_height_key, block_hash_index_key, contract_storage_key, decode_block_height_key,
+    decode_mempool_key, decode_schema_version, decode_state_history_key, encode_schema_version,
+    mempool_key, mempool_sender_prefix, meta_key, state_history_key, state_key, tx_index_key,
+    tx_raw_key, KeyPrefix, META_CHAIN_ID, META_DIFFICULTY, META_SCHEMA_VERSION, META_TIP_HASH,
+    META_TIP_HEIGHT, SCHEMA_VERSION,
+};

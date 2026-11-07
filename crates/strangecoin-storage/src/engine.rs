@@ -113,6 +113,12 @@ pub enum StorageError {
     SchemaVersion { found: u32, expected: u32 },
 }
 
+/// One `(key, value)` pair produced by [`StorageEngine::iterate_prefix`].
+///
+/// Aliased so the trait signature stays readable (clippy
+/// `type_complexity`); the type itself is unchanged.
+pub type KvPair = (Vec<u8>, Vec<u8>);
+
 /// Engine-agnostic persistence contract over seven column families.
 ///
 /// Contract highlights (ADR-0024 §Decision "Trait surface"):
@@ -147,11 +153,7 @@ pub trait StorageEngine: Send + Sync {
 
     /// All `(key, value)` pairs in `cf` whose key starts with `prefix`,
     /// **sorted by key**. Empty `prefix` = the whole CF.
-    fn iterate_prefix(
-        &self,
-        cf: Cf,
-        prefix: &[u8],
-    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError>;
+    fn iterate_prefix(&self, cf: Cf, prefix: &[u8]) -> Result<Vec<KvPair>, StorageError>;
 
     /// Drain memtables/WAL to stable storage (best effort for in-memory
     /// engines; a durability barrier for disk-backed ones).
@@ -206,11 +208,7 @@ mod tests {
             Ok(())
         }
 
-        fn iterate_prefix(
-            &self,
-            cf: Cf,
-            prefix: &[u8],
-        ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+        fn iterate_prefix(&self, cf: Cf, prefix: &[u8]) -> Result<Vec<KvPair>, StorageError> {
             let cfs = self.cfs.lock().expect("memory engine lock poisoned");
             Ok(cfs[cf.ordinal()]
                 .range(prefix.to_vec()..)

@@ -42,3 +42,7 @@ rocksdb = ["dep:rocksdb"]
 # Stage 3 Pin Policy process rule (new storage-crate deps are pinned);
 # resolution 2026-10-30 -> 3.27.0.
 tempfile = "=3.27.0"
+# Property tests for the key codec (BE ordering, injectivity, cross-subspace
+# non-collision — S3-P05). Pinned exact per Stage 3 Pin Policy; resolution
+# 2026-11-07 -> 1.11.0 (already present in Cargo.lock via root/core dev-deps).
+proptest = "=1.11.0"

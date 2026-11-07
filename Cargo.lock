@@ -4150,6 +4150,7 @@ name = "strangecoin-storage"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "proptest",
  "rocksdb",
  "serde",
  "tempfile",
