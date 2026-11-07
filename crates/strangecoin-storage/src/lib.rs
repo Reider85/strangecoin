@@ -13,7 +13,10 @@
 //!   index sub-keyspaces, per-CF key constructors (big-endian heights /
 //!   nonces) and their decoders. Pure byte functions — no I/O, no clock,
 //!   no RNG; key *structure* only, values stay opaque bytes.
-//! - `RocksDbEngine` (S3-P06, feature `rocksdb`) — the production backend.
+//! - [`rocks`] (S3-P06, feature `rocksdb`) — [`RocksDbEngine`], the
+//!   production backend: open with all seven ADR-0024 column families,
+//!   fail-closed schema-version guard, atomic `WriteBatch`, sorted prefix
+//!   iteration, all-CF flush.
 //!
 //! Division of labor (ADR-0024 §Decision "Values"): the engine stores
 //! **opaque bytes**. Encoding/decoding of consensus types (`Block`,
@@ -26,9 +29,13 @@
 //! the S3-P08 migration removes it.
 
 pub mod engine;
+#[cfg(feature = "rocksdb")]
+pub mod rocks;
 pub mod schema;
 
-pub use engine::{KvPair, StorageEngine, StorageError, WriteBatchOp};
+pub use engine::{Cf, KvPair, StorageEngine, StorageError, WriteBatchOp};
+#[cfg(feature = "rocksdb")]
+pub use rocks::RocksDbEngine;
 pub use schema::{
     block_by_height_key, block_hash_index_key, contract_storage_key, decode_block_height_key,
     decode_mempool_key, decode_schema_version, decode_state_history_key, encode_schema_version,

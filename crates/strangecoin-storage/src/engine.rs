@@ -70,6 +70,22 @@ impl Cf {
             Cf::Mempool => 6,
         }
     }
+
+    /// On-disk column-family name (ADR-0024 §Column families) — the
+    /// strings `open` creates and `cf_handle` looks up (S3-P06), and the
+    /// spelling config/log consumers use without pulling in the
+    /// `rocksdb` feature.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Cf::Meta => "meta",
+            Cf::Blocks => "blocks",
+            Cf::State => "state",
+            Cf::Transactions => "transactions",
+            Cf::ContractStorage => "contract_storage",
+            Cf::StateHistory => "state_history",
+            Cf::Mempool => "mempool",
+        }
+    }
 }
 
 /// A single mutation inside an atomic [`StorageEngine::write_batch`].
