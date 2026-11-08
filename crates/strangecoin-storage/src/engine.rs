@@ -262,7 +262,10 @@ mod tests {
         engine.put(Cf::State, b"key", b"state").unwrap();
         engine.put(Cf::Mempool, b"key", b"mempool").unwrap();
 
-        assert_eq!(engine.get(Cf::State, b"key").unwrap(), Some(b"state".to_vec()));
+        assert_eq!(
+            engine.get(Cf::State, b"key").unwrap(),
+            Some(b"state".to_vec())
+        );
         assert_eq!(
             engine.get(Cf::Mempool, b"key").unwrap(),
             Some(b"mempool".to_vec())
@@ -345,12 +348,22 @@ mod tests {
     #[test]
     fn iterate_prefix_excludes_non_matching_and_cross_cf_keys() {
         let engine = MemoryEngine::new();
-        engine.put(Cf::StateHistory, b"0000000000000001addr", b"h1").unwrap();
-        engine.put(Cf::StateHistory, b"0000000000000002addr", b"h2").unwrap();
-        engine.put(Cf::StateHistory, b"ffffffffffffffffaddr", b"h-max").unwrap();
-        engine.put(Cf::State, b"0000000000000001addr", b"current").unwrap();
+        engine
+            .put(Cf::StateHistory, b"0000000000000001addr", b"h1")
+            .unwrap();
+        engine
+            .put(Cf::StateHistory, b"0000000000000002addr", b"h2")
+            .unwrap();
+        engine
+            .put(Cf::StateHistory, b"ffffffffffffffffaddr", b"h-max")
+            .unwrap();
+        engine
+            .put(Cf::State, b"0000000000000001addr", b"current")
+            .unwrap();
 
-        let entries = engine.iterate_prefix(Cf::StateHistory, b"000000000000000").unwrap();
+        let entries = engine
+            .iterate_prefix(Cf::StateHistory, b"000000000000000")
+            .unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].1, b"h1");
         assert_eq!(entries[1].1, b"h2");

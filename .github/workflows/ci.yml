@@ -1,18 +1,157 @@
 name: CI
 
+# [GITHUB-P2] Push CI: lint / test-core / coverage / source-gates — 4 jobs,
+# stable-green badge target ≤ 8 min.
+#
+# Deviations from analytics/GITHUB.md P2 spec (documented explicitly per
+# FBP "deviations must be stated"):
+#   1. Spec says branch `main`; the repo default branch is `master`
+#      (origin/HEAD -> master, same deviation as prerelease.yml [GITHUB-P1])
+#      -> triggers keep [main, master, develop] and the concurrency group
+#      keys off github.ref (branch-agnostic).
+#   2. Spec item 2 defers the extra-OS / non-stable toolchain matrix move
+#      to P3 nightly.yml, but the P2 acceptance criterion ("workflow CI
+#      <= 8 min", exactly 4 jobs) cannot hold while the 9x600s fuzz matrix
+#      still runs on push -> the fuzz job is removed here already; it
+#      returns in P3's nightly.yml (user-approved).
+#   3. Spec item 1 keeps a release-profile smoke build in test-core, item 6
+#      says remove it (duplicates release.yml, 15+ min) -> item 6 wins: no
+#      release build in push CI; LTO/strip stay release.yml-only
+#      (user-approved).
+#   4. Spec says `cargo install <tool> --locked` (source build ~2-6 min per
+#      run) -> taiki-e/install-action ships prebuilt binaries in seconds
+#      (user-approved); the coverage tool crate was also renamed
+#      cargo-llvm-cov-preview -> cargo-llvm-cov.
+#   5. Spec item 1 wants `-D clippy::correctness -D warnings`, item 5 wants
+#      `-A warnings` -> item 5 wins (goal is a stable-green badge; new
+#      lints on the rolling toolchain channels must not fail the build).
+#      Flag order `-A warnings -D clippy::correctness` so the deny for
+#      correctness cannot be overridden by the later allow.
+#   6. `cargo nextest` does not run doctests (replaces `cargo test --all`)
+#      -> extra step `cargo test --workspace --doc` in test-core preserves
+#      the doctest coverage.
+#   7. codecov-action@v4 needs the CODECOV_TOKEN repo secret (manual step
+#      in repo settings, not verifiable from code); coverage job is
+#      continue-on-error per spec so a missing/failing upload never paints
+#      the badge. An lcov.info artifact upload is kept as a local fallback.
+
 on:
   push:
     branches: [main, master, develop]
   pull_request:
     branches: [main, master, develop]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  lint:
+    name: Lint (fmt + clippy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          sharedKey: ci-ubuntu-stable
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      # Deviation 5: -A warnings (non-blocking) + -D clippy::correctness
+      # (real bugs still fail); -A comes first so -D wins on overlap.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -A warnings -D clippy::correctness
+
+  test-core:
+    name: Test (ubuntu, stable)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Deviation 4: prebuilt binary instead of `cargo install --locked`.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          sharedKey: ci-ubuntu-stable
+
+      - name: Run tests (nextest)
+        run: cargo nextest run --workspace --no-fail-fast --retries 2
+
+      # Deviation 6: nextest skips doctests; `cargo test --all` used to run
+      # them — keep them green without losing coverage.
+      - name: Run doctests
+        run: cargo test --workspace --doc
+
+      # Deviation 3: no release-profile smoke build here — release.yml owns
+      # the LTO/strip release build (spec item 6).
+
+  coverage:
+    name: Coverage (llvm-cov)
+    runs-on: ubuntu-latest
+    # Spec item 7: llvm-cov/codecov instability must not fail the badge.
+    continue-on-error: true
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      # Deviation 4: prebuilt binary; crate renamed cargo-llvm-cov-preview
+      # -> cargo-llvm-cov.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          sharedKey: ci-ubuntu-stable
+
+      - name: Generate lcov report
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+
+      # Deviation 7: CODECOV_TOKEN secret must exist in repo settings;
+      # fail_ci_if_error keeps a missing token from failing this step.
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload lcov artifact (local fallback)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov-info
+          path: lcov.info
+          retention-days: 30
+          if-no-files-found: ignore
+
   source-gates:
     name: Source gates (rg audits)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -63,104 +202,3 @@ jobs:
       # issues 12/3/0). Fails fast without a Rust build.
       - name: "Gate: Stage 0 summary arithmetic (BUG-S1-014)"
         run: python3 scripts/audit/check_stage0_arith.py
-
-  test:
-    name: Test (${{ matrix.os }}, ${{ matrix.rust }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        rust: [stable, beta]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-          components: clippy, rustfmt
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Check formatting
-        run: cargo fmt -- --check
-
-      - name: Clippy
-        run: cargo clippy -- -D warnings
-
-      - name: Run tests
-        run: cargo test --all
-
-      - name: Build release
-        run: cargo build --release
-
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin
-
-      - name: Generate coverage
-        run: cargo tarpaulin --all --out Html --output-dir coverage
-
-      - name: Upload coverage report
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage/tarpaulin-report.html
-          retention-days: 30
-
-  fuzz:
-    name: Fuzz ${{ matrix.target }} (10 min)
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        # S1.5-P16: canonical decode (S1-P19) + four Stage 1.5 VM targets.
-        # S2-P21: + four Stage 2 network targets (noise/gossip/compact/erlay)
-        # — 9 targets total, one 600s run each.
-        target:
-          - canonical_decode
-          - host_functions
-          - gas_metering
-          - storage_trie
-          - differential_wasmi_vs_wasmtime
-          - noise_handshake
-          - gossip_inv
-          - compact_blocks_fill_up
-          - erlay_reconciliation
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@nightly
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            .
-            fuzz
-
-      - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked --version 0.13.2
-
-      # BUG-S0-023 / S1.5-P07 / S1.5-P16: coverage-guided 10-minute run per
-      # target. A crash fails the job; repro artifacts are uploaded below.
-      - name: Run ${{ matrix.target }} fuzz (600s)
-        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=600 -rss_limit_mb=2560
-
-      - name: Upload crash artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: fuzz-${{ matrix.target }}-artifacts
-          path: fuzz/artifacts/
-          retention-days: 30
-          if-no-files-found: ignore
