@@ -50,12 +50,26 @@ pub struct Blockchain {
     /// Receipts of the most recently committed block (S1.5-P14, invariant
     /// #18): replaced wholesale on commit/adopt, never mutated in place.
     pub(crate) receipts: Vec<strangecoin_core::vm::Receipt>,
+    /// Accounts as they exist in the `state` CF right now (S3-P07): the
+    /// diff base for incremental saves — `save_state` writes only what
+    /// differs from this snapshot and then refreshes it. Initialized from
+    /// the loaded state at open, so restarts rewrite nothing.
+    pub(crate) persisted_accounts: HashMap<String, AccountState>,
+    /// Contract slots as they exist in the `contract_storage` CF (S3-P07
+    /// diff base, same contract as [`Self::persisted_accounts`]).
+    pub(crate) persisted_contract_storage: strangecoin_core::state::ContractStorageMap,
+    /// `(sender, nonce) → txid` of the mempool entries in the `mempool`
+    /// CF (S3-P07 diff base): drives put-new / delete-mined deltas.
+    pub(crate) persisted_mempool: HashMap<(String, u64), [u8; 32]>,
+    /// Pre-apply account snapshots captured at commit/adoption, waiting
+    /// for the next `save_state` to land in `state_history` (ADR-0024).
+    pub(crate) pending_state_history: Vec<crate::blockchain::state_cache::PendingHistory>,
 }
 
 impl Blockchain {
     /// Open storage for `port` via `state_cache::open_blockchain`.
-    pub(crate) fn new(port: u16, chain_id: u32) -> Self {
-        super::state_cache::open_blockchain(port, chain_id)
+    pub(crate) fn new(port: u16, chain_id: u32, storage: &crate::config::StorageConfig) -> Self {
+        super::state_cache::open_blockchain(port, chain_id, storage)
     }
 
     pub(crate) fn view_for(&self, height: u64) -> BlockView<'_> {
@@ -87,9 +101,13 @@ pub struct BlockchainFacade {
 }
 
 impl BlockchainFacade {
-    pub fn new(port: u16, chain_id: u32) -> Self {
+    /// Open the port-based node database per `storage` (S3-P07: the
+    /// config-driven `storage.path` + `storage.engine` path; the
+    /// `engine = "leveldb"` fallback opens the historical
+    /// `<exe_dir>/blockchain_db_{port}` directory).
+    pub fn new(port: u16, chain_id: u32, storage: crate::config::StorageConfig) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(Blockchain::new(port, chain_id))),
+            inner: Arc::new(RwLock::new(Blockchain::new(port, chain_id, &storage))),
             event_bus: Arc::new(crate::events::EventBus::new()),
         }
     }
@@ -98,9 +116,10 @@ impl BlockchainFacade {
         port: u16,
         event_bus: Arc<crate::events::EventBus>,
         chain_id: u32,
+        storage: crate::config::StorageConfig,
     ) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(Blockchain::new(port, chain_id))),
+            inner: Arc::new(RwLock::new(Blockchain::new(port, chain_id, &storage))),
             event_bus,
         }
     }
@@ -114,14 +133,29 @@ impl BlockchainFacade {
 
     /// Open a standalone chain at `db_path` for `chain_id` (S2-P20
     /// shadow/staging replay, and the test-support constructor). Creates
-    /// the directory, opens storage, builds genesis and wraps the chain —
-    /// no port-based DB path, no event bus wiring. Validation is
-    /// regtest-permissive (`allow_grant_blocks`/`allow_zero_state_root`)
-    /// so replay tooling can exercise genesis and historical blocks;
-    /// strict mainnet-rule staging configs are a Stage 4 CLI concern.
+    /// the directory, opens the RocksDB backend, loads whatever the
+    /// directory already holds (genesis only on an empty database —
+    /// S3-P07: a reused directory resumes instead of silently wiping),
+    /// and wraps the chain — no port-based DB path, no event bus wiring.
+    /// Validation is regtest-permissive (`allow_grant_blocks`/
+    /// `allow_zero_state_root`) so replay tooling can exercise genesis
+    /// and historical blocks; strict mainnet-rule staging configs are a
+    /// Stage 4 CLI concern.
     pub fn open_local(db_path: &std::path::Path, chain_id: u32) -> Self {
-        std::fs::create_dir_all(db_path).expect("Failed to create local DB directory");
-        let storage = crate::storage::Storage::new(db_path).expect("Failed to open local DB");
+        let storage =
+            crate::storage::Storage::open_rocks(db_path).expect("Failed to open local DB");
+        Self::open_local_with(db_path, chain_id, storage)
+    }
+
+    /// [`Self::open_local`] over a caller-supplied [`Storage`] (test
+    /// engines — counting mocks inject an in-memory backend, `db_path`
+    /// is unused there). Shared by `test_support`.
+    pub(crate) fn open_local_with(
+        db_path: &std::path::Path,
+        chain_id: u32,
+        storage: crate::storage::Storage,
+    ) -> Self {
+        let _ = db_path; // directory creation happens in `Storage::open_rocks`
         let mut bc = Blockchain {
             chain: vec![],
             balances: StateCache::new(),
@@ -135,8 +169,48 @@ impl BlockchainFacade {
             chain_id,
             codes: std::collections::HashMap::new(),
             receipts: Vec::new(),
+            persisted_accounts: HashMap::new(),
+            persisted_contract_storage: strangecoin_core::state::ContractStorageMap::new(),
+            persisted_mempool: HashMap::new(),
+            pending_state_history: Vec::new(),
         };
-        bc.create_genesis_block();
+
+        // Load-if-present (S3-P07): fresh databases take the historical
+        // `create_genesis_block` path unchanged; a directory with data
+        // resumes it (no save at open — first mutation persists).
+        let loaded = super::state_cache::load_persisted_state(&bc.storage)
+            .expect("Failed to load local DB state");
+        bc.persisted_accounts = loaded.balances.clone().unwrap_or_default();
+        bc.persisted_contract_storage = loaded.contract_storage.clone().unwrap_or_default();
+        bc.persisted_mempool = loaded
+            .mempool_txs
+            .iter()
+            .map(|tx| {
+                (
+                    (tx.sender().to_string(), tx.nonce()),
+                    strangecoin_core::serialize::txid(tx),
+                )
+            })
+            .collect();
+        // Whole-field `balances` replacement lives in state_cache (balances
+        // gate, BUG-S0-022) — both open paths funnel through the helper.
+        super::state_cache::apply_loaded_accounts(&mut bc, &loaded);
+        if let Some(chain) = loaded.chain {
+            if !chain.is_empty() {
+                crate::consensus::validate_genesis(&chain[0], chain_id)
+                    .expect("Genesis validation failed");
+                bc.chain = chain;
+            }
+        }
+        if bc.chain.is_empty() {
+            bc.create_genesis_block();
+        }
+        bc.total_work = strangecoin_core::consensus::cumulative_work(&bc.chain);
+        for tx in loaded.mempool_txs {
+            let account = bc.balances.get(tx.sender()).unwrap_or_default();
+            let _ = bc.mempool.insert(tx, &account);
+        }
+        bc.codes = block_executor::codes_from_chain(&bc.chain, chain_id);
         Self::from_blockchain(bc)
     }
 

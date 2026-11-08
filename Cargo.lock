@@ -4098,6 +4098,7 @@ dependencies = [
  "serde_json",
  "strangecoin-core",
  "strangecoin-net",
+ "strangecoin-storage",
  "strangecoin-vm-wasm",
  "thiserror 1.0.69",
  "tokio",

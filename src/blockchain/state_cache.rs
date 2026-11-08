@@ -14,11 +14,13 @@ use rusty_leveldb::LdbIterator;
 use serde::Serialize;
 use strangecoin_core::state::{unapply_block, State};
 use strangecoin_core::types::{Block, Transaction};
+use strangecoin_storage::{Cf, StorageEngine, WriteBatchOp};
 use tracing::{debug, info};
 
 use crate::blockchain::block_executor::{self, BlockView};
 use crate::blockchain::blockchain_facade::Blockchain;
 use crate::error::StrangecoinError;
+use crate::storage::{codec, schema::*};
 use crate::AccountState;
 
 /// Balances/nonces cache plus per-contract storage (S1.5-P15).
@@ -198,8 +200,53 @@ impl StateCache {
         rules: &super::consensus_manager::ConsensusManager,
         chain_id: u32,
     ) -> Result<(Self, Vec<strangecoin_core::vm::Receipt>), StrangecoinError> {
+        let outcome = Self::rebuild_impl(
+            chain,
+            now,
+            allow_grant_blocks,
+            allow_zero_state_root,
+            rules,
+            chain_id,
+            false,
+        )?;
+        Ok((outcome.cache, outcome.receipts))
+    }
+
+    /// [`Self::rebuild_from_chain`] **plus** per-height pre-apply account
+    /// snapshots (S3-P07 `state_history`). Adoption is the only recorder:
+    /// validation/rebuild paths (`validate_chain`, `rebuild_state_cache`)
+    /// never persist, so they pay nothing for the extra bookkeeping.
+    pub(crate) fn rebuild_from_chain_recorded(
+        chain: &[Block],
+        now: u64,
+        allow_grant_blocks: bool,
+        allow_zero_state_root: bool,
+        rules: &super::consensus_manager::ConsensusManager,
+        chain_id: u32,
+    ) -> Result<RebuildOutcome, StrangecoinError> {
+        Self::rebuild_impl(
+            chain,
+            now,
+            allow_grant_blocks,
+            allow_zero_state_root,
+            rules,
+            chain_id,
+            true,
+        )
+    }
+
+    fn rebuild_impl(
+        chain: &[Block],
+        now: u64,
+        allow_grant_blocks: bool,
+        allow_zero_state_root: bool,
+        rules: &super::consensus_manager::ConsensusManager,
+        chain_id: u32,
+        record_history: bool,
+    ) -> Result<RebuildOutcome, StrangecoinError> {
         let mut state = State::new();
         let mut codes: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut history: Vec<PendingHistory> = Vec::new();
         for (height, block) in chain.iter().enumerate() {
             let view = BlockView::new(
                 &chain[..height],
@@ -211,6 +258,17 @@ impl StateCache {
             .with_phase(rules.phase_at(height as u64))
             .with_allow_zero_state_root(allow_zero_state_root)
             .with_codes(&codes);
+            if record_history {
+                // Pre-apply values: `state` still holds the parent block's
+                // post-state at this point of the replay.
+                let pre = capture_pre_state(&state.balances, block);
+                if !pre.is_empty() {
+                    history.push(PendingHistory {
+                        height: height as u64,
+                        accounts: pre,
+                    });
+                }
+            }
             state = block_executor::validate_and_apply(&state, block, &view).map_err(|e| {
                 tracing::warn!(block_index = height, error = %e, "Rebuild stopped at an invalid block");
                 e
@@ -218,7 +276,11 @@ impl StateCache {
             block_executor::collect_block_codes(block, chain_id, &mut codes);
         }
         let receipts = state.receipts.clone();
-        Ok((Self::from_state(&state), receipts))
+        Ok(RebuildOutcome {
+            cache: Self::from_state(&state),
+            receipts,
+            history,
+        })
     }
 }
 
@@ -241,16 +303,67 @@ impl<'a> IntoIterator for &'a StateCache {
 }
 
 // ---------------------------------------------------------------------------
-// Storage paths + LevelDB load/save + migrations (S1.5-P04)
+// Storage paths + persistence (S1.5-P04; migrated to strangecoin-storage
+// in S3-P07: per-block/per-account schema, incremental saves, mempool CF)
 // ---------------------------------------------------------------------------
 
-/// Persisted state read from LevelDB on open.
+/// Persisted state read from storage on open (both backends).
 pub(crate) struct PersistedState {
     pub chain: Option<Vec<Block>>,
     pub balances: Option<HashMap<String, AccountState>>,
     pub contract_storage: Option<strangecoin_core::state::ContractStorageMap>,
     pub difficulty: Option<u32>,
     pub mempool_txs: Vec<Transaction>,
+}
+
+/// Pre-apply snapshot of the accounts one block touches (S3-P07,
+/// ADR-0024 `state_history` CF, ADR-0025 pruning substrate): the account
+/// values **before** the block was applied, keyed by the block's height
+/// once written (`height: u64 BE ‖ address`).
+///
+/// Captured at every apply site (`commit_block`, grant blocks, genesis)
+/// and at every adoption (per-height, from the recorded rebuild); only
+/// accounts that *exist* pre-apply are recorded — an absent account's
+/// pre-state is the zero account, which a `state` lookup already yields.
+#[derive(Clone, Debug)]
+pub(crate) struct PendingHistory {
+    pub height: u64,
+    pub accounts: Vec<(String, AccountState)>,
+}
+
+/// Result of a recorded chain rebuild (S3-P07): the rebuilt cache, the
+/// tip receipts, and the per-height pre-apply snapshots the adoption path
+/// hands to `save_state` (`state_history` CF).
+pub(crate) struct RebuildOutcome {
+    pub cache: StateCache,
+    pub receipts: Vec<strangecoin_core::vm::Receipt>,
+    pub history: Vec<PendingHistory>,
+}
+
+/// Accounts `block` will touch, as they are **now** (pre-apply).
+///
+/// Affected set = senders + receivers of the block's transactions
+/// (coinbase `from` magic strings have no account and drop out via the
+/// `balances.get` filter; `Create` contract addresses come back from
+/// `Transaction::receiver`). Deduplicated in first-seen order.
+pub(crate) fn capture_pre_state(
+    balances: &HashMap<String, AccountState>,
+    block: &Block,
+) -> Vec<(String, AccountState)> {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut out: Vec<(String, AccountState)> = Vec::new();
+    for tx in &block.transactions {
+        for addr in std::iter::once(tx.sender()).chain(tx.receiver()) {
+            if seen.contains(&addr) {
+                continue;
+            }
+            seen.push(addr);
+            if let Some(account) = balances.get(addr) {
+                out.push((addr.to_string(), account.clone()));
+            }
+        }
+    }
+    out
 }
 
 /// JSON wire form of [`strangecoin_core::state::ContractStorageMap`]
@@ -302,26 +415,32 @@ pub(crate) fn db_path_for_port(port: u16) -> PathBuf {
     exe_dir.join(format!("blockchain_db_{}", port))
 }
 
-pub(crate) fn db_path_from_env() -> PathBuf {
-    let port = std::env::var("PORT")
-        .unwrap_or_else(|_| "8081".to_string())
-        .parse::<u16>()
-        .unwrap_or(8081);
-    db_path_for_port(port)
-}
-
-/// Open or create storage for `port`, load persisted state, install genesis
-/// when the DB is empty, run migrations, persist. (S1.5-P04: moved from facade.)
-pub(crate) fn open_blockchain(port: u16, chain_id: u32) -> Blockchain {
+/// Open or create storage for `port` per `storage_cfg`, load persisted
+/// state, install genesis when the DB is empty, run the open-path
+/// migrations, persist. (S1.5-P04: moved from facade; S3-P07: engine
+/// selection + per-block schema.)
+///
+/// Engine/path rule (ADR-0024 "Config surface"):
+/// * `engine = "rocksdb"` (default) → `RocksDbEngine` at `storage.path`;
+/// * `engine = "leveldb"` (transitional) → the blob schema at the
+///   historical `<exe_dir>/blockchain_db_{port}` (`legacy_path`);
+///   `storage.path` is ignored there (the key was never wired).
+pub(crate) fn open_blockchain(
+    port: u16,
+    chain_id: u32,
+    storage_cfg: &crate::config::StorageConfig,
+) -> Blockchain {
     use super::consensus_manager::ConsensusManager;
     use tracing::info;
 
     let start_time = std::time::SystemTime::now();
-    let db_path = db_path_for_port(port);
-    if !db_path.exists() {
+    let legacy_path = db_path_for_port(port);
+    if storage_cfg.engine == crate::config::StorageEngineKind::Rocksdb && !storage_cfg.path.exists()
+    {
         info!("База данных не существует, создаётся новая");
     }
-    let storage = crate::storage::Storage::new(&db_path).expect("Не удалось открыть LevelDB");
+    let storage = crate::storage::Storage::open(storage_cfg, &legacy_path)
+        .expect("Не удалось открыть хранилище");
 
     let mut blockchain = Blockchain {
         chain: vec![],
@@ -336,14 +455,36 @@ pub(crate) fn open_blockchain(port: u16, chain_id: u32) -> Blockchain {
         chain_id,
         codes: HashMap::new(),
         receipts: Vec::new(),
+        persisted_accounts: HashMap::new(),
+        persisted_contract_storage: strangecoin_core::state::ContractStorageMap::new(),
+        persisted_mempool: HashMap::new(),
+        pending_state_history: Vec::new(),
     };
-    blockchain.debug_db();
+    blockchain.storage_health_check();
 
-    let loaded = load_persisted_state(&blockchain.storage);
-    for tx in loaded.mempool_txs {
-        let account = AccountState::default();
-        let _ = blockchain.mempool.insert(tx, &account);
-    }
+    let loaded = load_persisted_state(&blockchain.storage).expect("persisted state must load");
+    // Persisted snapshots = what the DB actually holds. Set BEFORE the
+    // open-path migrations so the final `save_state` diffs only what the
+    // migrations (or genesis install) changed — restarts rewrite nothing.
+    blockchain.persisted_accounts = loaded.balances.clone().unwrap_or_default();
+    blockchain.persisted_contract_storage = loaded.contract_storage.clone().unwrap_or_default();
+    blockchain.persisted_mempool = loaded
+        .mempool_txs
+        .iter()
+        .map(|tx| {
+            (
+                (tx.sender().to_string(), tx.nonce()),
+                strangecoin_core::serialize::txid(tx),
+            )
+        })
+        .collect();
+    // Accounts before the chain branch: on a fresh DB `balances` is
+    // `None` (helper no-ops, the genesis install below owns the initial
+    // state); on a loaded DB genesis never installs. Whole-field
+    // replacement goes through this helper — the balances gate confines
+    // it to this file (BUG-S0-022).
+    apply_loaded_accounts(&mut blockchain, &loaded);
+
     if let Some(chain) = loaded.chain {
         if !chain.is_empty() {
             if let Err(e) = crate::consensus::validate_genesis(&chain[0], chain_id) {
@@ -355,29 +496,51 @@ pub(crate) fn open_blockchain(port: u16, chain_id: u32) -> Blockchain {
         Blockchain::install_fresh_genesis(&mut blockchain);
     }
 
-    if let Some(balances) = loaded.balances {
-        blockchain.balances = StateCache::from_accounts(balances);
-    }
-    if let Some(contract_storage) = loaded.contract_storage {
-        blockchain.balances.set_contract_storage(contract_storage);
-    }
-    if let Some(difficulty) = loaded.difficulty {
-        blockchain.difficulty = difficulty;
-    }
     blockchain.total_work = strangecoin_core::consensus::cumulative_work(&blockchain.chain);
+    // Restore the mempool against the *loaded* sender accounts (the old
+    // `AccountState::default()` made `Mempool::insert` reject every funded
+    // tx on reload — nonce/balance validation needs the real account).
+    for tx in loaded.mempool_txs {
+        let account = blockchain.balances.get(tx.sender()).unwrap_or_default();
+        if let Err(e) = blockchain.mempool.insert(tx, &account) {
+            debug!(error = %e, "Пропущена восстановленная mempool-транзакция");
+        }
+    }
     blockchain.migrate_initial_wallet_balance();
     blockchain.migrate_addresses_to_bech32();
     blockchain.codes = block_executor::codes_from_chain(&blockchain.chain, chain_id);
     blockchain.save_state();
-    blockchain.debug_db();
+    blockchain.storage_health_check();
     let duration = start_time.elapsed().map(|d| d.as_secs_f64()).unwrap_or(0.0);
     info!(duration_secs = duration, "Создание блокчейна завершено");
     blockchain
 }
 
-/// Read chain/balances/difficulty and mempool txs from LevelDB.
-pub(crate) fn load_persisted_state(storage: &crate::storage::Storage) -> PersistedState {
-    let db_arc = storage.db();
+/// Read chain/balances/difficulty and mempool txs from storage.
+///
+/// * **Engine (default)**: fail-closed per-block read — meta tip cross-checked
+///   against a single sorted pass over `blocks` (contiguous `0..=tip`, no
+///   hash-index keys), `state` full-load, `contract_storage` per-slot
+///   (address = `key[..len-32]`), mempool by prefix-iterate (no full-DB
+///   scan, ascending nonce per sender — ADR-0024). Corruption →
+///   `StorageError::Corrupt`, never a silent partial load.
+/// * **Legacy (`engine = "leveldb"`)**: the Stage 2 blob read, unchanged
+///   (lenient: unparsable values become `None`, as before).
+pub(crate) fn load_persisted_state(
+    storage: &crate::storage::Storage,
+) -> Result<PersistedState, StrangecoinError> {
+    match storage {
+        crate::storage::Storage::Legacy(legacy) => Ok(load_persisted_state_legacy(&legacy.db())),
+        crate::storage::Storage::Engine(engine) => load_persisted_state_engine(engine.as_ref()),
+    }
+}
+
+/// Legacy blob read (`chain`/`balances`/`difficulty`/`contract_storage` +
+/// mempool full scan) — verbatim Stage 2 semantics, transitional until
+/// S3-P08's migration consumes these keys.
+fn load_persisted_state_legacy(
+    db_arc: &std::sync::Arc<std::sync::Mutex<rusty_leveldb::DB>>,
+) -> PersistedState {
     let mut db_guard = db_arc
         .lock()
         .expect("Не удалось захватить Mutex для LevelDB");
@@ -437,27 +600,166 @@ pub(crate) fn load_persisted_state(storage: &crate::storage::Storage) -> Persist
     }
 }
 
+/// Apply a load's account state onto `blockchain`: whole-field
+/// `balances` replacement is confined to this file by the balances gate
+/// (BUG-S0-022 / `tests/balances_gate.rs`), so both S3-P07 open paths
+/// (production `open_blockchain`, standalone `open_local`) funnel the
+/// loaded accounts through here. One-shot at open — the `clone`s are
+/// outside any hot path.
+pub(crate) fn apply_loaded_accounts(blockchain: &mut Blockchain, loaded: &PersistedState) {
+    if let Some(balances) = &loaded.balances {
+        blockchain.balances = StateCache::from_accounts(balances.clone());
+    }
+    if let Some(contract_storage) = &loaded.contract_storage {
+        blockchain
+            .balances
+            .set_contract_storage(contract_storage.clone());
+    }
+    if let Some(difficulty) = loaded.difficulty {
+        blockchain.difficulty = difficulty;
+    }
+}
+
+/// Per-block schema read (ADR-0024). See `load_persisted_state` docs.
+fn load_persisted_state_engine(
+    engine: &dyn StorageEngine,
+) -> Result<PersistedState, StrangecoinError> {
+    let tip_height = match engine.get(Cf::Meta, &meta_key(META_TIP_HEIGHT))? {
+        None => {
+            // Fresh database: the atomic-batch contract means blocks can
+            // never exist without their tip meta — anything else is corrupt.
+            let stray = engine.iterate_prefix(Cf::Blocks, b"")?;
+            if stray
+                .iter()
+                .any(|(k, _)| decode_block_height_key(k).is_some())
+            {
+                return Err(strangecoin_storage::StorageError::Corrupt(
+                    "blocks present without tip meta",
+                )
+                .into());
+            }
+            return Ok(PersistedState {
+                // `None`s, not empty maps: the open path treats `Some` as
+                // "replace the state the genesis install just built".
+                chain: None,
+                balances: None,
+                contract_storage: None,
+                difficulty: None,
+                mempool_txs: Vec::new(),
+            });
+        }
+        Some(bytes) => codec::decode_u64(&bytes)?,
+    };
+    let tip_hash = engine.get(Cf::Meta, &meta_key(META_TIP_HASH))?.ok_or(
+        strangecoin_storage::StorageError::Corrupt("tip_hash missing"),
+    )?;
+    let tip_hash = codec::decode_hash(&tip_hash)?;
+
+    // One sorted pass over `blocks`; BE height keys come back ascending,
+    // so contiguity == no gaps. Tagged hash-index keys (S3-P09, 33 B)
+    // do not decode as heights and are skipped.
+    let mut chain: Vec<Block> = Vec::new();
+    let mut expected = 0u64;
+    for (key, value) in engine.iterate_prefix(Cf::Blocks, b"")? {
+        let Some(height) = decode_block_height_key(&key) else {
+            continue;
+        };
+        if height != expected {
+            return Err(strangecoin_storage::StorageError::Corrupt("missing block height").into());
+        }
+        let block = codec::decode_block(&value)?;
+        if block.index != height {
+            return Err(strangecoin_storage::StorageError::Corrupt(
+                "block index does not match key",
+            )
+            .into());
+        }
+        chain.push(block);
+        expected += 1;
+    }
+    if chain.len() as u64 != tip_height + 1 {
+        return Err(strangecoin_storage::StorageError::Corrupt("chain shorter than tip").into());
+    }
+    if chain.last().map(|b| b.hash.as_str()) != Some(tip_hash.as_str()) {
+        return Err(strangecoin_storage::StorageError::Corrupt("tip hash mismatch").into());
+    }
+
+    let mut balances = HashMap::new();
+    for (key, value) in engine.iterate_prefix(Cf::State, b"")? {
+        let address = String::from_utf8(key)
+            .map_err(|_| strangecoin_storage::StorageError::Corrupt("state key not utf-8"))?;
+        balances.insert(address, codec::decode_account(&value)?);
+    }
+
+    // `address ‖ slot[32]`: slots are fixed-width (ADR-0024), so the
+    // address/slot boundary is the last 32 bytes — no framing needed.
+    let mut contract_storage = strangecoin_core::state::ContractStorageMap::new();
+    for (key, value) in engine.iterate_prefix(Cf::ContractStorage, b"")? {
+        if key.len() < 32 {
+            return Err(strangecoin_storage::StorageError::Corrupt(
+                "contract storage key too short",
+            )
+            .into());
+        }
+        let (address_bytes, slot_bytes) = key.split_at(key.len() - 32);
+        let address = String::from_utf8(address_bytes.to_vec())
+            .map_err(|_| strangecoin_storage::StorageError::Corrupt("contract key not utf-8"))?;
+        let slot: [u8; 32] = slot_bytes
+            .try_into()
+            .map_err(|_| strangecoin_storage::StorageError::Corrupt("contract slot width"))?;
+        contract_storage
+            .entry(address)
+            .or_default()
+            .insert(slot, value);
+    }
+
+    let difficulty = engine
+        .get(Cf::Meta, &meta_key(META_DIFFICULTY))?
+        .map(|bytes| codec::decode_u32(&bytes))
+        .transpose()?;
+
+    // Empty prefix = the whole mempool CF (prefix-iterate, NOT the Stage 1
+    // full-DB scan): per sender, BE nonces ascend (ADR-0024).
+    let mut mempool_txs = Vec::new();
+    for (_key, value) in engine.iterate_prefix(Cf::Mempool, b"")? {
+        mempool_txs.push(codec::decode_tx(&value)?);
+    }
+
+    Ok(PersistedState {
+        chain: Some(chain),
+        balances: Some(balances),
+        contract_storage: Some(contract_storage),
+        difficulty,
+        mempool_txs,
+    })
+}
+
 impl Blockchain {
-    pub(crate) fn debug_db(&self) {
-        let db_arc = self.storage.db();
-        let mut db = db_arc
-            .lock()
-            .expect("Не удалось захватить Mutex для LevelDB");
-        let mut iterator = db.new_iter().expect("Не удалось создать итератор LevelDB");
-        debug!("Содержимое базы данных:");
-        while let Some((key, value)) = iterator.next() {
-            let key_str = std::str::from_utf8(&key).unwrap_or("невалидный ключ");
-            debug!(key = %key_str, "Ключ");
-            if key == b"chain" {
-                debug!(value = ?serde_json::from_slice::<Vec<Block>>(&value), "Значение (chain)");
-            } else if key == b"balances" {
-                debug!(value = ?serde_json::from_slice::<HashMap<String, AccountState>>(&value), "Значение (balances)");
-            } else if key == b"difficulty" {
-                debug!(value = ?serde_json::from_slice::<u32>(&value), "Значение (difficulty)");
-            } else if key == b"contract_storage" {
-                debug!(value = ?serde_json::from_slice::<ContractStorageJson>(&value), "Значение (contract_storage)");
-            } else {
-                debug!(value = ?serde_json::from_slice::<Transaction>(&value), "Значение (transaction)");
+    /// Storage health check (S3-P07 — replaces the LevelDB key dump):
+    /// schema version + tip presence on the per-block engine, a one-line
+    /// note on the transitional backend. Cheap (two point gets), safe to
+    /// call at open and after every save.
+    pub(crate) fn storage_health_check(&self) {
+        match &self.storage {
+            crate::storage::Storage::Legacy(_) => {
+                debug!("transitional LevelDB storage open (engine = \"leveldb\")");
+            }
+            crate::storage::Storage::Engine(engine) => {
+                let schema_version = engine
+                    .get(Cf::Meta, &meta_key(META_SCHEMA_VERSION))
+                    .ok()
+                    .flatten()
+                    .and_then(|bytes| decode_schema_version(&bytes));
+                let tip_height = engine
+                    .get(Cf::Meta, &meta_key(META_TIP_HEIGHT))
+                    .ok()
+                    .flatten()
+                    .and_then(|bytes| codec::decode_u64(&bytes).ok());
+                debug!(
+                    schema_version = ?schema_version,
+                    tip_height = ?tip_height,
+                    "storage health"
+                );
             }
         }
     }
@@ -569,8 +871,34 @@ impl Blockchain {
         Ok(())
     }
 
+    /// Persist current state.
+    ///
+    /// * `engine = "leveldb"` (transitional): the Stage 2 blob rewrite,
+    ///   unchanged until S3-P08.
+    /// * default engine (S3-P07, ADR-0024 §Decision "Write path"): ONE
+    ///   atomic `write_batch` covering **O(changed records)** — blocks only
+    ///   from the common ancestor with the persisted tip (reorg tail
+    ///   deleted), account/contract/mempool diffs against the persisted
+    ///   snapshots, pre-apply `state_history` for the heights written here,
+    ///   meta tip. Never a full-chain or full-state rewrite.
     pub(crate) fn save_state(&mut self) {
-        let db_arc = self.storage.db();
+        match self.storage.clone() {
+            crate::storage::Storage::Legacy(legacy) => {
+                self.save_state_legacy(&legacy);
+                self.storage_health_check();
+            }
+            crate::storage::Storage::Engine(engine) => {
+                self.save_state_engine(engine.as_ref())
+                    .expect("Ошибка сохранения состояния");
+                self.storage_health_check();
+            }
+        }
+    }
+
+    /// Stage 2 blob write, verbatim (`chain`/`balances`/
+    /// `contract_storage`/`difficulty` + mempool puts, no deletes).
+    fn save_state_legacy(&mut self, legacy: &crate::storage::legacy::LegacyStorage) {
+        let db_arc = legacy.db();
         let mut db = db_arc
             .lock()
             .expect("Не удалось захватить Mutex для LevelDB");
@@ -602,7 +930,220 @@ impl Blockchain {
         .expect("Ошибка сохранения сложности");
         db.flush().expect("Ошибка при фиксации данных в LevelDB");
         drop(db);
-        self.debug_db();
+    }
+
+    /// Per-block incremental write (ADR-0024). See [`Self::save_state`].
+    fn save_state_engine(&mut self, engine: &dyn StorageEngine) -> Result<(), StrangecoinError> {
+        let mut ops: Vec<WriteBatchOp> = Vec::new();
+        let chain_len = self.chain.len() as u64;
+
+        // ---- 1. blocks + state_history + meta tip (height-scoped) ----
+        let persisted_tip: Option<u64> = engine
+            .get(Cf::Meta, &meta_key(META_TIP_HEIGHT))?
+            .map(|bytes| codec::decode_u64(&bytes))
+            .transpose()?;
+        let persisted_tip_hash: Option<String> = engine
+            .get(Cf::Meta, &meta_key(META_TIP_HASH))?
+            .map(|bytes| codec::decode_hash(&bytes))
+            .transpose()?;
+
+        // Common ancestor with the persisted chain: O(1) in the common
+        // extension case (meta tip hash vs the in-memory block), walking
+        // down with point-gets only across an actual reorg. A corrupt
+        // stored block reads as "mismatch" — the rewrite below self-heals.
+        let common: Option<u64> = match persisted_tip {
+            None => None,
+            Some(_) if chain_len == 0 => None,
+            Some(pt) => {
+                let start = pt.min(chain_len - 1);
+                let mut height = start;
+                loop {
+                    let memory_hash = self.chain[height as usize].hash.as_str();
+                    let matches = if height == pt {
+                        persisted_tip_hash.as_deref() == Some(memory_hash)
+                    } else {
+                        match engine.get(Cf::Blocks, &block_by_height_key(height))? {
+                            Some(bytes) => codec::decode_block(&bytes)
+                                .map(|stored| stored.hash == memory_hash)
+                                .unwrap_or(false),
+                            None => false,
+                        }
+                    };
+                    if matches {
+                        break Some(height);
+                    }
+                    if height == 0 {
+                        break None;
+                    }
+                    height -= 1;
+                }
+            }
+        };
+
+        let new_heights: Vec<u64> = match common {
+            Some(c) => ((c + 1)..chain_len).collect(),
+            None => (0..chain_len).collect(),
+        };
+        // Persisted heights above the new chain end (reorg to a shorter
+        // chain) — always above `common`, never rewritten by the puts.
+        let drop_heights: Vec<u64> = match persisted_tip {
+            Some(pt) if pt >= chain_len => (chain_len..=pt).collect(),
+            _ => Vec::new(),
+        };
+
+        for &height in &new_heights {
+            ops.push(WriteBatchOp::Put {
+                cf: Cf::Blocks,
+                key: block_by_height_key(height),
+                value: codec::encode_block(&self.chain[height as usize]),
+            });
+            // A previous fork may have written `state_history` at this
+            // height (reorg): replace, don't merge.
+            for (key, _) in engine.iterate_prefix(Cf::StateHistory, &height.to_be_bytes())? {
+                ops.push(WriteBatchOp::Delete {
+                    cf: Cf::StateHistory,
+                    key,
+                });
+            }
+            // Pre-apply snapshot captured at commit/adoption for this height.
+            for pending in self
+                .pending_state_history
+                .iter()
+                .filter(|pending| pending.height == height)
+            {
+                for (address, account) in &pending.accounts {
+                    ops.push(WriteBatchOp::Put {
+                        cf: Cf::StateHistory,
+                        key: state_history_key(height, address),
+                        value: codec::encode_account(account),
+                    });
+                }
+            }
+        }
+        for &height in &drop_heights {
+            ops.push(WriteBatchOp::Delete {
+                cf: Cf::Blocks,
+                key: block_by_height_key(height),
+            });
+            for (key, _) in engine.iterate_prefix(Cf::StateHistory, &height.to_be_bytes())? {
+                ops.push(WriteBatchOp::Delete {
+                    cf: Cf::StateHistory,
+                    key,
+                });
+            }
+        }
+
+        if chain_len > 0 {
+            ops.push(WriteBatchOp::Put {
+                cf: Cf::Meta,
+                key: meta_key(META_TIP_HEIGHT),
+                value: codec::encode_u64(chain_len - 1),
+            });
+            ops.push(WriteBatchOp::Put {
+                cf: Cf::Meta,
+                key: meta_key(META_TIP_HASH),
+                value: codec::encode_hash(&self.chain[chain_len as usize - 1].hash)?,
+            });
+        }
+        ops.push(WriteBatchOp::Put {
+            cf: Cf::Meta,
+            key: meta_key(META_DIFFICULTY),
+            value: codec::encode_u32(self.difficulty),
+        });
+
+        // ---- 2. accounts: upsert changed, delete removed ----
+        for (address, account) in self.balances.iter() {
+            if self.persisted_accounts.get(address) != Some(account) {
+                ops.push(WriteBatchOp::Put {
+                    cf: Cf::State,
+                    key: state_key(address),
+                    value: codec::encode_account(account),
+                });
+            }
+        }
+        let removed_addresses: Vec<String> = self
+            .persisted_accounts
+            .keys()
+            .filter(|address| !self.balances.contains_key(address.as_str()))
+            .cloned()
+            .collect();
+        for address in &removed_addresses {
+            ops.push(WriteBatchOp::Delete {
+                cf: Cf::State,
+                key: state_key(address),
+            });
+        }
+
+        // ---- 3. contract storage: per-slot diff ----
+        for (address, slots) in self.balances.contract_storage().iter() {
+            let persisted_slots = self.persisted_contract_storage.get(address);
+            for (slot, value) in slots.iter() {
+                let changed = persisted_slots
+                    .map(|stored| stored.get(slot) != Some(value))
+                    .unwrap_or(true);
+                if changed {
+                    ops.push(WriteBatchOp::Put {
+                        cf: Cf::ContractStorage,
+                        key: contract_storage_key(address, slot),
+                        value: value.clone(),
+                    });
+                }
+            }
+        }
+        for (address, slots) in self.persisted_contract_storage.iter() {
+            let current_slots = self.balances.contract_storage().get(address);
+            for slot in slots.keys() {
+                if current_slots.map(|stored| stored.contains_key(slot)) != Some(true) {
+                    ops.push(WriteBatchOp::Delete {
+                        cf: Cf::ContractStorage,
+                        key: contract_storage_key(address, slot),
+                    });
+                }
+            }
+        }
+
+        // ---- 4. mempool: put new/changed, delete mined/replaced/evicted ----
+        let current_mempool: Vec<Transaction> = self.mempool.transactions();
+        let mut current_mempool_keys: HashMap<(String, u64), [u8; 32]> = HashMap::new();
+        for tx in &current_mempool {
+            current_mempool_keys.insert(
+                (tx.sender().to_string(), tx.nonce()),
+                strangecoin_core::serialize::txid(tx),
+            );
+        }
+        for tx in &current_mempool {
+            let key = (tx.sender().to_string(), tx.nonce());
+            if self.persisted_mempool.get(&key) != Some(&strangecoin_core::serialize::txid(tx)) {
+                ops.push(WriteBatchOp::Put {
+                    cf: Cf::Mempool,
+                    key: mempool_key(&key.0, key.1),
+                    value: codec::encode_tx(tx),
+                });
+            }
+        }
+        let removed_mempool: Vec<(String, u64)> = self
+            .persisted_mempool
+            .keys()
+            .filter(|key| !current_mempool_keys.contains_key(*key))
+            .cloned()
+            .collect();
+        for key in &removed_mempool {
+            ops.push(WriteBatchOp::Delete {
+                cf: Cf::Mempool,
+                key: mempool_key(&key.0, key.1),
+            });
+        }
+
+        // ---- commit: atomic batch + durability barrier, then sync the
+        // in-memory snapshots to what the DB now holds ----
+        engine.write_batch(ops)?;
+        engine.flush()?;
+
+        self.persisted_accounts = self.balances.accounts().clone();
+        self.persisted_contract_storage = self.balances.contract_storage().clone();
+        self.persisted_mempool = current_mempool_keys;
+        self.pending_state_history.clear();
+        Ok(())
     }
 
     /// Legacy DB: move genesis placeholder balance to the single real wallet.

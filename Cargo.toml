@@ -13,6 +13,9 @@ strangecoin-core = { path = "crates/strangecoin-core" }
 strangecoin-vm-wasm = { path = "crates/strangecoin-vm-wasm", optional = true }
 # Stage 2 network crate (S2-P05); populated by S2-P06..S2-P20.
 strangecoin-net = { path = "crates/strangecoin-net", version = "0.1.0", optional = true }
+# Stage 3 storage crate (S3-P04); monolith migrates onto it in S3-P07.
+# Default features (rocksdb, default-on) link the pinned C++ backend.
+strangecoin-storage = { path = "crates/strangecoin-storage" }
 ctrlc = "3.4"
 rusty-leveldb = "4.0.0"
 uuid = { version = "1.17.0", features = ["v4"] }

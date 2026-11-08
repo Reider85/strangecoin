@@ -122,7 +122,6 @@ impl<'de> Deserialize<'de> for Blockchain {
             total_work,
         } = BlockchainDeserialize::deserialize(deserializer)?;
 
-        let db_path = super::state_cache::db_path_from_env();
         // Legacy serde-JSON wire path (tests/diagnostics): the snapshot does
         // not carry a chain; the receiving node pins its own network when it
         // adopts via `try_adopt_candidate` (BUG-S1-004).
@@ -132,7 +131,12 @@ impl<'de> Deserialize<'de> for Blockchain {
             let account = AccountState::default();
             let _ = mempool.insert(tx, &account);
         }
-        let storage = crate::storage::Storage::new(&db_path).map_err(serde::de::Error::custom)?;
+        // S3-P07: no config reaches this residual wire-deserialize path —
+        // open the default backend at the default path (deviation note;
+        // no test/call site exercises this constructor today).
+        let storage =
+            crate::storage::Storage::open_rocks(&crate::config::StorageConfig::default().path)
+                .map_err(serde::de::Error::custom)?;
 
         let codes = super::block_executor::codes_from_chain(
             &chain,
@@ -152,6 +156,13 @@ impl<'de> Deserialize<'de> for Blockchain {
             chain_id: strangecoin_core::consensus::CHAIN_ID_REGTEST,
             codes,
             receipts: Vec::new(),
+            // Empty snapshots: nothing was read from `storage`, so the
+            // first save must write everything (never diff against state
+            // the DB does not hold).
+            persisted_accounts: HashMap::new(),
+            persisted_contract_storage: strangecoin_core::state::ContractStorageMap::new(),
+            persisted_mempool: HashMap::new(),
+            pending_state_history: Vec::new(),
         })
     }
 }
@@ -184,7 +195,10 @@ pub(crate) fn try_adopt_candidate(
         return Ok(false);
     }
 
-    let (rebuilt, receipts) = match StateCache::rebuild_from_chain(
+    // Recorded rebuild (S3-P07): besides the cache/receipts, adoption
+    // collects per-height pre-apply account snapshots — `state_history`
+    // material for every height this adoption persists.
+    let outcome = match StateCache::rebuild_from_chain_recorded(
         &candidate_chain,
         block_executor::now_secs(),
         current.allow_grant_blocks,
@@ -198,6 +212,7 @@ pub(crate) fn try_adopt_candidate(
             return Ok(false);
         }
     };
+    let rebuilt = outcome.cache;
 
     if let Some(wire_balances) = candidate_balances {
         if !wire_balances.is_empty() {
@@ -235,7 +250,12 @@ pub(crate) fn try_adopt_candidate(
     current.difficulty = candidate_difficulty;
     current.total_work = strangecoin_core::consensus::cumulative_work(&current.chain);
     current.mempool = merged;
-    current.receipts = receipts;
+    current.receipts = outcome.receipts;
+    // Replace (not append): the candidate's history supersedes anything
+    // an earlier unsaved commit might have staged; `save_state` writes
+    // only the heights past the persisted common ancestor and clears the
+    // rest.
+    current.pending_state_history = outcome.history;
     current.codes = block_executor::codes_from_chain(&current.chain, current.chain_id);
     Ok(true)
 }

@@ -99,6 +99,10 @@ pub enum MiningStatus {
 }
 
 impl Node {
+    // Eight parameters since S3-P07 (storage config is wired through the
+    // orchestrator); bundling them into a struct would churn every call
+    // site for a constructor called exactly once.
+    #[allow(clippy::too_many_arguments)]
     fn new(
         address: String,
         mining_rx: tokio::sync::mpsc::UnboundedReceiver<MiningTask>,
@@ -107,11 +111,13 @@ impl Node {
         network_id: u32,
         rate_limit_config: crate::network::RateLimitConfig,
         peer_manager: Arc<strangecoin_net::PeerManager>,
+        storage: crate::config::StorageConfig,
     ) -> Self {
         let blockchain = Arc::new(BlockchainFacade::with_event_bus(
             port,
             event_bus.clone(),
             network_id,
+            storage,
         ));
         let peers = Arc::new(Mutex::new(vec![]));
         let rate_limiter = Arc::new(crate::network::RateLimiter::new(rate_limit_config));
@@ -1088,7 +1094,8 @@ pub async fn run_async() {
                 ..Default::default()
             },
             storage: crate::config::StorageConfig {
-                path: exe_dir.join("data/leveldb"),
+                path: exe_dir.join("data/rocksdb"),
+                ..crate::config::StorageConfig::default()
             },
             log_level: "info".into(),
             data_dir: exe_dir.join("data"),
@@ -1196,6 +1203,7 @@ pub async fn run_async() {
         config.network_id,
         config.rate_limit_config(),
         Arc::clone(&peer_manager),
+        config.storage.clone(),
     );
     node.blockchain
         .set_allow_grant_blocks(config.allow_grant_blocks);
@@ -1400,9 +1408,11 @@ pub mod test_support {
             .port()
     }
 
-    /// LevelDB path that `BlockchainFacade::new(port)` opens (open-path DB,
-    /// not the TestDir scheme). Exposed so tests can seed a legacy DB before
-    /// triggering the DB-open migrations (BUG-S0-017).
+    /// Port-derived DB directory the open path uses for
+    /// `engine = "leveldb"` (S3-P07: `storage.path` is the default path;
+    /// this stays the transitional fallback + the legacy-fixture location).
+    /// Exposed so tests can seed a legacy DB before triggering the DB-open
+    /// migrations (BUG-S0-017, `tests/address_migration.rs`).
     pub fn blockchain_db_path_for_port(port: u16) -> PathBuf {
         crate::blockchain::state_cache::db_path_for_port(port)
     }
@@ -1417,6 +1427,49 @@ pub mod test_support {
 
     pub fn create_test_blockchain(db_path: &Path) -> BlockchainFacade {
         create_test_blockchain_for_network(db_path, crate::consensus::CHAIN_ID_REGTEST)
+    }
+
+    /// Test blockchain over a caller-supplied [`strangecoin_storage::StorageEngine`]
+    /// (S3-P07): same open semantics as [`create_test_blockchain`], but
+    /// persistence goes through the injected engine — counting mocks in
+    /// `tests/per_block_writes.rs` observe every write. `db_path` is
+    /// unused by in-memory engines (kept for signature symmetry).
+    pub fn create_test_blockchain_with_engine(
+        db_path: &Path,
+        engine: std::sync::Arc<dyn strangecoin_storage::StorageEngine>,
+    ) -> BlockchainFacade {
+        BlockchainFacade::open_local_with(
+            db_path,
+            crate::consensus::CHAIN_ID_REGTEST,
+            crate::storage::Storage::from_engine(engine),
+        )
+    }
+
+    /// Seed a legacy LevelDB blob database the way a Stage 0/1 node left
+    /// it (`balances` + optional `chain` JSON blobs) — S3-P07: the public
+    /// `storage::Storage` no longer exposes the raw `rusty-leveldb`
+    /// handle, so `tests/address_migration.rs` seeds through here.
+    pub fn seed_legacy_leveldb(
+        path: &Path,
+        balances: &std::collections::HashMap<String, u64>,
+        chain: Option<&[Block]>,
+    ) {
+        let legacy = crate::storage::legacy::LegacyStorage::new(path).expect("seed DB must open");
+        {
+            let db = legacy.db();
+            let mut db = db.lock().expect("seed DB lock");
+            db.put(
+                b"balances",
+                &serde_json::to_vec(balances).expect("balances json"),
+            )
+            .expect("seed balances");
+            if let Some(chain) = chain {
+                db.put(b"chain", &serde_json::to_vec(chain).expect("chain json"))
+                    .expect("seed chain");
+            }
+        }
+        // Drop flushes/closes the LevelDB handle so the open path can take it.
+        drop(legacy);
     }
 
     pub fn mine_current(blockchain: &BlockchainFacade) {

@@ -1,11 +1,18 @@
 //! BUG-S0-017 — legacy base64(pubkey) address migration on DB open.
 //!
 //! `migrate_addresses_to_bech32` (S1-P15) runs only on the DB-open path
-//! (`BlockchainFacade::new(port, strangecoin::consensus::CHAIN_ID_REGTEST)` → `open_blockchain`). These tests seed a
+//! (`BlockchainFacade::new(port, chain_id, storage)` → `open_blockchain`). These tests seed a
 //! LevelDB fixture the way a Stage 0 node left it — balances keyed by
 //! base64(pubkey) — and verify the open path rewrites them to bech32,
 //! resets a chain that still contains legacy tx addresses, and is
 //! idempotent across reopens.
+//!
+//! S3-P07 deviation: the fixture is seeded through
+//! `test_support::seed_legacy_leveldb` (the public `storage::Storage`
+//! no longer exposes the raw `rusty-leveldb` handle) and the open path is
+//! pinned to the transitional `engine = "leveldb"` backend at the
+//! historical port directory — the per-block RocksDB schema cannot read
+//! blob fixtures (S3-P08's migration will).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -14,8 +21,9 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use secp256k1::{PublicKey, Secp256k1, SecretKey};
 
-use strangecoin::test_support::{blockchain_db_path_for_port, random_port};
-use strangecoin::{address, consensus, storage::Storage, Block, BlockchainFacade, Transaction};
+use strangecoin::config::{StorageConfig, StorageEngineKind};
+use strangecoin::test_support::{blockchain_db_path_for_port, random_port, seed_legacy_leveldb};
+use strangecoin::{address, consensus, Block, BlockchainFacade, Transaction};
 
 /// Magic strings the migration deliberately leaves alone.
 const MAGIC_FIELDS: &[&str] = &[
@@ -47,34 +55,25 @@ fn keypair() -> (String, String) {
 }
 
 fn seed_balances(db_path: &Path, balances: &HashMap<String, u64>) {
-    let storage = Storage::new(db_path).expect("seed DB must open");
-    {
-        let db_arc = storage.db();
-        let mut db = db_arc.lock().expect("seed DB lock");
-        db.put(
-            b"balances",
-            &serde_json::to_vec(balances).expect("balances json"),
-        )
-        .expect("seed balances");
-    }
-    // Drop closes the LevelDB handle so the open path can take the lock.
-    drop(storage);
+    seed_legacy_leveldb(db_path, balances, None);
 }
 
 fn seed_balances_and_chain(db_path: &Path, balances: &HashMap<String, u64>, chain: &[Block]) {
-    let storage = Storage::new(db_path).expect("seed DB must open");
-    {
-        let db_arc = storage.db();
-        let mut db = db_arc.lock().expect("seed DB lock");
-        db.put(
-            b"balances",
-            &serde_json::to_vec(balances).expect("balances json"),
-        )
-        .expect("seed balances");
-        db.put(b"chain", &serde_json::to_vec(chain).expect("chain json"))
-            .expect("seed chain");
-    }
-    drop(storage);
+    seed_legacy_leveldb(db_path, balances, Some(chain));
+}
+
+/// Open the port path on the transitional LevelDB backend (S3-P07): the
+/// fixture above is a blob-schema database, readable only by
+/// `engine = "leveldb"` until the S3-P08 migration exists.
+fn open_legacy(port: u16) -> BlockchainFacade {
+    BlockchainFacade::new(
+        port,
+        strangecoin::consensus::CHAIN_ID_REGTEST,
+        StorageConfig {
+            path: blockchain_db_path_for_port(port),
+            engine: StorageEngineKind::LevelDb,
+        },
+    )
 }
 
 /// Minimal block that deserializes; on regtest `validate_genesis` is a no-op
@@ -140,7 +139,7 @@ fn legacy_base64_balances_migrate_to_bech32_on_open() {
     seed_balances(db.path(), &balances);
 
     // Open #1: DB-open path runs `migrate_addresses_to_bech32`.
-    let facade = BlockchainFacade::new(port, strangecoin::consensus::CHAIN_ID_REGTEST);
+    let facade = open_legacy(port);
 
     assert_no_legacy_keys(&facade);
     let keys = facade.account_keys();
@@ -178,7 +177,7 @@ fn legacy_base64_balances_migrate_to_bech32_on_open() {
     drop(facade);
 
     // Open #2: idempotent — nothing left to migrate, balances stay put.
-    let reopened = BlockchainFacade::new(port, strangecoin::consensus::CHAIN_ID_REGTEST);
+    let reopened = open_legacy(port);
     assert_no_legacy_keys(&reopened);
     assert_eq!(
         reopened.account_keys().len(),
@@ -227,7 +226,7 @@ fn legacy_base64_addresses_in_chain_reset_and_migrate() {
     seed_balances_and_chain(db.path(), &balances, &[genesis, legacy_block]);
 
     // Open #1: legacy tx addresses force a chain reset to fresh genesis.
-    let facade = BlockchainFacade::new(port, strangecoin::consensus::CHAIN_ID_REGTEST);
+    let facade = open_legacy(port);
 
     assert_no_legacy_keys(&facade);
     assert_eq!(facade.get_balance(&bech32_a), 10_000, "balance a migrated");
@@ -255,7 +254,7 @@ fn legacy_base64_addresses_in_chain_reset_and_migrate() {
     drop(facade);
 
     // Open #2: idempotent — no second reset, balances survive.
-    let reopened = BlockchainFacade::new(port, strangecoin::consensus::CHAIN_ID_REGTEST);
+    let reopened = open_legacy(port);
     assert_eq!(
         reopened.chain_len(),
         1,

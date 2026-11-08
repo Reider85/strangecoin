@@ -469,6 +469,8 @@ impl Blockchain {
             strangecoin_core::serialize::compute_tx_root(&genesis_block.transactions);
         genesis_block.hash = self.calculate_hash(&genesis_block);
 
+        let pre_state =
+            super::state_cache::capture_pre_state(self.balances.accounts(), &genesis_block);
         let applied = {
             let view = BlockView::new(
                 &[],
@@ -482,6 +484,13 @@ impl Blockchain {
         };
         match applied {
             Ok(new_state) => {
+                if !pre_state.is_empty() {
+                    self.pending_state_history
+                        .push(super::state_cache::PendingHistory {
+                            height: 0,
+                            accounts: pre_state,
+                        });
+                }
                 self.chain.push(genesis_block);
                 self.receipts = new_state.receipts.clone();
                 self.balances.commit(new_state);
@@ -540,12 +549,21 @@ impl Blockchain {
         }
         block.hash = self.calculate_hash(&block);
 
+        // S3-P07 `state_history`: pre-apply snapshot for the grant height.
+        let pre_state = super::state_cache::capture_pre_state(&parent_state.balances, &block);
         let applied = {
             let view = self.view_for(height);
             validate_and_apply(&parent_state, &block, &view)
         };
         match applied {
             Ok(new_state) => {
+                if !pre_state.is_empty() {
+                    self.pending_state_history
+                        .push(super::state_cache::PendingHistory {
+                            height,
+                            accounts: pre_state,
+                        });
+                }
                 self.chain.push(block);
                 self.receipts = new_state.receipts.clone();
                 self.balances.commit(new_state);
@@ -587,11 +605,22 @@ impl Blockchain {
     }
 
     pub(crate) fn commit_block(&mut self, block: &Block) -> Result<(), StrangecoinError> {
+        let parent_state = self.balances.to_state();
+        // S3-P07 `state_history`: snapshot the accounts this block will
+        // touch BEFORE the apply; persisted by the `save_state` that
+        // follows every commit.
+        let pre_state = super::state_cache::capture_pre_state(&parent_state.balances, block);
         let new_state = {
             let view = self.view_for(block.index);
-            let parent_state = self.balances.to_state();
             validate_and_apply(&parent_state, block, &view)?
         };
+        if !pre_state.is_empty() {
+            self.pending_state_history
+                .push(super::state_cache::PendingHistory {
+                    height: block.index,
+                    accounts: pre_state,
+                });
+        }
         self.receipts = new_state.receipts.clone();
         self.balances.commit(new_state);
         collect_block_codes(block, self.chain_id, &mut self.codes);
