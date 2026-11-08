@@ -277,35 +277,22 @@ impl Default for NetworkConfig {
     }
 }
 
-/// Persistence backend selected by `storage.engine` (S3-P07, ADR-0024
-/// §Decision "Config surface").
+/// Backend directory of the single RocksDB engine (ADR-0024 §Decision
+/// "Config surface").
 ///
-/// * [`StorageEngineKind::Rocksdb`] — default, the per-block/per-account
-///   `strangecoin-storage` schema at `storage.path`.
-/// * [`StorageEngineKind::LevelDb`] — **transitional**: the Stage 1/2
-///   blob schema at the historical `<exe_dir>/blockchain_db_{port}`
-///   directory (`storage.path` is ignored — it was never wired, so no
-///   legacy data lives there). Removed together with `rusty-leveldb` in
-///   S3-P08's one-shot migration.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum StorageEngineKind {
-    #[default]
-    Rocksdb,
-    LevelDb,
-}
-
+/// S3-P08 removed the `storage.engine` key: `"rocksdb"` was the only
+/// value left after the transitional `"leveldb"` backend died with the
+/// one-shot LevelDB → RocksDB migration, and a single-choice key is dead
+/// weight. A leftover `engine = ...` line in an old `config.toml` is
+/// ignored with a warning at [`Config::load`] — the historical
+/// `<exe_dir>/blockchain_db_{port}` directory it used to point at is
+/// auto-migrated on open regardless of the config file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
     /// Backend directory (default `./data/rocksdb`). Relative paths
-    /// resolve against the process CWD. Ignored when
-    /// [`StorageConfig::engine`] is [`StorageEngineKind::LevelDb`].
+    /// resolve against the process CWD.
     #[serde(default = "default_storage_path")]
     pub path: PathBuf,
-    /// Backend selection (default `rocksdb`); `#[serde(default)]` keeps
-    /// pre-S3-P07 `config.toml` files (which only carried `path`) valid.
-    #[serde(default)]
-    pub engine: StorageEngineKind,
 }
 
 fn default_storage_path() -> PathBuf {
@@ -316,15 +303,33 @@ impl Default for StorageConfig {
     fn default() -> Self {
         Self {
             path: default_storage_path(),
-            engine: StorageEngineKind::default(),
         }
     }
+}
+
+/// S3-P08: detect a leftover `engine = ...` line in raw `config.toml`
+/// text. The key left the schema (serde ignores it), so the warning is the
+/// only trace an old config leaves behind; comment lines never match.
+fn removed_storage_engine_key(content: &str) -> bool {
+    content.lines().map(str::trim_start).any(|line| {
+        line.strip_prefix("engine")
+            .and_then(|rest| rest.trim_start().strip_prefix('='))
+            .is_some()
+    })
 }
 
 impl Config {
     pub fn load(path: &std::path::Path) -> Result<Self, StrangecoinError> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| StrangecoinError::ConfigError(format!("Failed to read config: {}", e)))?;
+        if removed_storage_engine_key(&content) {
+            tracing::warn!(
+                "the `storage.engine` config key was removed in Stage 3 (S3-P08): opening \
+                 RocksDB at `storage.path` and auto-migrating a legacy \
+                 <exe_dir>/blockchain_db_{{port}} directory on first open if one exists; \
+                 the stale `engine = ...` line can be deleted"
+            );
+        }
         let config: Config = toml::from_str(&content)
             .map_err(|e| StrangecoinError::ConfigError(format!("Failed to parse config: {}", e)))?;
         config.validate()?;
@@ -477,15 +482,6 @@ impl Config {
             return Err(StrangecoinError::ConfigError(
                 "storage.path must not be empty".into(),
             ));
-        }
-        // S3-P07: `leveldb` still opens (transitional blob schema), but it
-        // is scheduled for removal with the S3-P08 one-shot migration —
-        // surface the deprecation every time the config is loaded.
-        if self.storage.engine == StorageEngineKind::LevelDb {
-            tracing::warn!(
-                "storage.engine = \"leveldb\" is transitional and will be removed in S3-P08; \
-                 run the LevelDB -> RocksDB migration and switch to engine = \"rocksdb\""
-            );
         }
         Ok(())
     }
@@ -647,21 +643,20 @@ mod tests {
         cfg.validate().expect("regtest may enable the opt-in");
     }
 
-    // ------------------------------------------------------- storage (S3-P07)
+    // --------------------------------------------------- storage (S3-P07/P08)
 
     #[test]
     fn storage_defaults_to_rocksdb_at_data_rocksdb() {
         let cfg = Config::default();
-        assert_eq!(cfg.storage.engine, StorageEngineKind::Rocksdb);
         assert_eq!(cfg.storage.path, PathBuf::from("./data/rocksdb"));
         cfg.validate().expect("default storage config is valid");
     }
 
     #[test]
-    fn pre_s3_p07_config_without_engine_key_parses_as_rocksdb() {
+    fn pre_s3_p07_config_without_engine_key_parses() {
         // The S3-P05-era fixtures (only `path`, still spelled leveldb)
-        // must keep parsing: `engine` defaults to rocksdb — the operator
-        // migrates the data dir (S3-P08) and can flip the key later.
+        // must keep parsing: `engine` left the schema entirely in S3-P08 —
+        // the operator's data dir migrates itself on open, no key to flip.
         let toml = r#"
             network_id = 3
             node_mode = "full"
@@ -677,53 +672,50 @@ mod tests {
             path = "./data/leveldb"
         "#;
         let cfg: Config = toml::from_str(toml).expect("legacy config must parse");
-        assert_eq!(cfg.storage.engine, StorageEngineKind::Rocksdb);
         assert_eq!(cfg.storage.path, PathBuf::from("./data/leveldb"));
         cfg.validate().expect("defaults are valid");
     }
 
     #[test]
-    fn storage_engine_leveldb_parses_and_validates() {
-        let toml = r#"
-            network_id = 3
-            node_mode = "full"
-            log_level = "info"
-            data_dir = "./data"
+    fn removed_engine_key_is_ignored_and_flagged() {
+        // `engine = "leveldb"` (and any other value — `sqlite` included)
+        // is no longer part of the schema: old config files keep loading
+        // (S3-P08 deviation note: unknown `engine` values are ignored
+        // instead of rejected — there is only one backend to mistype now),
+        // and `Config::load` warns about the stale line.
+        for value in ["leveldb", "rocksdb", "sqlite"] {
+            let toml = format!(
+                r#"
+                network_id = 3
+                node_mode = "full"
+                log_level = "info"
+                data_dir = "./data"
 
-            [network]
-            listen_addr = "127.0.0.1:8081"
-            seeds = []
-            max_peers = 50
+                [network]
+                listen_addr = "127.0.0.1:8081"
+                seeds = []
+                max_peers = 50
 
-            [storage]
-            path = "./data/leveldb"
-            engine = "leveldb"
-        "#;
-        let cfg: Config = toml::from_str(toml).expect("leveldb engine must parse");
-        assert_eq!(cfg.storage.engine, StorageEngineKind::LevelDb);
-        // Transitional, not rejected — S3-P08 removes the value.
-        cfg.validate().expect("leveldb engine still validates");
-    }
+                [storage]
+                path = "./data/rocksdb"
+                engine = "{value}"
+                "#
+            );
+            let cfg: Config = toml::from_str(&toml)
+                .unwrap_or_else(|err| panic!("engine = {value} must be ignored: {err}"));
+            assert_eq!(cfg.storage.path, PathBuf::from("./data/rocksdb"));
+            cfg.validate()
+                .expect("config with a stale engine key validates");
+        }
 
-    #[test]
-    fn unknown_storage_engine_is_a_config_error() {
-        let toml = r#"
-            network_id = 3
-            node_mode = "full"
-            log_level = "info"
-            data_dir = "./data"
-
-            [network]
-            listen_addr = "127.0.0.1:8081"
-            seeds = []
-            max_peers = 50
-
-            [storage]
-            path = "./data/rocksdb"
-            engine = "sqlite"
-        "#;
-        let err = toml::from_str::<Config>(toml).expect_err("unknown engine must be rejected");
-        assert!(err.to_string().contains("engine"), "{err}");
+        // The detector behind the load-time warning: only live
+        // `engine = ...` lines count, comments and other keys do not.
+        assert!(removed_storage_engine_key("engine = \"leveldb\""));
+        assert!(removed_storage_engine_key("  engine=\"leveldb\""));
+        assert!(removed_storage_engine_key("\tengine = 'x'"));
+        assert!(!removed_storage_engine_key("# engine = \"leveldb\""));
+        assert!(!removed_storage_engine_key("network_id = 3"));
+        assert!(!removed_storage_engine_key("engineer = 1"));
     }
 
     #[test]

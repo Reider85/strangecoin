@@ -25,8 +25,11 @@
 //! depend on `strangecoin-core` (pure, 0 I/O) for the snapshot (S3-P13) and
 //! witness (S3-P11) modules; the reverse dependency is forbidden.
 //!
-//! No LevelDB code lives here: `rusty-leveldb` stays in the monolith until
-//! the S3-P08 migration removes it.
+//! No LevelDB code lives here: the S3-P08 one-shot LevelDB → RocksDB
+//! migration reads the legacy blob schema from the monolith edge
+//! (`src/storage/migrations.rs`, default-on feature `legacy-migrate`) —
+//! this crate only receives the already-decoded snapshot as opaque
+//! `WriteBatchOp`s.
 
 pub mod engine;
 #[cfg(feature = "rocksdb")]

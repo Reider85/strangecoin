@@ -10,7 +10,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use rusty_leveldb::LdbIterator;
 use serde::Serialize;
 use strangecoin_core::state::{unapply_block, State};
 use strangecoin_core::types::{Block, Transaction};
@@ -369,26 +368,12 @@ pub(crate) fn capture_pre_state(
 /// JSON wire form of [`strangecoin_core::state::ContractStorageMap`]
 /// (S1.5-P15): serde_json cannot use `[u8; 32]` map keys, so slots are
 /// stored as sorted `(hex_key, value)` pairs per address; the sorted order
-/// keeps the persisted bytes deterministic.
-pub(crate) type ContractStorageJson = Vec<(String, Vec<(String, Vec<u8>)>)>;
-
-pub(crate) fn contract_storage_to_json(
-    map: &strangecoin_core::state::ContractStorageMap,
-) -> ContractStorageJson {
-    let mut out: ContractStorageJson = map
-        .iter()
-        .map(|(address, storage)| {
-            let mut slots: Vec<(String, Vec<u8>)> = storage
-                .iter()
-                .map(|(key, value)| (hex::encode(key), value.clone()))
-                .collect();
-            slots.sort_by(|a, b| a.0.cmp(&b.0));
-            (address.clone(), slots)
-        })
-        .collect();
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    out
-}
+/// keeps the persisted bytes deterministic. Written by the Stage 0-2 blob
+/// schema, read by the S3-P08 migration (`contract_storage_from_json`
+/// below); nothing on the per-block path emits it anymore. Public since
+/// S3-P08: the legacy fixture seeder (`test_support::LegacySeed`) builds
+/// this shape for `tests/leveldb_migration.rs`.
+pub type ContractStorageJson = Vec<(String, Vec<(String, Vec<u8>)>)>;
 
 pub(crate) fn contract_storage_from_json(
     raw: &ContractStorageJson,
@@ -415,16 +400,23 @@ pub(crate) fn db_path_for_port(port: u16) -> PathBuf {
     exe_dir.join(format!("blockchain_db_{}", port))
 }
 
-/// Open or create storage for `port` per `storage_cfg`, load persisted
-/// state, install genesis when the DB is empty, run the open-path
-/// migrations, persist. (S1.5-P04: moved from facade; S3-P07: engine
-/// selection + per-block schema.)
+/// Open or create storage for `port` per `storage_cfg`, run the S3-P08
+/// LevelDB auto-migration when the historical directory is present, load
+/// persisted state, install genesis when the DB is empty, run the
+/// open-path migrations, persist. (S1.5-P04: moved from facade; S3-P07:
+/// engine selection + per-block schema; S3-P08: one-shot LevelDB →
+/// RocksDB.)
 ///
-/// Engine/path rule (ADR-0024 "Config surface"):
-/// * `engine = "rocksdb"` (default) → `RocksDbEngine` at `storage.path`;
-/// * `engine = "leveldb"` (transitional) → the blob schema at the
-///   historical `<exe_dir>/blockchain_db_{port}` (`legacy_path`);
-///   `storage.path` is ignored there (the key was never wired).
+/// Path rule (ADR-0024 "Config surface"): `RocksDbEngine` at
+/// `storage.path`; the historical `<exe_dir>/blockchain_db_{port}`
+/// directory (`legacy_path`) is never opened as a backend anymore — on
+/// first open it is converted into `storage.path` and kept as
+/// `.leveldb.bak` (ADR-0008 rollback capability).
+///
+/// Fail-closed: a migration error (or a legacy directory present in a
+/// build without the reader) panics here, before the RocksDB open — the
+/// node never starts over unconverted or divergent data, and the legacy
+/// directory is left untouched.
 pub(crate) fn open_blockchain(
     port: u16,
     chain_id: u32,
@@ -435,11 +427,28 @@ pub(crate) fn open_blockchain(
 
     let start_time = std::time::SystemTime::now();
     let legacy_path = db_path_for_port(port);
-    if storage_cfg.engine == crate::config::StorageEngineKind::Rocksdb && !storage_cfg.path.exists()
+    #[cfg(feature = "legacy-migrate")]
+    if let Err(err) =
+        crate::storage::migrations::auto_migrate_legacy(&legacy_path, &storage_cfg.path)
     {
+        panic!(
+            "LevelDB -> RocksDB migration failed: {err} (legacy directory left untouched at {})",
+            legacy_path.display()
+        );
+    }
+    #[cfg(not(feature = "legacy-migrate"))]
+    if legacy_path.exists() {
+        panic!(
+            "legacy LevelDB database found at {} but this build lacks the `legacy-migrate` \
+             feature; rebuild with `--features legacy-migrate` to convert it \
+             (refusing to start over unconverted data)",
+            legacy_path.display()
+        );
+    }
+    if !storage_cfg.path.exists() {
         info!("База данных не существует, создаётся новая");
     }
-    let storage = crate::storage::Storage::open(storage_cfg, &legacy_path)
+    let storage = crate::storage::Storage::open_rocks(&storage_cfg.path)
         .expect("Не удалось открыть хранилище");
 
     let mut blockchain = Blockchain {
@@ -518,86 +527,17 @@ pub(crate) fn open_blockchain(
 
 /// Read chain/balances/difficulty and mempool txs from storage.
 ///
-/// * **Engine (default)**: fail-closed per-block read — meta tip cross-checked
-///   against a single sorted pass over `blocks` (contiguous `0..=tip`, no
-///   hash-index keys), `state` full-load, `contract_storage` per-slot
-///   (address = `key[..len-32]`), mempool by prefix-iterate (no full-DB
-///   scan, ascending nonce per sender — ADR-0024). Corruption →
-///   `StorageError::Corrupt`, never a silent partial load.
-/// * **Legacy (`engine = "leveldb"`)**: the Stage 2 blob read, unchanged
-///   (lenient: unparsable values become `None`, as before).
+/// Per-block schema read (S3-P07/S3-P08 — the transitional blob read is
+/// gone with the LevelDB engine): fail-closed per-block read — meta tip
+/// cross-checked against a single sorted pass over `blocks` (contiguous
+/// `0..=tip`, no hash-index keys), `state` full-load, `contract_storage`
+/// per-slot (address = `key[..len-32]`), mempool by prefix-iterate (no
+/// full-DB scan, ascending nonce per sender — ADR-0024). Corruption →
+/// `StorageError::Corrupt`, never a silent partial load.
 pub(crate) fn load_persisted_state(
     storage: &crate::storage::Storage,
 ) -> Result<PersistedState, StrangecoinError> {
-    match storage {
-        crate::storage::Storage::Legacy(legacy) => Ok(load_persisted_state_legacy(&legacy.db())),
-        crate::storage::Storage::Engine(engine) => load_persisted_state_engine(engine.as_ref()),
-    }
-}
-
-/// Legacy blob read (`chain`/`balances`/`difficulty`/`contract_storage` +
-/// mempool full scan) — verbatim Stage 2 semantics, transitional until
-/// S3-P08's migration consumes these keys.
-fn load_persisted_state_legacy(
-    db_arc: &std::sync::Arc<std::sync::Mutex<rusty_leveldb::DB>>,
-) -> PersistedState {
-    let mut db_guard = db_arc
-        .lock()
-        .expect("Не удалось захватить Mutex для LevelDB");
-
-    let chain = db_guard
-        .get(b"chain")
-        .and_then(|v| serde_json::from_slice::<Vec<Block>>(&v).ok());
-    // `save_state` writes `HashMap<String, AccountState>`; Stage 0 DBs held
-    // plain `HashMap<String, u64>` — accept both so reloads never drop state.
-    let balances = db_guard.get(b"balances").and_then(|v| {
-        if let Ok(accounts) = serde_json::from_slice::<HashMap<String, AccountState>>(&v) {
-            Some(accounts)
-        } else {
-            serde_json::from_slice::<HashMap<String, u64>>(&v)
-                .ok()
-                .map(|legacy| {
-                    legacy
-                        .into_iter()
-                        .map(|(address, balance)| (address, AccountState::eoa(balance, 0)))
-                        .collect()
-                })
-        }
-    });
-    let difficulty = db_guard
-        .get(b"difficulty")
-        .and_then(|v| serde_json::from_slice::<u32>(&v).ok());
-    // S1.5-P15: absent key (pre-storage DBs) → empty map.
-    let contract_storage = db_guard
-        .get(b"contract_storage")
-        .and_then(|v| serde_json::from_slice::<ContractStorageJson>(&v).ok())
-        .and_then(|raw| contract_storage_from_json(&raw));
-
-    let mut iterator = db_guard
-        .new_iter()
-        .expect("Не удалось создать итератор LevelDB");
-    let mut mempool_txs = Vec::new();
-    while let Some((key, value)) = iterator.next() {
-        if key == b"chain"
-            || key == b"balances"
-            || key == b"difficulty"
-            || key == b"contract_storage"
-        {
-            continue;
-        }
-        if let Ok(transaction) = serde_json::from_slice::<Transaction>(&value) {
-            mempool_txs.push(transaction);
-        }
-    }
-    drop(db_guard);
-
-    PersistedState {
-        chain,
-        balances,
-        contract_storage,
-        difficulty,
-        mempool_txs,
-    }
+    load_persisted_state_engine(storage.engine().as_ref())
 }
 
 /// Apply a load's account state onto `blockchain`: whole-field
@@ -621,13 +561,19 @@ pub(crate) fn apply_loaded_accounts(blockchain: &mut Blockchain, loaded: &Persis
 }
 
 /// Per-block schema read (ADR-0024). See `load_persisted_state` docs.
+///
+/// **Tip-less databases** (S3-P08): a fresh database *or* the result of
+/// migrating a legacy database that carried state but no `chain` blob.
+/// Stray *blocks* without their tip remain impossible (atomic-batch
+/// contract) and stay corrupt; stray *state* is legitimate on this path
+/// and is loaded below — `None` (the "replace nothing" marker consumed
+/// before the genesis install) is returned only when the state CF is
+/// actually empty, byte-compatible with the pre-S3-P08 fresh behaviour.
 fn load_persisted_state_engine(
     engine: &dyn StorageEngine,
 ) -> Result<PersistedState, StrangecoinError> {
-    let tip_height = match engine.get(Cf::Meta, &meta_key(META_TIP_HEIGHT))? {
+    let tip_height: Option<u64> = match engine.get(Cf::Meta, &meta_key(META_TIP_HEIGHT))? {
         None => {
-            // Fresh database: the atomic-batch contract means blocks can
-            // never exist without their tip meta — anything else is corrupt.
             let stray = engine.iterate_prefix(Cf::Blocks, b"")?;
             if stray
                 .iter()
@@ -638,51 +584,56 @@ fn load_persisted_state_engine(
                 )
                 .into());
             }
-            return Ok(PersistedState {
-                // `None`s, not empty maps: the open path treats `Some` as
-                // "replace the state the genesis install just built".
-                chain: None,
-                balances: None,
-                contract_storage: None,
-                difficulty: None,
-                mempool_txs: Vec::new(),
-            });
+            None
         }
-        Some(bytes) => codec::decode_u64(&bytes)?,
+        Some(bytes) => Some(codec::decode_u64(&bytes)?),
     };
-    let tip_hash = engine.get(Cf::Meta, &meta_key(META_TIP_HASH))?.ok_or(
-        strangecoin_storage::StorageError::Corrupt("tip_hash missing"),
-    )?;
-    let tip_hash = codec::decode_hash(&tip_hash)?;
 
-    // One sorted pass over `blocks`; BE height keys come back ascending,
-    // so contiguity == no gaps. Tagged hash-index keys (S3-P09, 33 B)
-    // do not decode as heights and are skipped.
-    let mut chain: Vec<Block> = Vec::new();
-    let mut expected = 0u64;
-    for (key, value) in engine.iterate_prefix(Cf::Blocks, b"")? {
-        let Some(height) = decode_block_height_key(&key) else {
-            continue;
-        };
-        if height != expected {
-            return Err(strangecoin_storage::StorageError::Corrupt("missing block height").into());
+    // ---- chain: only with a tip (the migration writes tip meta exactly
+    //      when a chain exists) ----
+    let chain: Option<Vec<Block>> = match tip_height {
+        None => None,
+        Some(tip_height) => {
+            let tip_hash = engine.get(Cf::Meta, &meta_key(META_TIP_HASH))?.ok_or(
+                strangecoin_storage::StorageError::Corrupt("tip_hash missing"),
+            )?;
+            let tip_hash = codec::decode_hash(&tip_hash)?;
+
+            // One sorted pass over `blocks`; BE height keys come back
+            // ascending, so contiguity == no gaps. Tagged hash-index keys
+            // (S3-P09, 33 B) do not decode as heights and are skipped.
+            let mut chain: Vec<Block> = Vec::new();
+            let mut expected = 0u64;
+            for (key, value) in engine.iterate_prefix(Cf::Blocks, b"")? {
+                let Some(height) = decode_block_height_key(&key) else {
+                    continue;
+                };
+                if height != expected {
+                    return Err(
+                        strangecoin_storage::StorageError::Corrupt("missing block height").into(),
+                    );
+                }
+                let block = codec::decode_block(&value)?;
+                if block.index != height {
+                    return Err(strangecoin_storage::StorageError::Corrupt(
+                        "block index does not match key",
+                    )
+                    .into());
+                }
+                chain.push(block);
+                expected += 1;
+            }
+            if chain.len() as u64 != tip_height + 1 {
+                return Err(
+                    strangecoin_storage::StorageError::Corrupt("chain shorter than tip").into(),
+                );
+            }
+            if chain.last().map(|b| b.hash.as_str()) != Some(tip_hash.as_str()) {
+                return Err(strangecoin_storage::StorageError::Corrupt("tip hash mismatch").into());
+            }
+            Some(chain)
         }
-        let block = codec::decode_block(&value)?;
-        if block.index != height {
-            return Err(strangecoin_storage::StorageError::Corrupt(
-                "block index does not match key",
-            )
-            .into());
-        }
-        chain.push(block);
-        expected += 1;
-    }
-    if chain.len() as u64 != tip_height + 1 {
-        return Err(strangecoin_storage::StorageError::Corrupt("chain shorter than tip").into());
-    }
-    if chain.last().map(|b| b.hash.as_str()) != Some(tip_hash.as_str()) {
-        return Err(strangecoin_storage::StorageError::Corrupt("tip hash mismatch").into());
-    }
+    };
 
     let mut balances = HashMap::new();
     for (key, value) in engine.iterate_prefix(Cf::State, b"")? {
@@ -726,9 +677,20 @@ fn load_persisted_state_engine(
     }
 
     Ok(PersistedState {
-        chain: Some(chain),
-        balances: Some(balances),
-        contract_storage: Some(contract_storage),
+        chain,
+        // Tip-less: `None` only when there is nothing to restore — the
+        // open path treats `Some` as "replace the state the genesis
+        // install starts from" (chain-less migrated legacy DBs land here).
+        balances: if tip_height.is_some() || !balances.is_empty() {
+            Some(balances)
+        } else {
+            None
+        },
+        contract_storage: if tip_height.is_some() || !contract_storage.is_empty() {
+            Some(contract_storage)
+        } else {
+            None
+        },
         difficulty,
         mempool_txs,
     })
@@ -736,32 +698,25 @@ fn load_persisted_state_engine(
 
 impl Blockchain {
     /// Storage health check (S3-P07 — replaces the LevelDB key dump):
-    /// schema version + tip presence on the per-block engine, a one-line
-    /// note on the transitional backend. Cheap (two point gets), safe to
+    /// schema version + tip presence, cheap (two point gets), safe to
     /// call at open and after every save.
     pub(crate) fn storage_health_check(&self) {
-        match &self.storage {
-            crate::storage::Storage::Legacy(_) => {
-                debug!("transitional LevelDB storage open (engine = \"leveldb\")");
-            }
-            crate::storage::Storage::Engine(engine) => {
-                let schema_version = engine
-                    .get(Cf::Meta, &meta_key(META_SCHEMA_VERSION))
-                    .ok()
-                    .flatten()
-                    .and_then(|bytes| decode_schema_version(&bytes));
-                let tip_height = engine
-                    .get(Cf::Meta, &meta_key(META_TIP_HEIGHT))
-                    .ok()
-                    .flatten()
-                    .and_then(|bytes| codec::decode_u64(&bytes).ok());
-                debug!(
-                    schema_version = ?schema_version,
-                    tip_height = ?tip_height,
-                    "storage health"
-                );
-            }
-        }
+        let engine = self.storage.engine();
+        let schema_version = engine
+            .get(Cf::Meta, &meta_key(META_SCHEMA_VERSION))
+            .ok()
+            .flatten()
+            .and_then(|bytes| decode_schema_version(&bytes));
+        let tip_height = engine
+            .get(Cf::Meta, &meta_key(META_TIP_HEIGHT))
+            .ok()
+            .flatten()
+            .and_then(|bytes| codec::decode_u64(&bytes).ok());
+        debug!(
+            schema_version = ?schema_version,
+            tip_height = ?tip_height,
+            "storage health"
+        );
     }
 
     /// Validate a transaction against current state and queue it in the mempool.
@@ -871,65 +826,18 @@ impl Blockchain {
         Ok(())
     }
 
-    /// Persist current state.
-    ///
-    /// * `engine = "leveldb"` (transitional): the Stage 2 blob rewrite,
-    ///   unchanged until S3-P08.
-    /// * default engine (S3-P07, ADR-0024 §Decision "Write path"): ONE
-    ///   atomic `write_batch` covering **O(changed records)** — blocks only
-    ///   from the common ancestor with the persisted tip (reorg tail
-    ///   deleted), account/contract/mempool diffs against the persisted
-    ///   snapshots, pre-apply `state_history` for the heights written here,
-    ///   meta tip. Never a full-chain or full-state rewrite.
+    /// Persist current state (S3-P07, ADR-0024 §Decision "Write path"):
+    /// ONE atomic `write_batch` covering **O(changed records)** — blocks
+    /// only from the common ancestor with the persisted tip (reorg tail
+    /// deleted), account/contract/mempool diffs against the persisted
+    /// snapshots, pre-apply `state_history` for the heights written here,
+    /// meta tip. Never a full-chain or full-state rewrite. (The Stage 2
+    /// blob rewrite died with the LevelDB engine in S3-P08.)
     pub(crate) fn save_state(&mut self) {
-        match self.storage.clone() {
-            crate::storage::Storage::Legacy(legacy) => {
-                self.save_state_legacy(&legacy);
-                self.storage_health_check();
-            }
-            crate::storage::Storage::Engine(engine) => {
-                self.save_state_engine(engine.as_ref())
-                    .expect("Ошибка сохранения состояния");
-                self.storage_health_check();
-            }
-        }
-    }
-
-    /// Stage 2 blob write, verbatim (`chain`/`balances`/
-    /// `contract_storage`/`difficulty` + mempool puts, no deletes).
-    fn save_state_legacy(&mut self, legacy: &crate::storage::legacy::LegacyStorage) {
-        let db_arc = legacy.db();
-        let mut db = db_arc
-            .lock()
-            .expect("Не удалось захватить Mutex для LevelDB");
-        for tx in self.mempool.transactions() {
-            let key = format!("{}:{}", tx.sender(), tx.nonce()).into_bytes();
-            match db.get(&key) {
-                Some(_) => continue,
-                None => {
-                    let value = serde_json::to_vec(&tx).expect("Ошибка сериализации транзакции");
-                    db.put(&key, &value)
-                        .expect("Ошибка сохранения транзакции в LevelDB");
-                }
-            }
-        }
-        db.put(b"chain", &serde_json::to_vec(&self.chain).unwrap())
-            .expect("Ошибка сохранения цепочки блоков");
-        db.put(b"balances", &serde_json::to_vec(&self.balances).unwrap())
-            .expect("Ошибка сохранения балансов");
-        db.put(
-            b"contract_storage",
-            &serde_json::to_vec(&contract_storage_to_json(self.balances.contract_storage()))
-                .unwrap(),
-        )
-        .expect("Ошибка сохранения контрактного хранилища");
-        db.put(
-            b"difficulty",
-            &serde_json::to_vec(&self.difficulty).unwrap(),
-        )
-        .expect("Ошибка сохранения сложности");
-        db.flush().expect("Ошибка при фиксации данных в LevelDB");
-        drop(db);
+        let storage = self.storage.clone();
+        self.save_state_engine(storage.engine().as_ref())
+            .expect("Ошибка сохранения состояния");
+        self.storage_health_check();
     }
 
     /// Per-block incremental write (ADR-0024). See [`Self::save_state`].

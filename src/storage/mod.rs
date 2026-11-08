@@ -1,27 +1,33 @@
-//! # Storage (S3-P07) — monolith edge over `strangecoin-storage`
+//! # Storage (S3-P07, S3-P08) — monolith edge over `strangecoin-storage`
 //!
 //! Two layers:
 //!
 //! * **Re-exports** of the storage crate surface (`StorageEngine`, `Cf`,
 //!   `RocksDbEngine`, the pure `schema` key codec) so monolith call sites
 //!   reach persistence through one module (S3-P07 task 1).
-//! * [`Storage`] — the engine selector owned by `Blockchain`: RocksDB
-//!   ([`strangecoin_storage::RocksDbEngine`], default, per ADR-0024) or the
-//!   **transitional** LevelDB blob backend ([`legacy`], `storage.engine =
-//!   "leveldb"`, removed in S3-P08).
+//! * [`Storage`] — the single-backend handle owned by `Blockchain`: the
+//!   per-block/per-account schema over [`strangecoin_storage::RocksDbEngine`]
+//!   (ADR-0024). The transitional LevelDB variant of S3-P07 is gone
+//!   (S3-P08): its one-shot conversion lives in [`migrations`] behind the
+//!   default-on `legacy-migrate` feature, and nothing here opens LevelDB
+//!   for storage anymore.
 //!
-//! `rusty-leveldb` is deliberately **not** imported here — it lives in
-//! [`legacy`] (S3-P07 deviation note: the task says "delete rusty-leveldb
-//! from this file"; the transitional engine itself survives until S3-P08).
+//! `rusty-leveldb` is reachable only through [`migrations`] (read-only
+//! legacy reader) and the test fixture seeder — see the S3-P08 deviation
+//! note in the commit / `Cargo.toml` (the КГ `cargo tree -i rusty-leveldb`
+//! expectation of "dev-deps only" is met only for `--no-default-features`
+//! builds: production auto-migration needs a runtime reader).
 //!
 //! Lock ordering (ADR-0024 §Decision "Concurrency"): the RocksDB engine is
 //! `Send + Sync` with no interior mutex, so the Stage 1 `Arc<Mutex<DB>>`
-//! level is gone from the hierarchy for the default path — see the
-//! re-documents order in `src/error.rs`. The legacy variant still carries
-//! its `Mutex` inside the `blockchain` lock scope, exactly as before.
+//! level is gone from the hierarchy — see the re-documented order in
+//! `src/error.rs`.
+//!
+//! [`migrations`]: migrations
 
 pub mod codec;
-pub mod legacy;
+#[cfg(feature = "legacy-migrate")]
+pub mod migrations;
 
 pub use strangecoin_storage::schema;
 pub use strangecoin_storage::{
@@ -59,71 +65,35 @@ pub use strangecoin_storage::{
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::config::{StorageConfig, StorageEngineKind};
 use crate::error::StrangecoinError;
 
-/// Engine selector shared by every `Blockchain`.
+/// Engine handle shared by every `Blockchain` (S3-P08: one backend).
 ///
-/// Open rules (S3-P07, ADR-0024 "Config surface"):
-/// * `engine = "rocksdb"` (default) → `RocksDbEngine` at `config.path`
-///   (`storage.path` is wired for real now; default `./data/rocksdb`);
-/// * `engine = "leveldb"` (transitional) → the historical
-///   `<exe_dir>/blockchain_db_{port}` blob database (`legacy_path`; the
-///   never-wired `storage.path` key is ignored for the legacy engine —
-///   no legacy data ever lived there).
+/// Open rule (ADR-0024 "Config surface"): `storage.path` (default
+/// `./data/rocksdb`) is opened as a `RocksDbEngine`; the historical
+/// `<exe_dir>/blockchain_db_{port}` directory is never opened directly —
+/// when it exists it is converted first (`migrations::auto_migrate_legacy`,
+/// invoked from the DB-open path) and then kept as `.leveldb.bak`.
 #[derive(Clone)]
-pub enum Storage {
-    /// Transitional blob schema (`engine = "leveldb"`, removed in S3-P08).
-    Legacy(legacy::LegacyStorage),
-    /// Per-block/per-account schema over the `StorageEngine` trait
-    /// (ADR-0024) — `RocksDbEngine` in production, test mocks in tests.
-    Engine(Arc<dyn StorageEngine>),
-}
+pub struct Storage(Arc<dyn StorageEngine>);
 
 impl Storage {
-    /// Open per `config`. `legacy_path` is the port-derived historical
-    /// directory used only by `engine = "leveldb"`.
-    pub fn open(config: &StorageConfig, legacy_path: &Path) -> Result<Self, StrangecoinError> {
-        match config.engine {
-            StorageEngineKind::LevelDb => {
-                Ok(Self::Legacy(legacy::LegacyStorage::new(legacy_path)?))
-            }
-            StorageEngineKind::Rocksdb => Self::open_rocks(&config.path),
-        }
-    }
-
-    /// Open (creating the directory if needed) the default RocksDB backend
-    /// at `path`. Used by `open_local`, the wire-deserialize path and
-    /// `Storage::open` for `engine = "rocksdb"`.
+    /// Open (creating the directory if needed) the RocksDB backend at
+    /// `path`. Used by `open_local`, the wire-deserialize path and the
+    /// production open path after the auto-migration hook.
     pub fn open_rocks(path: &Path) -> Result<Self, StrangecoinError> {
         std::fs::create_dir_all(path)?;
         let engine = RocksDbEngine::open(path)?;
-        Ok(Self::Engine(Arc::new(engine)))
+        Ok(Self(Arc::new(engine)))
     }
 
     /// Wrap an already-constructed engine (counting/mock engines in tests).
     pub fn from_engine(engine: Arc<dyn StorageEngine>) -> Self {
-        Self::Engine(engine)
+        Self(engine)
     }
 
-    pub fn is_legacy(&self) -> bool {
-        matches!(self, Self::Legacy(_))
-    }
-
-    /// The per-block engine, or `None` while on the transitional LevelDB
-    /// backend (call sites branch on [`Self::is_legacy`]).
-    pub fn engine(&self) -> Option<&Arc<dyn StorageEngine>> {
-        match self {
-            Self::Engine(engine) => Some(engine),
-            Self::Legacy(_) => None,
-        }
-    }
-
-    /// The transitional LevelDB handle, or `None` on the default engine.
-    pub fn legacy(&self) -> Option<&legacy::LegacyStorage> {
-        match self {
-            Self::Legacy(inner) => Some(inner),
-            Self::Engine(_) => None,
-        }
+    /// The per-block engine backing this handle.
+    pub fn engine(&self) -> &Arc<dyn StorageEngine> {
+        &self.0
     }
 }

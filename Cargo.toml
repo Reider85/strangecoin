@@ -17,7 +17,18 @@ strangecoin-net = { path = "crates/strangecoin-net", version = "0.1.0", optional
 # Default features (rocksdb, default-on) link the pinned C++ backend.
 strangecoin-storage = { path = "crates/strangecoin-storage" }
 ctrlc = "3.4"
-rusty-leveldb = "4.0.0"
+# S3-P08: transitional — only the read-only LevelDB reader of the one-shot
+# LevelDB -> RocksDB migration (`src/storage/migrations.rs`) still needs this
+# crate; the storage engine itself is RocksDB since S3-P07. Optional behind
+# the default-on `legacy-migrate` feature so `--no-default-features` builds
+# (light/headless direction) carry no LevelDB code at all. Full removal of
+# the crate (with the reader) is a Stage 4+ cleanup — see the S3-P08 commit
+# deviation note (КГ "cargo tree -i rusty-leveldb" is non-empty in default
+# features: exactly one runtime edge, the migration reader).
+# Pinned exact per Stage 3 Pin Policy (AGENTS.md): caret "4.0.0" since
+# Stage 0, fixed at =4.0.0 in S3-P08 — a caret bump changing legacy read
+# semantics would silently corrupt the one-shot migration.
+rusty-leveldb = { version = "=4.0.0", optional = true }
 uuid = { version = "1.17.0", features = ["v4"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.142"
@@ -78,10 +89,15 @@ tokio = { version = "1", features = [
 # vm-wasm is default-on (regtest/devnet builds).
 # gui is default-on per S2-P05 spec (operator desktop client; headless via
 # --no-default-features + selective re-enable).
-default = ["net", "vm-wasm", "gui"]
+# legacy-migrate is default-on (S3-P08): the LevelDB -> RocksDB one-shot
+# auto-migration must read the legacy `<exe_dir>/blockchain_db_{port}`
+# directory in production builds (ADR-0008 "run automatically on first
+# startup"); --no-default-features builds drop it with everything else.
+default = ["net", "vm-wasm", "gui", "legacy-migrate"]
 net = ["dep:strangecoin-net"]
 vm-wasm = ["dep:strangecoin-vm-wasm"]
 gui = ["dep:eframe", "dep:winapi"]
+legacy-migrate = ["dep:rusty-leveldb"]
 
 [profile.release]
 lto = true

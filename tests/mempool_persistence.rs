@@ -3,16 +3,16 @@
 //! "stale txs accumulate forever" leak is dead).
 //!
 //! Also carries the config-wiring acceptance of the prompt:
-//! `storage.path` + `storage.engine` decide where and how the database
-//! opens — RocksDB at the configured path, the blob fallback at the
-//! historical port directory only when `engine = "leveldb"`.
+//! `storage.path` decides where the database opens (S3-P08 removed the
+//! `storage.engine` key — RocksDB is the only backend, and a legacy
+//! port directory is auto-migrated, see `tests/leveldb_migration.rs`).
 
 mod common;
 
 use common::*;
 use std::path::Path;
 
-use strangecoin::config::{StorageConfig, StorageEngineKind};
+use strangecoin::config::StorageConfig;
 use strangecoin::serialize::txid;
 use strangecoin::storage::{RocksDbEngine, StorageEngine};
 use strangecoin::{BlockchainFacade, Transaction};
@@ -101,14 +101,21 @@ fn mempool_prefix_loads_and_deletes_on_mine() {
     drop(bc);
 }
 
-/// `config.storage.path` / `config.engine` wired for real (S3-P07):
-/// rocksdb writes at the configured path and never touches the legacy
-/// port directory; `engine = "leveldb"` opens exactly that fallback.
+/// `config.storage.path` wired for real (S3-P07/S3-P08): rocksdb writes
+/// at the configured path and never touches the legacy port directory
+/// (which only exists as an auto-migration *source*, not a backend —
+/// `tests/leveldb_migration.rs` covers that path).
 #[test]
-fn storage_config_wires_path_and_engine() {
+fn storage_config_wires_path() {
     let port = random_port();
     let port_dir = strangecoin::test_support::blockchain_db_path_for_port(port);
-    let _ = std::fs::remove_dir_all(&port_dir); // leftovers from prior runs
+    let _ = std::fs::remove_dir_all(port_dir.clone()); // leftovers from prior runs
+    let bak_dir = {
+        let mut bak = port_dir.as_os_str().to_owned();
+        bak.push(".leveldb.bak");
+        std::path::PathBuf::from(bak)
+    };
+    let _ = std::fs::remove_dir_all(&bak_dir);
 
     let dir = TestDir::new("storage_config_wiring");
     let rocks_path = dir.path().join("configured_rocksdb");
@@ -118,7 +125,6 @@ fn storage_config_wires_path_and_engine() {
         strangecoin::consensus::CHAIN_ID_REGTEST,
         StorageConfig {
             path: rocks_path.clone(),
-            engine: StorageEngineKind::Rocksdb,
         },
     );
     assert_eq!(
@@ -129,11 +135,11 @@ fn storage_config_wires_path_and_engine() {
     drop(bc);
     assert!(
         rocks_path.join("CURRENT").exists(),
-        "engine = rocksdb must create its database at storage.path"
+        "the configured storage.path must hold the rocksdb database"
     );
     assert!(
-        !port_dir.exists(),
-        "engine = rocksdb must not touch the legacy <exe_dir>/blockchain_db_{{port}}"
+        !port_dir.exists() && !bak_dir.exists(),
+        "an open without legacy data must not touch the port directory"
     );
 
     // Reopen through the same config: the per-block schema loads what the
@@ -143,25 +149,8 @@ fn storage_config_wires_path_and_engine() {
         strangecoin::consensus::CHAIN_ID_REGTEST,
         StorageConfig {
             path: rocks_path.clone(),
-            engine: StorageEngineKind::Rocksdb,
         },
     );
     assert_eq!(reopened.chain_len(), 1, "reopen loads instead of resetting");
     drop(reopened);
-
-    // Transitional engine: the port-dir fallback wins, config path ignored.
-    let bc = BlockchainFacade::new(
-        port,
-        strangecoin::consensus::CHAIN_ID_REGTEST,
-        StorageConfig {
-            path: dir.path().join("ignored_for_leveldb"),
-            engine: StorageEngineKind::LevelDb,
-        },
-    );
-    drop(bc);
-    assert!(
-        port_dir.exists(),
-        "engine = leveldb must open the historical port directory"
-    );
-    let _ = std::fs::remove_dir_all(&port_dir);
 }

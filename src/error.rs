@@ -15,11 +15,11 @@
 //! This ordering is enforced by the deadlock test in `tests/concurrency.rs`.
 //!
 //! **S3-P07 / ADR-0024 (§Decision "Concurrency")**: the innermost
-//! `Arc<Mutex<DB>>` LevelDB level of Stage 1/2 is **gone** on the default
-//! path — `rocksdb::DB` is `Send + Sync` and the engine takes no lock of
-//! its own, so persistence happens under the `blockchain` lock directly
-//! (no nesting). The transitional `engine = "leveldb"` backend keeps its
-//! internal mutex inside the `blockchain` scope — never the reverse.
+//! `Arc<Mutex<DB>>` LevelDB level of Stage 1/2 is **gone** — `rocksdb::DB`
+//! is `Send + Sync` and the engine takes no lock of its own, so
+//! persistence happens under the `blockchain` lock directly (no nesting).
+//! S3-P08 removed the transitional `engine = "leveldb"` backend together
+//! with this lock level's last call sites.
 
 use thiserror::Error;
 
@@ -39,12 +39,11 @@ pub enum StrangecoinError {
     IoError(#[from] std::io::Error),
     #[error("serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
-    /// Transitional blob backend (`storage.engine = "leveldb"`), removed
-    /// with `rusty-leveldb` in S3-P08.
-    #[error("leveldb error: {0}")]
-    LeveldbError(#[from] rusty_leveldb::Status),
     /// `strangecoin-storage` backend (S3-P07): I/O, RocksDB, corruption
     /// and schema-version failures — fail-closed, never repaired silently.
+    /// Also the error type of the S3-P08 LevelDB → RocksDB one-shot
+    /// migration (the transitional `LeveldbError` variant died with the
+    /// LevelDB engine in S3-P08).
     #[error("storage error: {0}")]
     Storage(#[from] strangecoin_storage::StorageError),
     #[error("block timestamp too old: must be > median time past of last 11 blocks")]

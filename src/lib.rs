@@ -1095,7 +1095,6 @@ pub async fn run_async() {
             },
             storage: crate::config::StorageConfig {
                 path: exe_dir.join("data/rocksdb"),
-                ..crate::config::StorageConfig::default()
             },
             log_level: "info".into(),
             data_dir: exe_dir.join("data"),
@@ -1408,11 +1407,12 @@ pub mod test_support {
             .port()
     }
 
-    /// Port-derived DB directory the open path uses for
-    /// `engine = "leveldb"` (S3-P07: `storage.path` is the default path;
-    /// this stays the transitional fallback + the legacy-fixture location).
-    /// Exposed so tests can seed a legacy DB before triggering the DB-open
-    /// migrations (BUG-S0-017, `tests/address_migration.rs`).
+    /// Port-derived DB directory the Stage 0-2 node used for the LevelDB
+    /// blob database (S3-P07: `storage.path` is the default backend path;
+    /// this stays the auto-migration *source* location + the legacy-fixture
+    /// location — `tests/address_migration.rs` and
+    /// `tests/leveldb_migration.rs` seed fixtures here so the S3-P08
+    /// one-shot migration can find them).
     pub fn blockchain_db_path_for_port(port: u16) -> PathBuf {
         crate::blockchain::state_cache::db_path_for_port(port)
     }
@@ -1445,31 +1445,94 @@ pub mod test_support {
         )
     }
 
-    /// Seed a legacy LevelDB blob database the way a Stage 0/1 node left
-    /// it (`balances` + optional `chain` JSON blobs) — S3-P07: the public
-    /// `storage::Storage` no longer exposes the raw `rusty-leveldb`
-    /// handle, so `tests/address_migration.rs` seeds through here.
+    /// What a Stage 0-2 node could leave in `<exe_dir>/blockchain_db_{port}`
+    /// (S3-P08 fixture shape — exactly the keys `storage::migrations`
+    /// reads): the `balances`/`chain`/`difficulty`/`contract_storage`
+    /// blobs plus `sender:nonce` mempool entries.
+    #[cfg(feature = "legacy-migrate")]
+    #[derive(Default)]
+    pub struct LegacySeed {
+        pub balances: std::collections::HashMap<String, AccountState>,
+        pub chain: Option<Vec<Block>>,
+        pub contract_storage: Option<crate::blockchain::state_cache::ContractStorageJson>,
+        pub difficulty: Option<u32>,
+        pub mempool_txs: Vec<Transaction>,
+    }
+
+    /// Seed a legacy LevelDB blob database the way a Stage 0 node left it
+    /// (Stage 0 `HashMap<String, u64>` balances + optional `chain` JSON
+    /// blobs) — S3-P08: the fixture of `tests/address_migration.rs`, kept
+    /// in the Stage-0 value shape on purpose (it exercises the dual-format
+    /// balances decode of the migration).
+    #[cfg(feature = "legacy-migrate")]
     pub fn seed_legacy_leveldb(
         path: &Path,
         balances: &std::collections::HashMap<String, u64>,
         chain: Option<&[Block]>,
     ) {
-        let legacy = crate::storage::legacy::LegacyStorage::new(path).expect("seed DB must open");
-        {
-            let db = legacy.db();
-            let mut db = db.lock().expect("seed DB lock");
+        let mut db = open_seed_db(path);
+        db.put(
+            b"balances",
+            &serde_json::to_vec(balances).expect("balances json"),
+        )
+        .expect("seed balances");
+        if let Some(chain) = chain {
+            db.put(b"chain", &serde_json::to_vec(chain).expect("chain json"))
+                .expect("seed chain");
+        }
+        finish_seed_db(db);
+    }
+
+    /// Seed every blob/mempool key of the full Stage 1-2 schema
+    /// (S3-P08 `tests/leveldb_migration.rs`).
+    #[cfg(feature = "legacy-migrate")]
+    pub fn seed_legacy_leveldb_full(path: &Path, seed: &LegacySeed) {
+        let mut db = open_seed_db(path);
+        if !seed.balances.is_empty() {
             db.put(
                 b"balances",
-                &serde_json::to_vec(balances).expect("balances json"),
+                &serde_json::to_vec(&seed.balances).expect("balances json"),
             )
             .expect("seed balances");
-            if let Some(chain) = chain {
-                db.put(b"chain", &serde_json::to_vec(chain).expect("chain json"))
-                    .expect("seed chain");
-            }
         }
-        // Drop flushes/closes the LevelDB handle so the open path can take it.
-        drop(legacy);
+        if let Some(chain) = &seed.chain {
+            db.put(b"chain", &serde_json::to_vec(chain).expect("chain json"))
+                .expect("seed chain");
+        }
+        if let Some(difficulty) = seed.difficulty {
+            db.put(
+                b"difficulty",
+                &serde_json::to_vec(&difficulty).expect("difficulty json"),
+            )
+            .expect("seed difficulty");
+        }
+        if let Some(contract_storage) = &seed.contract_storage {
+            db.put(
+                b"contract_storage",
+                &serde_json::to_vec(contract_storage).expect("contract_storage json"),
+            )
+            .expect("seed contract storage");
+        }
+        for tx in &seed.mempool_txs {
+            let key = format!("{}:{}", tx.sender(), tx.nonce()).into_bytes();
+            db.put(&key, &serde_json::to_vec(tx).expect("tx json"))
+                .expect("seed mempool tx");
+        }
+        finish_seed_db(db);
+    }
+
+    /// Raw handle for the legacy fixtures (S3-P08): `create_if_missing`
+    /// is on, so the fixture directory is created by `open`.
+    #[cfg(feature = "legacy-migrate")]
+    fn open_seed_db(path: &Path) -> rusty_leveldb::DB {
+        rusty_leveldb::DB::open(path, rusty_leveldb::Options::default()).expect("seed DB must open")
+    }
+
+    /// Durability barrier before the test hands the directory to the open
+    /// path — mirrors the old `LegacyStorage::drop` flush.
+    #[cfg(feature = "legacy-migrate")]
+    fn finish_seed_db(mut db: rusty_leveldb::DB) {
+        db.flush().expect("seed DB flush");
     }
 
     pub fn mine_current(blockchain: &BlockchainFacade) {
