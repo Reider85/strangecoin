@@ -20,6 +20,13 @@ jobs:
   build:
     name: Build (${{ matrix.os }}, ${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    # [GITHUB-P1] Dev tags (vX.Y.Z-dev.N, minted by prerelease.yml) must not
+    # trigger the full 6-platform release. GitHub Actions makes `tags` and
+    # `tags-ignore` mutually exclusive, so the exclusion lives here instead of
+    # the `on.push.tags` filter. Every downstream job (aggregate-hashes /
+    # provenance / sign / release) `needs` this one, so gating it gates the
+    # whole workflow; real vX.Y.Z tags are unaffected.
+    if: ${{ !contains(github.ref_name, '-dev.') }}
     strategy:
       fail-fast: false
       matrix:

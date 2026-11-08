@@ -1,0 +1,116 @@
+name: Pre-release
+
+# [GITHUB-P1] Auto pre-release on every push to master.
+#
+# Deviations from analytics/GITHUB.md P1 spec (documented explicitly per
+# FBP "deviations must be stated"):
+#   1. Spec says branch `main`; the repo default branch is `master`
+#      (origin/HEAD -> master, no refs/heads/main on origin) -> `master`.
+#   2. Spec's `workflow_run: workflow: CI, branch: main, conclusion: success`
+#      is not valid GitHub Actions syntax -> `workflows: ["CI"]` (matches the
+#      workflow `name:` field of ci.yml) + `branches: ["master"]` +
+#      `types: [completed]` + job-level `if` on conclusion/event.
+#   3. Spec's "tags: ['v*'] + tags-ignore: ['v*-dev.*']" is invalid (the two
+#      filters are mutually exclusive) -> release.yml keeps tags: ['v*'] and
+#      excludes dev tags with a job-level `if` on `build` (see release.yml);
+#      this workflow only ever mints -dev.* tags itself.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: ["master"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prerelease-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # env: does not shell-expand $GITHUB_WORKSPACE — expression context is
+  # required, otherwise --remap-path-prefix is a silent no-op (same as
+  # release.yml).
+  RUSTFLAGS: "--remap-path-prefix ${{ github.workspace }}=."
+
+jobs:
+  tag-and-release:
+    name: Tag and publish pre-release
+    runs-on: ubuntu-latest
+    # Deviation 2: only a green CI run caused by a push to master (not a PR
+    # run) may mint a dev tag; workflow_dispatch is the manual escape hatch.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.conclusion == 'success')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history + tags: next dev-number walks `git tag --list`.
+          fetch-depth: 0
+
+      - name: Compute next dev tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Step 1 (spec): next dev number from existing v*-dev.* tags.
+          last="$(git tag --list 'v*-dev.*' --sort=-v:refname | head -1 || true)"
+          if [ -z "$last" ]; then
+            n=1
+          else
+            n=$(( ${last##*-dev.} + 1 ))
+          fi
+          # Step 2 (spec): MAJOR.MINOR.PATCH from Cargo.toml.
+          ver="$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)"
+          echo "ver=${ver}" >> "$GITHUB_OUTPUT"
+          echo "n=${n}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${ver}-dev.${n}"
+          echo "Next pre-release tag: v${ver}-dev.${n}"
+
+      - name: Create and push annotated dev tag
+        shell: bash
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Step 3 (spec): annotated tag. Identity is set inline so the job
+          # does not depend on runner git config; the push uses the checkout
+          # persisted GITHUB_TOKEN credential.
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              tag -a "$TAG" -m "Automated pre-release ${TAG}"
+          git push origin "refs/tags/${TAG}"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary (single target)
+        # Step 4 (spec): fast single-target build, no LTO (LTO stays in
+        # release.yml).
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Rename binary
+        run: cp target/x86_64-unknown-linux-gnu/release/strangecoin strangecoin-linux-x86_64
+
+      - name: Generate checksum
+        run: shasum -a 256 strangecoin-linux-x86_64 > strangecoin-linux-x86_64.sha256
+
+      - name: Publish pre-release
+        # Step 5 (spec).
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          tag_name: ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          body: |
+            ⚠️ Automated dev build, not for production
+          files: |
+            strangecoin-linux-x86_64
+            strangecoin-linux-x86_64.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

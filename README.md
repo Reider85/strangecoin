@@ -4,7 +4,7 @@
 
 > **AI-agent orientation.** Strangecoin is engineered for autonomous economic agents: wallets are first-class agent identities (programmable key derivation, batched/sponsored txs, gasless UX via paymasters in Stage 5), the node exposes itself as an **MCP server** (tools: `get_block`, `get_balance`, `submit_tx`, `call_contract`, `subscribe_events`), and the protocol supports **ACP** (Agent Communication Protocol) messages so agents can negotiate, settle, and route payments peer-to-peer without a centralized coordinator. See [ADR-0028](docs/ADR/0028-strangecoin-as-cryptocurrency-for-ai-agents.md), [ADR-0029](docs/ADR/0029-mcp-server.md), [ADR-0030](docs/ADR/0030-acp-agent-communication-protocol.md), and the extension prompts in [`analytics/prompt-stage3.md`](analytics/prompt-stage3.md) §8.
 
-[![CI](https://github.com/Reider85/strangecoin/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Reider85/strangecoin/actions/workflows/ci.yml)
+[![CI](https://github.com/Reider85/strangecoin/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Reider85/strangecoin/actions/workflows/ci.yml)
 [![Release](https://github.com/Reider85/strangecoin/actions/workflows/release.yml/badge.svg)](https://github.com/Reider85/strangecoin/actions/workflows/release.yml)
 [![GitHub release](https://img.shields.io/github/v/release/Reider85/strangecoin?include_prereleases&label=version)](https://github.com/Reider85/strangecoin/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
