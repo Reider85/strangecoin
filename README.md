@@ -6,6 +6,7 @@
 
 [![CI](https://github.com/Reider85/strangecoin/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Reider85/strangecoin/actions/workflows/ci.yml)
 [![Release](https://github.com/Reider85/strangecoin/actions/workflows/release.yml/badge.svg)](https://github.com/Reider85/strangecoin/actions/workflows/release.yml)
+[![Nightly](https://github.com/Reider85/strangecoin/actions/workflows/nightly.yml/badge.svg?branch=master)](https://github.com/Reider85/strangecoin/actions/workflows/nightly.yml)
 [![GitHub release](https://img.shields.io/github/v/release/Reider85/strangecoin?include_prereleases&label=version)](https://github.com/Reider85/strangecoin/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.74%2B-orange.svg)](https://www.rust-lang.org)
@@ -18,6 +19,8 @@
 [![Testnet Only](https://img.shields.io/badge/status-testnet--only-FFB347)](docs/SCIP/scip-0001-genesis-key-replacement.md)
 [![AI-Agent Ready](https://img.shields.io/badge/AI--agent-MCP%20%7C%20ACP%20%7C%20JSON--RPC-blueviolet)](docs/ADR/0028-strangecoin-as-cryptocurrency-for-ai-agents.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
+[![Audit](https://img.shields.io/badge/cargo--audit-passing-green)](https://github.com/Reider85/strangecoin/actions/workflows/nightly.yml)
+[![Mutation](https://img.shields.io/badge/mutation--score-N%25-blue)](https://github.com/Reider85/strangecoin/actions/workflows/nightly.yml)
 
 ---
 

@@ -1,0 +1,30 @@
+# [GITHUB-P3] Dependabot: weekly cargo + github-actions update PRs
+# (analytics/GITHUB.md P3 item 4).
+#
+# PIN POLICY (AGENTS.md §Stage 2/3 Pin Policy): consensus / data-layout /
+# crypto dependencies are pinned with `=` and may only be bumped via SCIP +
+# activation height after mainnet freeze. Dependabot PRs against those crates
+# are proposals only — never auto-merge; manual review with the pin policy
+# applies (labels: [dependencies]).
+#
+# Deviation from spec: `/fuzz` is a separate Cargo workspace
+# (fuzz/Cargo.toml carries its own `[workspace]`) and is not covered by the
+# root `cargo` entry — the spec asks for exactly two ecosystems, so a
+# `directory: "/fuzz"` entry can be added later if desired.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies

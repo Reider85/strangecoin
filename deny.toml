@@ -1,0 +1,89 @@
+# cargo-deny configuration — [GITHUB-P3] (deviation 3: the P3 spec's
+# "Файлы для правки" list does not include this file, but the spec's own
+# `audit` job runs `cargo deny check`, which requires a config; the license
+# allow-list below was tuned against a green local
+# `cargo deny check advisories bans licenses sources`).
+
+[graph]
+all-features = false
+
+[advisories]
+# yanked crate = warning, not failure (clipboard-win 5.4.1 via the eframe
+# GUI stack; fixed only by an eframe-adjacent update campaign).
+yanked = "warn"
+# [GITHUB-P3] BASELINE IGNORES — pre-existing findings in Cargo.lock at the
+# time this config was introduced (2026-11-09, GITHUB.md P3), approved by
+# the maintainer as a baseline: the nightly `audit` job must be green for
+# KNOWN findings while any NEW RUSTSEC advisory still fails it (signal
+# preserved). Removal obligation = follow-up dependency-update prompt:
+#   - fixable via `cargo update`: bytes(0007), tokio(0386), rand(0097),
+#     zstd/zstd-safe(0391/0398/0403);
+#   - pinned dev-only: wasmtime 49.0.3 =49.0.3 (0378/0379/0422/0423/0424);
+#   - no fix without eframe 0.22 stack upgrade: webbrowser(0257),
+#     derivative(0388), instant(0384), paste(0436), ttf-parser(0192),
+#     zbus_names(0371), zvariant(0370/0372).
+# The mirror list for `cargo audit` lives in .github/workflows/nightly.yml
+# (cargo-audit does not read this file).
+ignore = [
+    "RUSTSEC-2024-0384", # instant — unmaintained, eframe stack
+    "RUSTSEC-2024-0388", # derivative — unmaintained, zbus stack
+    "RUSTSEC-2024-0436", # paste — unmaintained, accesskit stack
+    "RUSTSEC-2026-0007", # bytes — vuln, fixable via cargo update
+    "RUSTSEC-2026-0097", # rand — unsound, fixable via cargo update
+    "RUSTSEC-2026-0192", # ttf-parser — unmaintained, egui font stack
+    "RUSTSEC-2026-0257", # webbrowser — vuln, fix needs eframe upgrade
+    "RUSTSEC-2026-0370", # zvariant — unmaintained, zbus stack
+    "RUSTSEC-2026-0371", # zbus_names — unmaintained, zbus stack
+    "RUSTSEC-2026-0372", # zvariant_derive — unmaintained, zbus stack
+    "RUSTSEC-2026-0378", # wasmtime — dev-only pin =49.0.3
+    "RUSTSEC-2026-0379", # wasmtime — dev-only pin =49.0.3 (critical)
+    "RUSTSEC-2026-0386", # tokio — unsound, fixable via cargo update
+    "RUSTSEC-2026-0391", # zstd — dev-only (wasmtime cache)
+    "RUSTSEC-2026-0398", # zstd-safe — dev-only (wasmtime cache)
+    "RUSTSEC-2026-0403", # zstd-safe — dev-only (wasmtime cache)
+    "RUSTSEC-2026-0422", # wasmtime — dev-only pin =49.0.3
+    "RUSTSEC-2026-0423", # wasmtime — dev-only pin =49.0.3
+    "RUSTSEC-2026-0424", # wasmtime — dev-only pin =49.0.3
+]
+
+[licenses]
+# Dual-licensed crates are satisfied when ANY side of `OR` is allowed.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "CC0-1.0",
+    "0BSD",
+    "MIT-0",
+    "Unlicense",
+    "Unicode-3.0",
+    # epaint 0.22 (egui font stack) is "(MIT OR Apache-2.0) AND OFL-1.1
+    # AND LicenseRef-UFL-1.0" — OFL-1.1 is a real SPDX license, the
+    # non-SPDX UFL part is granted per-crate below.
+    "OFL-1.1",
+]
+
+# LicenseRef-UFL-1.0 is not an SPDX id, so it can only be allowed as a
+# per-crate exception (epaint -> egui -> eframe GUI stack).
+[[licenses.exceptions]]
+crate = "epaint"
+allow = ["LicenseRef-UFL-1.0"]
+
+[bans]
+# Duplicate semver-incompatible versions (windows-sys, syn, ...) are common
+# in a workspace this size — warn, never deny, per deviation note in the
+# nightly.yml header.
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

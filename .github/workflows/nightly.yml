@@ -1,0 +1,333 @@
+name: Nightly
+
+# [GITHUB-P3] Nightly: fuzz / cross-build / audit / mutation / miri — heavy &
+# fragile checks off the push badge (analytics/GITHUB.md P3, cron 04:00 UTC).
+#
+# Deviations from the P3 spec (documented explicitly per FBP "deviations must
+# be stated"):
+#   1. Spec says branch `main`; the repo default branch is `master`
+#      (origin/HEAD -> master — same deviation as ci.yml / prerelease.yml).
+#      `schedule` / `workflow_dispatch` are branch-agnostic; only the README
+#      badge URL follows `master`.
+#   2. Spec says `cargo install <tool> --locked` (source build ~2-6 min per
+#      job) -> taiki-e/install-action ships prebuilt binaries in seconds
+#      (P2 deviation-4 precedent) for cargo-audit / cargo-deny / cargo-mutants
+#      (all three verified present in install-action TOOLS.md, 2026-11-09).
+#      cargo-fuzz is NOT on that list -> stays spec-literal with the spec's
+#      pin: `cargo install cargo-fuzz --locked --version 0.13.2`.
+#   3. `cargo deny check` requires a config file; the repo had none -> new
+#      `deny.toml` at the workspace root (not in the spec's "Файлы для
+#      правки" list, but required by the spec's own `audit` job; the license
+#      allow-list was tuned against a green local run).
+#   4. Mutation artifact: cargo-mutants writes `mutants.out/` (actual tool
+#      behavior); the spec writes `mutants-out/` — actual path used.
+#   5. Spec item 2 ("remove fuzz from ci.yml") needs no edit: the fuzz job
+#      was already moved out in P2 (ci.yml deviation 2: "removed here;
+#      returns in P3's nightly.yml").
+#   6. Spec's "matrix {ubuntu, macos, windows} × {stable} + aarch64 cross"
+#      is read as the full 6-cell matrix mirroring release.yml (3 OS ×
+#      x86_64 native; macOS aarch64 is native on macos-latest; linux and
+#      windows aarch64 are true cross builds).
+#   7. continue-on-error: set on aarch64-pc-windows-msvc per spec, and also
+#      on fuzz / mutation / miri per the same spec bullets (nightly crashes
+#      are signals, not blockers). The `audit` job stays blocking — the spec
+#      does not exempt it — and was verified green locally against deny.toml.
+#   8. RUSTSEC baseline (user-approved, 2026-11-09): Cargo.lock carries
+#      10 pre-existing vulnerabilities + ~20 unmaintained/unsound/yanked
+#      findings (all predating P3; see deny.toml [advisories].ignore for
+#      the full rationale). cargo-deny reads deny.toml; cargo-audit does NOT
+#      -> the 10 vulnerability IDs are passed here as repeated `--ignore`
+#      flags (cargo-audit's warnings do not fail the run by default).
+#      NEW advisories still fail both steps — the signal is preserved.
+#      Removal obligation = follow-up dependency-update prompt.
+#   9. Spec item 5 (enable CodeQL) is a repo-settings toggle (Settings ->
+#      Code security -> CodeQL, Rust); no `gh` CLI on the dev host and the
+#      spec's file list contains no CodeQL workflow -> manual step for the
+#      maintainer after merge, not encoded here.
+
+on:
+  schedule:
+    - cron: '0 4 * * *' # 04:00 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write # SARIF upload (audit job, spec item 1)
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }} (30 min)
+    runs-on: ubuntu-latest
+    # Spec: nightly crashes are a signal, not a blocker — never fail the
+    # Nightly badge from the fuzz matrix.
+    continue-on-error: true
+    # 30 min run + up to ~35 min for the pinned cargo-fuzz source install
+    # and a cold fuzz-workspace build (wasmtime) on the first nightly.
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        # S1.5-P16: canonical decode + four VM targets; S2-P21: + four
+        # network targets — 9 targets total (moved out of ci.yml in P2).
+        target:
+          - canonical_decode
+          - host_functions
+          - gas_metering
+          - storage_trie
+          - differential_wasmi_vs_wasmtime
+          - noise_handshake
+          - gossip_inv
+          - compact_blocks_fill_up
+          - erlay_reconciliation
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            fuzz
+
+      # Deviation 2: cargo-fuzz is absent from install-action TOOLS.md ->
+      # spec-literal source install with the spec's version pin (identical
+      # to the job removed from ci.yml in P2).
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version 0.13.2
+
+      # Spec: 1800 s (30 min) per target with a 4096 MB RSS cap (the old
+      # ci.yml run was 600 s / 2560 MB — the low cap OOM'd
+      # differential_wasmi_vs_wasmtime on the 7 GB standard runner).
+      - name: Run ${{ matrix.target }} fuzz (1800s)
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=1800 -rss_limit_mb=4096
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}-artifacts
+          path: fuzz/artifacts/
+          retention-days: 30
+          if-no-files-found: ignore
+
+  cross-build:
+    name: Build (${{ matrix.os }}, ${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    # Spec item: only aarch64-pc-windows-msvc may fail without failing the
+    # workflow (matrix flag; the `strategy` context is available to
+    # job-level `continue-on-error`).
+    continue-on-error: ${{ matrix.allow_failure == true }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: nightly-linux-x86_64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: nightly-linux-aarch64
+            cross: true
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: nightly-macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: nightly-macos-aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: nightly-windows-x86_64
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact: nightly-windows-aarch64
+            cross: true
+            # Spec: the historically fragile Windows aarch64 cross cell
+            # (choco llvm / LIBCLANG churn) must not paint the badge.
+            allow_failure: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # Cross tooling identical to release.yml (same cells, same flags).
+      - name: Install cross-compilation tools (Linux aarch64)
+        if: matrix.cross && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Install cross-compilation tools (Windows aarch64)
+        if: matrix.cross && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          rustup target add aarch64-pc-windows-msvc
+          echo "Installing LLVM/Clang for aarch64 cross-compilation..."
+          choco install llvm -y --no-progress
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Rename binary (Unix)
+        if: runner.os != 'Windows'
+        run: cp target/${{ matrix.target }}/release/strangecoin ${{ matrix.artifact }}
+
+      - name: Rename binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Copy-Item "target/${{ matrix.target }}/release/strangecoin.exe" "${{ matrix.artifact }}.exe"
+
+      - name: Upload artifact (Unix)
+        if: runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  audit:
+    name: Audit (cargo-audit + cargo-deny)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Deviation 2: prebuilt binaries instead of `cargo install --locked`.
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      # First pass in human format so a red run has a readable log.
+      - name: cargo deny (advisories + bans + licenses + sources)
+        run: cargo deny check advisories bans licenses sources
+
+      # SARIF report for GitHub code scanning (spec item 1). cargo-deny 0.20
+      # exposes -f/--format as a GLOBAL flag and has no --output-file (both
+      # verified against cargo-deny 0.20.2 locally) -> shell redirect. Runs
+      # with if: always() so the report exists even when the pass above or
+      # cargo-audit below fails.
+      - name: cargo deny SARIF report
+        if: always()
+        run: cargo deny --format sarif check advisories bans licenses sources > deny.sarif
+
+      - name: cargo audit (RUSTSEC advisories)
+        if: always()
+        # Baseline ignores (deviation 8): the 10 pre-existing vulnerabilities
+        # in Cargo.lock — cargo-audit does not read deny.toml, so the IDs are
+        # repeated here. Warnings (unmaintained/unsound/yanked) do not fail
+        # cargo-audit by default. A NEW vulnerability still fails this step.
+        run: >
+          cargo audit
+          --ignore RUSTSEC-2026-0007
+          --ignore RUSTSEC-2026-0378
+          --ignore RUSTSEC-2026-0379
+          --ignore RUSTSEC-2026-0422
+          --ignore RUSTSEC-2026-0423
+          --ignore RUSTSEC-2026-0424
+          --ignore RUSTSEC-2026-0257
+          --ignore RUSTSEC-2026-0391
+          --ignore RUSTSEC-2026-0398
+          --ignore RUSTSEC-2026-0403
+
+      # `security-events: write` comes from the workflow-level permissions;
+      # hashFiles guard skips the step when no report was produced, and
+      # continue-on-error keeps code-scanning-off repos from failing audit.
+      - name: Upload SARIF to code scanning
+        if: always() && hashFiles('deny.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: deny.sarif
+          category: cargo-deny
+
+  mutation:
+    name: Mutation testing (cargo-mutants)
+    runs-on: ubuntu-latest
+    # Spec: mutation score is a signal, not a blocker.
+    continue-on-error: true
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Deviation 2: prebuilt binary instead of `cargo install --locked`.
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Spec: -j 4, --in-place, 50-minute cap (step-level timeout), job-level
+      # continue-on-error above.
+      - name: Run cargo mutants
+        timeout-minutes: 50
+        run: cargo mutants --workspace -j 4 --in-place
+
+      # Deviation 4: actual cargo-mutants output directory is `mutants.out/`.
+      - name: Upload mutants report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-out
+          path: mutants.out/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  miri:
+    name: Miri (vm-wasm + storage)
+    runs-on: ubuntu-latest
+    # Spec marks miri "(опционально)" — included per user decision.
+    # Known limitation (documented, user-approved): strangecoin-storage
+    # tests go through the rocksdb FFI, which Miri cannot execute — the job
+    # is a signal-only run and never blocks the Nightly badge.
+    continue-on-error: true
+    timeout-minutes: 60
+    env:
+      MIRIFLAGS: -Zmiri-disable-isolation
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: "cargo miri test (spec-literal: vm-wasm + storage)"
+        run: cargo +nightly miri test -p strangecoin-vm-wasm -p strangecoin-storage
