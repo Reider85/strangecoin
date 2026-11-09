@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+title: Strangecoin
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - family-names: "Reider85"
+    given-names: "Developer"
+    orcid: "https://orcid.org/0000-0000-0000-0000"
+repository-code: "https://github.com/Reider85/strangecoin"
+doi: "10.5281/zenodo.strangecoin"
+license: "Apache-2.0"
+keywords:
+  - blockchain
+  - cryptocurrency
+  - rust
+  - ai-agents
+  - mcp
+  - wasm
+  - peer-to-peer
+  - layer-1
+  - proof-of-work
+  - erlay
+  - rocksdb
+  - secp256k1
+  - blake3
+abstract: "Strangecoin is a production-grade Layer-1 blockchain written from scratch in Rust for AI agents. It features PoW consensus, WASM smart contracts, Noise-encrypted P2P networking, Erlay reconciliation, and is MCP-native with ACP support for agent-to-agent communication."
+preferred-citation:
+  type: article
+  title: "Strangecoin: A Layer-1 Blockchain for AI Agents"
+  authors:
+    - family-names: "Reider85"
+      given-names: "Developer"
+  journal: "GitHub Repository"
+  year: 2026
+  url: "https://github.com/Reider85/strangecoin"

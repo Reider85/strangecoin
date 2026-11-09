@@ -1,0 +1,57 @@
+# Social Preview Image
+
+This directory should contain the social preview image for GitHub repository display.
+
+## Requirements
+
+- **Dimensions**: 1280 × 640 pixels (16:8 aspect ratio)
+- **Format**: PNG
+- **File Name**: `social-preview.png`
+- **Purpose**: Used as the repository preview image on GitHub, social media shares, and other platforms
+
+## Design Guidelines
+
+### Visual Elements
+- **Logo**: Strangecoin logo (if available)
+- **Background**: Clean, professional background representing blockchain/AI theme
+- **Typography**: Clear, readable project name and tagline
+- **Color Scheme**: Consistent with project branding (blues, greens, tech colors)
+
+### Content
+- **Primary Text**: "Strangecoin" in large, bold font
+- **Secondary Text**: "Production-grade Layer-1 blockchain for AI agents" in smaller font
+- **Visual Elements**: Abstract representation of blockchain/AI concepts (nodes, connections, etc.)
+
+### Technical Requirements
+- **File Size**: Keep under 500KB for fast loading
+- **Color Profile**: sRGB for consistent display
+- **Text Contrast**: Ensure text is readable on both light and dark backgrounds
+- **Safe Areas**: Keep important text away from edges (leave 10% margin)
+
+## Creation Instructions
+
+To create this image:
+
+1. Use design tools like:
+   - Figma (free, web-based)
+   - Adobe Photoshop
+   - GIMP (free, open-source)
+   - Canva (free templates available)
+
+2. Follow the design guidelines above
+
+3. Save as `social-preview.png` in this directory
+
+4. Upload to GitHub repository:
+   ```bash
+   # Upload via GitHub CLI (requires authentication)
+   gh api -X PUT repos/Reider85/strangecoin/social-preview -F image=@assets/social-preview.png
+   ```
+
+## Placeholder
+
+This file serves as a placeholder until the actual image is created. The actual image should be a professional-looking preview that represents the project's blockchain and AI agent focus.
+
+---
+
+**Note**: This image is critical for GitHub repository presentation and social media sharing. A professional-looking preview significantly increases click-through rates and project visibility.

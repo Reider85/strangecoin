@@ -1,0 +1,68 @@
+# Strangecoin Documentation Site
+
+This is the documentation site for Strangecoin, built with mdBook and hosted on GitHub Pages.
+
+## Building the Documentation
+
+To build the documentation locally:
+
+```bash
+# Install mdBook
+cargo install mdbook
+
+# Build the documentation
+cd gh-pages
+mdbook build
+
+# Serve the documentation locally
+mdbook serve
+```
+
+## Structure
+
+```
+gh-pages/
+├── index.md              # Main documentation page
+├── README.md             # Project README
+├── analytics/            # Architecture and planning docs
+│   └── ARCHITECT3.md     # Comprehensive architecture guide
+└── book.toml            # mdBook configuration
+```
+
+## Configuration
+
+The documentation is configured in `book.toml`:
+
+```toml
+[book]
+title = "Strangecoin Documentation"
+description = "Production-grade Layer-1 blockchain in Rust for AI agents"
+authors = ["Reider85"]
+language = "en"
+
+[build]
+build-dir = "book"
+
+[output.html]
+site-url = "/strangecoin/"
+edit-url = "https://github.com/Reider85/strangecoin/edit/master/docs/"
+```
+
+## Deployment
+
+The documentation is automatically deployed to GitHub Pages when changes are pushed to the `gh-pages` branch.
+
+## Contributing
+
+To contribute to the documentation:
+
+1. Edit the appropriate markdown files
+2. Commit your changes to the `gh-pages` branch
+3. The documentation will be automatically built and deployed
+
+## Links
+
+- **GitHub Repository**: https://github.com/Reider85/strangecoin
+- **GitHub Pages**: https://reider85.github.io/strangecoin/
+- **Issues**: https://github.com/Reider85/strangecoin/issues
+- **Discussions**: https://github.com/Reider85/strangecoin/discussions

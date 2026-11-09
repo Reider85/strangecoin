@@ -1,0 +1,110 @@
+name: Configuration Issue
+description: Report issues with configuration, build, or deployment
+title: "[CONFIG] "
+labels: ["configuration"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a configuration issue! Please help us understand the problem.
+
+  - type: textarea
+    id: config-issue
+    attributes:
+      label: Configuration Issue Description
+      description: A clear and concise description of the configuration issue
+      placeholder: Describe the configuration problem in detail...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: issue-type
+    attributes:
+      label: Issue Type
+      description: What type of configuration issue are you experiencing?
+      options:
+        - Build/Compilation
+        - Runtime Configuration
+        - Network Configuration
+        - Docker/Kubernetes
+        - CI/CD Pipeline
+        - Documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the configuration issue
+      placeholder: |
+        1. Set up environment with...
+        2. Configure settings like...
+        3. Run command '...'
+        4. See error or unexpected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected Behavior
+      description: What should happen with the correct configuration
+      placeholder: What configuration behavior did you expect?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: Actual Behavior
+      description: What actually happened with the configuration
+      placeholder: What configuration behavior actually occurred?
+    validations:
+      required: true
+
+  - type: textarea
+    id: configuration-files
+    attributes:
+      label: Configuration Files
+      description: Relevant configuration files or settings
+      placeholder: Paste your config.toml, docker-compose.yml, or other relevant config here
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment-details
+    attributes:
+      label: Environment Details
+      description: Environment and system information
+      placeholder: |
+        - OS: [e.g. Ubuntu 22.04, macOS 13.0, Windows 11]
+        - Rust version: [e.g. 1.74.0]
+        - Strangecoin version: [e.g. v2.0.0-stage2]
+        - Docker version: [if applicable]
+        - Cloud provider: [if applicable]
+    validations:
+      required: true
+
+  - type: textarea
+    id: error-messages
+    attributes:
+      label: Error Messages and Logs
+      description: Any error messages, stack traces, or logs
+      placeholder: Paste error messages, logs, or stack traces here
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Checklist
+      description: Please confirm the following
+      options:
+        - label: I have checked the [documentation](../blob/master/README.md) for configuration instructions
+          required: true
+        - label: I have searched existing issues to see if this configuration issue has been reported
+          required: true
+        - label: I am using the latest stable version of Strangecoin
+          required: true
