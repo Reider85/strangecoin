@@ -4100,7 +4100,7 @@ dependencies = [
  "strangecoin-net",
  "strangecoin-storage",
  "strangecoin-vm-wasm",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
  "tokio",
  "toml 0.5.11",
  "tracing",
@@ -4122,7 +4122,7 @@ dependencies = [
  "secp256k1",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4141,7 +4141,7 @@ dependencies = [
  "siphasher",
  "snow",
  "strangecoin-core",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -4155,7 +4155,7 @@ dependencies = [
  "rocksdb",
  "serde",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
@@ -4169,7 +4169,7 @@ dependencies = [
  "secp256k1",
  "sha2",
  "strangecoin-core",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
  "tiny-keccak",
  "wasmi",
  "wasmtime",
