@@ -1,0 +1,99 @@
+name: Star monitor
+
+# [GITHUB-P5] Hourly stargazer/forks/issues snapshot ->
+# analytics/stargazer-history.csv (analytics/GITHUB.md P5, item 3).
+#
+# Deviations from the P5 spec (documented explicitly per FBP "deviations must
+# be stated"):
+#   1. Spec says branch `main`; the repo default branch is `master` (same
+#      deviation as ci.yml / prerelease.yml / nightly.yml). `schedule` is
+#      branch-agnostic and always runs from the default branch.
+#   2. Spec fetches stargazers_count, forks_count AND open_issues_count but
+#      defines a 4-column CSV (date,count,delta_24h,delta_7d) with no storage
+#      for the latter two -> CSV widened to 6 columns
+#      (date,count,delta_24h,delta_7d,forks,open_issues); the header plus a
+#      baseline row are seeded in the same commit as this workflow.
+#   3. delta_24h / delta_7d are pure row-distance arithmetic over the CSV
+#      (newest row vs the row 24 / 168 positions older); when fewer rows
+#      exist the oldest available row is used (delta vs baseline) and a
+#      single data row yields 0. No wall clock enters the deltas — the file
+#      is fully reproducible from its own contents (Stage 3 determinism
+#      checklist: derived data only).
+#   4. Spec's `chore(stars): hourly snapshot NNNN`: NNNN = zero-padded
+#      `github.run_number` (monotonic per workflow).
+#   5. The auto-commit pushes with the default GITHUB_TOKEN
+#      (stefanzweifel/git-auto-commit-action@v5 default) — GitHub does NOT
+#      start new workflow runs for GITHUB_TOKEN pushes: no CI run, no
+#      prerelease minting (P1), no self-recursion. The spec's side effect
+#      ("hourly commit -> repo looks active in Explore") still holds; the
+#      release-per-push loop is broken by platform behavior, not by a
+#      ci.yml paths-ignore (which would have been outside the P5 file list).
+#      Hourly commits therefore do NOT paint the CI badge and do NOT create
+#      24 dev pre-releases a day.
+
+on:
+  schedule:
+    - cron: '0 * * * *' # hourly, spec item 3
+  workflow_dispatch: # manual snapshot (testing / first-row bootstrap)
+
+permissions:
+  contents: write # auto-commit the appended CSV row
+
+concurrency:
+  group: star-monitor
+  cancel-in-progress: false # never cancel a mid-push snapshot
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  snapshot:
+    name: Hourly star snapshot
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch counters and append CSV row
+        shell: bash
+        run: |
+          set -euo pipefail
+          csv="analytics/stargazer-history.csv"
+          if [ ! -f "$csv" ]; then
+            echo "::error::${csv} is missing (seed commit lost?)"
+            exit 1
+          fi
+
+          # Spec item 3: one gh api call for the three counters.
+          IFS=$'\t' read -r stars forks issues < <(
+            gh api "repos/${{ github.repository }}" \
+              --jq '[.stargazers_count, .forks_count, .open_issues_count] | @tsv'
+          )
+          case "${stars}" in (''|*[!0-9]*)
+            echo "::error::unexpected stargazers_count: '${stars}'"
+            exit 1
+          ;; esac
+
+          # delta_24h: row 24 positions older than the newest data row.
+          # `tail -n 25 | head -n 1` over data rows falls back to the oldest
+          # row when fewer than 24 exist (deviation 3), empty -> 0.
+          delta_of() {
+            local back="$1" old
+            old="$(tail -n +2 "$csv" | cut -d, -f2 | tail -n "$((back + 1))" | head -n 1 || true)"
+            if [ -z "$old" ]; then echo 0; else echo $((stars - old)); fi
+          }
+          delta24="$(delta_of 24)"
+          delta7="$(delta_of 168)"
+
+          now="$(date -u +%Y-%m-%dT%H:%MZ)"
+          echo "${now},${stars},${delta24},${delta7},${forks},${issues}" >> "$csv"
+          echo "Appended: ${now} count=${stars} delta_24h=${delta24} delta_7d=${delta7} forks=${forks} open_issues=${issues}"
+
+      - name: Commit and push CSV snapshot
+        # Spec item 3: git-auto-commit-action@v5, message with snapshot
+        # number (deviation 4). Only the CSV is ever staged (file_pattern),
+        # so a concurrent edit elsewhere in the tree cannot ride along.
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(stars): hourly snapshot ${{ github.run_number }}"
+          file_pattern: analytics/stargazer-history.csv

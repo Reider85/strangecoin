@@ -1,0 +1,112 @@
+name: Star alert
+
+# [GITHUB-P5] Discord alert when star-monitor's last snapshot shows
+# delta_24h >= 10 (analytics/GITHUB.md P5, item 6).
+#
+# Deviations from the P5 spec (documented explicitly per FBP "deviations must
+# be stated"):
+#   1. Spec says "при срабатывании star-monitor.yml" without naming the
+#      mechanism -> `workflow_run` on the `Star monitor` workflow completion
+#      (same pattern prerelease.yml uses on CI) + `workflow_dispatch` as a
+#      manual escape hatch.
+#   2. The `delta_24h >= 10` threshold is enforced only on workflow_run; a
+#      manual `workflow_dispatch` always sends (labeled [TEST]) — otherwise
+#      the acceptance criterion "тестовое срабатывание триггера" is
+#      unreachable while the repo has a single star.
+#   3. The `secrets` context is not usable in a job-level `if` ->
+#      DISCORD_WEBHOOK_URL is passed through `env` and inspected inside
+#      github-script; a missing secret -> core.notice + graceful skip (the
+#      webhook is a manual repo secret, GITHUB.md §9).
+#   4. Spec item 6 text is used verbatim for the alert body
+#      (emoji + Trending link); the [TEST] variant carries the same link with
+#      a test marker and the current star count.
+
+on:
+  workflow_run:
+    workflows: ["Star monitor"] # `name:` field of star-monitor.yml
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read # read analytics/stargazer-history.csv
+
+concurrency:
+  group: star-alert
+  cancel-in-progress: false
+
+jobs:
+  alert:
+    name: Discord star alert
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Deviation 1: only a successful star-monitor run may fire the
+    # threshold alert; workflow_dispatch is the manual test path.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read last snapshot row
+        id: snap
+        shell: bash
+        run: |
+          set -euo pipefail
+          csv="analytics/stargazer-history.csv"
+          if [ ! -f "$csv" ]; then
+            echo "::error::${csv} is missing"
+            exit 1
+          fi
+          # csv: date,count,delta_24h,delta_7d,forks,open_issues
+          last="$(tail -n 1 "$csv")"
+          count="$(printf '%s' "$last" | cut -d, -f2)"
+          delta24="$(printf '%s' "$last" | cut -d, -f3)"
+          echo "count=${count}" >> "$GITHUB_OUTPUT"
+          echo "delta24=${delta24}" >> "$GITHUB_OUTPUT"
+          echo "Last snapshot row: ${last}"
+
+      - name: Send Discord alert
+        uses: actions/github-script@v7
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          COUNT: ${{ steps.snap.outputs.count }}
+          DELTA24: ${{ steps.snap.outputs.delta24 }}
+          MODE: ${{ github.event_name }}
+        with:
+          script: |
+            const url = process.env.DISCORD_WEBHOOK_URL;
+            if (!url) {
+              core.notice(
+                'DISCORD_WEBHOOK_URL secret is not set — skipping Discord alert. ' +
+                'Add it in Settings -> Secrets and variables -> Actions (GITHUB.md §9).'
+              );
+              return;
+            }
+            const count = process.env.COUNT || '?';
+            let delta = Number.parseInt(process.env.DELTA24 ?? '0', 10);
+            if (Number.isNaN(delta)) delta = 0;
+            const manual = process.env.MODE === 'workflow_dispatch';
+
+            // Deviation 2: threshold only on the cron-driven path.
+            if (!manual && delta < 10) {
+              core.notice(`delta_24h=${delta} < 10 — no alert needed.`);
+              return;
+            }
+            const content = manual
+              ? `[TEST] Strangecoin star alert — current ${count} stars ` +
+                `(last delta_24h=${delta}). ` +
+                `Trending: https://github.com/trending/rust?since=daily`
+              : `🚀 Strangecoin +${delta} stars in 24h! ` +
+                `Check Trending: https://github.com/trending/rust?since=daily ` +
+                `(now ${count} stars)`;
+
+            const res = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ content }),
+            });
+            if (!res.ok) {
+              core.setFailed(`Discord webhook returned HTTP ${res.status}`);
+              return;
+            }
+            core.notice(`Discord alert sent (HTTP ${res.status}).`);

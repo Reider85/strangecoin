@@ -114,3 +114,69 @@ jobs:
             strangecoin-linux-x86_64.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # [GITHUB-P5] Spec item 2: release-notes-enrichment — after the
+      # pre-release is published, ping Discord (if the DISCORD_WEBHOOK_URL
+      # secret exists) and record the repo counters into
+      # analytics/stargazer-history.json for z-score analysis. Deviations
+      # from the P5 spec (documented explicitly per FBP):
+      #   a. The spec names the step but not the commit-back; without a push
+      #      the JSON record would evaporate with the runner -> commit +
+      #      push under github-actions[bot]. The push uses GITHUB_TOKEN, so
+      #      GitHub does not start new workflow runs for it (no CI, no
+      #      recursive prerelease minting) — same platform behavior as
+      #      star-monitor.yml deviation 5.
+      #   b. `git pull --rebase` before the push so a concurrent hourly
+      #      star-monitor CSV commit cannot make the push non-fast-forward.
+      #   c. A failed Discord ping is a warning, not a failure: the release
+      #      itself is already published and DISCORD_WEBHOOK_URL is a
+      #      manual secret (GITHUB.md §9) that may legitimately be absent.
+      - name: release-notes-enrichment
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          repo="${{ github.repository }}"
+          now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          # 1. Discord ping (spec: "пинговать Discord webhook (если есть)").
+          if [ -n "${DISCORD_WEBHOOK_URL:-}" ]; then
+            if ! curl -fsS -X POST -H 'Content-Type: application/json' \
+                -d "{\"content\":\"🚀 ${TAG} pre-release is out — https://github.com/${repo}/releases/tag/${TAG} (⚠️ automated dev build, not for production)\"}" \
+                "${DISCORD_WEBHOOK_URL}"; then
+              echo "::warning::Discord ping failed (non-fatal)"
+            fi
+          else
+            echo "DISCORD_WEBHOOK_URL not set — skipping Discord ping (add it in Settings -> Secrets and variables -> Actions)"
+          fi
+
+          # 2. Record counters (spec: gh api ... --jq '.stargazers_count';
+          #    forks/issues added for the same reason as star-monitor
+          #    deviation 2 — they are fetched, so they are stored).
+          IFS=$'\t' read -r stars forks issues < <(
+            gh api "repos/${repo}" \
+              --jq '[.stargazers_count, .forks_count, .open_issues_count] | @tsv'
+          )
+          file="analytics/stargazer-history.json"
+          record="$(jq -cn \
+            --arg date "${now}" --arg tag "${TAG}" \
+            --argjson stars "${stars}" --argjson forks "${forks}" --argjson issues "${issues}" \
+            '{date:$date, tag:$tag, stargazers_count:$stars, forks_count:$forks, open_issues_count:$issues}')"
+          if [ -s "${file}" ]; then
+            jq --argjson rec "${record}" '. + [$rec]' "${file}" > "${file}.tmp"
+            mv "${file}.tmp" "${file}"
+          else
+            printf '[%s]\n' "${record}" > "${file}"
+          fi
+          echo "Recorded ${record}"
+
+          # 3. Commit back (deviation a/b).
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git add "${file}"
+          git commit -m "chore(stars): record counters for ${TAG}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
