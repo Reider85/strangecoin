@@ -20,7 +20,7 @@ description = "Strangecoin storage crate: StorageEngine trait, versioned key sch
 # provided by the msys64 mingw-w64-x86_64-clang-libs package).
 rocksdb = { version = "=0.25.0", optional = true }
 # Error enum convention matches strangecoin-core / strangecoin-net (NetError).
-thiserror = "1"
+thiserror = "2"
 tracing = "0.1"
 # Snapshot manifest types only (ADR-0026 optional JSON sidecar, S3-P13) —
 # NEVER for hot-path encoding: blocks/state/txs go through canonical binary
