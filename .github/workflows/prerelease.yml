@@ -14,6 +14,15 @@ name: Pre-release
 #      filters are mutually exclusive) -> release.yml keeps tags: ['v*'] and
 #      excludes dev tags with a job-level `if` on `build` (see release.yml);
 #      this workflow only ever mints -dev.* tags itself.
+#
+# [GITHUB-P06] Hybrid runners: `tag-and-release` reads the repo variable
+# RUNS_ON (JSON label array). Unset -> ubuntu-latest + linux artifact as
+# before; set -> the local self-hosted Windows runner, and the build step
+# switches to a native windows-x86_64 artifact (strangecoin-windows-x86_64
+# .exe/.sha256 — the Linux cross-build cannot run on the Windows runner).
+# Tag minting, release publishing and the P5 enrichment step are
+# shell-portable and run identically on both. See
+# .github/SELF_HOSTED_RUNNERS.md.
 
 on:
   workflow_run:
@@ -39,7 +48,8 @@ env:
 jobs:
   tag-and-release:
     name: Tag and publish pre-release
-    runs-on: ubuntu-latest
+    # [GITHUB-P06] unset -> ubuntu-latest; set -> local self-hosted labels.
+    runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
     # Deviation 2: only a green CI run caused by a push to master (not a PR
     # run) may mint a dev tag; workflow_dispatch is the manual escape hatch.
     if: >-
@@ -86,19 +96,44 @@ jobs:
           git push origin "refs/tags/${TAG}"
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # [GITHUB-P06] local runner pins the gnu-flavor toolchain (the dev
+          # machine has no MSVC); GitHub-hosted keeps plain `stable`.
+          toolchain: ${{ vars.RUNS_ON && 'stable-x86_64-pc-windows-gnu' || 'stable' }}
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build release binary (single target)
-        # Step 4 (spec): fast single-target build, no LTO (LTO stays in
-        # release.yml).
-        run: cargo build --release --target x86_64-unknown-linux-gnu
+      # Step 4 (spec): fast single-target build, no LTO (LTO stays in
+      # release.yml). [GITHUB-P06] split by runner: GitHub-hosted keeps the
+      # linux-x86_64 target; the local Windows runner builds the host triple
+      # (no Linux cross toolchain there) and emits a windows-x86_64 artifact.
+      - name: Build release binary (Linux host)
+        if: runner.os != 'Windows'
+        run: |
+          cargo build --release --target x86_64-unknown-linux-gnu
+          cp target/x86_64-unknown-linux-gnu/release/strangecoin strangecoin-linux-x86_64
+          shasum -a 256 strangecoin-linux-x86_64 > strangecoin-linux-x86_64.sha256
 
-      - name: Rename binary
-        run: cp target/x86_64-unknown-linux-gnu/release/strangecoin strangecoin-linux-x86_64
+      - name: Build release binary (Windows host)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --release
+          Copy-Item target/release/strangecoin.exe strangecoin-windows-x86_64.exe
+          $hash = (Get-FileHash -Algorithm SHA256 strangecoin-windows-x86_64.exe).Hash.ToLower()
+          "$hash  strangecoin-windows-x86_64.exe" | Out-File -Encoding ascii strangecoin-windows-x86_64.exe.sha256
 
-      - name: Generate checksum
-        run: shasum -a 256 strangecoin-linux-x86_64 > strangecoin-linux-x86_64.sha256
+      # [GITHUB-P06] artifact file list is a step output: the publish step
+      # cannot branch on runner.os inside `with: files`.
+      - name: Resolve artifact file list
+        id: artifact
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            printf 'files<<EOF\nstrangecoin-windows-x86_64.exe\nstrangecoin-windows-x86_64.exe.sha256\nEOF\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'files<<EOF\nstrangecoin-linux-x86_64\nstrangecoin-linux-x86_64.sha256\nEOF\n' >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Publish pre-release
         # Step 5 (spec).
@@ -109,9 +144,7 @@ jobs:
           generate_release_notes: true
           body: |
             ⚠️ Automated dev build, not for production
-          files: |
-            strangecoin-linux-x86_64
-            strangecoin-linux-x86_64.sha256
+          files: ${{ steps.artifact.outputs.files }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

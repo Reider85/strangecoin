@@ -1,5 +1,13 @@
 name: GitHub Pages
 
+# [GITHUB-P06] Hybrid runners: both jobs read the repo variable RUNS_ON
+# (JSON label array). Unset -> ubuntu-latest as before; set -> the local
+# self-hosted Windows runner. The build step's heredoc needs an explicit
+# `shell: bash` (pwsh on the local runner cannot run `cat > ... << EOF`),
+# and the build job carries the same fork-PR guard as ci.yml — while
+# RUNS_ON is set, fork PRs never execute on the dev machine.
+# See .github/SELF_HOSTED_RUNNERS.md.
+
 on:
   push:
     branches: [ master ]
@@ -17,7 +25,11 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # [GITHUB-P06] unset -> ubuntu-latest; set -> self-hosted labels.
+    runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
+    # [GITHUB-P06] fork-PR guard (see header): local execution only for
+    # pushes and same-repo PRs while RUNS_ON is set.
+    if: ${{ !vars.RUNS_ON || github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,7 +39,10 @@ jobs:
         with:
           mdbook-version: "latest"
       
+      # [GITHUB-P06] shell: bash — the heredoc below is bash syntax; the
+      # local Windows runner's default shell is pwsh.
       - name: Build mdBook
+        shell: bash
         run: |
           # Create a custom book.toml for GitHub Pages
           cp analytics/ARCHITECT3.md docs/index.md
@@ -78,7 +93,9 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+    # [GITHUB-P06] unset -> ubuntu-latest; set -> self-hosted labels
+    # (actions/deploy-pages is a node action, runner-portable).
+    runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
     needs: build
     steps:
       - name: Deploy to GitHub Pages

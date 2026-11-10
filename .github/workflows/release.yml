@@ -1,5 +1,17 @@
 name: Release
 
+# [GITHUB-P06] Hybrid runners: `build` reads the repo variable RUNS_ON (JSON
+# label array). Unset -> the 6-cell GitHub-hosted matrix runs exactly as
+# before. Set (free minutes exhausted) -> cells marked `local: true` run on
+# the local self-hosted Windows runner; every other cell is skipped (macOS /
+# Linux hosts cannot be cross-built from the Windows runner), so a fallback
+# release carries the Windows x86_64 artifact only. The SLSA `provenance`
+# job is a called external workflow pinned to ubuntu-latest — it cannot be
+# retargeted, so it is skipped while RUNS_ON is set (documented degradation:
+# no attestation on fallback releases). `aggregate-hashes`/`sign`/`release`
+# are portable shell jobs -> they follow RUNS_ON too. See
+# .github/SELF_HOSTED_RUNNERS.md.
+
 on:
   push:
     tags: ['v*']
@@ -19,14 +31,17 @@ env:
 jobs:
   build:
     name: Build (${{ matrix.os }}, ${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
+    # [GITHUB-P06] unset -> matrix.os (GitHub-hosted); set -> self-hosted labels.
+    runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON(format('["{0}"]', matrix.os)) }}
     # [GITHUB-P1] Dev tags (vX.Y.Z-dev.N, minted by prerelease.yml) must not
     # trigger the full 6-platform release. GitHub Actions makes `tags` and
-    # `tags-ignore` mutually exclusive, so the exclusion lives here instead of
-    # the `on.push.tags` filter. Every downstream job (aggregate-hashes /
+    # `tags-ignore` mutually exclusive, so the exclusion lives here instead
+    # of the `on.push.tags` filter. Every downstream job (aggregate-hashes /
     # provenance / sign / release) `needs` this one, so gating it gates the
     # whole workflow; real vX.Y.Z tags are unaffected.
-    if: ${{ !contains(github.ref_name, '-dev.') }}
+    # [GITHUB-P06] second clause: while RUNS_ON is set only `local: true`
+    # matrix cells may execute (on the Windows runner); the rest are skipped.
+    if: ${{ !contains(github.ref_name, '-dev.') && (!vars.RUNS_ON || matrix.local) }}
     strategy:
       fail-fast: false
       matrix:
@@ -34,34 +49,62 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: strangecoin-linux-x86_64
+            local: false
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             artifact: strangecoin-linux-aarch64
             cross: true
+            local: false
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: strangecoin-macos-x86_64
+            local: false
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: strangecoin-macos-aarch64
+            local: false
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            # [GITHUB-P06] local build uses the host gnu toolchain (the
+            # dev machine has no MSVC); artifact name stays identical.
+            target_local: x86_64-pc-windows-gnu
             artifact: strangecoin-windows-x86_64
+            local: true
           - os: windows-latest
             target: aarch64-pc-windows-msvc
             artifact: strangecoin-windows-aarch64
             cross: true
+            local: false
 
     steps:
       - uses: actions/checkout@v4
 
+      # [GITHUB-P06] resolve the effective target once: GitHub-hosted keeps
+      # matrix.target; the local runner builds the host gnu triple instead
+      # of the msvc cross cell (no MSVC toolchain on the dev machine).
+      - name: Resolve effective target
+        id: tgt
+        shell: bash
+        run: |
+          if [ -n "${RUNS_ON:-}" ]; then
+            eff="${{ matrix.target_local || matrix.target }}"
+          else
+            eff="${{ matrix.target }}"
+          fi
+          echo "target=${eff}" >> "$GITHUB_OUTPUT"
+        env:
+          RUNS_ON: ${{ vars.RUNS_ON }}
+
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          # [GITHUB-P06] local runner pins the gnu-flavor toolchain (matches
+          # the dev machine's rustup default; the msvc flavor would need MSVC).
+          toolchain: ${{ vars.RUNS_ON && 'stable-x86_64-pc-windows-gnu' || 'stable' }}
+          targets: ${{ steps.tgt.outputs.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          key: ${{ steps.tgt.outputs.target }}
 
       - name: Install cross-compilation tools (Linux aarch64)
         if: matrix.cross && runner.os == 'Linux'
@@ -80,18 +123,18 @@ jobs:
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ steps.tgt.outputs.target }}
 
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
         run: |
-          cp target/${{ matrix.target }}/release/strangecoin ${{ matrix.artifact }}
+          cp target/${{ steps.tgt.outputs.target }}/release/strangecoin ${{ matrix.artifact }}
 
       - name: Rename binary (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Copy-Item "target/${{ matrix.target }}/release/strangecoin.exe" "${{ matrix.artifact }}.exe"
+          Copy-Item "target/${{ steps.tgt.outputs.target }}/release/strangecoin.exe" "${{ matrix.artifact }}.exe"
 
       - name: Generate checksum (Unix)
         if: runner.os != 'Windows'
@@ -147,7 +190,8 @@ jobs:
   aggregate-hashes:
     name: Aggregate checksums
     needs: build
-    runs-on: ubuntu-latest
+    # [GITHUB-P06] hybrid runner (see header).
+    runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
     outputs:
       hashes: ${{ steps.aggregate.outputs.hashes }}
     steps:
@@ -161,16 +205,27 @@ jobs:
 
       - name: Aggregate hashes
         id: aggregate
+        # [GITHUB-P06] shell: bash (local runner default is pwsh); the hash
+        # count is derived from the checksum files instead of the literal 6 —
+        # a fallback run only produces the local cells' artifacts.
+        shell: bash
         run: |
           set -euo pipefail
           cat checksums/*/hash.txt > hashes.txt
-          test "$(wc -l < hashes.txt)" -eq 6
+          expected=$(find checksums -name hash.txt | wc -l)
+          test "$(wc -l < hashes.txt)" -eq "$expected"
+          test "$expected" -ge 1
           # base64-subjects input must decode to sha256sum output (SLSA generator docs).
           echo "hashes=$(base64 -w0 hashes.txt)" >> "$GITHUB_OUTPUT"
 
   provenance:
     name: SLSA Provenance
     needs: aggregate-hashes
+    # [GITHUB-P06] the SLSA generator is an external reusable workflow pinned
+    # to its own ubuntu-latest runners — it cannot follow RUNS_ON, so while
+    # the local fallback is active this job is skipped (fallback releases
+    # ship without attestation; documented in .github/SELF_HOSTED_RUNNERS.md).
+    if: ${{ !vars.RUNS_ON }}
     permissions:
       actions: read
       id-token: write
@@ -185,7 +240,8 @@ jobs:
   sign:
     name: Sign artifacts
     needs: build
-    runs-on: ubuntu-latest
+    # [GITHUB-P06] hybrid runner (see header).
+    runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -195,7 +251,10 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3.7.0
 
+      # [GITHUB-P06] shell: bash — the local Windows runner defaults to pwsh,
+      # which cannot run this for-loop (cosign.exe resolves via PATHEXT).
       - name: Sign each artifact
+        shell: bash
         run: |
           for dir in artifacts/*/; do
             for file in "$dir"*; do
@@ -221,7 +280,8 @@ jobs:
   release:
     name: Create Release
     needs: [build, sign]
-    runs-on: ubuntu-latest
+    # [GITHUB-P06] hybrid runner (see header).
+    runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -234,7 +294,9 @@ jobs:
           pattern: "*-checksum"
           path: checksums
 
+      # [GITHUB-P06] shell: bash (pwsh on the local runner cannot run find/cp).
       - name: Collect release assets
+        shell: bash
         run: |
           mkdir -p release
           find artifacts -type f ! -name 'hash.txt' -exec cp {} release/ \;

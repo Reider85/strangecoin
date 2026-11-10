@@ -49,7 +49,10 @@ env:
 jobs:
   snapshot:
     name: Hourly star snapshot
-    runs-on: ubuntu-latest
+    # [GITHUB-P06] unset -> ubuntu-latest; set -> local self-hosted labels
+    # (the bash step + gh CLI + git-auto-commit are runner-portable; gh/jq
+    # are provisioned by scripts/actions/setup-local-runner.ps1).
+    runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4

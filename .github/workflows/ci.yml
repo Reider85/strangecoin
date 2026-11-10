@@ -34,6 +34,22 @@ name: CI
 #      in repo settings, not verifiable from code); coverage job is
 #      continue-on-error per spec so a missing/failing upload never paints
 #      the badge. An lcov.info artifact upload is kept as a local fallback.
+#
+# [GITHUB-P06] Hybrid runners: every `runs-on` reads the repo variable
+# `RUNS_ON` (a JSON label array, e.g. ["self-hosted","windows","X64"]).
+#   - RUNS_ON unset (default) -> GitHub-hosted `ubuntu-latest`, exactly the
+#     pre-P06 behavior; nothing changes until the variable is set by hand.
+#   - RUNS_ON set (free GitHub minutes exhausted) -> jobs land on the local
+#     self-hosted Windows runner registered by
+#     scripts/actions/setup-local-runner.ps1 (see .github/SELF_HOSTED_RUNNERS.md).
+#   Fork PRs are NEVER dispatched to the local runner (untrusted code on the
+#   dev machine): while RUNS_ON is set, pull_request jobs only run when the
+#   head branch lives in this repository; fork PRs are skipped (their
+#   GitHub-hosted minutes are gone anyway). Same-repo PRs and pushes run
+#   locally. CARGO_BUILD_JOBS drops 4 -> 2 locally to avoid the mass test-exe
+#   linking failure documented in AGENTS.md (windows-gnu link parallelism);
+#   timeouts are raised statically (duration on GitHub-hosted is unaffected —
+#   timeout is only a runaway guard).
 
 on:
   push:
@@ -50,17 +66,28 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # [GITHUB-P06] 4 = default on the 4-vCPU GitHub-hosted runner (no-op);
+  # 2 locally — caps cargo/nextest build parallelism so ~45 test exes do not
+  # link at once (AGENTS.md windows-gnu link-parallelism gotcha).
+  CARGO_BUILD_JOBS: ${{ vars.RUNS_ON && '2' || '4' }}
 
 jobs:
   lint:
     name: Lint (fmt + clippy)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # [GITHUB-P06] unset -> ubuntu-latest; set -> local self-hosted labels.
+    runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
+    # [GITHUB-P06] fork-PR guard (see header): while RUNS_ON is set only
+    # pushes and same-repo PRs may execute on the local machine.
+    if: ${{ !vars.RUNS_ON || github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
+          # [GITHUB-P06] local runner pins the gnu-flavor toolchain (matches
+          # the dev machine; msvc flavor would need MSVC + flip rustup default).
+          toolchain: ${{ vars.RUNS_ON && 'stable-x86_64-pc-windows-gnu' || 'stable' }}
           components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
@@ -77,12 +104,17 @@ jobs:
 
   test-core:
     name: Test (ubuntu, stable)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # [GITHUB-P06] hybrid runner (see header).
+    runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
+    if: ${{ !vars.RUNS_ON || github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # [GITHUB-P06] local runner pins the gnu-flavor toolchain.
+          toolchain: ${{ vars.RUNS_ON && 'stable-x86_64-pc-windows-gnu' || 'stable' }}
 
       # Deviation 4: prebuilt binary instead of `cargo install --locked`.
       - uses: taiki-e/install-action@v2
@@ -106,15 +138,19 @@ jobs:
 
   coverage:
     name: Coverage (llvm-cov)
-    runs-on: ubuntu-latest
+    # [GITHUB-P06] hybrid runner (see header).
+    runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
+    if: ${{ !vars.RUNS_ON || github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     # Spec item 7: llvm-cov/codecov instability must not fail the badge.
     continue-on-error: true
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
+          # [GITHUB-P06] local runner pins the gnu-flavor toolchain.
+          toolchain: ${{ vars.RUNS_ON && 'stable-x86_64-pc-windows-gnu' || 'stable' }}
           components: llvm-tools-preview
 
       # Deviation 4: prebuilt binary; crate renamed cargo-llvm-cov-preview
@@ -150,15 +186,20 @@ jobs:
 
   source-gates:
     name: Source gates (rg audits)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # [GITHUB-P06] hybrid runner (see header).
+    runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
+    if: ${{ !vars.RUNS_ON || github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       # BUG-S0-022 / S1-P12: executable form of the balances-mutation audit.
       # Mirrors tests/balances_gate.rs (which runs on every platform via
       # `cargo test --workspace`); this step fails fast without a Rust build.
+      # [GITHUB-P06] explicit shell: bash — the local self-hosted runner's
+      # default shell is pwsh, which cannot run this script.
       - name: "Gate: no direct balances mutations (BUG-S0-022)"
+        shell: bash
         run: |
           set -euo pipefail
           raw=$(rg -n '\.balances\.(insert|remove|get_mut)' src/ \
@@ -175,6 +216,7 @@ jobs:
       # BUG-S1-012 / P21: #[allow(dead_code)] and #[allow(clippy::await_holding_lock)]
       # are permitted only with a // justification comment on the preceding line.
       - name: "Gate: allow(dead_code)/await_holding_lock must be justified (BUG-S1-012)"
+        shell: bash
         run: |
           set -euo pipefail
           violations=0
@@ -200,5 +242,19 @@ jobs:
       # BUG-S1-014: the three Stage 0 summary docs must agree with their own
       # detail tables and with each other (invariants 17/5/0 of 22; critical
       # issues 12/3/0). Fails fast without a Rust build.
+      # [GITHUB-P06] shell: bash + interpreter probe: the Windows self-hosted
+      # runner has a dead `python3` WindowsApps alias (command -v finds it,
+      # running it exits 9009) — probe with --version, fall back to `python`.
       - name: "Gate: Stage 0 summary arithmetic (BUG-S1-014)"
-        run: python3 scripts/audit/check_stage0_arith.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v python3 >/dev/null 2>&1 && python3 --version >/dev/null 2>&1; then
+            py=python3
+          elif command -v python >/dev/null 2>&1 && python --version >/dev/null 2>&1; then
+            py=python
+          else
+            echo "::error::no working python interpreter (python3/python)"
+            exit 1
+          fi
+          "$py" scripts/audit/check_stage0_arith.py

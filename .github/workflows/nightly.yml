@@ -62,9 +62,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # [GITHUB-P06] Hybrid runners (see .github/SELF_HOSTED_RUNNERS.md): every
+  # `runs-on` reads the repo variable RUNS_ON (JSON label array). Unset ->
+  # GitHub-hosted as before; set -> the local self-hosted Windows runner.
+  # Fallback degradations (documented, not silent):
+  #   - fuzz: cargo-fuzz/libFuzzer does not build on this Windows host
+  #     (AGENTS.md cargo-fuzz note) -> the whole matrix is GitHub-hosted-only
+  #     and is SKIPPED while RUNS_ON is set;
+  #   - cross-build: only the `local: true` cell (windows x86_64, host gnu
+  #     triple instead of msvc) runs locally; linux/macos cells are skipped;
+  #   - miri: `cargo +nightly` is replaced by the resolved default toolchain
+  #     (the dtolnay step pins nightly-x86_64-pc-windows-gnu locally).
   fuzz:
     name: Fuzz ${{ matrix.target }} (30 min)
     runs-on: ubuntu-latest
+    # [GITHUB-P06] GitHub-hosted only — see hybrid header above.
+    if: ${{ !vars.RUNS_ON }}
     # Spec: nightly crashes are a signal, not a blocker — never fail the
     # Nightly badge from the fuzz matrix.
     continue-on-error: true
@@ -120,7 +133,10 @@ jobs:
 
   cross-build:
     name: Build (${{ matrix.os }}, ${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
+    # [GITHUB-P06] unset -> matrix.os; set -> self-hosted labels; only
+    # `local: true` cells survive while RUNS_ON is set (see hybrid header).
+    runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON(format('["{0}"]', matrix.os)) }}
+    if: ${{ !vars.RUNS_ON || matrix.local }}
     timeout-minutes: 180
     # Spec item: only aarch64-pc-windows-msvc may fail without failing the
     # workflow (matrix flag; the `strategy` context is available to
@@ -133,36 +149,63 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: nightly-linux-x86_64
+            local: false
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             artifact: nightly-linux-aarch64
             cross: true
+            local: false
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: nightly-macos-x86_64
+            local: false
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: nightly-macos-aarch64
+            local: false
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            # [GITHUB-P06] local build uses the host gnu toolchain (no MSVC
+            # on the dev machine); artifact name stays identical.
+            target_local: x86_64-pc-windows-gnu
             artifact: nightly-windows-x86_64
+            local: true
           - os: windows-latest
             target: aarch64-pc-windows-msvc
             artifact: nightly-windows-aarch64
             cross: true
+            local: false
             # Spec: the historically fragile Windows aarch64 cross cell
             # (choco llvm / LIBCLANG churn) must not paint the badge.
             allow_failure: true
     steps:
       - uses: actions/checkout@v4
 
+      # [GITHUB-P06] resolve the effective target once (same pattern as
+      # release.yml): GitHub-hosted keeps matrix.target; the local runner
+      # builds the host gnu triple.
+      - name: Resolve effective target
+        id: tgt
+        shell: bash
+        run: |
+          if [ -n "${RUNS_ON:-}" ]; then
+            eff="${{ matrix.target_local || matrix.target }}"
+          else
+            eff="${{ matrix.target }}"
+          fi
+          echo "target=${eff}" >> "$GITHUB_OUTPUT"
+        env:
+          RUNS_ON: ${{ vars.RUNS_ON }}
+
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          # [GITHUB-P06] local runner pins the gnu-flavor toolchain.
+          toolchain: ${{ vars.RUNS_ON && 'stable-x86_64-pc-windows-gnu' || 'stable' }}
+          targets: ${{ steps.tgt.outputs.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          key: ${{ steps.tgt.outputs.target }}
 
       # Cross tooling identical to release.yml (same cells, same flags).
       - name: Install cross-compilation tools (Linux aarch64)
@@ -182,16 +225,16 @@ jobs:
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ steps.tgt.outputs.target }}
 
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
-        run: cp target/${{ matrix.target }}/release/strangecoin ${{ matrix.artifact }}
+        run: cp target/${{ steps.tgt.outputs.target }}/release/strangecoin ${{ matrix.artifact }}
 
       - name: Rename binary (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Copy-Item "target/${{ matrix.target }}/release/strangecoin.exe" "${{ matrix.artifact }}.exe"
+        run: Copy-Item "target/${{ steps.tgt.outputs.target }}/release/strangecoin.exe" "${{ matrix.artifact }}.exe"
 
       - name: Upload artifact (Unix)
         if: runner.os != 'Windows'
@@ -213,12 +256,16 @@ jobs:
 
   audit:
     name: Audit (cargo-audit + cargo-deny)
-    runs-on: ubuntu-latest
+    # [GITHUB-P06] hybrid runner (see header).
+    runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # [GITHUB-P06] local runner pins the gnu-flavor toolchain.
+          toolchain: ${{ vars.RUNS_ON && 'stable-x86_64-pc-windows-gnu' || 'stable' }}
 
       # Deviation 2: prebuilt binaries instead of `cargo install --locked`.
       - name: Install cargo-audit
@@ -232,7 +279,9 @@ jobs:
           tool: cargo-deny
 
       # First pass in human format so a red run has a readable log.
+      # [GITHUB-P06] shell: bash (pwsh on the local runner).
       - name: cargo deny (advisories + bans + licenses + sources)
+        shell: bash
         run: cargo deny check advisories bans licenses sources
 
       # SARIF report for GitHub code scanning (spec item 1). cargo-deny 0.20
@@ -240,8 +289,11 @@ jobs:
       # verified against cargo-deny 0.20.2 locally) -> shell redirect. Runs
       # with if: always() so the report exists even when the pass above or
       # cargo-audit below fails.
+      # [GITHUB-P06] shell: bash — pwsh's `>` writes UTF-16, which breaks
+      # the SARIF parser; git-bash redirect stays UTF-8 like on ubuntu.
       - name: cargo deny SARIF report
         if: always()
+        shell: bash
         run: cargo deny --format sarif check advisories bans licenses sources > deny.sarif
 
       - name: cargo audit (RUSTSEC advisories)
@@ -250,6 +302,7 @@ jobs:
         # in Cargo.lock — cargo-audit does not read deny.toml, so the IDs are
         # repeated here. Warnings (unmaintained/unsound/yanked) do not fail
         # cargo-audit by default. A NEW vulnerability still fails this step.
+        shell: bash
         run: >
           cargo audit
           --ignore RUSTSEC-2026-0007
@@ -276,7 +329,8 @@ jobs:
 
   mutation:
     name: Mutation testing (cargo-mutants)
-    runs-on: ubuntu-latest
+    # [GITHUB-P06] hybrid runner (see header).
+    runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
     # Spec: mutation score is a signal, not a blocker.
     continue-on-error: true
     timeout-minutes: 60
@@ -284,6 +338,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # [GITHUB-P06] local runner pins the gnu-flavor toolchain.
+          toolchain: ${{ vars.RUNS_ON && 'stable-x86_64-pc-windows-gnu' || 'stable' }}
 
       # Deviation 2: prebuilt binary instead of `cargo install --locked`.
       - name: Install cargo-mutants
@@ -311,7 +368,8 @@ jobs:
 
   miri:
     name: Miri (vm-wasm + storage)
-    runs-on: ubuntu-latest
+    # [GITHUB-P06] hybrid runner (see header).
+    runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
     # Spec marks miri "(опционально)" — included per user decision.
     # Known limitation (documented, user-approved): strangecoin-storage
     # tests go through the rocksdb FFI, which Miri cannot execute — the job
@@ -325,9 +383,24 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@nightly
         with:
+          # [GITHUB-P06] local runner pins the gnu-flavor nightly (msvc
+          # nightly would need the MSVC link toolchain on the dev machine).
+          toolchain: ${{ vars.RUNS_ON && 'nightly-x86_64-pc-windows-gnu' || 'nightly' }}
           components: miri
 
       - uses: Swatinem/rust-cache@v2
 
+      # [GITHUB-P06] dropped the literal `+nightly` override: the dtolnay
+      # step above already pins the exact toolchain (gnu-flavor locally),
+      # and `+nightly` would resolve the msvc-flavor nightly on Windows.
       - name: "cargo miri test (spec-literal: vm-wasm + storage)"
-        run: cargo +nightly miri test -p strangecoin-vm-wasm -p strangecoin-storage
+        shell: bash
+        run: cargo miri test -p strangecoin-vm-wasm -p strangecoin-storage
+
+      # [GITHUB-P06] the dtolnay step runs `rustup default <toolchain>` —
+      # after this job the local machine's default would point at nightly.
+      # Restore the dev-machine default so interactive builds stay stable.
+      - name: Restore rustup default (local runner)
+        if: ${{ always() && vars.RUNS_ON }}
+        shell: bash
+        run: rustup default stable-x86_64-pc-windows-gnu

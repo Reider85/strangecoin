@@ -37,7 +37,9 @@ concurrency:
 jobs:
   alert:
     name: Discord star alert
-    runs-on: ubuntu-latest
+    # [GITHUB-P06] unset -> ubuntu-latest; set -> local self-hosted labels
+    # (bash step + github-script are runner-portable).
+    runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
     timeout-minutes: 5
     # Deviation 1: only a successful star-monitor run may fire the
     # threshold alert; workflow_dispatch is the manual test path.
