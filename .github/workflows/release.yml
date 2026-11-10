@@ -196,7 +196,7 @@ jobs:
       hashes: ${{ steps.aggregate.outputs.hashes }}
     steps:
       - name: Download all checksum files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: "*-checksum"
           path: checksums
@@ -244,7 +244,7 @@ jobs:
     runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -284,12 +284,12 @@ jobs:
     runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
       - name: Download checksum files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: "*-checksum"
           path: checksums
