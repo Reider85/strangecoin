@@ -69,8 +69,10 @@ jobs:
   #   - fuzz: cargo-fuzz/libFuzzer does not build on this Windows host
   #     (AGENTS.md cargo-fuzz note) -> the whole matrix is GitHub-hosted-only
   #     and is SKIPPED while RUNS_ON is set;
-  #   - cross-build: only the `local: true` cell (windows x86_64, host gnu
-  #     triple instead of msvc) runs locally; linux/macos cells are skipped;
+#   - cross-build: while RUNS_ON is set the matrix collapses to the single
+#     windows-x86_64 cell (windows gnu triple, host toolchain); linux/macos
+#     cells are not offered to the local runner at all (dynamic include —
+#     the `matrix` context is unavailable in jobs.<job_id>.if).
   #   - miri: `cargo +nightly` is replaced by the resolved default toolchain
   #     (the dtolnay step pins nightly-x86_64-pc-windows-gnu locally).
   fuzz:
@@ -133,10 +135,13 @@ jobs:
 
   cross-build:
     name: Build (${{ matrix.os }}, ${{ matrix.target }})
-    # [GITHUB-P06] unset -> matrix.os; set -> self-hosted labels; only
-    # `local: true` cells survive while RUNS_ON is set (see hybrid header).
+    # [GITHUB-P06] unset -> matrix.os; set -> self-hosted labels.
+    # NOTE: the RUNS_ON cell filter CANNOT be a job-level `if` — the
+    # `matrix` context is not available in jobs.<job_id>.if (GitHub/actionlint:
+    # "context matrix is not allowed here"; a `matrix.local` guard made the
+    # file invalid -> phantom 0-job runs). It lives in the dynamic
+    # `matrix.include` below instead (vars is allowed in strategy).
     runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON(format('["{0}"]', matrix.os)) }}
-    if: ${{ !vars.RUNS_ON || matrix.local }}
     timeout-minutes: 180
     # Spec item: only aarch64-pc-windows-msvc may fail without failing the
     # workflow (matrix flag; the `strategy` context is available to
@@ -145,39 +150,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact: nightly-linux-x86_64
-            local: false
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            artifact: nightly-linux-aarch64
-            cross: true
-            local: false
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact: nightly-macos-x86_64
-            local: false
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            artifact: nightly-macos-aarch64
-            local: false
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            # [GITHUB-P06] local build uses the host gnu toolchain (no MSVC
-            # on the dev machine); artifact name stays identical.
-            target_local: x86_64-pc-windows-gnu
-            artifact: nightly-windows-x86_64
-            local: true
-          - os: windows-latest
-            target: aarch64-pc-windows-msvc
-            artifact: nightly-windows-aarch64
-            cross: true
-            local: false
-            # Spec: the historically fragile Windows aarch64 cross cell
-            # (choco llvm / LIBCLANG churn) must not paint the badge.
-            allow_failure: true
+        # [GITHUB-P06] dynamic cell filter: RUNS_ON unset -> all 6 cells on
+        # GitHub-hosted; RUNS_ON set -> only the windows-x86_64 cell (host
+        # gnu triple, no MSVC on the dev machine; linux/macos cells cannot
+        # run on the local Windows runner).
+        include: ${{ vars.RUNS_ON && fromJSON('[{"os":"windows-latest","target":"x86_64-pc-windows-msvc","target_local":"x86_64-pc-windows-gnu","artifact":"nightly-windows-x86_64"}]') || fromJSON('[{"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","artifact":"nightly-linux-x86_64"},{"os":"ubuntu-latest","target":"aarch64-unknown-linux-gnu","artifact":"nightly-linux-aarch64","cross":true},{"os":"macos-latest","target":"x86_64-apple-darwin","artifact":"nightly-macos-x86_64"},{"os":"macos-latest","target":"aarch64-apple-darwin","artifact":"nightly-macos-aarch64"},{"os":"windows-latest","target":"x86_64-pc-windows-msvc","target_local":"x86_64-pc-windows-gnu","artifact":"nightly-windows-x86_64"},{"os":"windows-latest","target":"aarch64-pc-windows-msvc","artifact":"nightly-windows-aarch64","cross":true,"allow_failure":true}]') }}
     steps:
       - uses: actions/checkout@v4
 

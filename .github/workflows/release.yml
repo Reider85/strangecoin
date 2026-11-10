@@ -2,10 +2,12 @@ name: Release
 
 # [GITHUB-P06] Hybrid runners: `build` reads the repo variable RUNS_ON (JSON
 # label array). Unset -> the 6-cell GitHub-hosted matrix runs exactly as
-# before. Set (free minutes exhausted) -> cells marked `local: true` run on
-# the local self-hosted Windows runner; every other cell is skipped (macOS /
-# Linux hosts cannot be cross-built from the Windows runner), so a fallback
-# release carries the Windows x86_64 artifact only. The SLSA `provenance`
+# before. Set (free minutes exhausted) -> the build matrix collapses to the
+# single windows-x86_64 cell (dynamic `matrix.include`; the `matrix` context
+# is unavailable in jobs.<job_id>.if) — every other cell is simply not
+# offered to the local runner (macOS / Linux hosts cannot be cross-built
+# from the Windows runner), so a fallback release carries the Windows x86_64
+# artifact only. The SLSA `provenance`
 # job is a called external workflow pinned to ubuntu-latest — it cannot be
 # retargeted, so it is skipped while RUNS_ON is set (documented degradation:
 # no attestation on fallback releases). `aggregate-hashes`/`sign`/`release`
@@ -39,42 +41,20 @@ jobs:
     # of the `on.push.tags` filter. Every downstream job (aggregate-hashes /
     # provenance / sign / release) `needs` this one, so gating it gates the
     # whole workflow; real vX.Y.Z tags are unaffected.
-    # [GITHUB-P06] second clause: while RUNS_ON is set only `local: true`
-    # matrix cells may execute (on the Windows runner); the rest are skipped.
-    if: ${{ !contains(github.ref_name, '-dev.') && (!vars.RUNS_ON || matrix.local) }}
+    # [GITHUB-P06] NOTE: the RUNS_ON cell filter CANNOT live here — the
+    # `matrix` context is not available in jobs.<job_id>.if (GitHub/actionlint:
+    # "context matrix is not allowed here"; a job-level `matrix.local` guard
+    # made the whole file invalid -> phantom 0-job runs). It lives in the
+    # dynamic `matrix.include` below instead (vars is allowed in strategy).
+    if: ${{ !contains(github.ref_name, '-dev.') }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact: strangecoin-linux-x86_64
-            local: false
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            artifact: strangecoin-linux-aarch64
-            cross: true
-            local: false
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact: strangecoin-macos-x86_64
-            local: false
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            artifact: strangecoin-macos-aarch64
-            local: false
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            # [GITHUB-P06] local build uses the host gnu toolchain (the
-            # dev machine has no MSVC); artifact name stays identical.
-            target_local: x86_64-pc-windows-gnu
-            artifact: strangecoin-windows-x86_64
-            local: true
-          - os: windows-latest
-            target: aarch64-pc-windows-msvc
-            artifact: strangecoin-windows-aarch64
-            cross: true
-            local: false
+        # [GITHUB-P06] dynamic cell filter: RUNS_ON unset -> all 6 cells on
+        # GitHub-hosted; RUNS_ON set -> only the windows-x86_64 cell (the
+        # local Windows runner cannot build linux/macos targets), so a
+        # fallback release ships the Windows artifact only.
+        include: ${{ vars.RUNS_ON && fromJSON('[{"os":"windows-latest","target":"x86_64-pc-windows-msvc","target_local":"x86_64-pc-windows-gnu","artifact":"strangecoin-windows-x86_64"}]') || fromJSON('[{"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","artifact":"strangecoin-linux-x86_64"},{"os":"ubuntu-latest","target":"aarch64-unknown-linux-gnu","artifact":"strangecoin-linux-aarch64","cross":true},{"os":"macos-latest","target":"x86_64-apple-darwin","artifact":"strangecoin-macos-x86_64"},{"os":"macos-latest","target":"aarch64-apple-darwin","artifact":"strangecoin-macos-aarch64"},{"os":"windows-latest","target":"x86_64-pc-windows-msvc","target_local":"x86_64-pc-windows-gnu","artifact":"strangecoin-windows-x86_64"},{"os":"windows-latest","target":"aarch64-pc-windows-msvc","artifact":"strangecoin-windows-aarch64","cross":true,"allow_failure":true}]') }}
 
     steps:
       - uses: actions/checkout@v4
