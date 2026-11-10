@@ -249,7 +249,7 @@ jobs:
           path: artifacts
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3.7.0
+        uses: sigstore/cosign-installer@v4.1.3
 
       # [GITHUB-P06] shell: bash — the local Windows runner defaults to pwsh,
       # which cannot run this for-loop (cosign.exe resolves via PATHEXT).
