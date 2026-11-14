@@ -84,7 +84,11 @@ impl<E: StorageEngine> CachedEngine<E> {
     fn capacity(&self) -> usize {
         match &self.cache {
             None => 0,
-            Some(cache) => cache.lock().expect("cached engine lock poisoned").cap().get(),
+            Some(cache) => cache
+                .lock()
+                .expect("cached engine lock poisoned")
+                .cap()
+                .get(),
         }
     }
 }
@@ -286,9 +290,7 @@ mod tests {
         // A miss on an absent key must not insert None-shaped junk:
         // subsequent inner insert (via a path that invalidates) wins.
         assert_eq!(cached.get(Cf::Blocks, b"never").unwrap(), None);
-        cached
-            .put(Cf::Blocks, b"never", b"now-here")
-            .unwrap();
+        cached.put(Cf::Blocks, b"never", b"now-here").unwrap();
         assert_eq!(
             cached.get(Cf::Blocks, b"never").unwrap(),
             Some(b"now-here".to_vec())
@@ -360,7 +362,10 @@ mod tests {
         let cached = CachedEngine::new(MapEngine::new(), 8);
         cached.put(Cf::State, b"addr", b"v1").unwrap();
         // Warm a get (would populate if State were cacheable).
-        assert_eq!(cached.get(Cf::State, b"addr").unwrap(), Some(b"v1".to_vec()));
+        assert_eq!(
+            cached.get(Cf::State, b"addr").unwrap(),
+            Some(b"v1".to_vec())
+        );
 
         // Direct inner mutation is immediately visible → State bypasses.
         cached.inner.put(Cf::State, b"addr", b"v2").unwrap();

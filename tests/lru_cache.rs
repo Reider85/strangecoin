@@ -89,8 +89,7 @@ fn block_by_hash_warm_reads_are_stable_through_cached_open() {
 fn deleting_block_keys_invalidates_cached_reads() {
     let dir = TestDir::new("lru_invalidate");
     let path = dir.path().join("db");
-    let storage =
-        Storage::open_rocks_with_cache(&path, 16).expect("cached open at capacity 16");
+    let storage = Storage::open_rocks_with_cache(&path, 16).expect("cached open at capacity 16");
     let engine = storage.engine().clone();
 
     // Seed one block-body-shaped record through the engine (opaque bytes

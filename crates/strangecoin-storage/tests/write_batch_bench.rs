@@ -54,7 +54,10 @@ fn account_keys(n: usize) -> Vec<Vec<u8>> {
     let mut keys = Vec::with_capacity(n);
     let mut seen = std::collections::HashSet::new();
     while keys.len() < n {
-        let addr = format!("sc1{:032x}", lcg.next() ^ (keys.len() as u64).wrapping_mul(0x9E37));
+        let addr = format!(
+            "sc1{:032x}",
+            lcg.next() ^ (keys.len() as u64).wrapping_mul(0x9E37)
+        );
         if seen.insert(addr.clone()) {
             keys.push(state_key(&addr));
         }
