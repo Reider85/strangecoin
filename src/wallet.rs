@@ -10,7 +10,7 @@ use pbkdf2::{
     password_hash::{rand_core::RngCore, PasswordHasher, SaltString},
     Pbkdf2,
 };
-use rand::rngs::OsRng;
+use secp256k1::rand::rngs::OsRng;
 use secp256k1::{
     ecdsa::{RecoverableSignature, Signature},
     Message, PublicKey, Secp256k1, SecretKey,

@@ -19,7 +19,7 @@
 //! cargo run --release --example generate_offline_genesis_key -- genesis_privkey.hex
 //! ```
 
-use rand::rngs::OsRng;
+use secp256k1::rand::rngs::OsRng;
 use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use std::fs::OpenOptions;
 use std::io::Write;
