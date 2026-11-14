@@ -50,6 +50,7 @@ pub use strangecoin_storage::{
     state_key,
     tx_index_key,
     tx_raw_key,
+    CachedEngine,
     Cf,
     KeyPrefix,
     KvPair,
@@ -77,6 +78,10 @@ use crate::error::StrangecoinError;
 /// `<exe_dir>/blockchain_db_{port}` directory is never opened directly —
 /// when it exists it is converted first (`migrations::auto_migrate_legacy`,
 /// invoked from the DB-open path) and then kept as `.leveldb.bak`.
+///
+/// S3-P10: when `block_cache_capacity > 0` the engine is wrapped in a
+/// [`CachedEngine`] (LRU over `Cf::Blocks`/`Cf::Transactions` point reads;
+/// state CF never cached — `StateCache` owns it). Capacity 0 = no wrapper.
 #[derive(Clone)]
 pub struct Storage(Arc<dyn StorageEngine>);
 
@@ -84,10 +89,28 @@ impl Storage {
     /// Open (creating the directory if needed) the RocksDB backend at
     /// `path`. Used by `open_local`, the wire-deserialize path and the
     /// production open path after the auto-migration hook.
+    ///
+    /// `block_cache_capacity` — LRU entry budget for block/tx reads
+    /// (S3-P10; 0 disables the cache). The pre-cache signature is kept
+    /// as [`Self::open_rocks`] with the default capacity for call sites
+    /// that have no config on hand (tests, shadow replay).
     pub fn open_rocks(path: &Path) -> Result<Self, StrangecoinError> {
+        Self::open_rocks_with_cache(path, DEFAULT_BLOCK_CACHE_CAPACITY)
+    }
+
+    /// [`Self::open_rocks`] with an explicit block-cache capacity.
+    pub fn open_rocks_with_cache(
+        path: &Path,
+        block_cache_capacity: usize,
+    ) -> Result<Self, StrangecoinError> {
         std::fs::create_dir_all(path)?;
         let engine = RocksDbEngine::open(path)?;
-        Ok(Self(Arc::new(engine)))
+        let boxed: Arc<dyn StorageEngine> = if block_cache_capacity == 0 {
+            Arc::new(engine)
+        } else {
+            Arc::new(CachedEngine::new(engine, block_cache_capacity))
+        };
+        Ok(Self(boxed))
     }
 
     /// Wrap an already-constructed engine (counting/mock engines in tests).
@@ -100,3 +123,8 @@ impl Storage {
         &self.0
     }
 }
+
+/// Default LRU capacity for [`Storage::open_rocks`] call sites without a
+/// config (matches `StorageConfig::block_cache_capacity`'s default —
+/// 4096 entries; S3-P10 / prompt task 3).
+pub const DEFAULT_BLOCK_CACHE_CAPACITY: usize = 4096;

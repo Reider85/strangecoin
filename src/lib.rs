@@ -1095,6 +1095,7 @@ pub async fn run_async() {
             },
             storage: crate::config::StorageConfig {
                 path: exe_dir.join("data/rocksdb"),
+                ..Default::default()
             },
             log_level: "info".into(),
             data_dir: exe_dir.join("data"),

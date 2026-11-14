@@ -8,6 +8,9 @@
 //!   `docs/ADR/0024-storage-schema-and-engine.md` (which amends the engine
 //!   decision of `docs/ADR/0008-rocksdb-plan.md`); the raw DB handle never
 //!   leaves this crate.
+//! - [`cache`] (S3-P10) — [`CachedEngine`], a capacity-bounded LRU decorator
+//!   for `Cf::Blocks` / `Cf::Transactions` point reads (state CF stays out:
+//!   the monolith `StateCache` already holds the full current state in RAM).
 //! - [`schema`] — pure key-encoding functions and schema versioning
 //!   (S3-P05): [`schema::SCHEMA_VERSION`], [`schema::KeyPrefix`] tags for
 //!   index sub-keyspaces, per-CF key constructors (big-endian heights /
@@ -32,11 +35,13 @@
 //! this crate only receives the already-decoded snapshot as opaque
 //! `WriteBatchOp`s.
 
+pub mod cache;
 pub mod engine;
 #[cfg(feature = "rocksdb")]
 pub mod rocks;
 pub mod schema;
 
+pub use cache::CachedEngine;
 pub use engine::{Cf, KvPair, StorageEngine, StorageError, WriteBatchOp};
 #[cfg(feature = "rocksdb")]
 pub use rocks::RocksDbEngine;

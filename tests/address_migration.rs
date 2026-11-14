@@ -75,6 +75,7 @@ fn open_migrated(port: u16, rocks_path: &Path) -> BlockchainFacade {
         strangecoin::consensus::CHAIN_ID_REGTEST,
         StorageConfig {
             path: rocks_path.to_path_buf(),
+            ..Default::default()
         },
     )
 }

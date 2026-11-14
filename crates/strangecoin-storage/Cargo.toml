@@ -29,6 +29,11 @@ serde = { version = "1.0", features = ["derive"] }
 # Whole-file snapshot checksums (ADR-0026 trailer) — blake3 is the
 # deterministic hash of the whole codebase (Stage 3 determinism checklist #2).
 blake3 = "1"
+# Capacity-bounded block/tx read cache (S3-P10, ADR-0024). Pinned exact
+# per Stage 3 Pin Policy: resolution 2026-11-14 -> 0.19.0 (MSRV 1.85).
+# Eviction order is part of the read-path contract (same inputs -> same
+# hit/miss decisions); bumps go through SCIP after mainnet freeze.
+lru = "=0.19.0"
 
 [features]
 default = ["rocksdb"]

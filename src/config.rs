@@ -293,16 +293,29 @@ pub struct StorageConfig {
     /// resolve against the process CWD.
     #[serde(default = "default_storage_path")]
     pub path: PathBuf,
+
+    /// LRU entry budget for the block/tx read cache (S3-P10, prompt
+    /// task 4). Default 4096; `0` disables the cache (raw engine, no
+    /// `CachedEngine` wrapper). The state CF is never cached here — the
+    /// monolith `StateCache` holds the full current state in RAM.
+    #[serde(default = "default_block_cache_capacity")]
+    pub block_cache_capacity: usize,
 }
 
 fn default_storage_path() -> PathBuf {
     "./data/rocksdb".into()
 }
 
+/// S3-P10: default block/tx LRU capacity (prompt task 3: 4096).
+fn default_block_cache_capacity() -> usize {
+    4096
+}
+
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
             path: default_storage_path(),
+            block_cache_capacity: default_block_cache_capacity(),
         }
     }
 }
@@ -649,7 +662,61 @@ mod tests {
     fn storage_defaults_to_rocksdb_at_data_rocksdb() {
         let cfg = Config::default();
         assert_eq!(cfg.storage.path, PathBuf::from("./data/rocksdb"));
+        assert_eq!(
+            cfg.storage.block_cache_capacity, 4096,
+            "S3-P10 default block/tx LRU capacity"
+        );
         cfg.validate().expect("default storage config is valid");
+    }
+
+    #[test]
+    fn storage_block_cache_capacity_parses_and_zero_is_valid() {
+        // Explicit capacity (including the off-switch 0) must parse from
+        // `[storage]`; a config without the key keeps the 4096 default.
+        let with_key = r#"
+            network_id = 3
+            node_mode = "full"
+            log_level = "info"
+            data_dir = "./data"
+
+            [network]
+            listen_addr = "127.0.0.1:8081"
+            seeds = []
+            max_peers = 50
+
+            [storage]
+            path = "./data/rocksdb"
+            block_cache_capacity = 128
+        "#;
+        let cfg: Config = toml::from_str(with_key).expect("capacity key must parse");
+        assert_eq!(cfg.storage.block_cache_capacity, 128);
+        cfg.validate().expect("128 is valid");
+
+        let zero = with_key.replace("128", "0");
+        let cfg0: Config = toml::from_str(&zero).expect("capacity 0 must parse");
+        assert_eq!(
+            cfg0.storage.block_cache_capacity, 0,
+            "0 = cache off switch, must stay valid"
+        );
+        cfg0.validate().expect("0 is valid");
+
+        // Legacy fixture without the key (S3-P07-era TOML) → default.
+        let legacy = r#"
+            network_id = 3
+            node_mode = "full"
+            log_level = "info"
+            data_dir = "./data"
+
+            [network]
+            listen_addr = "127.0.0.1:8081"
+            seeds = []
+            max_peers = 50
+
+            [storage]
+            path = "./data/leveldb"
+        "#;
+        let cfg_default: Config = toml::from_str(legacy).expect("legacy must parse");
+        assert_eq!(cfg_default.storage.block_cache_capacity, 4096);
     }
 
     #[test]

@@ -268,6 +268,7 @@ fn auto_run_converts_renames_to_bak_and_is_idempotent() {
 
     let config = || StorageConfig {
         path: rocks.clone(),
+        ..Default::default()
     };
 
     // Open #1: auto-run converts the fixture, then the chain loads.
@@ -376,6 +377,7 @@ fn corrupt_legacy_fails_closed() {
             CHAIN_ID,
             StorageConfig {
                 path: rocks.clone(),
+                ..Default::default()
             },
         );
     }));

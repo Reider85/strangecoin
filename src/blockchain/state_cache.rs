@@ -459,8 +459,11 @@ pub(crate) fn open_blockchain(
     if !storage_cfg.path.exists() {
         info!("База данных не существует, создаётся новая");
     }
-    let storage = crate::storage::Storage::open_rocks(&storage_cfg.path)
-        .expect("Не удалось открыть хранилище");
+    let storage = crate::storage::Storage::open_rocks_with_cache(
+        &storage_cfg.path,
+        storage_cfg.block_cache_capacity,
+    )
+    .expect("Не удалось открыть хранилище");
 
     let mut blockchain = Blockchain {
         chain: vec![],

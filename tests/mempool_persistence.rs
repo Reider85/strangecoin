@@ -125,6 +125,7 @@ fn storage_config_wires_path() {
         strangecoin::consensus::CHAIN_ID_REGTEST,
         StorageConfig {
             path: rocks_path.clone(),
+            ..Default::default()
         },
     );
     assert_eq!(
@@ -149,6 +150,7 @@ fn storage_config_wires_path() {
         strangecoin::consensus::CHAIN_ID_REGTEST,
         StorageConfig {
             path: rocks_path.clone(),
+            ..Default::default()
         },
     );
     assert_eq!(reopened.chain_len(), 1, "reopen loads instead of resetting");
