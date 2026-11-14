@@ -249,4 +249,4 @@ Protocol design decisions are recorded as ADRs under [`docs/ADR/`](docs/ADR) and
 
 **Star it · Fork it · Try to break it · Point your agents at it.**
 
-If Strangecoin helped you learn or build, please [star the repo](https://github.com/Reider85/strangecoin/stargazers) — it really helps.
+If Strangecoin helped you learn or build, please [star the repo](https://github.com/Reider85/strangecoin/stargazers) — it really helps.⭐ null stars
