@@ -44,6 +44,34 @@ name: Nightly
 #      Code security -> CodeQL, Rust); no `gh` CLI on the dev host and the
 #      spec's file list contains no CodeQL workflow -> manual step for the
 #      maintainer after merge, not encoded here.
+#   10. [GITHUB-P08] Deviations from analytics/CI2.md prompt 3 (all verified
+#      against real run logs, run #8 / 43588190155, 2026-11-14):
+#      a. Spec says the x86_64-apple-darwin cell should move to `macos-13`;
+#         that runner label was retired (Dec 2025) and is no longer offered by
+#         GitHub -> replaced with `macos-15-intel` (current Intel label).
+#         The aarch64 cell stays `macos-latest` (native arm64), per spec.
+#      b. Spec says to move the Linux-aarch64 cross-tool install into a
+#         SEPARATE job. Not possible: `$GITHUB_ENV` and installed apt packages
+#         do not propagate across jobs (each job gets a fresh runner). The
+#         retry is added inside the existing step instead. The actual failure
+#         was never apt flakiness: `gcc-aarch64-linux-gnu` was installed fine,
+#         but `librocksdb-sys` (C++) needs `aarch64-linux-gnu-g++`, which the
+#         `gcc-*` package does not pull in -> `g++-aarch64-linux-gnu` added.
+#      c. BOTH macOS cells failed on `objc2 0.3.0-beta.3` (error[E0277]) after
+#         rustc stable 1.99.1 -> 1.100.0 (regressed between run #6 and #7;
+#         same runner image, only the toolchain changed). objc2 is pinned by
+#         eframe 0.22 -> glutin 0.30.10 (`>=0.3.0-beta.3, <0.3.0-beta.4`), so
+#         it cannot be bumped without the eframe migration (issue #11 /
+#         CI2 prompt 2). Mitigation: pin the macOS cells to `1.99.1` via a
+#         matrix `toolchain` field. TEMPORARY until the eframe migration;
+#         release.yml has the same latent failure on its next v*-tag build
+#         (tracked in issue #15).
+#      d. Spec says "do not touch the mutation job" and attributes its
+#         failure to a survived mutant. Verified false: the job failed in 0 s
+#         because `--in-place` conflicts with `-j/--jobs` (clap
+#         `conflicts_with`, exit 2) on every cargo-mutants >= 24.1.2 — the
+#         mutants never ran. `-j 4` dropped (`--in-place` kept: parallel
+#         tree copies do not fit the 14 GB runner disk); user-approved fix.
 
 on:
   schedule:
@@ -154,7 +182,7 @@ jobs:
         # GitHub-hosted; RUNS_ON set -> only the windows-x86_64 cell (host
         # gnu triple, no MSVC on the dev machine; linux/macos cells cannot
         # run on the local Windows runner).
-        include: ${{ vars.RUNS_ON && fromJSON('[{"os":"windows-latest","target":"x86_64-pc-windows-msvc","target_local":"x86_64-pc-windows-gnu","artifact":"nightly-windows-x86_64"}]') || fromJSON('[{"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","artifact":"nightly-linux-x86_64"},{"os":"ubuntu-latest","target":"aarch64-unknown-linux-gnu","artifact":"nightly-linux-aarch64","cross":true},{"os":"macos-latest","target":"x86_64-apple-darwin","artifact":"nightly-macos-x86_64"},{"os":"macos-latest","target":"aarch64-apple-darwin","artifact":"nightly-macos-aarch64"},{"os":"windows-latest","target":"x86_64-pc-windows-msvc","target_local":"x86_64-pc-windows-gnu","artifact":"nightly-windows-x86_64"},{"os":"windows-latest","target":"aarch64-pc-windows-msvc","artifact":"nightly-windows-aarch64","cross":true,"allow_failure":true}]') }}
+        include: ${{ vars.RUNS_ON && fromJSON('[{"os":"windows-latest","target":"x86_64-pc-windows-msvc","target_local":"x86_64-pc-windows-gnu","artifact":"nightly-windows-x86_64"}]') || fromJSON('[{"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","artifact":"nightly-linux-x86_64"},{"os":"ubuntu-latest","target":"aarch64-unknown-linux-gnu","artifact":"nightly-linux-aarch64","cross":true},{"os":"macos-15-intel","target":"x86_64-apple-darwin","artifact":"nightly-macos-x86_64","toolchain":"1.99.1"},{"os":"macos-latest","target":"aarch64-apple-darwin","artifact":"nightly-macos-aarch64","toolchain":"1.99.1"},{"os":"windows-latest","target":"x86_64-pc-windows-msvc","target_local":"x86_64-pc-windows-gnu","artifact":"nightly-windows-x86_64"},{"os":"windows-latest","target":"aarch64-pc-windows-msvc","artifact":"nightly-windows-aarch64","cross":true,"allow_failure":true}]') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -177,7 +205,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           # [GITHUB-P06] local runner pins the gnu-flavor toolchain.
-          toolchain: ${{ vars.RUNS_ON && 'stable-x86_64-pc-windows-gnu' || 'stable' }}
+          # [GITHUB-P08] macOS cells carry matrix.toolchain=1.99.1 (objc2 /
+          # rustc 1.100 breakage — header deviation 10c); all other cells
+          # fall through to `stable`.
+          toolchain: ${{ vars.RUNS_ON && 'stable-x86_64-pc-windows-gnu' || matrix.toolchain || 'stable' }}
           targets: ${{ steps.tgt.outputs.target }}
 
       - uses: Swatinem/rust-cache@v2
@@ -185,11 +216,16 @@ jobs:
           key: ${{ steps.tgt.outputs.target }}
 
       # Cross tooling identical to release.yml (same cells, same flags).
+      # [GITHUB-P08] + g++-aarch64-linux-gnu: librocksdb-sys compiles C++ and
+      # cc-rs looks for `aarch64-linux-gnu-g++`, which the gcc-* package does
+      # NOT provide (real cause of the 4/4 cell failures — header deviation
+      # 10b). Retry on transient apt failures per CI2 prompt 3.
       - name: Install cross-compilation tools (Linux aarch64)
         if: matrix.cross && runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo apt-get update || (sleep 10 && sudo apt-get update)
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            || (sleep 10 && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu)
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
 
       - name: Install cross-compilation tools (Windows aarch64)
@@ -327,11 +363,15 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # Spec: -j 4, --in-place, 50-minute cap (step-level timeout), job-level
-      # continue-on-error above.
+      # Spec: --in-place, 50-minute cap (step-level timeout), job-level
+      # continue-on-error above. [GITHUB-P08] `-j 4` dropped: `--in-place`
+      # conflicts with `--jobs` (clap conflicts_with, exit 2) on every
+      # cargo-mutants >= 24.1.2 — the command died at arg parsing in 0 s and
+      # the mutants never ran (header deviation 10d). `--in-place` is kept:
+      # parallel tree copies do not fit the 14 GB runner disk.
       - name: Run cargo mutants
         timeout-minutes: 50
-        run: cargo mutants --workspace -j 4 --in-place
+        run: cargo mutants --workspace --in-place
 
       # Deviation 4: actual cargo-mutants output directory is `mutants.out/`.
       - name: Upload mutants report
