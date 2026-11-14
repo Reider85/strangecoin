@@ -141,9 +141,7 @@ fn wait_for_progress(child: &mut Child, kill_after: u64) {
             "child never reached progress {kill_after}"
         );
         line.clear();
-        let n = reader
-            .read_line(&mut line)
-            .expect("read child stdout");
+        let n = reader.read_line(&mut line).expect("read child stdout");
         assert!(n > 0, "child stdout closed before progress {kill_after}");
         if let Some(rest) = line.trim().strip_prefix("progress ") {
             let seen: u64 = rest.parse().expect("progress number");
@@ -211,8 +209,8 @@ fn crash_then_reopen_is_atomic(test_name: &str, kill_after: u64) {
     let _ = child.wait();
 
     // Reopen with zero manual cleanup (no LOCK removal, no repair).
-    let engine =
-        RocksDbEngine::open(dir.path()).expect("reopen after kill must succeed without intervention");
+    let engine = RocksDbEngine::open(dir.path())
+        .expect("reopen after kill must succeed without intervention");
 
     // Schema guard still holds after the crash.
     let version = engine
