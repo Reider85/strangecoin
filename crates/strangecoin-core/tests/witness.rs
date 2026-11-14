@@ -1,6 +1,11 @@
+use std::collections::HashMap;
+
 use strangecoin_core::consensus::CHAIN_ID_REGTEST;
 use strangecoin_core::state::sparse_merkle::SparseMerkleTrie;
-use strangecoin_core::state::witness::{build_witness, verify_block_stateless};
+use strangecoin_core::state::witness::{
+    build_witness, deserialize_state_witness, serialize_state_witness, verify_block_stateless,
+    AccountProof, StateWitness, WITNESS_FORMAT_VERSION,
+};
 use strangecoin_core::state::{apply_block, State};
 use strangecoin_core::types::{Account, Block, Transaction};
 use strangecoin_core::CoreError;
@@ -273,7 +278,7 @@ fn forged_state_root_rejected() {
 }
 
 /// BUG-S1-003: a post-commitment that also tampers an untouched account is
-/// rejected — the recompute is anchored to the parent root, so an untouched
+/// rejected вЂ” the recompute is anchored to the parent root, so an untouched
 /// leaf cannot diverge (the residual Option A would leave open).
 #[test]
 fn untouched_account_tamper_in_post_commitment_rejected() {
@@ -352,7 +357,7 @@ fn missing_touched_address_rejected() {
     assert!(matches!(result, Err(CoreError::WitnessVerificationFailed)));
 }
 
-/// BUG-S1-003: genesis keeps the invariant #19 exemption — a zero state_root
+/// BUG-S1-003: genesis keeps the invariant #19 exemption вЂ” a zero state_root
 /// on index 0 is tolerated (same rule as `root_after` / SCIP-0002).
 #[test]
 fn genesis_zero_state_root_is_tolerated() {
@@ -403,4 +408,194 @@ proptest! {
             result
         );
     }
+}
+
+// ---------------------------------------------------------------- wire codec
+// S3-P11: canonical binary StateWitness encoding. The codec is a pure byte
+// function (no time/RNG/I/O) and sorts proofs by address so one witness
+// always encodes to the same bytes вЂ” Stage 3 determinism checklist.
+
+/// A deterministic hand-built witness covering both account shapes (EOA and
+/// contract) вЂ” the fixture for round-trip and golden-vector tests.
+fn codec_fixture() -> StateWitness {
+    let mut proofs = HashMap::new();
+    proofs.insert(
+        "alice".to_string(),
+        AccountProof {
+            balance: 1000,
+            nonce: 1,
+            code_hash: None,
+            storage_root: None,
+            key_hash: [0xaa; 32],
+            proof: vec![[0x11; 32], [0x22; 32]],
+        },
+    );
+    proofs.insert(
+        "bob".to_string(),
+        AccountProof {
+            balance: 5,
+            nonce: 0,
+            code_hash: Some([0xcc; 32]),
+            storage_root: Some([0xdd; 32]),
+            key_hash: [0xbb; 32],
+            proof: vec![[0x33; 32]],
+        },
+    );
+    StateWitness {
+        pre_state_root: [0x77; 32],
+        proofs,
+    }
+}
+
+#[test]
+fn witness_codec_roundtrip() {
+    let witness = codec_fixture();
+    let bytes = serialize_state_witness(&witness);
+    assert_eq!(bytes[0], WITNESS_FORMAT_VERSION);
+
+    let decoded = deserialize_state_witness(&bytes).unwrap();
+    assert_eq!(decoded, witness);
+    // Encoding the decoded value reproduces the exact same bytes.
+    assert_eq!(serialize_state_witness(&decoded), bytes);
+}
+
+/// One witness в†’ one byte string, regardless of `HashMap` insertion (and
+/// therefore iteration) order вЂ” the sorted-by-address layout is what makes
+/// the wire form canonical.
+#[test]
+fn witness_codec_is_order_independent() {
+    let witness = codec_fixture();
+
+    let mut reversed = StateWitness {
+        pre_state_root: witness.pre_state_root,
+        proofs: HashMap::new(),
+    };
+    let mut entries: Vec<(String, AccountProof)> = witness.proofs.clone().into_iter().collect();
+    entries.sort_by(|a, b| b.0.cmp(&a.0)); // insert in descending order
+    for (addr, proof) in entries {
+        reversed.proofs.insert(addr, proof);
+    }
+    assert_eq!(
+        serialize_state_witness(&witness),
+        serialize_state_witness(&reversed),
+        "same witness content must encode identically"
+    );
+}
+
+/// Golden vector (BUG-S1-007-style pin): any change to the witness wire
+/// layout must fail this test and bump `WITNESS_FORMAT_VERSION`.
+#[test]
+fn witness_codec_golden_vector() {
+    let expected = concat!(
+        "01",                                             // WITNESS_FORMAT_VERSION
+        "7777777777777777777777777777777777777777777777777777777777777777", // pre_state_root
+        "00000002",                                       // proof count
+        "00000005", "616c696365",                         // "alice"
+        "00000000000003e8",                               // balance 1000
+        "0000000000000001",                               // nonce 1
+        "00",                                             // code_hash: None
+        "00",                                             // storage_root: None
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // key_hash
+        "00000002",                                       // 2 proof hashes
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        "2222222222222222222222222222222222222222222222222222222222222222",
+        "00000003", "626f62",                             // "bob"
+        "0000000000000005",                               // balance 5
+        "0000000000000000",                               // nonce 0
+        "01", "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", // code_hash
+        "01", "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", // storage_root
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", // key_hash
+        "00000001",                                       // 1 proof hash
+        "3333333333333333333333333333333333333333333333333333333333333333",
+    );
+
+    let witness = codec_fixture();
+    let actual = hex::encode(serialize_state_witness(&witness));
+    assert_eq!(actual, expected);
+    let decoded = deserialize_state_witness(&hex::decode(expected).unwrap()).unwrap();
+    assert_eq!(decoded, witness);
+}
+
+#[test]
+fn witness_codec_rejects_unknown_version() {
+    let mut bytes = serialize_state_witness(&codec_fixture());
+    bytes[0] = WITNESS_FORMAT_VERSION + 1;
+    assert_eq!(
+        deserialize_state_witness(&bytes),
+        Err("Unknown witness format version")
+    );
+}
+
+#[test]
+fn witness_codec_rejects_unsorted_addresses() {
+    // Assemble a two-entry witness that lists "zeta" before "alpha" вЂ” a
+    // shuffled encoding is not canonical, so decode must reject it.
+    let mut bytes = Vec::new();
+    bytes.push(WITNESS_FORMAT_VERSION);
+    bytes.extend_from_slice(&[0u8; 32]); // pre_state_root
+    bytes.extend_from_slice(&2u32.to_be_bytes());
+    for address in ["zeta", "alpha"] {
+        bytes.extend_from_slice(&(address.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(address.as_bytes());
+        bytes.extend_from_slice(&0u64.to_be_bytes()); // balance
+        bytes.extend_from_slice(&0u64.to_be_bytes()); // nonce
+        bytes.push(0); // code_hash: None
+        bytes.push(0); // storage_root: None
+        bytes.extend_from_slice(&[0u8; 32]); // key_hash
+        bytes.extend_from_slice(&0u32.to_be_bytes()); // no proof hashes
+    }
+    assert_eq!(
+        deserialize_state_witness(&bytes),
+        Err("Proof addresses not in strictly ascending order")
+    );
+}
+
+#[test]
+fn witness_codec_rejects_truncated_and_trailing_bytes() {
+    let bytes = serialize_state_witness(&codec_fixture());
+
+    let mut truncated = bytes.clone();
+    truncated.truncate(bytes.len() - 5);
+    assert!(deserialize_state_witness(&truncated).is_err());
+
+    let mut trailing = bytes.clone();
+    trailing.push(0xff);
+    assert_eq!(
+        deserialize_state_witness(&trailing),
+        Err("Trailing bytes after witness")
+    );
+}
+
+#[test]
+fn witness_codec_rejects_absurd_proof_count() {
+    let mut bytes = Vec::new();
+    bytes.push(WITNESS_FORMAT_VERSION);
+    bytes.extend_from_slice(&[0u8; 32]);
+    bytes.extend_from_slice(&u32::MAX.to_be_bytes());
+    assert_eq!(
+        deserialize_state_witness(&bytes),
+        Err("Proof count exceeds buffer")
+    );
+}
+
+/// A witness that travelled through the wire codec still verifies вЂ” the
+/// decode path must not drop or reorder anything `verify_block_stateless`
+/// depends on.
+#[test]
+fn decoded_real_witness_still_verifies() {
+    let mut state = State::new();
+    state
+        .balances
+        .insert("alice".to_string(), Account::eoa(1000, 0));
+
+    let genesis = genesis_block(vec![coinbase("alice", 1000)]);
+    let after_genesis = apply_block(&state, &genesis, CHAIN_ID_REGTEST).unwrap();
+    let genesis_root = SparseMerkleTrie::compute_root(&after_genesis.balances);
+
+    let block = transfer_block(1, vec![transfer("alice", "bob", 100, 1)], &after_genesis);
+    let witness = build_witness(&after_genesis, &block).unwrap();
+
+    let decoded = deserialize_state_witness(&serialize_state_witness(&witness)).unwrap();
+    let result = verify_block_stateless(&genesis_root, &block, CHAIN_ID_REGTEST, &decoded);
+    assert!(result.is_ok());
 }

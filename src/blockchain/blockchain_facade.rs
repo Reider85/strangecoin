@@ -500,6 +500,100 @@ impl BlockchainFacade {
             .is_some()
     }
 
+    // ------------------------------------------------------------- stateless
+
+    /// State witness для блока на `height`: pre-state = replay цепочки
+    /// `chain[..height]` (S3-P11). **Expensive** — O(height) полной
+    /// реплеи-валидации; вызывается по запросу, не в hot-path.
+    ///
+    /// `state_history` CF (S3-P07) как optimization здесь **не
+    /// применяется** (FBP): он хранит только touched-дельты высоты, а
+    /// генерация SMT-доказательств требует полного набора leaves
+    /// (`SparseMerkleTrie::prove`) — полный pre-state из дельт не
+    /// реконструируется, fallback = replay (зафиксировано в
+    /// `strangecoin_core::state::witness` module docs).
+    ///
+    /// Replay идёт вне blockchain-лока (клонируем срез цепочки под
+    /// read-lock), чтобы не блокировать writers на всё время реконструкции.
+    pub fn build_witness_for_block(
+        &self,
+        height: u64,
+    ) -> Result<strangecoin_core::StateWitness, StrangecoinError> {
+        let (blocks, allow_grant_blocks, allow_zero_state_root, rules, chain_id) = {
+            let guard = self.inner.read().expect(BLOCKCHAIN_LOCK);
+            let idx = height as usize;
+            if idx >= guard.chain.len() {
+                return Err(StrangecoinError::InvalidBlock(format!(
+                    "witness height {} out of range (chain len {})",
+                    height,
+                    guard.chain.len()
+                )));
+            }
+            (
+                guard.chain[..=idx].to_vec(),
+                guard.allow_grant_blocks,
+                guard.allow_zero_state_root,
+                guard.rules.clone(),
+                guard.chain_id,
+            )
+        };
+
+        let (pre_cache, _receipts) = StateCache::rebuild_from_chain(
+            &blocks[..height as usize],
+            block_executor::now_secs(),
+            allow_grant_blocks,
+            allow_zero_state_root,
+            &rules,
+            chain_id,
+        )?;
+        let pre_state = pre_cache.to_state();
+        Ok(strangecoin_core::build_witness(
+            &pre_state,
+            &blocks[height as usize],
+        )?)
+    }
+
+    /// Проверка входящего блока с stateless-свидетелем против parent'а
+    /// этой цепочки (S3-P11): parent ищется по `block.previous_hash`
+    /// (in-memory `chain`), его `state_root` — pre-state root для
+    /// [`verify_block_stateless`](strangecoin_core::verify_block_stateless).
+    ///
+    /// Назначение — будущие stateless relay-пути; **wire-интеграция
+    /// (strangecoin-net message enum) — Stage 4+ residual**, здесь только
+    /// API + тесты. Genesis (`index == 0`) не поддерживается: incoming
+    /// genesis не имеет parent'а в цепочке → `InvalidBlock`.
+    ///
+    /// Ограничение baseline (S1-P07): core-verify применяет transfer-only
+    /// `apply_block` — блоки с Create/Call транзакциями stateless не
+    /// верифицируются (исправляется отдельным SCIP/промптом, не S3-P11).
+    pub fn verify_incoming_block_with_witness(
+        &self,
+        block: &Block,
+        witness: &strangecoin_core::StateWitness,
+    ) -> Result<(), StrangecoinError> {
+        let (parent_root, chain_id) = {
+            let guard = self.inner.read().expect(BLOCKCHAIN_LOCK);
+            let parent = guard
+                .chain
+                .iter()
+                .find(|candidate| candidate.hash == block.previous_hash)
+                .ok_or_else(|| {
+                    StrangecoinError::InvalidBlock(
+                        "parent block not found for stateless verification".to_string(),
+                    )
+                })?;
+            if parent.index + 1 != block.index {
+                return Err(StrangecoinError::InvalidBlock(format!(
+                    "block index {} does not follow parent index {}",
+                    block.index, parent.index
+                )));
+            }
+            (parent.state_root, guard.chain_id)
+        };
+        strangecoin_core::verify_block_stateless(&parent_root, block, chain_id, witness)?;
+        Ok(())
+    }
+
     pub fn mempool_transactions(&self) -> Vec<Transaction> {
         self.inner
             .read()
