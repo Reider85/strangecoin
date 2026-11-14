@@ -4,15 +4,27 @@ name: GitHub Pages
 # (JSON label array). Unset -> ubuntu-latest as before; set -> the local
 # self-hosted Windows runner. The build step's heredoc needs an explicit
 # `shell: bash` (pwsh on the local runner cannot run `cat > ... << EOF`),
-# and the build job carries the same fork-PR guard as ci.yml — while
-# RUNS_ON is set, fork PRs never execute on the dev machine.
+# and the build job carries a fork-PR guard as ci.yml does.
 # See .github/SELF_HOSTED_RUNNERS.md.
+#
+# [GITHUB-P09] Pages trigger hardening:
+#   - pull_request trigger removed — Dependabot PRs (e.g. actions/checkout
+#     bumps) produced phantom Pages-runs; the job-level guard below stays
+#     as belt-and-suspenders if the trigger is ever re-added.
+#   - push is paths-filtered to docs-only changes: star-monitor hourly
+#     snapshots (analytics/stargazer-history.csv) and prerelease README
+#     star-count commits must NOT trigger Pages.
+#   - workflow_dispatch kept for manual runs (CI2 prompt 4, check #2).
 
 on:
   push:
     branches: [ master ]
-  pull_request:
-    branches: [ master ]
+    paths:
+      - 'docs/**'
+      - 'book/**'
+      - 'mdbook.toml'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -29,25 +41,39 @@ jobs:
     runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
     # [GITHUB-P06] fork-PR guard (see header): local execution only for
     # pushes and same-repo PRs while RUNS_ON is set.
-    if: ${{ !vars.RUNS_ON || github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
+    # [GITHUB-P09] `!= 'pull_request'` replaces `== 'push'`: pull_request
+    # trigger was removed (see on:), so this now lets push AND
+    # workflow_dispatch run even while RUNS_ON is set.
+    if: ${{ !vars.RUNS_ON || github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       
       - name: Setup mdBook
-        uses: peaceiris/actions-mdbook@v1
+        # [GITHUB-P09] pinned: v1 was node16-era; 'latest' mdbook is not reproducible.
+        uses: peaceiris/actions-mdbook@v2.0.0
         with:
-          mdbook-version: "latest"
+          mdbook-version: '0.4.52'
       
       # [GITHUB-P06] shell: bash — the heredoc below is bash syntax; the
       # local Windows runner's default shell is pwsh.
+      # [GITHUB-P09] mdbook needs src/ + SUMMARY.md under the book root:
+      # index copies now land in docs/src/, book.toml gets explicit src="src"
+      # and build-dir="book" (resolves to docs/book == upload path below;
+      # the old build-dir="docs/book" would have resolved to docs/docs/book).
       - name: Build mdBook
         shell: bash
         run: |
-          # Create a custom book.toml for GitHub Pages
-          cp analytics/ARCHITECT3.md docs/index.md
-          cp README.md docs/README.md
-          
+          # Stage content into docs/src (mdbook source root)
+          mkdir -p docs/src
+          cp analytics/ARCHITECT3.md docs/src/index.md
+          cp README.md docs/src/README.md
+          cat > docs/src/SUMMARY.md << EOF
+          # Summary
+          - [Introduction](index.md)
+          - [README](README.md)
+          EOF
+
           # Create book.toml
           cat > docs/book.toml << EOF
           [book]
@@ -55,9 +81,10 @@ jobs:
           description = "Production-grade Layer-1 blockchain in Rust for AI agents"
           authors = ["Reider85"]
           language = "en"
+          src = "src"
           
           [build]
-          build-dir = "docs/book"
+          build-dir = "book"
           
           [output.html]
           site-url = "/strangecoin/"
