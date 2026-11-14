@@ -8,7 +8,7 @@
 //! * owns adoption against live [`Blockchain`] state
 //!   ([`try_adopt_candidate`]);
 //! * chain query helpers used by the facade wire path
-//!   ([`chain_has_tx`], [`headers_from_height`], [`blocks_by_hashes`]);
+//!   ([`headers_from_height`], [`blocks_by_hashes`]);
 //! * wire snapshot shape + serde for `Blockchain`
 //!   ([`BlockchainDeserialize`], moved from the facade in S1.5-P04 residual).
 //!
@@ -20,7 +20,7 @@
 
 pub use strangecoin_core::chain_selector::{ChainInfo, ChainSelector};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Deserializer, Serialize};
 use strangecoin_core::types::{Block, BlockHeader, Transaction};
@@ -32,16 +32,6 @@ use super::consensus_manager::ConsensusManager;
 use super::state_cache::StateCache;
 use crate::error::StrangecoinError;
 use crate::AccountState;
-
-/// True when `tx` is already confirmed somewhere in `chain`.
-pub(crate) fn chain_has_tx(chain: &[Block], tx: &Transaction) -> bool {
-    let id = strangecoin_core::serialize::txid(tx);
-    chain.iter().any(|b| {
-        b.transactions
-            .iter()
-            .any(|t| strangecoin_core::serialize::txid(t) == id)
-    })
-}
 
 /// Headers for the HEADERS response: `index >= from_height`, ascending, at most `max`.
 pub(crate) fn headers_from_height(
@@ -229,13 +219,23 @@ pub(crate) fn try_adopt_candidate(
     }
 
     let local_mempool = current.mempool.transactions();
+    // S3-P09: the candidate chain is not persisted yet, so the storage
+    // txid index cannot see its txs — one HashSet pass over the candidate
+    // replaces the old O(mempool × chain) `chain_has_tx` scan with O(1)
+    // membership per mempool tx. (The facade-level `chain_contains_tx`
+    // goes through the `txid → (height, index)` index instead.)
+    let candidate_txids: HashSet<[u8; 32]> = candidate_chain
+        .iter()
+        .flat_map(|block| block.transactions.iter())
+        .map(strangecoin_core::serialize::txid)
+        .collect();
     let mut merged = crate::mempool::Mempool::new(current.chain_id);
     let mut merged_txids: Vec<[u8; 32]> = Vec::new();
     for tx in candidate_mempool_txs.into_iter().chain(local_mempool) {
-        if chain_has_tx(&candidate_chain, &tx) {
+        let txid = strangecoin_core::serialize::txid(&tx);
+        if candidate_txids.contains(&txid) {
             continue;
         }
-        let txid = strangecoin_core::serialize::txid(&tx);
         if merged_txids.contains(&txid) {
             continue;
         }
@@ -263,27 +263,6 @@ pub(crate) fn try_adopt_candidate(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn chain_has_tx_detects_confirmed() {
-        let tx = Transaction::transfer("a", "b", 1, 0, 3);
-        let block = Block {
-            index: 1,
-            timestamp: 0,
-            transactions: vec![tx.clone()],
-            previous_hash: "p".into(),
-            hash: "h".into(),
-            nonce: 0,
-            target: "ff".into(),
-            consensus_version: 1,
-            state_root: [0u8; 32],
-            tx_root: [0u8; 32],
-            receipts_root: [0u8; 32],
-        };
-        assert!(chain_has_tx(std::slice::from_ref(&block), &tx));
-        let other = Transaction::transfer("a", "b", 2, 0, 3);
-        assert!(!chain_has_tx(std::slice::from_ref(&block), &other));
-    }
 
     #[test]
     fn headers_and_blocks_helpers() {

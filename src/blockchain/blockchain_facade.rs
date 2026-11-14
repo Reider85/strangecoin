@@ -25,6 +25,10 @@ use super::chain_selector::ChainSelector;
 use super::consensus_manager::ConsensusManager;
 use super::state_cache::StateCache;
 use crate::error::StrangecoinError;
+use crate::storage::{
+    block_by_height_key, block_hash_index_key, codec, contract_storage_root_key,
+    decode_tx_index_value, tx_index_key, tx_raw_key, Cf,
+};
 use crate::AccountState;
 use strangecoin_core::types::{Block, BlockHeader, ChainSnapshot, Transaction};
 
@@ -283,8 +287,55 @@ impl BlockchainFacade {
         Ok(())
     }
 
+    /// Подтверждён ли `tx` в канонической цепочке. S3-P09: O(1) через
+    /// `txid → (height, tx_index)` индекс — прежний linear scan по
+    /// `chain` удалён.
     pub fn chain_contains_tx(&self, tx: &Transaction) -> bool {
-        super::chain_selector::chain_has_tx(&self.inner.read().expect(BLOCKCHAIN_LOCK).chain, tx)
+        self.tx_location(&strangecoin_core::serialize::txid(tx))
+            .is_some()
+    }
+
+    /// S3-P09: O(1) `txid → (height, tx_index)` (point-get в `transactions`
+    /// CF). `None` = tx не подтверждён / не проиндексирован.
+    pub fn tx_location(&self, txid: &[u8; 32]) -> Option<(u64, u32)> {
+        let guard = self.inner.read().expect(BLOCKCHAIN_LOCK);
+        let raw = guard
+            .storage
+            .engine()
+            .get(Cf::Transactions, &tx_index_key(txid))
+            .ok()
+            .flatten()?;
+        decode_tx_index_value(&raw)
+    }
+
+    /// Подтверждённая tx по txid: S3-P09 raw-запись в `transactions` CF
+    /// (Stage 4 ADR-0030 escrow-валидация читает отсюда). Для tx из
+    /// mempool — [`Self::mempool_tx`].
+    pub fn get_tx(&self, txid: &[u8; 32]) -> Option<Transaction> {
+        let guard = self.inner.read().expect(BLOCKCHAIN_LOCK);
+        let raw = guard
+            .storage
+            .engine()
+            .get(Cf::Transactions, &tx_raw_key(txid))
+            .ok()
+            .flatten()?;
+        codec::decode_tx(&raw).ok()
+    }
+
+    /// S3-P09: O(1) кэш `contract_address → storage_root` (point-get в
+    /// `contract_storage` CF, tagged sub-space). `None` = нет записи
+    /// (не-контракт или контракт без storage-записей). Авторитетный
+    /// источник — `AccountState.storage_root`; кэш инвалидируется при
+    /// каждой записи слотов (см. `save_state_engine`).
+    pub fn contract_storage_root(&self, address: &str) -> Option<[u8; 32]> {
+        let guard = self.inner.read().expect(BLOCKCHAIN_LOCK);
+        let raw = guard
+            .storage
+            .engine()
+            .get(Cf::ContractStorage, &contract_storage_root_key(address))
+            .ok()
+            .flatten()?;
+        raw.try_into().ok()
     }
 
     // ------------------------------------------------------------------ state
@@ -409,8 +460,44 @@ impl BlockchainFacade {
     }
 
     /// Канонический блок по hex-хешу (S2-P13 gossip GET_DATA → BLOCK).
+    ///
+    /// S3-P09: O(1) — `hash → height` индекс, затем point-get блока;
+    /// прежний scan по `chain` удалён. Stale/битый индекс (прочитанный
+    /// блок не совпадает хешем) → `None`, как и невалидный hex.
     pub fn block_by_hash(&self, block_hash: &str) -> Option<Block> {
-        self.with_inner(|bc| bc.chain.iter().find(|b| b.hash == block_hash).cloned())
+        let hash: [u8; 32] = hex::decode(block_hash).ok()?.try_into().ok()?;
+        let guard = self.inner.read().expect(BLOCKCHAIN_LOCK);
+        let engine = guard.storage.engine();
+        let height_bytes = engine
+            .get(Cf::Blocks, &block_hash_index_key(&hash))
+            .ok()
+            .flatten()?;
+        let height = codec::decode_u64(&height_bytes).ok()?;
+        let block_bytes = engine
+            .get(Cf::Blocks, &block_by_height_key(height))
+            .ok()
+            .flatten()?;
+        let block = codec::decode_block(&block_bytes).ok()?;
+        (block.hash == block_hash).then_some(block)
+    }
+
+    /// S3-P09: O(1) присутствие блока в канонической цепочке — по
+    /// `hash → height` индексу (без чтения тела блока); scan удалён.
+    pub fn chain_contains_block(&self, block_hash: &str) -> bool {
+        let Some(hash): Option<[u8; 32]> = hex::decode(block_hash)
+            .ok()
+            .and_then(|bytes| bytes.try_into().ok())
+        else {
+            return false;
+        };
+        let guard = self.inner.read().expect(BLOCKCHAIN_LOCK);
+        guard
+            .storage
+            .engine()
+            .get(Cf::Blocks, &block_hash_index_key(&hash))
+            .ok()
+            .flatten()
+            .is_some()
     }
 
     pub fn mempool_transactions(&self) -> Vec<Transaction> {
@@ -653,7 +740,7 @@ impl strangecoin_net::BlockchainView for BlockchainFacade {
     }
 
     fn chain_contains_block(&self, block_hash: &str) -> bool {
-        self.with_inner(|bc| bc.chain.iter().any(|b| b.hash == block_hash))
+        self.chain_contains_block(block_hash)
     }
 
     fn snapshot_wire(&self) -> ChainSnapshot {

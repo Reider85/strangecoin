@@ -19,18 +19,26 @@
 //!   `state_history`, nonces in `mempool` — iteration order is a
 //!   determinism requirement, Stage 3 checklist #3).
 //! - **Index sub-keyspaces carry a leading [`KeyPrefix`] tag byte**: the
-//!   `blocks` hash→height index (ADR-0024 calls it "index sub-keyspace")
-//!   and the `transactions` txid→(height, index) index (ADR-0024: "raw +
-//!   index sub-keys"). Without a tag the two `transactions` sub-keys
+//!   `blocks` hash→height index (ADR-0024 calls it "index sub-keyspace"),
+//!   the `transactions` txid→(height, index) index (ADR-0024: "raw +
+//!   index sub-keys"), and the `contract_storage` address→storage_root
+//!   cache (S3-P09). Without a tag the two `transactions` sub-keys
 //!   would be byte-identical (same 32-byte txid, same CF) — the prompt
 //!   requires two separate constructors, so the tag is what keeps them
-//!   disjoint (33 B index vs 32 B raw).
+//!   disjoint (33 B index vs 32 B raw). The root-cache tag is what lets
+//!   the loader skip the sub-space by first byte (an untagged root key —
+//!   the bare address — would otherwise be misparsed as
+//!   `address ‖ slot` by the last-32-bytes split).
 //! - ROADMAP3's CF-spanning letter tags (`c/`, `s/`, `b/` …) were
 //!   **rejected** by ADR-0024 §Alternatives (Alternative 1): column
 //!   families do the separation. `KeyPrefix` exists only *within* a CF.
 //!
 //! Values are opaque bytes at the engine boundary; this module owns KEY
-//! structure only. Decoders exist where the framing is unambiguous
+//! structure only, plus the fixed-width **index-entry value** codecs of
+//! the `transactions` sub-space ([`encode_tx_index_value`] /
+//! [`decode_tx_index_value`] — 12 raw bytes, no core types involved;
+//! the `blocks` hash→height value is a bare `u64` big-endian). Decoders
+//! exist where the framing is unambiguous
 //! (`schema_version`, block height, `state_history`, `mempool` — keys are
 //! split at a fixed offset). `state_key`/`meta_key` are identity
 //! encodings and `contract_storage_key` (`address ‖ slot`) has no
@@ -74,11 +82,13 @@ pub const META_CHAIN_ID: &str = "chain_id";
 /// |---|---|---|---|
 /// | [`KeyPrefix::BlockHashIndex`] | `blocks` | `0x00 ‖ hash` | height `u64` BE |
 /// | [`KeyPrefix::TxIndex`] | `transactions` | `0x01 ‖ txid` | `(height, tx_index)` |
+/// | [`KeyPrefix::ContractStorageRoot`] | `contract_storage` | `0x02 ‖ address` | storage root `[u8;32]` |
 ///
 /// Tag byte values carry no ordering contract (storage is an
-/// implementation detail, not consensus — ADR-0024): both CFs are read
-/// by point lookup, and no prefix iteration spans the two sub-spaces of
-/// either CF.
+/// implementation detail, not consensus — ADR-0024): every sub-space is
+/// read by point lookup or skipped by first byte, and no production
+/// prefix iteration intentionally spans two sub-spaces of one CF (the
+/// whole-CF loads skip tagged keys explicitly — S3-P09).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum KeyPrefix {
@@ -86,6 +96,10 @@ pub enum KeyPrefix {
     BlockHashIndex = 0x00,
     /// `transactions` CF: txid → `(height, tx_index)` index sub-space.
     TxIndex = 0x01,
+    /// `contract_storage` CF: address → storage-root cache sub-space
+    /// (S3-P09; invalidates on every slot write — the root itself stays
+    /// consensus-derived in `AccountState.storage_root`).
+    ContractStorageRoot = 0x02,
 }
 
 impl KeyPrefix {
@@ -159,6 +173,28 @@ pub fn tx_index_key(txid: &[u8; 32]) -> Vec<u8> {
     key
 }
 
+/// `transactions` CF index **value** for [`tx_index_key`]:
+/// `height: u64 BE ‖ tx_index: u32 BE` — 12 bytes (ADR-0024 §Column
+/// families → `transactions`, S3-P09).
+///
+/// Fixed-width big-endian, pure bytes: no core types, no clock/RNG
+/// (Stage 3 determinism checklist).
+pub fn encode_tx_index_value(height: u64, tx_index: u32) -> [u8; 12] {
+    let mut out = [0u8; 12];
+    out[..8].copy_from_slice(&height.to_be_bytes());
+    out[8..].copy_from_slice(&tx_index.to_be_bytes());
+    out
+}
+
+/// Inverse of [`encode_tx_index_value`]; `None` on any length but 12
+/// (the caller maps that to [`crate::StorageError::Corrupt`]).
+pub fn decode_tx_index_value(bytes: &[u8]) -> Option<(u64, u32)> {
+    let arr: [u8; 12] = bytes.try_into().ok()?;
+    let height = u64::from_be_bytes(arr[..8].try_into().ok()?);
+    let tx_index = u32::from_be_bytes(arr[8..].try_into().ok()?);
+    Some((height, tx_index))
+}
+
 /// `contract_storage` CF key: `address ‖ slot_key` — ADR-0024.
 ///
 /// Uniqueness under the fixed-length bech32 address invariant of the
@@ -169,6 +205,24 @@ pub fn contract_storage_key(address: &str, slot: &[u8]) -> Vec<u8> {
     let mut key = Vec::with_capacity(address.len() + slot.len());
     key.extend_from_slice(address.as_bytes());
     key.extend_from_slice(slot);
+    key
+}
+
+/// `contract_storage` CF index key: contract address → storage root
+/// cache (`KeyPrefix::ContractStorageRoot ‖ address`; value: 32-byte
+/// root, S3-P09).
+///
+/// A **cache**, not consensus state: the authoritative root lives in
+/// `AccountState.storage_root` (recomputed by core on every storage
+/// flush). The writer invalidates/refreshes this entry whenever the
+/// contract's slots or account change; readers get O(1) without walking
+/// slots. Disjoint from [`contract_storage_key`] by tag — a bech32 (or
+/// any test) address never starts with `0x02`, and the loader skips the
+/// sub-space by first byte before the `address ‖ slot` split.
+pub fn contract_storage_root_key(address: &str) -> Vec<u8> {
+    let mut key = Vec::with_capacity(1 + address.len());
+    key.push(KeyPrefix::ContractStorageRoot.byte());
+    key.extend_from_slice(address.as_bytes());
     key
 }
 
@@ -457,6 +511,53 @@ mod tests {
             assert_eq!(hk.len(), 8);
         }
         assert_eq!(block_hash_index_key(&hash).len(), 33);
+
+        // contract_storage CF: slot keys are bare `address ‖ slot`, the
+        // root cache is tagged — the loader classifies by first byte.
+        let addr = fixed_addr("r");
+        let rootk = contract_storage_root_key(&addr);
+        assert_eq!(rootk[0], KeyPrefix::ContractStorageRoot.byte());
+        assert_eq!(&rootk[1..], addr.as_bytes());
+        assert_ne!(rootk, contract_storage_key(&addr, &[0u8; 32]));
+        assert_ne!(
+            contract_storage_root_key(&addr),
+            contract_storage_root_key(&fixed_addr("s"))
+        );
+    }
+
+    #[test]
+    fn tx_index_value_codec_roundtrips_and_rejects_bad_lengths() {
+        // Golden bytes: height BE ‖ index BE, 12 bytes fixed.
+        assert_eq!(
+            encode_tx_index_value(0x0102_0304_0506_0708, 0x0a0b_0c0d),
+            [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13]
+        );
+        assert_eq!(encode_tx_index_value(0, 0), [0u8; 12]);
+
+        for (h, i) in [
+            (0u64, 0u32),
+            (1, 1),
+            (u64::MAX, u32::MAX),
+            (u64::from(u32::MAX) + 1, u32::MAX),
+        ] {
+            assert_eq!(
+                decode_tx_index_value(&encode_tx_index_value(h, i)),
+                Some((h, i))
+            );
+        }
+        for bad in [&[0u8; 11][..], &[0u8; 13][..], &[][..]] {
+            assert_eq!(decode_tx_index_value(bad), None, "len {}", bad.len());
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn tx_index_value_roundtrip(h: u64, i: u32) {
+            prop_assert_eq!(
+                decode_tx_index_value(&encode_tx_index_value(h, i)),
+                Some((h, i))
+            );
+        }
     }
 
     proptest! {
@@ -531,6 +632,11 @@ mod tests {
             assert_eq!(state_history_key(77, &addr), state_history_key(77, &addr));
             assert_eq!(tx_raw_key(&txid), tx_raw_key(&txid));
             assert_eq!(tx_index_key(&txid), tx_index_key(&txid));
+            assert_eq!(
+                contract_storage_root_key(&addr),
+                contract_storage_root_key(&addr)
+            );
+            assert_eq!(encode_tx_index_value(42, 7), encode_tx_index_value(42, 7));
             assert_eq!(
                 contract_storage_key(&addr, &[1, 2, 3]),
                 contract_storage_key(&addr, &[1, 2, 3])

@@ -7,7 +7,7 @@
 //! Invariant #1 («вся валидность — из цепочки»): when the cached accounts and
 //! a reconstruction from the chain disagree, the reconstruction wins.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -21,6 +21,17 @@ use crate::blockchain::blockchain_facade::Blockchain;
 use crate::error::StrangecoinError;
 use crate::storage::{codec, schema::*};
 use crate::AccountState;
+
+/// `Block::hash` (hex blake3) → the 32-byte form the S3-P09 index keys
+/// take. Fail-closed: a non-hex/non-32-byte hash is corruption, never a
+/// silently skipped index entry.
+fn hash_bytes(hash: &str) -> Result<[u8; 32], StrangecoinError> {
+    let decoded: Vec<u8> = hex::decode(hash)
+        .map_err(|_| strangecoin_storage::StorageError::Corrupt("block hash is not hex"))?;
+    Ok(decoded
+        .try_into()
+        .map_err(|_| strangecoin_storage::StorageError::Corrupt("block hash wrong length"))?)
+}
 
 /// Balances/nonces cache plus per-contract storage (S1.5-P15).
 ///
@@ -646,6 +657,13 @@ fn load_persisted_state_engine(
     // address/slot boundary is the last 32 bytes — no framing needed.
     let mut contract_storage = strangecoin_core::state::ContractStorageMap::new();
     for (key, value) in engine.iterate_prefix(Cf::ContractStorage, b"")? {
+        // S3-P09: the address→storage_root cache is a tagged sub-space
+        // of this CF — classify by first byte BEFORE the `address ‖ slot`
+        // split (its key would otherwise be misparsed as a slot record,
+        // or trip the length check on short addresses → false Corrupt).
+        if key.first() == Some(&KeyPrefix::ContractStorageRoot.byte()) {
+            continue;
+        }
         if key.len() < 32 {
             return Err(strangecoin_storage::StorageError::Corrupt(
                 "contract storage key too short",
@@ -841,6 +859,12 @@ impl Blockchain {
     }
 
     /// Per-block incremental write (ADR-0024). See [`Self::save_state`].
+    ///
+    /// S3-P09: besides blocks/state/mempool, every save keeps the
+    /// O(1) index sub-spaces consistent — `hash → height`,
+    /// `txid → (height, tx_index)` + raw tx, and the contract
+    /// `address → storage_root` cache — across both the extension
+    /// (puts) and the reorg (delete-then-put) directions.
     fn save_state_engine(&mut self, engine: &dyn StorageEngine) -> Result<(), StrangecoinError> {
         let mut ops: Vec<WriteBatchOp> = Vec::new();
         let chain_len = self.chain.len() as u64;
@@ -899,12 +923,184 @@ impl Blockchain {
             _ => Vec::new(),
         };
 
+        // ---- S3-P09: index maintenance (hash→height, txid→location +
+        //      raw tx, contract storage-root cache) ----
+        //
+        // Ordering contract: index DELETES for the superseded fork (Phase
+        // A) are emitted BEFORE the new-tail PUTS, so a tx re-mined by
+        // the new chain always ends the batch re-indexed (put wins), and
+        // an old-fork txid the new tail carries is skipped by the delete
+        // outright. The remaining duplicate-txid case — the txid also
+        // lives in the KEPT prefix (identical coinbases) — is re-pointed
+        // at its last kept occurrence instead of being deleted (Phase A
+        // details below). Convention: one entry per txid = the highest
+        // occurrence in the current chain.
+        let new_txids: HashSet<[u8; 32]> = new_heights
+            .iter()
+            .flat_map(|&h| self.chain[h as usize].transactions.iter())
+            .map(strangecoin_core::serialize::txid)
+            .collect();
+
+        // Addresses whose storage-root cache entry moves this save.
+        // BTreeSet ⇒ deterministic op order (Stage 3 checklist #3/#5).
+        let mut root_touch: BTreeSet<String> = BTreeSet::new();
+
+        // A database written before S3-P09 (legacy dev DB, one-shot
+        // LevelDB migration — `migrations::build_ops` writes blocks
+        // without indices) carries a tip but no hash-index entry for it:
+        // rebuild every index record for the whole in-memory chain in
+        // this same atomic batch. Fresh DBs (no tip) take the normal
+        // per-height path below; the keys are additive, so
+        // `SCHEMA_VERSION` stays 1 (pre-mainnet, no schema bump).
+        //
+        // The probe is the **persisted** tip (the DB's last written
+        // block), never the in-memory one: a block adopted from a peer
+        // or side facade is legitimately unindexed until the new-height
+        // puts below land and must not trigger a chain-wide rewrite.
+        let tip_index_missing = match (&persisted_tip, &persisted_tip_hash) {
+            (Some(_), Some(tip_hash)) => {
+                let tip_hash = hash_bytes(tip_hash)?;
+                engine
+                    .get(Cf::Blocks, &block_hash_index_key(&tip_hash))?
+                    .is_none()
+            }
+            _ => false,
+        };
+        if tip_index_missing {
+            for (height, block) in self.chain.iter().enumerate() {
+                let height = height as u64;
+                ops.push(WriteBatchOp::Put {
+                    cf: Cf::Blocks,
+                    key: block_hash_index_key(&hash_bytes(&block.hash)?),
+                    value: codec::encode_u64(height),
+                });
+                for (tx_index, tx) in block.transactions.iter().enumerate() {
+                    let txid = strangecoin_core::serialize::txid(tx);
+                    ops.push(WriteBatchOp::Put {
+                        cf: Cf::Transactions,
+                        key: tx_index_key(&txid),
+                        value: encode_tx_index_value(height, tx_index as u32).to_vec(),
+                    });
+                    ops.push(WriteBatchOp::Put {
+                        cf: Cf::Transactions,
+                        key: tx_raw_key(&txid),
+                        value: codec::encode_tx(tx),
+                    });
+                }
+            }
+            // Root cache for every contract the chain defines (the
+            // emission after §3 refreshes the ones this save touches).
+            for (address, account) in self.balances.iter() {
+                if account.is_contract() {
+                    root_touch.insert(address.clone());
+                }
+            }
+        }
+
+        // Phase A — index cleanup for the superseded fork tail: every
+        // persisted height above the common ancestor that the new chain
+        // does not keep byte-identically (rewritten heights AND heights
+        // dropped by a shorter chain). Point-gets only; a corrupt old
+        // block reads as "mismatch" and self-heals through the rewrite,
+        // matching the common-ancestor walk's contract.
+        //
+        // Duplicate txids exist on-chain (identical coinbases: regtest
+        // reward is 0 and the miner address is stable — a plateau-height
+        // mainnet coinbase of one miner collides the same way). The
+        // index convention is "one entry = the HIGHEST occurrence in the
+        // current chain", so an old-fork txid that the *kept* prefix also
+        // carries must be re-pointed at its last kept occurrence instead
+        // of being deleted. Built lazily: only reorg saves pay for it.
+        let mut kept_txids: Option<HashMap<[u8; 32], (u64, u32)>> = None;
+        let index_drop_heights: Vec<u64> = match (common, persisted_tip) {
+            (Some(c), Some(pt)) if pt > c => ((c + 1)..=pt).collect(),
+            (None, Some(pt)) => (0..=pt).collect(),
+            _ => Vec::new(),
+        };
+        for height in index_drop_heights {
+            let Some(old_bytes) = engine.get(Cf::Blocks, &block_by_height_key(height))? else {
+                continue;
+            };
+            let Ok(old_block) = codec::decode_block(&old_bytes) else {
+                continue;
+            };
+            let superseded =
+                height >= chain_len || self.chain[height as usize].hash != old_block.hash;
+            if !superseded {
+                continue;
+            }
+            ops.push(WriteBatchOp::Delete {
+                cf: Cf::Blocks,
+                key: block_hash_index_key(&hash_bytes(&old_block.hash)?),
+            });
+            for tx in &old_block.transactions {
+                let txid = strangecoin_core::serialize::txid(tx);
+                if new_txids.contains(&txid) {
+                    continue;
+                }
+                // Kept-prefix duplicate: repoint at the last occurrence
+                // the surviving chain still holds (raw bytes are txid-
+                // determined, the raw record needs no touch).
+                if let Some(c) = common {
+                    let kept = kept_txids.get_or_insert_with(|| {
+                        let mut map: HashMap<[u8; 32], (u64, u32)> = HashMap::new();
+                        for block in self.chain.iter().take(c as usize + 1) {
+                            for (index, kept_tx) in block.transactions.iter().enumerate() {
+                                map.insert(
+                                    strangecoin_core::serialize::txid(kept_tx),
+                                    (block.index, index as u32),
+                                );
+                            }
+                        }
+                        map
+                    });
+                    if let Some(&(kept_height, kept_index)) = kept.get(&txid) {
+                        ops.push(WriteBatchOp::Put {
+                            cf: Cf::Transactions,
+                            key: tx_index_key(&txid),
+                            value: encode_tx_index_value(kept_height, kept_index).to_vec(),
+                        });
+                        continue;
+                    }
+                }
+                ops.push(WriteBatchOp::Delete {
+                    cf: Cf::Transactions,
+                    key: tx_index_key(&txid),
+                });
+                ops.push(WriteBatchOp::Delete {
+                    cf: Cf::Transactions,
+                    key: tx_raw_key(&txid),
+                });
+            }
+        }
+
         for &height in &new_heights {
+            let block = &self.chain[height as usize];
             ops.push(WriteBatchOp::Put {
                 cf: Cf::Blocks,
                 key: block_by_height_key(height),
-                value: codec::encode_block(&self.chain[height as usize]),
+                value: codec::encode_block(block),
             });
+            // S3-P09: hash→height plus per-tx location/raw for this
+            // height (the raw copy is what Stage 4 `get_tx` reads).
+            ops.push(WriteBatchOp::Put {
+                cf: Cf::Blocks,
+                key: block_hash_index_key(&hash_bytes(&block.hash)?),
+                value: codec::encode_u64(height),
+            });
+            for (tx_index, tx) in block.transactions.iter().enumerate() {
+                let txid = strangecoin_core::serialize::txid(tx);
+                ops.push(WriteBatchOp::Put {
+                    cf: Cf::Transactions,
+                    key: tx_index_key(&txid),
+                    value: encode_tx_index_value(height, tx_index as u32).to_vec(),
+                });
+                ops.push(WriteBatchOp::Put {
+                    cf: Cf::Transactions,
+                    key: tx_raw_key(&txid),
+                    value: codec::encode_tx(tx),
+                });
+            }
             // A previous fork may have written `state_history` at this
             // height (reorg): replace, don't merge.
             for (key, _) in engine.iterate_prefix(Cf::StateHistory, &height.to_be_bytes())? {
@@ -967,6 +1163,12 @@ impl Blockchain {
                     key: state_key(address),
                     value: codec::encode_account(account),
                 });
+                // S3-P09: a changed contract account moves its
+                // `storage_root` (core recomputed it on the storage
+                // flush) — refresh the cache entry with it.
+                if account.is_contract() {
+                    root_touch.insert(address.clone());
+                }
             }
         }
         let removed_addresses: Vec<String> = self
@@ -980,6 +1182,13 @@ impl Blockchain {
                 cf: Cf::State,
                 key: state_key(address),
             });
+            if self
+                .persisted_accounts
+                .get(address)
+                .is_some_and(AccountState::is_contract)
+            {
+                root_touch.insert(address.clone());
+            }
         }
 
         // ---- 3. contract storage: per-slot diff ----
@@ -995,6 +1204,7 @@ impl Blockchain {
                         key: contract_storage_key(address, slot),
                         value: value.clone(),
                     });
+                    root_touch.insert(address.clone());
                 }
             }
         }
@@ -1006,7 +1216,31 @@ impl Blockchain {
                         cf: Cf::ContractStorage,
                         key: contract_storage_key(address, slot),
                     });
+                    root_touch.insert(address.clone());
                 }
+            }
+        }
+
+        // S3-P09: emit the storage-root cache refresh for every address
+        // touched above (account change, slot write, removal, backfill).
+        // Value = the consensus-derived `AccountState.storage_root` — the
+        // cache never recomputes roots itself; a removed/never-contracted
+        // address drops its entry (Delete of an absent key is a no-op).
+        for address in &root_touch {
+            let root = self
+                .balances
+                .get(address)
+                .and_then(|account| account.as_contract().map(|contract| contract.storage_root));
+            match root {
+                Some(root) => ops.push(WriteBatchOp::Put {
+                    cf: Cf::ContractStorage,
+                    key: contract_storage_root_key(address),
+                    value: root.to_vec(),
+                }),
+                None => ops.push(WriteBatchOp::Delete {
+                    cf: Cf::ContractStorage,
+                    key: contract_storage_root_key(address),
+                }),
             }
         }
 

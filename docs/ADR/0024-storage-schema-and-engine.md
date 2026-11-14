@@ -70,7 +70,7 @@ open.**
 | Schema versioning | `meta.schema_version: u32`; legacy LevelDB blob layout = **0**, this schema = **1**; fresh DB → initialize to 1; existing DB with different value → `StorageError::SchemaVersion { found, expected }` fail-closed; upgrades only via `migrations.rs` (S3-P08) |
 | Trait surface | `get` / `put` / `delete` / `write_batch` (atomic) / `iterate_prefix` (sorted, deterministic) / `flush`; `Cf` enum mirrors the CF list; **raw DB handle never leaves the crate** (ADR-0008 Decision, now binding) |
 | Concurrency | `rocksdb::DB` is thread-safe ⇒ no `Arc<Mutex<DB>>` inside the engine; the DB-lock level disappears from the monolith lock ordering (S3-P07 documents the new order) |
-| Write path | adopt-block writes **O(changed records)**: changed accounts → `state`, block → `blocks`, txs → `transactions` + `mempool` deletes, touched pre-state → `state_history`; no full-chain or full-state rewrite |
+| Write path | adopt-block writes **O(changed records)**: changed accounts → `state`, block → `blocks` + `hash → height` index, txs → `transactions` (`txid → (height, tx_index)` index + raw copy) + `mempool` deletes, touched pre-state → `state_history`, touched contracts → `storage_root` cache; reorg deletes the superseded fork's index records before the new-tail puts; no full-chain or full-state rewrite (S3-P09) |
 | Config surface | `storage.engine` (`"rocksdb"` default; `"leveldb"` transitional until S3-P08, then removed), `storage.path` **wired for real** (default `./data/rocksdb`); legacy `<exe_dir>/blockchain_db_{port}` detected for auto-migration (S3-P08) |
 | Derived data | receipts, VM codes and `total_work` remain **derived** (rebuild-from-chain, invariant #1); not persisted in Stage 3 |
 | Pin policy | `rocksdb = "=0.25.0"` — version resolved 2026-10-30 in S3-P04 against the then-current stable `rust-rocksdb` (recorded here and in AGENTS.md §Stage 3 Pin Policy); update path = SCIP after mainnet freeze |
@@ -83,7 +83,7 @@ open.**
 | `blocks` | `height: u64 BE` → canonical block bytes; `hash: [u8;32]` → height `u64 BE` (index sub-keyspace) | block / height | replaces the `chain` blob; height key order == insertion order |
 | `state` | address (UTF-8) | canonical `AccountState` bytes | replaces `balances` blob; O(1) `address → balance` (ROADMAP3 index — already the natural access path) |
 | `transactions` | `txid: [u8;32]` (raw + index sub-keys) | `(height, tx_index)` + raw tx bytes | enables O(1) `txid → block` (replaces linear scan in `chain_has_tx`) |
-| `contract_storage` | `address ‖ slot_key` | value bytes | replaces the `contract_storage` blob |
+| `contract_storage` | `address ‖ slot_key` | value bytes | replaces the `contract_storage` blob; plus the S3-P09 cache sub-keyspace `0x02 ‖ address → storage_root [u8;32]` (tagged; invalidated on every slot/account write — the consensus root stays in `AccountState.storage_root`) |
 | `state_history` | `height: u64 BE ‖ address` | pre-block `AccountState` snapshot (canonical bytes) | written on adopt; **pruned** by height window (ADR-0025); powers archival queries and future expiry research |
 | `mempool` | `sender ‖ nonce: u64 BE` | raw tx bytes | prefix-iterate per sender (no full-DB scan); **deleted** on mine/confirm — closes the Stage 1 leak |
 

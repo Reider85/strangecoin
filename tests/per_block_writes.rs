@@ -98,9 +98,10 @@ impl StorageEngine for CountingEngine {
 fn adopt_writes_only_changed_records_not_the_whole_chain() {
     const MIN_BLOCKS: usize = 30;
     /// One block put + tip meta (height/hash/difficulty) + the touched
-    /// accounts (~3) + their pre-apply history (~3) + margin. A full
-    /// rewrite would need ≥ MIN_BLOCKS puts (blocks alone).
-    const MAX_OPS: usize = 16;
+    /// accounts (~3) + their pre-apply history (~3) + the S3-P09 index
+    /// records for the new tip (hash→height + 2 per-tx entries, ~5) +
+    /// margin. A full rewrite would need ≥ MIN_BLOCKS puts (blocks alone).
+    const MAX_OPS: usize = 24;
 
     let engine = Arc::new(CountingEngine::new());
     let dir = TestDir::new("per_block_writes");

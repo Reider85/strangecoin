@@ -11,7 +11,8 @@
 //! - [`schema`] — pure key-encoding functions and schema versioning
 //!   (S3-P05): [`schema::SCHEMA_VERSION`], [`schema::KeyPrefix`] tags for
 //!   index sub-keyspaces, per-CF key constructors (big-endian heights /
-//!   nonces) and their decoders. Pure byte functions — no I/O, no clock,
+//!   nonces) and their decoders, plus the S3-P09 index-entry value codec
+//!   (`txid → (height, tx_index)`). Pure byte functions — no I/O, no clock,
 //!   no RNG; key *structure* only, values stay opaque bytes.
 //! - [`rocks`] (S3-P06, feature `rocksdb`) — [`RocksDbEngine`], the
 //!   production backend: open with all seven ADR-0024 column families,
@@ -40,9 +41,10 @@ pub use engine::{Cf, KvPair, StorageEngine, StorageError, WriteBatchOp};
 #[cfg(feature = "rocksdb")]
 pub use rocks::RocksDbEngine;
 pub use schema::{
-    block_by_height_key, block_hash_index_key, contract_storage_key, decode_block_height_key,
-    decode_mempool_key, decode_schema_version, decode_state_history_key, encode_schema_version,
-    mempool_key, mempool_sender_prefix, meta_key, state_history_key, state_key, tx_index_key,
-    tx_raw_key, KeyPrefix, META_CHAIN_ID, META_DIFFICULTY, META_SCHEMA_VERSION, META_TIP_HASH,
-    META_TIP_HEIGHT, SCHEMA_VERSION,
+    block_by_height_key, block_hash_index_key, contract_storage_key, contract_storage_root_key,
+    decode_block_height_key, decode_mempool_key, decode_schema_version, decode_state_history_key,
+    decode_tx_index_value, encode_schema_version, encode_tx_index_value, mempool_key,
+    mempool_sender_prefix, meta_key, state_history_key, state_key, tx_index_key, tx_raw_key,
+    KeyPrefix, META_CHAIN_ID, META_DIFFICULTY, META_SCHEMA_VERSION, META_TIP_HASH, META_TIP_HEIGHT,
+    SCHEMA_VERSION,
 };
