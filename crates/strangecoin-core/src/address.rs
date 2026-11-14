@@ -84,14 +84,14 @@ pub fn is_precompile_address(addr: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::RngCore;
+    use rand::Rng;
     use secp256k1::{Secp256k1, SecretKey};
 
     #[test]
     fn test_round_trip() {
         let secp = Secp256k1::new();
         let mut sk_bytes = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut sk_bytes);
+        rand::rng().fill_bytes(&mut sk_bytes);
         let sk = SecretKey::from_slice(&sk_bytes).unwrap();
         let pk = PublicKey::from_secret_key(&secp, &sk);
 
@@ -117,7 +117,7 @@ mod tests {
     fn test_hrp_validation() {
         let secp = Secp256k1::new();
         let mut sk_bytes = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut sk_bytes);
+        rand::rng().fill_bytes(&mut sk_bytes);
         let sk = SecretKey::from_slice(&sk_bytes).unwrap();
         let pk = PublicKey::from_secret_key(&secp, &sk);
 
@@ -148,7 +148,7 @@ mod tests {
     fn test_network_id_hrp_mapping() {
         let secp = Secp256k1::new();
         let mut sk_bytes = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut sk_bytes);
+        rand::rng().fill_bytes(&mut sk_bytes);
         let sk = SecretKey::from_slice(&sk_bytes).unwrap();
         let pk = PublicKey::from_secret_key(&secp, &sk);
 

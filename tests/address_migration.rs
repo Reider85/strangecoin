@@ -54,7 +54,7 @@ fn expected_bech32(sk: &SecretKey) -> String {
 
 /// (legacy base64 address, expected bech32 address)
 fn keypair() -> (String, String) {
-    let sk = SecretKey::new(&mut rand::rngs::OsRng);
+    let sk = SecretKey::new(&mut secp256k1::rand::rngs::OsRng);
     (legacy_address(&sk), expected_bech32(&sk))
 }
 

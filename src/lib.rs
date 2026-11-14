@@ -1368,7 +1368,7 @@ pub async fn run_async() {
 
 pub mod test_support {
     use super::*;
-    use rand::rngs::OsRng;
+    use secp256k1::rand::rngs::OsRng;
     use secp256k1::{ecdsa::RecoverableSignature, Message, PublicKey, Secp256k1, SecretKey};
     use std::path::Path;
 
