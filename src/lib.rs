@@ -1049,6 +1049,16 @@ pub async fn run_async() {
         crate::cli::print_genesis_hash();
         return;
     }
+    // S3-P13: snapshot export/import — ungated storage tooling (no `net`).
+    if args.len() > 2 && args[1] == "snapshot" {
+        match crate::cli::snapshot::snapshot(&args[2..]) {
+            Ok(code) => std::process::exit(code),
+            Err(err) => {
+                eprintln!("snapshot failed: {err}");
+                std::process::exit(1);
+            }
+        }
+    }
     #[cfg(feature = "net")]
     if args.len() > 2 && args[1] == "shadow" && args[2] == "replay" {
         match crate::cli::shadow_replay(&args[3..]).await {

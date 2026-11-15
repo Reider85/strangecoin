@@ -1,10 +1,15 @@
 //! CLI-команды P02. Сегодня поддерживается `--print-genesis-hash`
-//! (BUG-S0-009: машинно-читаемый stdout) и `shadow replay` (S2-P20,
+//! (BUG-S0-009: машинно-читаемый stdout), `shadow replay` (S2-P20,
 //! Stage 6 prep — replay mainnet-блоков на staging-цепь с детекцией
-//! consensus divergence). Полный CLI-спек ARCHITECT3 §3.10
+//! consensus divergence) и `snapshot export|import` (S3-P13, ADR-0026 —
+//! file-based snapshot sync, ungated: storage tooling, не требует `net`).
+//! Полный CLI-спек ARCHITECT3 §3.10
 //! (`--balance`, `--send --sign`, `sc block`, `sc node start`, faucet, …)
 //! деферрен вместе с api-слоем до Stage 4 (BUG-S0-020); имя бинаря
-//! `sc` — тоже Stage 4 (сейчас `strangecoin shadow replay …`).
+//! `sc` — тоже Stage 4 (сейчас `strangecoin shadow replay …` /
+//! `strangecoin snapshot export …`).
+
+pub mod snapshot;
 
 use crate::consensus;
 use std::io::Write;

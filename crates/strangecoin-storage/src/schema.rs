@@ -69,6 +69,13 @@ pub const META_TIP_HASH: &str = "tip_hash";
 pub const META_DIFFICULTY: &str = "difficulty";
 /// Network/chain id (value encoding owned by the monolith edge).
 pub const META_CHAIN_ID: &str = "chain_id";
+/// Lowest block height present in the `blocks` CF (`u64` BE value).
+///
+/// S3-P13 (ADR-0026 application): a snapshot-bootstrapped database holds
+/// blocks only from the import height upward. Absent key = `0` (full chain
+/// from genesis — the pre-S3-P13 invariant, backward compatible). Written
+/// only when `> 0` so ordinary nodes never carry the key.
+pub const META_CHAIN_BASE: &str = "chain_base_height";
 
 /// Leading tag byte for the index sub-keyspaces that live in the *same*
 /// column family as another key space (ADR-0024 "index sub-keyspace" /
@@ -126,7 +133,8 @@ impl KeyPrefix {
 /// `meta` CF key: the UTF-8 name itself (ADR-0024 key column).
 ///
 /// Known names: [`META_SCHEMA_VERSION`], [`META_TIP_HEIGHT`],
-/// [`META_TIP_HASH`], [`META_DIFFICULTY`], [`META_CHAIN_ID`].
+/// [`META_TIP_HASH`], [`META_DIFFICULTY`], [`META_CHAIN_ID`],
+/// [`META_CHAIN_BASE`].
 pub fn meta_key(name: &str) -> Vec<u8> {
     name.as_bytes().to_vec()
 }
@@ -386,6 +394,7 @@ mod tests {
             META_TIP_HASH,
             META_DIFFICULTY,
             META_CHAIN_ID,
+            META_CHAIN_BASE,
         ];
         let keys: BTreeSet<Vec<u8>> = names.iter().map(|n| meta_key(n)).collect();
         assert_eq!(keys.len(), names.len(), "known meta names must not collide");
@@ -395,6 +404,7 @@ mod tests {
         assert_eq!(meta_key(META_TIP_HASH), b"tip_hash".to_vec());
         assert_eq!(meta_key(META_DIFFICULTY), b"difficulty".to_vec());
         assert_eq!(meta_key(META_CHAIN_ID), b"chain_id".to_vec());
+        assert_eq!(meta_key(META_CHAIN_BASE), b"chain_base_height".to_vec());
     }
 
     #[test]

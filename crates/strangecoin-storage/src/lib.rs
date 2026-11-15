@@ -22,6 +22,10 @@
 //!   [`pruning::should_sweep`] trigger, archival-mode bypass, and the
 //!   touch-tracking expiry markers prepared for the future state-expiry
 //!   SCIP. Height arithmetic only — no clock, no RNG.
+//! - [`snapshot`] (S3-P13) — the ADR-0026 file format: [`snapshot::export`],
+//!   [`snapshot::verify_file`] (4-step commitment verification), and
+//!   [`snapshot::import`] (atomic state + tip-block bootstrap with
+//!   `chain_base_height`). Sorted body, blake3 trailer, no clock/RNG.
 //! - [`rocks`] (S3-P06, feature `rocksdb`) — [`RocksDbEngine`], the
 //!   production backend: open with all seven ADR-0024 column families,
 //!   fail-closed schema-version guard, atomic `WriteBatch`, sorted prefix
@@ -46,6 +50,7 @@ pub mod pruning;
 #[cfg(feature = "rocksdb")]
 pub mod rocks;
 pub mod schema;
+pub mod snapshot;
 
 pub use cache::CachedEngine;
 pub use engine::{Cf, KvPair, StorageEngine, StorageError, WriteBatchOp};
@@ -58,6 +63,10 @@ pub use schema::{
     decode_mempool_key, decode_schema_version, decode_state_history_key, decode_tx_index_value,
     encode_expiry_marker_value, encode_schema_version, encode_tx_index_value, expiry_marker_key,
     mempool_key, mempool_sender_prefix, meta_key, state_history_key, state_key, tx_index_key,
-    tx_raw_key, KeyPrefix, META_CHAIN_ID, META_DIFFICULTY, META_SCHEMA_VERSION, META_TIP_HASH,
-    META_TIP_HEIGHT, SCHEMA_VERSION,
+    tx_raw_key, KeyPrefix, META_CHAIN_BASE, META_CHAIN_ID, META_DIFFICULTY, META_SCHEMA_VERSION,
+    META_TIP_HASH, META_TIP_HEIGHT, SCHEMA_VERSION,
+};
+pub use snapshot::{
+    default_filename, export, import, verify_file, SnapshotError, SnapshotHeader,
+    SNAPSHOT_FORMAT_VERSION, SNAPSHOT_MAGIC,
 };

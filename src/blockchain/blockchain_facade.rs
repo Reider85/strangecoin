@@ -210,8 +210,14 @@ impl BlockchainFacade {
         super::state_cache::apply_loaded_accounts(&mut bc, &loaded);
         if let Some(chain) = loaded.chain {
             if !chain.is_empty() {
-                crate::consensus::validate_genesis(&chain[0], chain_id)
-                    .expect("Genesis validation failed");
+                // S3-P13: a snapshot-bootstrapped chain starts at height H > 0
+                // — `chain[0]` is the imported tip block, not the network
+                // genesis, so the genesis-hash check applies only to chains
+                // that actually start at 0.
+                if chain[0].index == 0 {
+                    crate::consensus::validate_genesis(&chain[0], chain_id)
+                        .expect("Genesis validation failed");
+                }
                 bc.chain = chain;
             }
         }
@@ -282,6 +288,18 @@ impl BlockchainFacade {
     /// Network this node validates (`Config.network_id`, BUG-S1-004).
     pub fn chain_id(&self) -> u32 {
         self.inner.read().expect(BLOCKCHAIN_LOCK).chain_id
+    }
+
+    /// Shared handle to the persistence engine (S3-P13): snapshot export
+    /// and tests read the raw CFs through the same `StorageEngine` the
+    /// node writes with. The lock is held only for the `Arc` clone.
+    pub fn storage_engine(&self) -> std::sync::Arc<dyn strangecoin_storage::StorageEngine> {
+        self.inner
+            .read()
+            .expect(BLOCKCHAIN_LOCK)
+            .storage
+            .engine()
+            .clone()
     }
 
     pub fn push_block_unchecked(&self, block: Block) {
@@ -530,14 +548,21 @@ impl BlockchainFacade {
     ) -> Result<strangecoin_core::StateWitness, StrangecoinError> {
         let (blocks, allow_grant_blocks, allow_zero_state_root, rules, chain_id) = {
             let guard = self.inner.read().expect(BLOCKCHAIN_LOCK);
-            let idx = height as usize;
-            if idx >= guard.chain.len() {
+            // S3-P13: map real height → vector position (snapshot chains
+            // start at `chain[0].index > 0`).
+            let chain_base = guard.chain.first().map(|b| b.index).unwrap_or(0);
+            let Some(idx) = height
+                .checked_sub(chain_base)
+                .filter(|&i| i < guard.chain.len() as u64)
+            else {
                 return Err(StrangecoinError::InvalidBlock(format!(
-                    "witness height {} out of range (chain len {})",
+                    "witness height {} out of range (chain base {}, len {})",
                     height,
+                    chain_base,
                     guard.chain.len()
                 )));
-            }
+            };
+            let idx = idx as usize;
             (
                 guard.chain[..=idx].to_vec(),
                 guard.allow_grant_blocks,
@@ -547,8 +572,10 @@ impl BlockchainFacade {
             )
         };
 
+        let chain_base = blocks.first().map(|b| b.index).unwrap_or(0);
+        let target_pos = (height - chain_base) as usize;
         let (pre_cache, _receipts) = StateCache::rebuild_from_chain(
-            &blocks[..height as usize],
+            &blocks[..target_pos],
             block_executor::now_secs(),
             allow_grant_blocks,
             allow_zero_state_root,
@@ -558,7 +585,7 @@ impl BlockchainFacade {
         let pre_state = pre_cache.to_state();
         Ok(strangecoin_core::build_witness(
             &pre_state,
-            &blocks[height as usize],
+            &blocks[target_pos],
         )?)
     }
 

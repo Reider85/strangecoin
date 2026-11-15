@@ -196,11 +196,20 @@ pub fn median_time_past(blocks: &[Block], current_height: u64) -> u64 {
     if current_height == 0 {
         return 0;
     }
+    // S3-P13: select by real block height, not vector position. A
+    // snapshot-bootstrapped chain holds blocks `[chain_base..=tip]`, so
+    // `blocks[start..]` (position := height) would panic or pick the wrong
+    // window when `chain_base > 0`. For genesis-based chains the filter
+    // yields the same set as the old slice (positions == heights).
     let start = current_height.saturating_sub(MEDIAN_TIME_WINDOW as u64);
-    let mut times: Vec<u64> = blocks[start as usize..]
+    let mut times: Vec<u64> = blocks
         .iter()
+        .filter(|b| b.index >= start && b.index < current_height)
         .map(|b| b.timestamp)
         .collect();
+    if times.is_empty() {
+        return 0;
+    }
     times.sort();
     times[times.len() / 2]
 }

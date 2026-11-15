@@ -384,7 +384,11 @@ fn validate_position(block: &Block, chain: &[Block]) -> Result<(), StrangecoinEr
     let parent = chain
         .last()
         .ok_or_else(|| invalid(block, "parent block is missing"))?;
-    if block.index as usize != chain.len() {
+    // S3-P13: compare against the parent's real height, not `chain.len()`.
+    // A snapshot-bootstrapped chain starts at `chain_base > 0`, so position
+    // ≠ height; `parent.index + 1` is equivalent for genesis-based chains
+    // (position i always holds height i) and correct for partial ones.
+    if block.index != parent.index + 1 {
         return Err(invalid(
             block,
             format!(
@@ -584,7 +588,10 @@ impl Blockchain {
             warn!("Grant blocks are disabled (allow_grant_blocks = false)");
             return Err(StrangecoinError::GrantBlocksDisabled);
         }
-        if self.chain.len() != 1 {
+        // Genesis-only gate: exactly one block AND it must be the real
+        // genesis (S3-P13: a snapshot-bootstrapped chain can also have
+        // len 1 — its tip block at height H — and must never grant).
+        if self.chain.len() != 1 || self.chain[0].index != 0 {
             return Ok(false);
         }
         if self.balances.contains_key(wallet_address) {

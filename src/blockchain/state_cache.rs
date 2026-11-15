@@ -257,15 +257,20 @@ impl StateCache {
         let mut state = State::new();
         let mut codes: HashMap<String, Vec<u8>> = HashMap::new();
         let mut history: Vec<PendingHistory> = Vec::new();
-        for (height, block) in chain.iter().enumerate() {
+        for (pos, block) in chain.iter().enumerate() {
+            // S3-P13: real height for rules/version/phase/history — a
+            // snapshot-bootstrapped chain starts at `chain[0].index > 0`,
+            // so the vector position is not the height. The parent prefix
+            // passed to `validate_position` is still `chain[..pos]`.
+            let height = block.index;
             let view = BlockView::new(
-                &chain[..height],
+                &chain[..pos],
                 now,
                 allow_grant_blocks,
-                rules.expected_version(height as u64),
+                rules.expected_version(height),
                 chain_id,
             )
-            .with_phase(rules.phase_at(height as u64))
+            .with_phase(rules.phase_at(height))
             .with_allow_zero_state_root(allow_zero_state_root)
             .with_codes(&codes);
             if record_history {
@@ -274,7 +279,7 @@ impl StateCache {
                 let pre = capture_pre_state(&state.balances, block);
                 if !pre.is_empty() {
                     history.push(PendingHistory {
-                        height: height as u64,
+                        height,
                         accounts: pre,
                     });
                 }
@@ -511,8 +516,12 @@ pub(crate) fn open_blockchain(
 
     if let Some(chain) = loaded.chain {
         if !chain.is_empty() {
-            if let Err(e) = crate::consensus::validate_genesis(&chain[0], chain_id) {
-                panic!("Genesis validation failed: {}", e);
+            // S3-P13: snapshot-bootstrapped chains start at H > 0 — their
+            // `chain[0]` is the imported tip, not the network genesis.
+            if chain[0].index == 0 {
+                if let Err(e) = crate::consensus::validate_genesis(&chain[0], chain_id) {
+                    panic!("Genesis validation failed: {}", e);
+                }
             }
         }
         blockchain.chain = chain;
@@ -614,11 +623,23 @@ fn load_persisted_state_engine(
             )?;
             let tip_hash = codec::decode_hash(&tip_hash)?;
 
+            // S3-P13: a snapshot-bootstrapped DB holds blocks only from
+            // `chain_base` upward (absent key = 0, full chain from genesis).
+            let chain_base = match engine.get(Cf::Meta, &meta_key(META_CHAIN_BASE))? {
+                None => 0u64,
+                Some(bytes) => codec::decode_u64(&bytes)?,
+            };
+            if chain_base > tip_height {
+                return Err(
+                    strangecoin_storage::StorageError::Corrupt("chain base above tip").into(),
+                );
+            }
+
             // One sorted pass over `blocks`; BE height keys come back
             // ascending, so contiguity == no gaps. Tagged hash-index keys
             // (S3-P09, 33 B) do not decode as heights and are skipped.
             let mut chain: Vec<Block> = Vec::new();
-            let mut expected = 0u64;
+            let mut expected = chain_base;
             for (key, value) in engine.iterate_prefix(Cf::Blocks, b"")? {
                 let Some(height) = decode_block_height_key(&key) else {
                     continue;
@@ -638,7 +659,9 @@ fn load_persisted_state_engine(
                 chain.push(block);
                 expected += 1;
             }
-            if chain.len() as u64 != tip_height + 1 {
+            // Full chain: len == tip + 1. Partial (S3-P13): len == tip - base + 1.
+            let expected_len = tip_height - chain_base + 1;
+            if chain.len() as u64 != expected_len {
                 return Err(
                     strangecoin_storage::StorageError::Corrupt("chain shorter than tip").into(),
                 );
@@ -872,6 +895,23 @@ impl Blockchain {
     fn save_state_engine(&mut self, engine: &dyn StorageEngine) -> Result<(), StrangecoinError> {
         let mut ops: Vec<WriteBatchOp> = Vec::new();
         let chain_len = self.chain.len() as u64;
+        // S3-P13: real height of `chain[0]` (0 for genesis-based chains,
+        // H > 0 for snapshot-bootstrapped ones). Position ↔ height:
+        // `position = height - chain_base`, `height = chain_base + position`.
+        let chain_base = self.chain.first().map(|b| b.index).unwrap_or(0);
+        let tip_height: Option<u64> = if chain_len > 0 {
+            Some(chain_base + chain_len - 1)
+        } else {
+            None
+        };
+        // Map a real height to a vector position, or None when the height
+        // falls outside the in-memory chain (below base or above tip).
+        let pos_of = |height: u64| -> Option<usize> {
+            height
+                .checked_sub(chain_base)
+                .filter(|&p| p < chain_len)
+                .map(|p| p as usize)
+        };
 
         // ---- 1. blocks + state_history + meta tip (height-scoped) ----
         let persisted_tip: Option<u64> = engine
@@ -887,14 +927,19 @@ impl Blockchain {
         // extension case (meta tip hash vs the in-memory block), walking
         // down with point-gets only across an actual reorg. A corrupt
         // stored block reads as "mismatch" — the rewrite below self-heals.
+        // Heights are real (S3-P13); the walk never goes below `chain_base`
+        // (a persisted tip below our base means no shared prefix).
         let common: Option<u64> = match persisted_tip {
             None => None,
             Some(_) if chain_len == 0 => None,
             Some(pt) => {
-                let start = pt.min(chain_len - 1);
-                let mut height = start;
+                let our_tip = chain_base + chain_len - 1;
+                let mut height = pt.min(our_tip);
                 loop {
-                    let memory_hash = self.chain[height as usize].hash.as_str();
+                    let Some(pos) = pos_of(height) else {
+                        break None;
+                    };
+                    let memory_hash = self.chain[pos].hash.as_str();
                     let matches = if height == pt {
                         persisted_tip_hash.as_deref() == Some(memory_hash)
                     } else {
@@ -908,7 +953,7 @@ impl Blockchain {
                     if matches {
                         break Some(height);
                     }
-                    if height == 0 {
+                    if height == chain_base {
                         break None;
                     }
                     height -= 1;
@@ -916,14 +961,18 @@ impl Blockchain {
             }
         };
 
-        let new_heights: Vec<u64> = match common {
-            Some(c) => ((c + 1)..chain_len).collect(),
-            None => (0..chain_len).collect(),
+        let new_heights: Vec<u64> = match (common, tip_height) {
+            (Some(c), Some(tip)) => ((c + 1)..=tip).collect(),
+            (None, Some(tip)) => (chain_base..=tip).collect(),
+            (_, None) => Vec::new(),
         };
         // Persisted heights above the new chain end (reorg to a shorter
         // chain) — always above `common`, never rewritten by the puts.
-        let drop_heights: Vec<u64> = match persisted_tip {
-            Some(pt) if pt >= chain_len => (chain_len..=pt).collect(),
+        // Empty memory chain + persisted tip → drop everything we keep
+        // nothing of (pre-S3-P13 wipe semantics: `0..=pt` with base 0).
+        let drop_heights: Vec<u64> = match (persisted_tip, tip_height) {
+            (Some(pt), Some(tip)) if pt > tip => ((tip + 1)..=pt).collect(),
+            (Some(pt), None) => (0..=pt).collect(),
             _ => Vec::new(),
         };
 
@@ -941,7 +990,8 @@ impl Blockchain {
         // occurrence in the current chain.
         let new_txids: HashSet<[u8; 32]> = new_heights
             .iter()
-            .flat_map(|&h| self.chain[h as usize].transactions.iter())
+            .filter_map(|&h| pos_of(h))
+            .flat_map(|pos| self.chain[pos].transactions.iter())
             .map(strangecoin_core::serialize::txid)
             .collect();
 
@@ -971,8 +1021,8 @@ impl Blockchain {
             _ => false,
         };
         if tip_index_missing {
-            for (height, block) in self.chain.iter().enumerate() {
-                let height = height as u64;
+            for block in self.chain.iter() {
+                let height = block.index;
                 ops.push(WriteBatchOp::Put {
                     cf: Cf::Blocks,
                     key: block_hash_index_key(&hash_bytes(&block.hash)?),
@@ -1028,8 +1078,13 @@ impl Blockchain {
             let Ok(old_block) = codec::decode_block(&old_bytes) else {
                 continue;
             };
-            let superseded =
-                height >= chain_len || self.chain[height as usize].hash != old_block.hash;
+            // Superseded = above our tip, or the in-memory block at this
+            // height (if any) differs. Heights below `chain_base` have no
+            // in-memory counterpart → always superseded when common is None.
+            let superseded = match pos_of(height) {
+                None => true,
+                Some(pos) => self.chain[pos].hash != old_block.hash,
+            };
             if !superseded {
                 continue;
             }
@@ -1048,7 +1103,9 @@ impl Blockchain {
                 if let Some(c) = common {
                     let kept = kept_txids.get_or_insert_with(|| {
                         let mut map: HashMap<[u8; 32], (u64, u32)> = HashMap::new();
-                        for block in self.chain.iter().take(c as usize + 1) {
+                        // Kept prefix = heights chain_base..=c (positions 0..=c-base).
+                        let keep_upto = (c - chain_base + 1) as usize;
+                        for block in self.chain.iter().take(keep_upto) {
                             for (index, kept_tx) in block.transactions.iter().enumerate() {
                                 map.insert(
                                     strangecoin_core::serialize::txid(kept_tx),
@@ -1079,7 +1136,10 @@ impl Blockchain {
         }
 
         for &height in &new_heights {
-            let block = &self.chain[height as usize];
+            let Some(pos) = pos_of(height) else {
+                continue;
+            };
+            let block = &self.chain[pos];
             ops.push(WriteBatchOp::Put {
                 cf: Cf::Blocks,
                 key: block_by_height_key(height),
@@ -1087,6 +1147,8 @@ impl Blockchain {
             });
             // S3-P09: hash→height plus per-tx location/raw for this
             // height (the raw copy is what Stage 4 `get_tx` reads).
+            // Index values carry the REAL height (block.index), so
+            // `block_by_hash` / `tx_location` stay correct on partial chains.
             ops.push(WriteBatchOp::Put {
                 cf: Cf::Blocks,
                 key: block_hash_index_key(&hash_bytes(&block.hash)?),
@@ -1141,17 +1203,27 @@ impl Blockchain {
             }
         }
 
-        if chain_len > 0 {
+        if let Some(tip) = tip_height {
+            let tip_block = self.chain.last().expect("tip_height implies non-empty");
             ops.push(WriteBatchOp::Put {
                 cf: Cf::Meta,
                 key: meta_key(META_TIP_HEIGHT),
-                value: codec::encode_u64(chain_len - 1),
+                value: codec::encode_u64(tip),
             });
             ops.push(WriteBatchOp::Put {
                 cf: Cf::Meta,
                 key: meta_key(META_TIP_HASH),
-                value: codec::encode_hash(&self.chain[chain_len as usize - 1].hash)?,
+                value: codec::encode_hash(&tip_block.hash)?,
             });
+            // Partial-chain marker (S3-P13): written only when > 0 so
+            // ordinary genesis-based nodes never carry the key.
+            if chain_base > 0 {
+                ops.push(WriteBatchOp::Put {
+                    cf: Cf::Meta,
+                    key: meta_key(META_CHAIN_BASE),
+                    value: codec::encode_u64(chain_base),
+                });
+            }
         }
         ops.push(WriteBatchOp::Put {
             cf: Cf::Meta,
@@ -1301,8 +1373,7 @@ impl Blockchain {
         // `Config::pruning_config()` via `set_pruning` (open-path saves
         // may run with the default window first — at most one
         // sweep-cadence of delay, documented on the field).
-        if chain_len > 0 {
-            let tip = chain_len - 1;
+        if let Some(tip) = tip_height {
             let cfg = self.pruning;
             if crate::storage::should_sweep(tip, cfg) {
                 crate::storage::sweep(engine, tip, cfg)?;
@@ -1316,7 +1387,8 @@ impl Blockchain {
         if !self.allow_grant_blocks {
             return;
         }
-        if self.chain.len() != 1 {
+        // Genesis-only gate (S3-P13: snapshot chains with len 1 excluded).
+        if self.chain.len() != 1 || self.chain[0].index != 0 {
             return;
         }
         let placeholder_amount = match self.balances.get("initial_wallet_address") {
