@@ -487,25 +487,29 @@ fn witness_codec_is_order_independent() {
 #[test]
 fn witness_codec_golden_vector() {
     let expected = concat!(
-        "01",                                             // WITNESS_FORMAT_VERSION
+        "01",                                                               // WITNESS_FORMAT_VERSION
         "7777777777777777777777777777777777777777777777777777777777777777", // pre_state_root
-        "00000002",                                       // proof count
-        "00000005", "616c696365",                         // "alice"
-        "00000000000003e8",                               // balance 1000
-        "0000000000000001",                               // nonce 1
-        "00",                                             // code_hash: None
-        "00",                                             // storage_root: None
+        "00000002",                                                         // proof count
+        "00000005",
+        "616c696365",                                                       // "alice"
+        "00000000000003e8",                                                 // balance 1000
+        "0000000000000001",                                                 // nonce 1
+        "00",                                                               // code_hash: None
+        "00",                                                               // storage_root: None
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // key_hash
-        "00000002",                                       // 2 proof hashes
+        "00000002",                                                         // 2 proof hashes
         "1111111111111111111111111111111111111111111111111111111111111111",
         "2222222222222222222222222222222222222222222222222222222222222222",
-        "00000003", "626f62",                             // "bob"
-        "0000000000000005",                               // balance 5
-        "0000000000000000",                               // nonce 0
-        "01", "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", // code_hash
-        "01", "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", // storage_root
+        "00000003",
+        "626f62",           // "bob"
+        "0000000000000005", // balance 5
+        "0000000000000000", // nonce 0
+        "01",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", // code_hash
+        "01",
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", // storage_root
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", // key_hash
-        "00000001",                                       // 1 proof hash
+        "00000001",                                                         // 1 proof hash
         "3333333333333333333333333333333333333333333333333333333333333333",
     );
 
