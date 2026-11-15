@@ -1,5 +1,17 @@
 name: Pre-release
 
+# [GITHUB-P12] prerelease: full rewrite — 7 bugfixes (conclusion gate, head_sha
+# checkout, rust-toolchain, rust-cache, github-script steps undefined,
+# context.tag undefined, stargazer push-loop removed).
+#
+# Triggers only on GREEN CI for master. Tags vX.Y.Z-dev.N on the exact CI
+# commit (workflow_run.head_sha) — no race with later pushes. Linux x86_64
+# binary only; full 6-platform matrix is release.yml on v*-tags.
+#
+# Stargazer-history snapshot moved out to .github/workflows/stargazer.yml
+# (hourly cron, no commit-back to master) — was creating a recursive loop:
+# push → CI → prerelease → stargazer-push to master → CI → prerelease → ...
+
 on:
   workflow_run:
     workflows: ["CI"]
@@ -12,102 +24,108 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+concurrency:
+  group: prerelease-${{ github.event.workflow_run.id || github.run_id }}
+  cancel-in-progress: false
+
 jobs:
   create-dev-tag:
-    name: Create dev tag
+    name: Create dev tag (vX.Y.Z-dev.N)
     runs-on: ubuntu-latest
-    concurrency:
-      group: prerelease-${{ github.event.workflow_run.id || github.run_id }}
-      cancel-in-progress: false
-    
+    # Bug 1 fix: skip prerelease when CI did not succeed.
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    timeout-minutes: 30
+
     steps:
-      - name: Checkout
+      - name: Checkout CI head commit
         uses: actions/checkout@v4
         with:
+          # Bug 2 fix: pin to the SHA that ran CI, not current master HEAD.
+          ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: true
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: prerelease-linux-x86_64
 
       - name: Compute next dev tag
         id: compute-tag
+        shell: bash
         run: |
-          # Extract version from Cargo.toml
-          VERSION=$(grep '^version = ' Cargo.toml | cut -d '"' -f2)
-          # Extract latest dev tag for this version
-          LATEST_DEV_TAG=$(git ls-remote --tags origin "v${VERSION}-dev.*" | cut -f2 | sort -V | tail -1 || echo "")
+          set -euo pipefail
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | cut -d '"' -f2)
+          LATEST_DEV_TAG=$(git ls-remote --tags origin "v${VERSION}-dev.*" \
+            | sed 's#refs/tags/##' | sed 's#\^{}##' | sort -V | tail -1 || true)
           if [[ -n "$LATEST_DEV_TAG" ]]; then
-            # Extract number from existing dev tag
-            CURRENT_NUM=$(echo "$LATEST_DEV_TAG" | grep -o '[0-9]*$')
+            CURRENT_NUM=$(echo "$LATEST_DEV_TAG" | grep -oE '[0-9]+$')
             NEXT_NUM=$((CURRENT_NUM + 1))
           else
             NEXT_NUM=1
           fi
           TAG="v${VERSION}-dev.${NEXT_NUM}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Creating dev tag: $TAG"
+          echo "Will create tag: $TAG"
 
       - name: Check if release already exists
         id: check-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          if gh release view "${{ steps.compute-tag.outputs.tag }}" >/dev/null 2>&1; then
-            echo "Tag ${{ steps.compute-tag.outputs.tag }} already exists — skipping creation"
+          TAG="${{ steps.compute-tag.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists — skipping creation"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build artifacts
+      - name: Build release binary (Linux x86_64)
         if: steps.check-release.outputs.skip != 'true'
+        shell: bash
         run: |
-          # Build for Linux x86_64 (primary platform)
+          set -euo pipefail
           cargo build --release
           cp target/release/strangecoin strangecoin-linux-x86_64
           shasum -a 256 strangecoin-linux-x86_64 > strangecoin-linux-x86_64.sha256
 
       - name: Create and push dev release
         if: steps.check-release.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          gh release create "${{ steps.compute-tag.outputs.tag }}" \
-            --target master \
+          set -euo pipefail
+          TAG="${{ steps.compute-tag.outputs.tag }}"
+          HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
+          gh release create "$TAG" \
+            --target "$HEAD_SHA" \
             --prerelease \
-            --title "${{ steps.compute-tag.outputs.tag }}" \
+            --title "$TAG" \
             --notes "Automated dev build, not for production" \
             --generate-notes \
             strangecoin-linux-x86_64 strangecoin-linux-x86_64.sha256
 
-      - name: Ping Discord
-        if: always()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { tag } = context;
-            if (steps.check-release.outputs.skip == 'true') {
-              console.log(`Dev tag ${tag} already exists - skipping Discord notification`);
-              return;
-            }
-            
-            const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
-            await octokit.rest.repos.createCommitComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              commit_sha: context.sha,
-              body: `🚀 New dev build created: ${tag}\n\n${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/releases/tag/${tag}`
-            });
-
-      - name: Update stargazer history
-        if: always()
+      - name: Post commit comment
+        if: always() && steps.check-release.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          # Update stargazer count in README (same as release.yml)
-          curl -s "https://api.github.com/repos/${{ github.repository }}" | \
-            jq '.stargazers_count' > stargazers.txt
-          if [ -f stargazers.txt ] && [ -s stargazers.txt ]; then
-            STARS=$(cat stargazers.txt)
-            if grep -q '⭐' README.md; then
-              sed -i "s/⭐ [0-9]*/⭐ $STARS/" README.md
-            else
-              echo "⭐ $STARS stars" >> README.md
-            fi
-            git config --local user.email "action@github.com"
-            git config --local user.name "GitHub Action"
-            git add README.md
-            git commit -m "Update stargazer count to $STARS" || true
-            git push
+          set -euo pipefail
+          TAG="${{ steps.compute-tag.outputs.tag }}"
+          HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
+          REPO="${{ github.repository }}"
+          if [[ "${{ steps.check-release.outputs.skip }}" == "true" ]]; then
+            echo "Tag $TAG already exists — skipping comment"
+            exit 0
           fi
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${REPO}/commits/${HEAD_SHA}/comments" \
+            -f body="Dev build created: ${TAG} — https://github.com/${REPO}/releases/tag/${TAG}"
