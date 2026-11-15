@@ -1,0 +1,124 @@
+name: Stargazer snapshot
+
+# [GITHUB-P13] stargazer: hourly snapshot, moved out of prerelease.yml
+# and release.yml (those workflows were doing git push to master on every
+# CI run -> recursive loop of "Update stargazer count to N" commits). Auth
+# via GITHUB_TOKEN to avoid 403 rate-limit (was producing "null" updates).
+# No push if stars unchanged or unparseable.
+#
+# Deviations from the CI3 Prompt 3 target YAML (documented per FBP
+# "deviations must be stated"):
+#   1. cron '17 * * * *' instead of '0 * * * *' — star-monitor.yml
+#      (GITHUB-P5) already pushes analytics/stargazer-history.csv to master
+#      at :00; two concurrent pushers -> non-fast-forward failure. The
+#      offset plus the rebase-retry below remove the collision window.
+#   2. `id: stargazer` added to the fetch step — the target YAML references
+#      steps.stargazer.outputs.stars but never sets the step id (the prompt
+#      itself offers an env-based alternative; step-id is the cleaner fix,
+#      otherwise every downstream step would silently skip).
+#   3. `gh api ... || true` under `set -euo pipefail` — a transient API
+#      failure must skip (empty -> exit 0), not fail the run (КГ:
+#      rate-limit -> exit 0, never red).
+#   4. Push runs `git pull --rebase` + bounded retry — star-monitor may
+#      land its CSV commit between our checkout and our push (both write
+#      to master).
+#   5. Optional CSV snapshot (CI3 item 4) NOT added — star-monitor.yml
+#      already maintains analytics/stargazer-history.csv hourly; a second
+#      writer would append duplicate rows and race on the same file.
+#   6. Commit-back to master (not gh-pages-meta) — matches the
+#      star-monitor precedent; GITHUB_TOKEN pushes do not start workflow
+#      runs, so no CI / prerelease recursion (platform behavior, same as
+#      documented in star-monitor.yml deviation 5).
+
+on:
+  schedule:
+    - cron: '17 * * * *' # hourly, offset from star-monitor's :00 (deviation 1)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stargazer
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    name: Hourly README star snapshot
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Fetch current stars
+        id: stargazer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          stars=$(gh api "repos/${{ github.repository }}" \
+            --jq '.stargazers_count' || true)
+          case "$stars" in
+            ''|null)
+              echo "Stars API returned empty/null — rate-limited or private repo; skip"
+              echo "stars=" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+            *[!0-9]*)
+              echo "Stars API returned non-numeric: '$stars'; skip"
+              echo "stars=" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          echo "stars=$stars" >> "$GITHUB_OUTPUT"
+          echo "Current stars: $stars"
+
+      - name: Update README snapshot
+        if: steps.stargazer.outputs.stars != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          STARS="${{ steps.stargazer.outputs.stars }}"
+          if grep -q '⭐ [0-9]' README.md; then
+            # Replace existing star count.
+            sed -i "s/⭐ [0-9][0-9]*/⭐ $STARS/" README.md
+          elif grep -q '⭐ null' README.md; then
+            # Recover from a previous null-write.
+            sed -i "s/⭐ null/⭐ $STARS/" README.md
+          else
+            # No marker yet — append to top of README after the first
+            # heading line, so future snapshots have a stable anchor.
+            awk -v stars="⭐ $STARS stars" '
+              NR==1 && /^#/ { print; print ""; print stars; print ""; next }
+              { print }
+            ' README.md > README.md.new && mv README.md.new README.md
+          fi
+          git diff --stat README.md
+
+      - name: Commit if README actually changed
+        if: steps.stargazer.outputs.stars != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- README.md; then
+            echo "README unchanged (stars same as last commit) — skip"
+            exit 0
+          fi
+          git config user.email "action@github.com"
+          git config user.name  "GitHub Action"
+          git add README.md
+          git commit -m "chore(stars): hourly snapshot $(date -u +%Y%m%d-%H%MZ)"
+          # Rebase onto any commit landed since checkout (e.g. star-monitor's
+          # CSV push) and retry — prevents non-fast-forward red runs.
+          for attempt in 1 2 3; do
+            if git pull --rebase origin master && git push; then
+              exit 0
+            fi
+            echo "push attempt ${attempt} failed; retrying"
+            sleep $((attempt * 5))
+          done
+          echo "::error::push failed after 3 attempts"
+          exit 1
