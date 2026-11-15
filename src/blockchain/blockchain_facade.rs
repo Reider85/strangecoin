@@ -68,6 +68,14 @@ pub struct Blockchain {
     /// Pre-apply account snapshots captured at commit/adoption, waiting
     /// for the next `save_state` to land in `state_history` (ADR-0024).
     pub(crate) pending_state_history: Vec<crate::blockchain::state_cache::PendingHistory>,
+    /// S3-P12 (ADR-0025): height-window sweep config for `state_history`.
+    /// Defaults to [`crate::storage::PruningConfig::default`]` at every
+    /// construction site; production applies `Config::pruning_config()`
+    /// through [`BlockchainFacade::set_pruning`] after open (the
+    /// `set_allow_grant_blocks` precedent — the open-path save may sweep
+    /// under the default window first, which is harmless: the trigger is
+    /// idempotent and re-fires on the next boundary).
+    pub(crate) pruning: crate::storage::PruningConfig,
 }
 
 impl Blockchain {
@@ -177,6 +185,7 @@ impl BlockchainFacade {
             persisted_contract_storage: strangecoin_core::state::ContractStorageMap::new(),
             persisted_mempool: HashMap::new(),
             pending_state_history: Vec::new(),
+            pruning: crate::storage::PruningConfig::default(),
         };
 
         // Load-if-present (S3-P07): fresh databases take the historical
@@ -640,6 +649,21 @@ impl BlockchainFacade {
             .write()
             .expect(BLOCKCHAIN_LOCK)
             .allow_zero_state_root = allow;
+    }
+
+    /// Effective pruning config (S3-P12, ADR-0025) — mostly for tests
+    /// and diagnostics; production writes it once via
+    /// [`Self::set_pruning`].
+    pub fn pruning(&self) -> crate::storage::PruningConfig {
+        self.inner.read().expect(BLOCKCHAIN_LOCK).pruning
+    }
+
+    /// Apply the `[pruning]` + `[node] mode` resolution
+    /// (`Config::pruning_config()`, S3-P12). Mirrors
+    /// [`Self::set_allow_grant_blocks`]: main wires config flags after
+    /// construction, before the node starts serving.
+    pub fn set_pruning(&self, cfg: crate::storage::PruningConfig) {
+        self.inner.write().expect(BLOCKCHAIN_LOCK).pruning = cfg;
     }
 
     // -------------------------------------------------------------- operations

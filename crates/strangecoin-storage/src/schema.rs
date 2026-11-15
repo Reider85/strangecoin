@@ -83,12 +83,15 @@ pub const META_CHAIN_ID: &str = "chain_id";
 /// | [`KeyPrefix::BlockHashIndex`] | `blocks` | `0x00 ‖ hash` | height `u64` BE |
 /// | [`KeyPrefix::TxIndex`] | `transactions` | `0x01 ‖ txid` | `(height, tx_index)` |
 /// | [`KeyPrefix::ContractStorageRoot`] | `contract_storage` | `0x02 ‖ address` | storage root `[u8;32]` |
+/// | [`KeyPrefix::ExpiryMarker`] | `state_history` | `0xFF ‖ address` | last-touch height `u64` BE |
 ///
 /// Tag byte values carry no ordering contract (storage is an
 /// implementation detail, not consensus — ADR-0024): every sub-space is
 /// read by point lookup or skipped by first byte, and no production
 /// prefix iteration intentionally spans two sub-spaces of one CF (the
-/// whole-CF loads skip tagged keys explicitly — S3-P09).
+/// whole-CF loads skip tagged keys explicitly — S3-P09; the S3-P12
+/// pruning sweep is the one whole-CF walk of `state_history` and
+/// classifies by first byte).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum KeyPrefix {
@@ -100,6 +103,17 @@ pub enum KeyPrefix {
     /// (S3-P09; invalidates on every slot write — the root itself stays
     /// consensus-derived in `AccountState.storage_root`).
     ContractStorageRoot = 0x02,
+    /// `state_history` CF: touch-tracking expiry-marker sub-space
+    /// (S3-P12, ADR-0025 marker preparation for the future state-expiry
+    /// SCIP). Key [`expiry_marker_key`], value = last-touch height.
+    ///
+    /// `0xFF` is unreachable as the first byte of a bare
+    /// [`state_history_key`]: those start with the first byte of a
+    /// big-endian `u64` height, and heights ≥ `0xFF00_0000_0000_0000`
+    /// (≈1.8e19 blocks) can never occur. Classification therefore
+    /// reduces to one byte-compare, and a marker key can never collide
+    /// with a snapshot key (1 + address vs 8 + address bytes).
+    ExpiryMarker = 0xFF,
 }
 
 impl KeyPrefix {
@@ -278,6 +292,50 @@ pub fn decode_state_history_key(key: &[u8]) -> Option<(u64, &str)> {
     Some((height, std::str::from_utf8(&key[8..]).ok()?))
 }
 
+/// `state_history` CF expiry-marker key: `KeyPrefix::ExpiryMarker ‖
+/// address` (S3-P12, ADR-0025 touch-tracking sub-space).
+///
+/// The marker records that `address` has no snapshot inside the current
+/// retention window — research data for the future state-expiry SCIP.
+/// It never replaces a snapshot: the current `state` CF entry stays
+/// untouched (expiry itself is consensus-changing → SCIP-gated).
+///
+/// Disjoint from [`state_history_key`] by tag **and** length: the bare
+/// form is `8 + address` bytes starting with a reachable height's first
+/// byte, the marker is `1 + address` bytes starting with `0xFF` (see
+/// [`KeyPrefix::ExpiryMarker`]).
+pub fn expiry_marker_key(address: &str) -> Vec<u8> {
+    let mut key = Vec::with_capacity(1 + address.len());
+    key.push(KeyPrefix::ExpiryMarker.byte());
+    key.extend_from_slice(address.as_bytes());
+    key
+}
+
+/// Inverse of [`expiry_marker_key`]: `Some(address)` iff `key` carries
+/// the marker tag and a UTF-8 tail; `None` for bare snapshot keys (the
+/// sweep classifies with this before decoding heights).
+pub fn decode_expiry_marker_key(key: &[u8]) -> Option<&str> {
+    if key.first()? != &KeyPrefix::ExpiryMarker.byte() {
+        return None;
+    }
+    std::str::from_utf8(&key[1..]).ok()
+}
+
+/// `state_history` CF expiry-marker **value**: the last height at which
+/// the address had a snapshot inside the window (`u64` big-endian, 8
+/// bytes) — S3-P12. Fixed-width BE keeps the bytes deterministic
+/// (Stage 3 determinism checklist; pure function, no clock/RNG).
+pub fn encode_expiry_marker_value(last_touch_height: u64) -> [u8; 8] {
+    last_touch_height.to_be_bytes()
+}
+
+/// Inverse of [`encode_expiry_marker_value`]; `None` on any length but
+/// 8 (the sweep maps that to "skip the marker", never a panic).
+pub fn decode_expiry_marker_value(bytes: &[u8]) -> Option<u64> {
+    let arr: [u8; 8] = bytes.try_into().ok()?;
+    Some(u64::from_be_bytes(arr))
+}
+
 /// Inverse of [`mempool_key`]: split at the fixed 8-byte nonce tail;
 /// `None` on short keys or non-UTF-8 senders.
 pub fn decode_mempool_key(key: &[u8]) -> Option<(&str, u64)> {
@@ -427,6 +485,48 @@ mod tests {
             Some((0, "")),
             "empty address still decodes at the fixed offset"
         );
+    }
+
+    #[test]
+    fn expiry_marker_key_roundtrips_and_never_collides_with_snapshots() {
+        let addr = fixed_addr("m");
+        let key = expiry_marker_key(&addr);
+
+        // Golden bytes: tag byte + address bytes.
+        assert_eq!(key[0], 0xFF);
+        assert_eq!(&key[1..], addr.as_bytes());
+        assert_eq!(key.len(), 1 + addr.len());
+        assert_eq!(decode_expiry_marker_key(&key), Some(addr.as_str()));
+
+        // Bare snapshot keys never carry the tag (reachable heights
+        // start below 0xFF), so first-byte classification is sound.
+        for h in [0u64, 1, 255, 256, 1 << 32, u64::from(u32::MAX)] {
+            let snapshot = state_history_key(h, &addr);
+            assert_ne!(snapshot, key, "h={h}");
+            assert_eq!(decode_expiry_marker_key(&snapshot), None);
+        }
+        // …and a marker key never decodes as a snapshot key of equal
+        // content: lengths differ (1+n vs 8+n).
+        assert!(expiry_marker_key(&addr).len() < state_history_key(0, &addr).len());
+
+        // Non-tagged / malformed inputs.
+        assert_eq!(decode_expiry_marker_key(b""), None);
+        assert_eq!(decode_expiry_marker_key(b"\x00addr"), None);
+
+        // Value codec: golden bytes + round-trip + bad lengths.
+        assert_eq!(encode_expiry_marker_value(0), [0u8; 8]);
+        assert_eq!(
+            encode_expiry_marker_value(0x0102_0304_0506_0708),
+            [1, 2, 3, 4, 5, 6, 7, 8]
+        );
+        for h in [0u64, 1, 100, u64::MAX] {
+            assert_eq!(
+                decode_expiry_marker_value(&encode_expiry_marker_value(h)),
+                Some(h)
+            );
+        }
+        assert_eq!(decode_expiry_marker_value(&[0u8; 7]), None, "short");
+        assert_eq!(decode_expiry_marker_value(&[0u8; 9]), None, "long");
     }
 
     #[test]
@@ -630,6 +730,11 @@ mod tests {
             assert_eq!(block_hash_index_key(&hash), block_hash_index_key(&hash));
             assert_eq!(state_key(&addr), state_key(&addr));
             assert_eq!(state_history_key(77, &addr), state_history_key(77, &addr));
+            assert_eq!(expiry_marker_key(&addr), expiry_marker_key(&addr));
+            assert_eq!(
+                encode_expiry_marker_value(77),
+                encode_expiry_marker_value(77)
+            );
             assert_eq!(tx_raw_key(&txid), tx_raw_key(&txid));
             assert_eq!(tx_index_key(&txid), tx_index_key(&txid));
             assert_eq!(

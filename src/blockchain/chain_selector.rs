@@ -153,6 +153,7 @@ impl<'de> Deserialize<'de> for Blockchain {
             persisted_contract_storage: strangecoin_core::state::ContractStorageMap::new(),
             persisted_mempool: HashMap::new(),
             pending_state_history: Vec::new(),
+            pruning: crate::storage::PruningConfig::default(),
         })
     }
 }

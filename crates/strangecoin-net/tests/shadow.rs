@@ -26,11 +26,12 @@ fn synthetic_block(index: u64) -> Block {
     let mut header = BlockHeader {
         index,
         timestamp: 1_700_000_000 + index,
-        previous_hash: if index == 0 {
-            "0".repeat(64)
-        } else {
-            "0".repeat(64) // linkage is not replay's concern
-        },
+        // Synthetic chain: every height links the same zero hash —
+        // linkage is not replay's concern (S2-P20). The historic
+        // `if index == 0 {…} else {…}` spelled both branches
+        // identically; collapsed for clippy `if_same_then_else`
+        // (toolchain drift, S3-P12).
+        previous_hash: "0".repeat(64),
         hash: String::new(),
         nonce: index,
         target: "ff".repeat(32),

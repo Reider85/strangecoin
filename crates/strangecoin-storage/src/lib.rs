@@ -17,6 +17,11 @@
 //!   nonces) and their decoders, plus the S3-P09 index-entry value codec
 //!   (`txid → (height, tx_index)`). Pure byte functions — no I/O, no clock,
 //!   no RNG; key *structure* only, values stay opaque bytes.
+//! - [`pruning`] (S3-P12) — the ADR-0025 height-window sweep over
+//!   `state_history`: [`pruning::sweep`] + the stateless
+//!   [`pruning::should_sweep`] trigger, archival-mode bypass, and the
+//!   touch-tracking expiry markers prepared for the future state-expiry
+//!   SCIP. Height arithmetic only — no clock, no RNG.
 //! - [`rocks`] (S3-P06, feature `rocksdb`) — [`RocksDbEngine`], the
 //!   production backend: open with all seven ADR-0024 column families,
 //!   fail-closed schema-version guard, atomic `WriteBatch`, sorted prefix
@@ -37,19 +42,22 @@
 
 pub mod cache;
 pub mod engine;
+pub mod pruning;
 #[cfg(feature = "rocksdb")]
 pub mod rocks;
 pub mod schema;
 
 pub use cache::CachedEngine;
 pub use engine::{Cf, KvPair, StorageEngine, StorageError, WriteBatchOp};
+pub use pruning::{should_sweep, sweep, PruneReport, PruningConfig};
 #[cfg(feature = "rocksdb")]
 pub use rocks::RocksDbEngine;
 pub use schema::{
     block_by_height_key, block_hash_index_key, contract_storage_key, contract_storage_root_key,
-    decode_block_height_key, decode_mempool_key, decode_schema_version, decode_state_history_key,
-    decode_tx_index_value, encode_schema_version, encode_tx_index_value, mempool_key,
-    mempool_sender_prefix, meta_key, state_history_key, state_key, tx_index_key, tx_raw_key,
-    KeyPrefix, META_CHAIN_ID, META_DIFFICULTY, META_SCHEMA_VERSION, META_TIP_HASH, META_TIP_HEIGHT,
-    SCHEMA_VERSION,
+    decode_block_height_key, decode_expiry_marker_key, decode_expiry_marker_value,
+    decode_mempool_key, decode_schema_version, decode_state_history_key, decode_tx_index_value,
+    encode_expiry_marker_value, encode_schema_version, encode_tx_index_value, expiry_marker_key,
+    mempool_key, mempool_sender_prefix, meta_key, state_history_key, state_key, tx_index_key,
+    tx_raw_key, KeyPrefix, META_CHAIN_ID, META_DIFFICULTY, META_SCHEMA_VERSION, META_TIP_HASH,
+    META_TIP_HEIGHT, SCHEMA_VERSION,
 };

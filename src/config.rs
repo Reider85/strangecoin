@@ -1,4 +1,5 @@
 use crate::error::StrangecoinError;
+use crate::storage::PruningConfig;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -13,12 +14,31 @@ pub enum NodeMode {
     Archival,
 }
 
+/// `[node]` table of `config.toml` (S3-P12, ADR-0025).
+///
+/// Replaces the Stage 0-2 top-level `node_mode` key: ADR-0025 fixes the
+/// surface as `[node] mode`, and archival mode finally carries behavior
+/// (it bypasses the `state_history` sweep — `strangecoin_storage::
+/// pruning::sweep`). A leftover top-level `node_mode = ...` line is
+/// ignored with a warning at [`Config::load`] (the `storage.engine`
+/// precedent, S3-P08) — the key never had behavior before S3-P12, so no
+/// setting is silently lost.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NodeConfig {
+    /// `"full"` (default) — prunes `state_history` per `[pruning]`;
+    /// `"light"` — sweeps like full (no separate pruning semantics);
+    /// `"archival"` — keeps all history (ADR-0025 archival node).
+    #[serde(default)]
+    pub mode: NodeMode,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    // Scalar keys first, tables last: TOML emission (and therefore the
+    // config.json → config.toml migration writer in `main`) errors with
+    // `ValueAfterTable` when a value follows a sub-table. Deserialization
+    // is order-independent, so only the Serialize side cares.
     pub network_id: u32,
-    pub node_mode: NodeMode,
-    pub network: NetworkConfig,
-    pub storage: StorageConfig,
     pub log_level: String,
     pub data_dir: PathBuf,
     #[serde(default)]
@@ -29,6 +49,16 @@ pub struct Config {
     /// config error.
     #[serde(default)]
     pub allow_zero_state_root: Option<bool>,
+    /// Node operating mode (S3-P12: `[node] mode`).
+    #[serde(default)]
+    pub node: NodeConfig,
+    pub network: NetworkConfig,
+    pub storage: StorageConfig,
+    /// State-history pruning surface (S3-P12, ADR-0025 `[pruning]`).
+    /// `archival` is *not* set here — it resolves from `node.mode` in
+    /// [`Config::pruning_config`].
+    #[serde(default)]
+    pub pruning: PruningConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,11 +351,25 @@ impl Default for StorageConfig {
 }
 
 /// S3-P08: detect a leftover `engine = ...` line in raw `config.toml`
-/// text. The key left the schema (serde ignores it), so the warning is the
-/// only trace an old config leaves behind; comment lines never match.
+/// text. The key left the schema (serde ignores it), so the warning is
+/// the only trace an old config leaves behind; comment lines never match.
 fn removed_storage_engine_key(content: &str) -> bool {
     content.lines().map(str::trim_start).any(|line| {
         line.strip_prefix("engine")
+            .and_then(|rest| rest.trim_start().strip_prefix('='))
+            .is_some()
+    })
+}
+
+/// S3-P12: detect a leftover top-level `node_mode = ...` line in raw
+/// `config.toml` text — the key moved into the `[node]` table as `mode`
+/// (ADR-0025 config surface). Same raw-text approach (and same
+/// comment-line immunity) as [`removed_storage_engine_key`]; a key that
+/// merely *starts* with `node_mode` (`node_mode_x = 1`) never matches
+/// because `=` must follow immediately.
+fn removed_node_mode_key(content: &str) -> bool {
+    content.lines().map(str::trim_start).any(|line| {
+        line.strip_prefix("node_mode")
             .and_then(|rest| rest.trim_start().strip_prefix('='))
             .is_some()
     })
@@ -341,6 +385,14 @@ impl Config {
                  RocksDB at `storage.path` and auto-migrating a legacy \
                  <exe_dir>/blockchain_db_{{port}} directory on first open if one exists; \
                  the stale `engine = ...` line can be deleted"
+            );
+        }
+        if removed_node_mode_key(&content) {
+            tracing::warn!(
+                "the top-level `node_mode` config key moved to the `[node]` table in Stage 3 \
+                 (S3-P12, ADR-0025): write `mode = \"archival\"` under a `[node]` section \
+                 instead; the stale top-level line is ignored (the key had no behavior \
+                 before S3-P12, so no setting is lost)"
             );
         }
         let config: Config = toml::from_str(&content)
@@ -504,6 +556,19 @@ impl Config {
     pub fn zero_state_root_allowed(&self) -> bool {
         self.allow_zero_state_root.unwrap_or(self.network_id == 3)
     }
+
+    /// Effective pruning config (S3-P12, ADR-0025): the `[pruning]`
+    /// table with `archival` resolved from `[node] mode` — the storage
+    /// crate's sweep takes one struct, so the node-mode crossing lives
+    /// here (mirror of `peer_manager_config`/`rate_limit_config`).
+    ///
+    /// Only `mode = "archival"` bypasses the sweep; `"light"` sweeps
+    /// like `"full"` (ADR-0025 defines no light-node pruning semantics).
+    pub fn pruning_config(&self) -> PruningConfig {
+        let mut cfg = self.pruning;
+        cfg.archival = self.node.mode == NodeMode::Archival;
+        cfg
+    }
 }
 
 #[cfg(feature = "net")]
@@ -577,9 +642,10 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             network_id: 3,
-            node_mode: NodeMode::default(),
+            node: NodeConfig::default(),
             network: NetworkConfig::default(),
             storage: StorageConfig::default(),
+            pruning: PruningConfig::default(),
             log_level: "info".into(),
             data_dir: "./data".into(),
             allow_grant_blocks: false,
@@ -675,7 +741,7 @@ mod tests {
         // `[storage]`; a config without the key keeps the 4096 default.
         let with_key = r#"
             network_id = 3
-            node_mode = "full"
+            node = { mode = "full" }
             log_level = "info"
             data_dir = "./data"
 
@@ -703,7 +769,7 @@ mod tests {
         // Legacy fixture without the key (S3-P07-era TOML) → default.
         let legacy = r#"
             network_id = 3
-            node_mode = "full"
+            node = { mode = "full" }
             log_level = "info"
             data_dir = "./data"
 
@@ -726,7 +792,7 @@ mod tests {
         // the operator's data dir migrates itself on open, no key to flip.
         let toml = r#"
             network_id = 3
-            node_mode = "full"
+            node = { mode = "full" }
             log_level = "info"
             data_dir = "./data"
 
@@ -754,7 +820,7 @@ mod tests {
             let toml = format!(
                 r#"
                 network_id = 3
-                node_mode = "full"
+                node = {{ mode = "full" }}
                 log_level = "info"
                 data_dir = "./data"
 
@@ -786,12 +852,134 @@ mod tests {
     }
 
     #[test]
+    fn removed_node_mode_key_detects_only_the_stale_top_level_line() {
+        assert!(removed_node_mode_key("node_mode = \"archival\""));
+        assert!(removed_node_mode_key("  node_mode=\"full\""));
+        assert!(removed_node_mode_key("\tnode_mode = 'x'"));
+        // Comments, prefixes and the new spelling never match.
+        assert!(!removed_node_mode_key("# node_mode = \"full\""));
+        assert!(!removed_node_mode_key("node_mode_extra = 1"));
+        assert!(!removed_node_mode_key("mode = \"archival\""));
+        assert!(!removed_node_mode_key("network_id = 3"));
+    }
+
+    #[test]
+    fn pruning_defaults_match_adr0025_when_table_absent() {
+        // No `[pruning]` table at all → ADR-0025 initial values.
+        let toml = r#"
+            network_id = 3
+            log_level = "info"
+            data_dir = "./data"
+
+            [network]
+            listen_addr = "127.0.0.1:8081"
+            seeds = []
+            max_peers = 50
+
+            [storage]
+            path = "./data/rocksdb"
+        "#;
+        let cfg: Config = toml::from_str(toml).expect("config without [pruning] must parse");
+        assert!(cfg.pruning.enabled, "ADR-0025: pruning on by default");
+        assert_eq!(cfg.pruning.retention_blocks, 5000, "ADR-0025 default");
+        assert_eq!(cfg.pruning.sweep_every_blocks, 100, "ADR-0025 default");
+        let effective = cfg.pruning_config();
+        assert!(!effective.archival, "mode defaults to full");
+        cfg.validate().expect("defaults are valid");
+    }
+
+    #[test]
+    fn pruning_section_parses_including_partial_tables() {
+        let full = r#"
+            network_id = 3
+            log_level = "info"
+            data_dir = "./data"
+
+            [network]
+            listen_addr = "127.0.0.1:8081"
+            seeds = []
+            max_peers = 50
+
+            [storage]
+            path = "./data/rocksdb"
+
+            [pruning]
+            enabled = true
+            retention_blocks = 100
+            sweep_every_blocks = 25
+        "#;
+        let cfg: Config = toml::from_str(full).expect("[pruning] must parse");
+        assert!(cfg.pruning.enabled);
+        assert_eq!(cfg.pruning.retention_blocks, 100);
+        assert_eq!(cfg.pruning.sweep_every_blocks, 25);
+
+        // Partial table: only the keys the operator sets; the rest keep
+        // the ADR-0025 per-field defaults.
+        let partial = full.replace("enabled = true\n            retention_blocks = 100\n            sweep_every_blocks = 25", "enabled = false");
+        let cfg_partial: Config = toml::from_str(&partial).expect("partial [pruning] must parse");
+        assert!(!cfg_partial.pruning.enabled);
+        assert_eq!(cfg_partial.pruning.retention_blocks, 5000);
+        assert_eq!(cfg_partial.pruning.sweep_every_blocks, 100);
+
+        // The emitted `[pruning]` table never carries the mode-derived
+        // `archival` flag (serde skip — the mode lives in `[node]`).
+        // Serialized on its own: whole-`Config` emission trips a
+        // pre-existing `ValueAfterTable` in `NetworkConfig` (S2-P17 put
+        // `peer_scoring_*` scalars after the `rate_limit_per_type`
+        // table — migration-writer concern, out of S3-P12 scope).
+        let serialized = toml::to_string(&cfg.pruning).expect("pruning table serializes");
+        assert!(!serialized.contains("archival"), "archival is mode-derived");
+        assert!(serialized.contains("retention_blocks"));
+    }
+
+    #[test]
+    fn pruning_config_resolves_archival_from_node_mode() {
+        let parse = |toml: &str| -> Config { toml::from_str(toml).expect("config must parse") };
+        let base = r#"
+            network_id = 3
+            log_level = "info"
+            data_dir = "./data"
+
+            [network]
+            listen_addr = "127.0.0.1:8081"
+            seeds = []
+            max_peers = 50
+
+            [storage]
+            path = "./data/rocksdb"
+        "#;
+
+        // Archival: sweep bypassed.
+        let archival = parse(&format!("{base}\n[node]\nmode = \"archival\"\n"));
+        assert_eq!(archival.node.mode, NodeMode::Archival);
+        assert!(
+            archival.pruning_config().archival,
+            "archival bypasses sweep"
+        );
+
+        // Full: sweeps normally.
+        let full = parse(&format!("{base}\n[node]\nmode = \"full\"\n"));
+        assert_eq!(full.node.mode, NodeMode::Full);
+        assert!(!full.pruning_config().archival);
+
+        // Light sweeps like full (ADR-0025 defines no light semantics).
+        let light = parse(&format!("{base}\n[node]\nmode = \"light\"\n"));
+        assert_eq!(light.node.mode, NodeMode::Light);
+        assert!(!light.pruning_config().archival);
+
+        // Absent `[node]` table → full default.
+        let absent = parse(base);
+        assert_eq!(absent.node.mode, NodeMode::Full);
+        assert!(!absent.pruning_config().archival);
+    }
+
+    #[test]
     fn peer_tunables_default_when_missing_from_config_file() {
         // Stage 1.5-era files (no peer keys) must keep parsing — S2-P12
         // serde defaults.
         let toml = r#"
             network_id = 3
-            node_mode = "full"
+            node = { mode = "full" }
             log_level = "info"
             data_dir = "./data"
 
@@ -873,7 +1061,7 @@ mod tests {
         // get the ADR-0022 initial tables — S2-P17 serde defaults.
         let toml = r#"
             network_id = 3
-            node_mode = "full"
+            node = { mode = "full" }
             log_level = "info"
             data_dir = "./data"
 
@@ -1005,7 +1193,7 @@ mod tests {
         // the ADR-0023 initial table — S2-P16 serde defaults.
         let toml = r#"
             network_id = 3
-            node_mode = "full"
+            node = { mode = "full" }
             log_level = "info"
             data_dir = "./data"
 

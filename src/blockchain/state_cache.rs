@@ -482,6 +482,7 @@ pub(crate) fn open_blockchain(
         persisted_contract_storage: strangecoin_core::state::ContractStorageMap::new(),
         persisted_mempool: HashMap::new(),
         pending_state_history: Vec::new(),
+        pruning: crate::storage::PruningConfig::default(),
     };
     blockchain.storage_health_check();
 
@@ -1288,6 +1289,25 @@ impl Blockchain {
         self.persisted_contract_storage = self.balances.contract_storage().clone();
         self.persisted_mempool = current_mempool_keys;
         self.pending_state_history.clear();
+
+        // ---- S3-P12: height-based pruning sweep (ADR-0025) ----
+        //
+        // Runs after the block's own batch so the new tip's snapshots
+        // are already on disk when the window is evaluated. The trigger
+        // is stateless (`tip % sweep_every_blocks == 0`) and the sweep
+        // idempotent: a crash between the two batches, a restart on the
+        // same boundary, or a reorg back onto it all re-derive the same
+        // decision on the next save. Config comes from
+        // `Config::pruning_config()` via `set_pruning` (open-path saves
+        // may run with the default window first — at most one
+        // sweep-cadence of delay, documented on the field).
+        if chain_len > 0 {
+            let tip = chain_len - 1;
+            let cfg = self.pruning;
+            if crate::storage::should_sweep(tip, cfg) {
+                crate::storage::sweep(engine, tip, cfg)?;
+            }
+        }
         Ok(())
     }
 

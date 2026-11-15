@@ -1080,7 +1080,9 @@ pub async fn run_async() {
 
         let new_config = crate::config::Config {
             network_id: 3,
-            node_mode: crate::config::NodeMode::Full,
+            // S3-P12: `[node] mode` replaces the top-level `node_mode`
+            // key (ADR-0025 config surface); migration defaults to full.
+            node: Default::default(),
             network: crate::config::NetworkConfig {
                 listen_addr: format!(
                     "{}:{}",
@@ -1097,6 +1099,7 @@ pub async fn run_async() {
                 path: exe_dir.join("data/rocksdb"),
                 ..Default::default()
             },
+            pruning: Default::default(),
             log_level: "info".into(),
             data_dir: exe_dir.join("data"),
             allow_grant_blocks: false,
@@ -1209,6 +1212,8 @@ pub async fn run_async() {
         .set_allow_grant_blocks(config.allow_grant_blocks);
     node.blockchain
         .set_allow_zero_state_root(config.zero_state_root_allowed());
+    // S3-P12 (ADR-0025): `[pruning]` + `[node] mode` → sweep config.
+    node.blockchain.set_pruning(config.pruning_config());
     node.start_server(port, sync_tx.clone()).await;
     node.discover_peers();
 

@@ -1,5 +1,9 @@
 network_id = 3
-node_mode = "Full"
+# S3-P12 (ADR-0025): node mode — "full" (default; prunes state_history
+# per the [pruning] table below), "light" (sweeps like full) or
+# "archival" (keeps all history). Replaces the Stage 0-2 top-level
+# `node_mode` key, which is ignored with a warning on load.
+node = { mode = "full" }
 log_level = "info"
 data_dir = "./data"
 
@@ -52,3 +56,14 @@ rate_limit_per_type = { inv = "100/10s", block = "30/10s", tx = "1000/10s", get_
 
 [storage]
 path = "./data/leveldb"
+
+# S3-P12 (ADR-0025): state-history pruning (full nodes only — archival
+# mode bypasses the sweep entirely). retention_blocks = 5000: snapshots
+# older than tip − retention are deleted (never current state, blocks,
+# txs, contract storage or meta); sweep_every_blocks = 100: height-based
+# trigger (deterministic — never wall clock); retention_blocks = 0 or
+# enabled = false disables the sweep.
+[pruning]
+enabled = true
+retention_blocks = 5000
+sweep_every_blocks = 100
