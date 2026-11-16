@@ -61,7 +61,7 @@ winapi = { version = "0.3", optional = true, features = [
     "synchapi",
     "processthreadsapi",
 ] }
-toml = "0.5"
+toml = "1.1"
 pbkdf2 = { version = "0.12.2", features = ["simple"] }
 rand_core = "0.10.1"
 base64 = "0.22.1"

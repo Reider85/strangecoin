@@ -4112,7 +4112,7 @@ dependencies = [
  "strangecoin-vm-wasm",
  "thiserror 2.0.21",
  "tokio",
- "toml 0.5.11",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -4453,15 +4453,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "toml"
-version = "0.5.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4f7f0dd8d50a853a531c426359045b1998f04219d88799810762cd4ad314234"
-dependencies = [
- "serde",
 ]
 
 [[package]]
@@ -5032,7 +5023,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "sha2",
- "toml 1.1.8+spec-1.1.0",
+ "toml",
  "wasmtime-environ",
  "windows-sys 0.61.2",
  "zstd",
