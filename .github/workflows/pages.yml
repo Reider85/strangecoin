@@ -47,7 +47,7 @@ jobs:
     if: ${{ !vars.RUNS_ON || github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       
       - name: Setup mdBook
         # [GITHUB-P09] pinned: v1 was node16-era; 'latest' mdbook is not reproducible.
