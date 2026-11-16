@@ -96,7 +96,7 @@ jobs:
         # Spec item 3: git-auto-commit-action@v5, message with snapshot
         # number (deviation 4). Only the CSV is ever staged (file_pattern),
         # so a concurrent edit elsewhere in the tree cannot ride along.
-        uses: stefanzweifel/git-auto-commit-action@v5
+        uses: stefanzweifel/git-auto-commit-action@v7
         with:
           commit_message: "chore(stars): hourly snapshot ${{ github.run_number }}"
           file_pattern: analytics/stargazer-history.csv
