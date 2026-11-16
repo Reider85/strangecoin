@@ -169,7 +169,7 @@ jobs:
       # Deviation 7: CODECOV_TOKEN secret must exist in repo settings;
       # fail_ci_if_error keeps a missing token from failing this step.
       - name: Upload to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         with:
           files: lcov.info
           fail_ci_if_error: false
