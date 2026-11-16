@@ -102,9 +102,13 @@ jobs:
           choco install llvm -y --no-progress
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
 
+      # [S3-P15] GITHUB-P10 regression fix: `if: matrix.allow_failure &&
+      # runner.os == 'Windows'` (427dc52) SKIPPED this step for the 5 normal
+      # matrix cells -> rename failed with "no binary" on every cell except
+      # windows-aarch64 (run 43912997942, v3.0.0-stage3). Build runs for
+      # every cell unconditionally; partial-matrix tolerance lives downstream
+      # (aggregate-hashes `expected -ge 4` + missing-artifact note, GITHUB-P10).
       - name: Build release binary
-        if: matrix.allow_failure && runner.os == 'Windows'
-        continue-on-error: true
         run: cargo build --release --target ${{ steps.tgt.outputs.target }}
 
       - name: Rename binary (Unix)
