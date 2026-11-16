@@ -1,10 +1,10 @@
 # THREAT_MODEL.md — Strangecoin Threat Model (STRIDE)
 
-**Версия:** 3.2 (S2-P23)
-**Дата:** 2026-10-29
-**Статус:** Stage 2 — актуализирован в S2-P23 (Stage 1.5 — S1.5-P18; Stage 1 — S1-P21; Stage 0 — D02)
-**Источник:** `analytics/ARCHITECT3.md` §6 (25 векторов атак) + `analytics/retro-stage0.md` (§4.3, §4.4, §8.2) + `analytics/prompt-stage1.md` S1-P21 (векторы Stage 1) + `analytics/prompt-stage1.5.md` S1.5-P18 (V-18..V-21 митигации Stage 1.5) + `analytics/prompt-stage2.md` S2-P23 (V-1/V-2/V-14/V-15/V-16/V-17/V-24 митигации Stage 2)
-**Связанные документы:** `INCIDENT_RESPONSE.md`, `ARCHITECT3.md`, `ROADMAP3.md`, `docs/stage1/INVARIANTS_ENFORCED.md`, `docs/stage1.5/INVARIANTS_ENFORCED.md`, `docs/stage1.5/THREAT_MODEL_STAGE1_5.md`, `docs/stage2/INVARIANTS_ENFORCED.md`, `docs/stage2/THREAT_MODEL_STAGE2.md`, `docs/stage2/RESIDUAL_RISKS_STAGE3_PLUS.md`, `fuzz/README.md`
+**Версия:** 3.3 (S3-P14)
+**Дата:** 2026-11-16
+**Статус:** Stage 3 — актуализирован в S3-P14 (Stage 2 — S2-P23; Stage 1.5 — S1.5-P18; Stage 1 — S1-P21; Stage 0 — D02)
+**Источник:** `analytics/ARCHITECT3.md` §6 (25 векторов атак) + `analytics/retro-stage0.md` (§4.3, §4.4, §8.2) + `analytics/prompt-stage1.md` S1-P21 (векторы Stage 1) + `analytics/prompt-stage1.5.md` S1.5-P18 (V-18..V-21 митигации Stage 1.5) + `analytics/prompt-stage2.md` S2-P23 (V-1/V-2/V-14/V-15/V-16/V-17/V-24 митигации Stage 2) + `analytics/prompt-stage3.md` S3-P14 (V-43..V-47 — storage/snapshot/witness/pruning векторы Stage 3)
+**Связанные документы:** `INCIDENT_RESPONSE.md`, `ARCHITECT3.md`, `ROADMAP3.md`, `docs/stage1/INVARIANTS_ENFORCED.md`, `docs/stage1.5/INVARIANTS_ENFORCED.md`, `docs/stage1.5/THREAT_MODEL_STAGE1_5.md`, `docs/stage2/INVARIANTS_ENFORCED.md`, `docs/stage2/THREAT_MODEL_STAGE2.md`, `docs/stage2/RESIDUAL_RISKS_STAGE3_PLUS.md`, `docs/stage3/INVARIANTS_ENFORCED.md`, `docs/stage3/THREAT_MODEL_STAGE3.md`, `docs/stage3/RESIDUAL_RISKS_STAGE4_PLUS.md`, `fuzz/README.md`
 
 ---
 
@@ -62,6 +62,15 @@
 - **Cleanup/async:** deprecated v0.8.6 messages удалены (S2-P18); network workers на `tokio::spawn` (S2-P19)
 - **Shadow tooling:** replay + consensus divergence detector (S2-P20)
 - **Fuzzing + интеграционные тесты:** 4 network fuzz targets (S2-P21); `tests/net_*.rs` (S2-P22)
+
+**Stage 3 (добавлено в S3-P14):**
+- **strangecoin-storage:** storage runtime вынесен в отдельный крейт `crates/strangecoin-storage/` (strangler, S3-P04; RocksDB backend `rocksdb = "=0.25.0"`, 7 CF, schema versioning `SCHEMA_VERSION=1`, ADR-0024)
+- **Crash recovery:** атомарный WriteBatch + WAL restore + kill-sweep suite + stale-LOCK auto-release (S3-P06/S3-P10; инварианты #23/#24)
+- **Миграция:** one-shot LevelDB→RocksDB (parse-all fail-closed, temp + atomic rename, `.leveldb.bak`; S3-P08); per-block keys + mempool CF + `state_history` (S3-P07)
+- **O(1)-индексы:** txid→(height,index), hash→height, contract→storage-root cache + LRU block/tx cache (S3-P09/S3-P10)
+- **Stateless wire witnesses:** canonical `StateWitness` codec (`WITNESS_FORMAT_VERSION=1`) + node light path + facade verify (S3-P11; ADR over SMT, Verkle SCIP-gated)
+- **State pruning:** height-window sweep `state_history` + archival mode + expiry markers (S3-P12; ADR-0025, boundary-инвариант #26)
+- **Snapshot sync:** file-based export/import + commitment verification (blake3 checksum → network_id → state-root → tip; S3-P13; ADR-0026)
 
 ### 1.2 Assumptions
 
@@ -861,6 +870,85 @@ Reproducible builds + cosign signatures для верификации бинар
 
 ---
 
+## 5b. Additional Stage 3-Specific Vectors (добавлено S3-P14)
+
+#### V-43: Snapshot Forging
+
+| Поле | Значение |
+|------|----------|
+| **ID** | V-43 |
+| **Название** | Snapshot Forging (подделанный state-snapshot) |
+| **STRIDE** | Tampering / Spoofing |
+| **Описание** | Атакующий подменяет snapshot-файл (или подсовывает враждебный), чтобы узел-новичок принял ложное состояние/tip: неверный state root, чужая сеть, испорченный контент, перезапись существующей БД. До Stage 3 snapshot не существовал (Stage 2 residual §1). |
+| **Stage 3 Mitigation (S3-P13, ADR-0026)** | **Mitigated (fail-closed).** `verify_file` (`crates/strangecoin-storage/src/snapshot.rs:290`): 4-step — blake3 checksum → `network_id` match → state-root recompute из accounts → tip hash + window linkage; `import` (`:362`) только после verify + `NotFreshDatabase` (не-fresh БД → reject, перезапись невозможна); canonical byte-identical export (детерминизм). Инвариант #25. |
+| **Stage** | S3-P13 (Stage 3) |
+| **Residual Risk** | Средний→низкий. Формат закрывает подделку контента; freshness относительно честной цепочки (старый валидный snapshot) и транспортная подмена файла — Stage 4+ (wire transport + versioning; `docs/stage3/RESIDUAL_RISKS_STAGE4_PLUS.md` §1). |
+| **Monitoring** | Reject-счётчики verify (checksum/network_id/state-root/tip mismatch); alert на систематические отказы verify. |
+| **Код** | `crates/strangecoin-storage/src/snapshot.rs` (`export:181`, `verify_file:290`, `import:362`), `src/cli/snapshot.rs` |
+| **Тест** | `tests/snapshot_sync.rs::forged_body_is_rejected`, `::corrupt_checksum_is_rejected`, `::wrong_network_id_is_rejected`, `::import_requires_fresh_db`; unit `snapshot.rs::forged_state_root_is_rejected`, `::bad_magic_is_rejected`, `::header_round_trip` |
+
+#### V-44: Snapshot Withholding
+
+| Поле | Значение |
+|------|----------|
+| **ID** | V-44 |
+| **Название** | Snapshot Withholding (отказ в выдаче/дистрибуции snapshot) |
+| **STRIDE** | Denial of Service |
+| **Описание** | Атакующий/некомпетентный оператор удерживает или цензурирует snapshot-файлы (mirror'ы), вынуждая новые узлы идти полным replay — потеря скорости bootstrap; возможен избирательный выдача старых файлов (связано с freshness V-43). |
+| **Stage 3 Mitigation (S3-P13, ADR-0026)** | **Частично (availability residual).** На уровне формата не решаемо: узел без честного файла детерминированно падает на полный replay (correctness сохраняется — invariant #1, скорость теряется); fallback-путь покрыт тестом catch-up. Operational mitigation — множественные независимые mirrors (Stage 4 ops guidance). |
+| **Stage** | S3-P13 (Stage 3) |
+| **Residual Risk** | Средний (availability, не integrity). Полное решение — wire snapshot transport (Stage 4+) с несколькими пиров-источниками. |
+| **Monitoring** | Доля узлов, завершивших bootstrap через snapshot vs replay; mirror availability probes (Stage 4 ops). |
+| **Код** | `crates/strangecoin-storage/src/snapshot.rs` (file-based path, P2P-transport отсутствует по дизайну — ADR-0026 §Transport residual) |
+| **Тест** | `tests/snapshot_sync.rs::snapshot_node_catches_up_via_direct_blocks` (replay-fallback работает без snapshot) |
+
+#### V-45: Witness Forgery / Wire Omission
+
+| Поле | Значение |
+|------|----------|
+| **ID** | V-45 |
+| **Название** | Witness Forgery / Wire Omission (подделка или отсутствие stateless-witness на wire) |
+| **STRIDE** | Tampering / Spoofing |
+| **Описание** | На relay-пути (будущий wire) блок сопровождается witness'ом: атакующий может подделать proof, опустить touched-address (omission), прислать truncated/malformed bytes, неизвестную версию формата — чтобы light-валидация приняла ложное состояние. Ядро-функция verify существовала с S1-P07 (V-36), wire-формат появился в Stage 3. |
+| **Stage 3 Mitigation (S3-P11)** | **Mitigated (node-side + codec).** `verify_incoming_block_with_witness` (`src/blockchain/blockchain_facade.rs:605`) → `verify_block_stateless` (`crates/strangecoin-core/src/state/witness.rs:279`): parent state-root сверка + touched-address completeness + SMT-proof verify; wire codec (`deserialize_state_witness:116`) fail-closed: unknown `WITNESS_FORMAT_VERSION`, unsorted addresses, truncated/trailing bytes, absurd proof count → reject; golden vector пинит формат. Инвариант #19-adjacent; core-тесты V-36 остаются. |
+| **Stage** | S1-P07 (core) + S3-P11 (wire codec + node path) |
+| **Residual Risk** | Средний→низкий. Интеграция witness в gossip/sync relay-путь — Stage 4+ (пока witness по сети не ходит, эксплуатация на relay невозможна, но и не протестирована end-to-end); fuzz decoder — Stage 4+. |
+| **Monitoring** | Reject-счётчики witness verify (proof mismatch, missing address, decode fail); alert на всплеск от узла. |
+| **Код** | `crates/strangecoin-core/src/state/witness.rs` (`serialize_state_witness:94`, `deserialize_state_witness:116`, `verify_block_stateless:279`), `src/blockchain/blockchain_facade.rs::build_witness_for_block:545` / `::verify_incoming_block_with_witness:605` |
+| **Тест** | core `tests/witness.rs` (22: `tampered_balance_rejected`, `forged_state_root_rejected`, `missing_touched_address_rejected`, `witness_codec_rejects_unknown_version`, `witness_codec_rejects_unsorted_addresses`, `witness_codec_rejects_truncated_and_trailing_bytes`, `witness_codec_golden_vector`, proptests); `tests/stateless_light_client.rs` (3: `corrupted_witness_proof_byte_is_rejected`, `witness_missing_touched_address_is_rejected`) |
+
+#### V-46: RocksDB Crash Divergence
+
+| Поле | Значение |
+|------|----------|
+| **ID** | V-46 |
+| **Название** | RocksDB Crash Divergence (расхождение после crash/неконсистентный disk-state) |
+| **STRIDE** | Tampering / Denial of Service |
+| **Описание** | Смена backend LevelDB→RocksDB меняет crash-recovery-семантику (WAL, compaction, CF): kill во время write → half-applied batch → disk-состояние расходится с цепочью; порча/несовместимость schema version при обновлении; osиротевший LOCK блокирует рестарт. Расхождение disk vs chain = форк/недоступность узла. |
+| **Stage 3 Mitigation (S3-P06/S3-P08/S3-P10, ADR-0024)** | **Mitigated.** (1) Атомарный WriteBatch — все op'ы или ни gördüğü (тест100-op batch через reopen); WAL restore после child-abort; (2) schema-version guard fail-closed: fresh→init, mismatch→`StorageError::SchemaVersion`, bad-len→`Corrupt`, без auto-upgrade (`rocks.rs:110-129`, `SCHEMA_VERSION=1`); (3) kill-sweep детерминированный k∈{0,1,5,50} + stale-LOCK auto-release; (4) invariant #1 — rebuild from chain остаётся авторитетом при любом disk-состоянии; (5) миграция LevelDB fail-closed (parse-all → temp + atomic rename → `.leveldb.bak`). Инварианты #23/#24. |
+| **Stage** | S3-P06/S3-P08/S3-P10 (Stage 3) |
+| **Residual Risk** | Низкий. Compaction/файл-системные семантики верифицированы suite'ом на локальном host; multi-platform crash-поведение — CI/release (не верифицируемо локально, Windows host). C++ toolchain drift — pin `rocksdb = "=0.25.0"` (SCIP-only update). |
+| **Monitoring** | Open-fail counter (SchemaVersion/Corrupt); crash-loop detection на рестартах; alert на repeated verify-guard rejects. |
+| **Код** | `crates/strangecoin-storage/src/rocks.rs` (`open:84`, guard `:110-129`), `src/schema.rs::SCHEMA_VERSION:57`, `src/storage/migrations.rs` (fail-closed миграция) |
+| **Тест** | `crates/strangecoin-storage/tests/crash_recovery.rs` (5: `crash_kill_after_{0,1,5,50}_reopens_atomically`, `stale_lock_is_auto_released_after_child_kill`); `tests/rocks_engine.rs::schema_version_guard_fails_closed_on_mismatch_and_corruption`, `::crash_smoke_wal_restores_after_child_process_abort`, `::write_batch_applies_all_100_ops_atomically_across_reopen`; `tests/leveldb_migration.rs::corrupt_legacy_fails_closed`, `::interrupted_migration_resumes_and_divergent_chains_refuse` |
+
+#### V-47: Pruning Replay Weakness
+
+| Поле | Значение |
+|------|----------|
+| **ID** | V-47 |
+| **Название** | Pruning Replay Weakness (ослабление replay-verifiability через pruning) |
+| **STRIDE** | Denial of Service / Tampering |
+| **Описание** | Удаление исторических данных ослабляет способность узла проверять/пересылать глубокую историю: агрессивный sweep теряет нужные данные; если бы pruning трогал current state — stale/replay-состояние могло бы пройти проверку (EIP-4444 analog); ошибочный boundary = потеря consensus-состояния. |
+| **Stage 3 Mitigation (S3-P12, ADR-0025)** | **Mitigated (boundary) + SCIP residual.** `sweep` (`pruning.rs:180`) удаляет только `state_history`-дельты старше height-window — current `state`/`blocks`/`meta` не прюнятся (инвариант #26); `[node] mode = archival` → полный no-op; expiry-маркеры — только в history-подпространстве, bounded 1/адрес; триггер height-based (детерминизм, без wall-clock); state expiry (удаление current state, реальный replay-ослабляющий фактор) — НЕ реализован, SCIP-gated (ADR-0025); deep re-org за пределами окна → полный rebuild-from-chain (correctness сохраняется). |
+| **Stage** | S3-P12 (Stage 3) |
+| **Residual Risk** | Низкий (при default retention 5000). Глубокая история за пределами окна недоступна для точечных запросов (blocks не прюнятся — только state-дельты); receipts — derived/не персистятся (prune-остаток — SCIP carry-over). |
+| **Monitoring** | PruneReport-метрики (удалено записей, маркеры); alert если swept-контент > ожидаемого window; disk-usage тренд. |
+| **Код** | `crates/strangecoin-storage/src/pruning.rs` (`should_sweep:163`, `sweep:180`), trigger в `src/blockchain/state_cache.rs::save_state_engine`, `src/config.rs` (`[pruning]`, `[node] mode`) |
+| **Тест** | `tests/pruning.rs` (6: `sweep_deletes_history_below_window_and_spares_state_blocks_meta`, `archival_node_mode_never_prunes_history`, `expiry_marker_written_for_dormant_address_without_deleting_state`, `disk_usage_smoke_pruned_key_count_below_control`, `adopt_path_sweeps_state_history_on_height_boundaries`, `archival_disabled_zero_window_and_unreached_window_are_noops`); unit `pruning.rs` (7: `identical_inputs_produce_identical_reports_and_state`, `should_sweep_is_height_based_and_gated`, ...) |
+
+---
+
 ## 6. Mitigations Map
 
 ### 6.1 Prompt → Vector Mapping (Stage 0)
@@ -937,6 +1025,19 @@ Reproducible builds + cosign signatures для верификации бинар
 | **S2-P22** | Интеграционные тесты: V-01/V-14/V-15/V-17/V-24 (`tests/net_*.rs`) |
 | **S2-P23** | V-1/V-2/V-14/V-15/V-16/V-17/V-24 (документирование митигаций этого раздела; regression 22 инвариантов — `docs/stage2/INVARIANTS_ENFORCED.md`) |
 
+### 6.2d Prompt → Vector Mapping (Stage 3, добавлено S3-P14)
+
+| Prompt | Векторы, которые он mitigates |
+|--------|------------------------------|
+| **S3-P06** | V-46 (RocksDbEngine: атомарный WriteBatch, schema guard, crash smoke) |
+| **S3-P07** | V-46 adjacent (per-block записи + `state_history` pre-apply — меньше write-amplification, invariant #1 regression) |
+| **S3-P08** | V-46 (LevelDB→RocksDB миграция fail-closed: parse-all, atomic rename, `.leveldb.bak`, divergent refusal) |
+| **S3-P10** | V-46 (crash-recovery kill-sweep k∈{0,1,5,50} + stale-LOCK), V-47 adjacent (perf-suite не трогает boundary) |
+| **S3-P11** | V-45 (witness wire codec fail-closed + node verify path + light-client e2e) |
+| **S3-P12** | V-47 (height-window boundary, archival no-op, expiry markers — инвариант #26) |
+| **S3-P13** | V-43 (snapshot commitment verify + NotFreshDatabase), V-44 (replay-fallback документирован) |
+| **S3-P14** | V-43..V-47 (документирование митигаций этого раздела; regression 26 инвариантов — `docs/stage3/INVARIANTS_ENFORCED.md`) |
+
 ### 6.3 Coverage Matrix
 
 | STRIDE Category | Covered by Stage 0 | Covered by Stage 1 | Covered by Stage 1.5 | Covered by Stage 2 | Residual (deferred) |
@@ -996,6 +1097,11 @@ Reproducible builds + cosign signatures для верификации бинар
 | V-40 (RBF fee-war DoS) | mempool RBF | `tests/rbf.rs::rbf_replacement_emits_tx_rejected`, `::rbf_replacement_with_lower_feerate_rejected`, `::rbf_replacement_chain_is_limited`, `::rbf_replacement_evicts_dependencies`, `::rbf_replacement_is_what_gets_mined`; `tests/double_spend.rs` (регрессия) | ✅ S1-P17 |
 | V-41 (SyncEngine flooding) | network/sync_engine | `tests/sync_engine.rs::concurrent_candidates_race_through_one_engine`; unit-тесты `src/network/sync_engine.rs::duplicate_candidate_is_dropped_at_the_inbox`, `::full_pull_lane_drops_without_ban`, `::full_inbound_lane_bans_the_producer`, `::headers_lane_is_separate_from_blocks`; `tests/network.rs::real_network_fast_registration_race` | ✅ S1-P18 |
 | V-42 (HRP confusion) | core address (bech32) | core `src/address.rs::test_round_trip`, `::test_checksum_error`, `::test_hrp_validation`, `::test_network_id_hrp_mapping`; `tests/two_clients.rs::bech32_address_transfer`; `tests/address_migration.rs::legacy_base64_balances_migrate_to_bech32_on_open` | ✅ S1-P15 |
+| V-43 (Snapshot forging) | storage snapshot (`verify_file`/`import`) + CLI | `tests/snapshot_sync.rs` (4 negative + `import_requires_fresh_db`), unit `snapshot.rs` (7 incl. `forged_state_root_is_rejected`) | ✅ **S3-P13** |
+| V-44 (Snapshot withholding) | storage snapshot (file-based, no P2P transport) | `tests/snapshot_sync.rs::snapshot_node_catches_up_via_direct_blocks` (replay-fallback); availability residual — mirrors (Stage 4 ops) | ✅ mitigated / ⚠️ availability residual (ADR-0026) |
+| V-45 (Witness forgery) | core witness codec + facade verify path | core `tests/witness.rs` (22 incl. golden/negative/proptest), `tests/stateless_light_client.rs` (3) | ✅ S1-P07 + **S3-P11** |
+| V-46 (RocksDB crash divergence) | storage rocks.rs (WriteBatch/WAL/schema guard) + migrations | `crates/strangecoin-storage/tests/crash_recovery.rs` (5), `tests/rocks_engine.rs` (guard + crash smoke + batch atomicity), `tests/leveldb_migration.rs` (4) | ✅ **S3-P06/S3-P08/S3-P10** |
+| V-47 (Pruning replay weakness) | storage pruning (boundary) + config archival | `tests/pruning.rs` (6), unit `pruning.rs` (7 incl. determinism) | ✅ **S3-P12** (state expiry — SCIP residual) |
 
 **Итого gaps:** 2 вектора без полных тестов (V-03, V-28). Из них:
 - V-03, V-28 — требуют интеграционных/unit-тестов (не закрыты Stage 1/1.5/2)
@@ -1008,6 +1114,7 @@ Reproducible builds + cosign signatures для верификации бинар
 - ~~V-35 zero-root вектор (3)~~ — **closed** (BUG-S1-002, 2026-10-11): zero-root opt-out удалён (SCIP-0002); mainnet/testnet обязателен commitment
 - **V-18..V-21 — closed (S1.5-P13/P17, 2026-10-17)**: reentrancy guard, storage cap, code-size cap, sandbox+limits — все с тестами (§3.7)
 - Новые V-34..V-42 — все с тестами, gaps нет
+- Новые V-43..V-47 (Stage 3, S3-P14) — все с тестами, gaps нет; V-44 availability-residual зафиксирован (wire transport — Stage 4+)
 
 ---
 
@@ -1055,6 +1162,24 @@ Reproducible builds + cosign signatures для верификации бинар
 | Seed rotation (автоматическая) | Stage 6+ (или SCIP) | Ручная ротация через network.json; auto-rotation отложена (V-16 residual) | Low |
 | Ephemeral из long-term seed (forward-secrecy trade-off) | Continuous (S2-P09 зафиксирован) | Компрометация seed раскрывает записанные сессии узла; reproducibility выбран осознанно | Low |
 | Plaintext-клиенты Stage 1.5 несовместимы | До тега `v2.0.0-stage2` (S2-P24) | Единый Noise-транспорт (S2-P19); допустимо до mainnet freeze | Low |
+
+### 7.1d Stage 3 Residual Risks (после закрытия V-43..V-47, добавлено S3-P14)
+
+Полный перечень — `docs/stage3/RESIDUAL_RISKS_STAGE4_PLUS.md` (S3-P14). Ключевые строки:
+
+| Risk | Deferred To | Mitigation Status (Stage 3) | Impact |
+|------|-------------|-----------------------------|--------|
+| Wire snapshot sync (GET_SNAPSHOT P2P) | Stage 4+ | File-based (ADR-0026); transport + rate-limit class + capability gating не реализованы; withholding residual (V-44) | Medium |
+| Wire witness integration (gossip/sync relay) | Stage 4+ | Node-API + codec есть (S3-P11); relay-путь witness не грузит; fuzz decoder — Stage 4+ | Medium |
+| State expiry (dormant accounts из current state) | Stage 3+ (SCIP) | Stage 3 — только touch-tracking маркеры (ADR-0025); удаление current state = consensus-changing | Medium |
+| Receipts prune / contract storage prune | Stage 3+ (SCIP) | Receipts — derived, не персистятся; prune-остаток carry-over Stage 1.5/2 | Low |
+| Verkle/KZG (вместо SMT) | Stage 3+ (SCIP, ADR-0006) | Stage 3 = witness-over-SMT; замена SMT — consensus-breaking | Medium |
+| Block-STM parallel execution | Stage 3+ | Serial execution; anti-goal Stage 3 (prompt §6) | Medium |
+| State rent / global state cap | Stage 3+ (SCIP) | Per-contract 1MB cap; глобальный рост не стягивается | Medium |
+| Persistent SMT (trie-узлы в DB) | Stage 3+ (ADR-0024 residual) | State root recompute in-memory; rebuild-from-chain — авторитет (#1) | Low |
+| Erlay minisketch full impl (impl_id=1) | SCIP-gated (carry-over Stage 2) | Stub `impl_id=0` (ADR-0021) | Low |
+| TLA+ формальная верификация network protocol | Stage 6 | `consensus.tla` только консенсус (carry-over Stage 2) | Medium |
+| SCIP-0001 + ops-gates BUG-S1-013/015 | mainnet freeze | Human ops; НЕ блокируют Stage 3/4 (carry-over) | High (pre-mainnet) |
 
 ### 7.2 Risks Accepted (Stage 0 + Stage 1)
 
@@ -1170,6 +1295,11 @@ Reproducible builds + cosign signatures для верификации бинар
 - [x] **S2-P23:** Monitoring plan дополнен network-метриками (handshake/NodeId/Replay/rate-limit/scoring/Erlay/DNSSEC — §8.1)
 - [x] **S2-P23:** Regression 22 инвариантов — `docs/stage2/INVARIANTS_ENFORCED.md` (22/22, extensions #16/#17)
 - [x] **S2-P23:** Network fuzz targets (S2-P21) + интеграционные тесты (S2-P22) — fuzz CI-side (9 targets), tests локально green
+- [x] **S3-P14:** Новые векторы Stage 3 (V-43..V-47: snapshot forging/withholding, witness forgery, RocksDB crash divergence, pruning replay weakness) задокументированы с Код/Тест (§5b)
+- [x] **S3-P14:** Prompt → Vector Mapping Stage 3 (§6.2d: S3-P06..S3-P14) добавлен; Mitigations Map (§6.4) дополнен V-43..V-47
+- [x] **S3-P14:** Residual risks Stage 4+ (wire snapshot, wire witness, state expiry SCIP, Verkle SCIP, Block-STM, SCIP-0001/ops-gates) зафиксированы в §7.1d + `docs/stage3/RESIDUAL_RISKS_STAGE4_PLUS.md`
+- [x] **S3-P14:** Regression 26 инвариантов (22 baseline + #23..#26) — `docs/stage3/INVARIANTS_ENFORCED.md`
+- [x] **S3-P14:** Stage 2 residual §1 сверён со статусом Stage 3 — `docs/stage3/THREAT_MODEL_STAGE3.md` §1b
 
 ### 9.2 Stage 0遗留 Review Checklist (D02)
 
@@ -1196,7 +1326,8 @@ Reproducible builds + cosign signatures для верификации бинар
 | `analytics/prompt-stage1.md` S1-P19 | Fuzz target + soak result |
 | `analytics/prompt-stage1.md` S1-P21 | Stage 1 threat model update |
 | `analytics/prompt-stage1.5.md` S1.5-P18 | Stage 1.5 threat model update (V-18..V-21) |
-| `analytics/prompt-stage2.md` S2-P23 | Stage 2 threat model update (this revision: V-01/V-02/V-14/V-15/V-16/V-17/V-24) |
+| `analytics/prompt-stage2.md` S2-P23 | Stage 2 threat model update (V-01/V-02/V-14/V-15/V-16/V-17/V-24) |
+| `analytics/prompt-stage3.md` S3-P14 | Stage 3 threat model update (this revision: V-43..V-47 — snapshot/witness/RocksDB/pruning) |
 | `analytics/retro-stage0.md` §4.3, §4.4, §8.2 | Genesis key, Changelog lie, remediation |
 | `docs/security/INCIDENT_RESPONSE.md` | Incident response plan (v3.0, Stage 1 alert sources) |
 | `docs/stage1/INVARIANTS_ENFORCED.md` | 22 invariants re-audit (S1-P20; historical Stage 1) |
@@ -1205,6 +1336,9 @@ Reproducible builds + cosign signatures для верификации бинар
 | `docs/stage2/INVARIANTS_ENFORCED.md` | 22 invariants Stage 2 (S2-P23: 22/22, extensions #16/#17) |
 | `docs/stage2/THREAT_MODEL_STAGE2.md` | Stage 2 network-layer threat-модель: V-01/V-02/V-14/V-15/V-16/V-17/V-24 + residual |
 | `docs/stage2/RESIDUAL_RISKS_STAGE3_PLUS.md` | Stage 3+ residual risks (snapshot sync, RocksDB, Block-STM, witnesses, Erlay stub, TLA+ network) |
+| `docs/stage3/INVARIANTS_ENFORCED.md` | 26 invariants Stage 3 (S3-P14: 22 baseline + #23..#26, extensions #1/#14) |
+| `docs/stage3/THREAT_MODEL_STAGE3.md` | Stage 3 storage-layer threat-модель: V-43..V-47 + Stage 2 residual §1 status |
+| `docs/stage3/RESIDUAL_RISKS_STAGE4_PLUS.md` | Stage 4+ residual risks (wire snapshot/witness, SCIP-gated expiry/Verkle/prune, Block-STM, ops-gates) |
 | `docs/spec/README.md` | TLC model checker результат (D02) |
 | `fuzz/README.md` | Fuzz target + soak run log (S1-P19; S1.5-P16 vm-таргеты; S2-P21 network-таргеты) |
 | `docs/ADR/0001-secp256k1-vs-ed25519.md` | Cryptographic decisions |
@@ -1221,6 +1355,9 @@ Reproducible builds + cosign signatures для верификации бинар
 | `docs/ADR/0021-erlay-integration.md` | Erlay mincut reconciliation + fallback |
 | `docs/ADR/0022-peer-scoring-algorithm.md` | Peer scoring + ban ladder (V-15/V-17) |
 | `docs/ADR/0023-rate-limiting-strategy.md` | Token bucket rate limiting (V-14/V-17) |
+| `docs/ADR/0024-storage-schema-and-engine.md` | Storage schema + StorageEngine trait (V-46; аменда ADR-0008) |
+| `docs/ADR/0025-state-pruning-strategy.md` | State pruning height-window + archival (V-47; state expiry SCIP) |
+| `docs/ADR/0026-snapshot-sync-format.md` | Snapshot sync format commitment-verified (V-43/V-44; wire transport Stage 4+) |
 
 ---
 
