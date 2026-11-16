@@ -1,5 +1,47 @@
 # Changelog
 
+## 3.0.0 — RocksDB storage + stateless validation + pruning + snapshot sync
+
+**Status**: Complete (tag `v3.0.0-stage3` — annotated, ставится этим коммитом; release pipeline run — §`docs/stage3/STAGE3_SUMMARY.md` §7: REST-верификация после push; `gh` CLI не установлен на Windows-хосте — прецедент FBP11)  
+**Date**: 2026-11-16  
+**Prompts**: S3-P01..S3-P15 (`analytics/prompt-stage3.md`)
+
+### Что сделано
+
+- **ADRs**: ADR-0024 (storage schema + StorageEngine trait — аменда ADR-0008), ADR-0025 (state pruning height-window + archival mode + SCIP-path), ADR-0026 (snapshot sync format — commitment-verified, file-based).
+- **`crates/strangecoin-storage/` создан** (S3-P04): workspace member, feature `rocksdb` default-on; pins `rocksdb = "=0.25.0"`, `rusty-leveldb = "=4.0.0"` (optional), `lru = "=0.19.0"`.
+- **Schema v1** (S3-P05): `SCHEMA_VERSION=1`, `KeyPrefix` index-subspace tags, BE key constructors (pure, proptest-covered).
+- **RocksDbEngine** (S3-P06): 7 column families, schema-version guard fail-closed (mismatch → `StorageError::SchemaVersion`, без auto-upgrade), атомарный WriteBatch, sorted prefix-iter, flush всех CF на Drop.
+- **Monolith-миграция** (S3-P07): per-block incremental saves (common-ancestor + diff), mempool CF put/delete, `state_history` pre-apply capture, `[storage] path` config wiring.
+- **One-shot LevelDB→RocksDB миграция** (S3-P08): parse-all fail-closed → temp + atomic rename; legacy `blockchain_db_{port}` переименовывается в `.leveldb.bak` (rollback, никогда не удаляется); `storage.engine` config-key / `LeveldbError` / `legacy.rs` удалены; `rusty-leveldb` → optional default-on feature `legacy-migrate` (read-only legacy reader; полное выпиливание крейта — Stage 4+).
+- **O(1) индексы** (S3-P09): `txid→(height,index)`+raw, `hash→height`, `contract→storage_root` кэш; reorg Phase A deletes → Phase B puts + legacy backfill; facade point-get lookups (`tests/indices.rs`).
+- **Performance + crash-recovery** (S3-P10): batch microbench ratio **719.7x** локально (37.8s sequential×1000 put+flush vs 52.6ms один write_batch+flush — DoD ≥10x; CI-time не верифицируемо локально); kill-sweep crash-suite `k∈{0,1,5,50}` (атомарность batch'ей + stale-LOCK auto-release); `CachedEngine` LRU + `[storage] block_cache_capacity`.
+- **Stateless validation** (S3-P11): canonical witness codec `WITNESS_FORMAT_VERSION=1` (sorted-by-address proofs, golden vector) + facade `build_witness_for_block` / `verify_incoming_block_with_witness` + light-client e2e (`tests/stateless_light_client.rs`). **Wire-интеграция witness в strangecoin-net — Stage 4+ residual.**
+- **State pruning** (S3-P12): height-window sweep `state_history` + expiry markers + archival no-op; `[pruning]` / `[node] mode` config; adopt-path trigger (`tests/pruning.rs`).
+- **Snapshot sync** (S3-P13): file-based export/import + 4-step commitment verification fail-closed (blake3 checksum → network_id → state-root recompute → tip hash + window linkage), `NotFreshDatabase` guard (`tests/snapshot_sync.rs`).
+- **Invariants**: **26/26 enforced** (22 baseline Stage 0-2 regression + #23 schema-version guard, #24 crash atomicity, #25 snapshot commitment, #26 pruning boundary) — `docs/stage3/INVARIANTS_ENFORCED.md` (S3-P14).
+- **Threat model**: V-43 (snapshot forging) / V-44 (withholding) / V-45 (witness forgery) / V-46 (RocksDB crash divergence) / V-47 (pruning replay) — `docs/stage3/THREAT_MODEL_STAGE3.md` + `docs/security/THREAT_MODEL.md` **v3.3** (S3-P14); residuals — `docs/stage3/RESIDUAL_RISKS_STAGE4_PLUS.md`.
+- **DoD verification**: `docs/stage3/STAGE3_SUMMARY.md` — 11/11 критериев ROADMAP3 Этап 3 ✅ (S3-P15).
+- **Version**: root + `strangecoin-core` → **3.0.0** (witness codec); `strangecoin-storage` 0.1.0 (первый release, unchanged), `strangecoin-vm-wasm` 0.2.0, `strangecoin-net` 0.1.0 — без изменений.
+
+### Breaking changes (pre-mainnet; после тега `v3.0.0-stage3` — только через SCIP + activation height)
+
+- **Storage format v1**: пер-блочная RocksDB-схема (7 CF, `SCHEMA_VERSION=1`) вместо LevelDB JSON-блобов — прямое чтение старых БД невозможно (только авто-миграция при первом открытии).
+- **LevelDB engine удалён**: `storage.engine` config-key удалён (leftover-ключ в старых config.toml игнорируется + warn при `Config::load`); `rusty-leveldb` больше не runtime-engine (optional `legacy-migrate` reader).
+- **Storage path default**: `./data/rocksdb` (`[storage] path`); исторический `<exe_dir>/blockchain_db_{port}` используется только как источник авто-миграции.
+- **Stateless witness wire**: новый canonical формат `WITNESS_FORMAT_VERSION=1` (sorted-by-address proofs) — witness, построенный старым кодом, отвергается fail-closed decode.
+
+### Not in this change
+
+- **SCIP-gated**: Verkle trie (ADR-0006 amendment), state expiry (ADR-0025), receipts prune, contract-storage prune, state rent, Erlay full minisketch (`impl_id=1`) — см. `docs/stage3/RESIDUAL_RISKS_STAGE4_PLUS.md`.
+- **Stage 4+**: wire snapshot sync (GET_SNAPSHOT P2P), wire witness в gossip/sync, SDK, devnet, indexer, explorer, JSON-RPC eth_*, faucet, cargo-strangecoin, выпиливание `legacy-migrate` reader, HD wallets/Ledger, metrics/Docker/systemd.
+- **Stage 5+**: Account Abstraction (ERC-4337), EIP-1559, threshold encryption mempool, fee market (инвариант #20).
+- **Stage 6+**: K-framework, ZK-VM, external audit, TLA+ network protocol, Block-STM (Stage 3+/6).
+- **Stage 7**: BLS12-381 + `bls_aggregate`, PoS/Casper, inclusion lists, validator ops.
+- **Ops (не блокируют Stage 4)**: **BUG-S1-013** (PGP-key offline keygen), **BUG-S1-015** (offline genesis key air-gapped keygen), **SCIP-0001** (genesis key replacement — единственный блокер mainnet).
+
+---
+
 ## 2.0.0 — production-grade P2P (Noise, gossip, compact blocks, Erlay, peer scoring)
 
 **Status**: Complete (tag `v2.0.0-stage2` pushed; release pipeline run https://github.com/Reider85/strangecoin/actions/runs/40897214764 — success 13/13, artifacts published + SHA256 recorded in `docs/security/REPRODUCIBLE_BUILDS.md` §Verified Release Runs; cosign/SLSA blob verification — not run locally, причина: инструменты не установлены на Windows-хосте, pipeline jobs green — прецедент FBP11)  
