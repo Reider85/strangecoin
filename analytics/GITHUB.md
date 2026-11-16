@@ -691,5 +691,53 @@ P5 — **событийный триггер** (синхронный запус�
 
 ---
 
+## P7. workflow_run defensive checklist
+
+Любой workflow, запускаемый через `on.workflow_run`, ДОЛЖЕН:
+
+1. Иметь на job-level (или на каждый job):
+   ```
+   if: ${{ github.event.workflow_run.conclusion == 'success' }}
+   ```
+   Без этого workflow срабатывает и на failure, и на cancelled CI. На
+   красном master это означает: workflow стартует, тратит runner-минуты,
+   и падает на неактуальном коде — смазывает сигнал «master красный».
+
+2. В actions/checkout явно указывать:
+   ```
+   ref: ${{ github.event.workflow_run.head_sha }}
+   ```
+   Без этого checkout берёт текущий HEAD мастер-ветки на момент запуска
+   workflow — а не тот SHA, который запустил CI. Если между CI и
+   workflow_run в master успели запушить новый коммит, workflow работает
+   с другим кодом, чем CI валидировал.
+
+3. НЕ использовать контекст `steps` внутри `actions/github-script@v7`.
+   Этот action не экспонирует `steps` (см.
+   https://github.com/actions/github-script). Чтение
+   `steps.<id>.outputs.<name>` выбрасывает `ReferenceError: steps is not
+   defined`. Если нужно значение из предыдущего shell-шага — передавай его
+   через `env:` (например `env.TAG: ${{ steps.compute-tag.outputs.tag }}`),
+   либо используй `gh api` из bash-шага вместо github-script.
+
+4. НЕ использовать `context.<step_id>` или `context.tag` в github-script —
+   у `context` нет динамических свойств для step-outputs. Доступные
+   свойства: `repo`, `sha`, `ref`, `workflow`, `action`, `actor`,
+   `event_name`, `event`, `run_id`, `run_number`, `run_attempt`,
+   `serverUrl`, `apiUrl`, `graphqlUrl`, `payload`.
+
+5. НЕ пушить в master из `workflow_run`-workflow (рекурсивный цикл:
+   push → CI → workflow_run → push → CI → ...). Любые фоновые
+   обновления README, badge-счётчиков, stargazer-history и т.п. — в
+   отдельный cron-job (см. .github/workflows/stargazer.yml как образец),
+   с guard "skip если не изменилось".
+
+6. Передавать `GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` явно в `env:` для
+   `gh` CLI — на workflow_run auto-injected `GITHUB_TOKEN` обычно работает,
+   но `gh` ищет сначала `GH_TOKEN`, явное объявление надёжнее на всех
+   версиях CLI.
+
+---
+
 *Документ сгенерирован 2026-11-08 на основе анализа открытого репозитория
 `github.com/Reider85/strangecoin` и журнала его GitHub Actions.*
