@@ -2,8 +2,8 @@
 
 ## Status
 
-Proposed (2026-11-04) — `UI-P01` (extension prompt in `analytics/prompt-stage3.md` §10). 
-Acceptance gate: land of `crates/strangecoin-ui/` (design system + component library + 5 screens), full axe-core WCAG AA audit green, strangler migration closeout (`src/gui/` → pure launcher), `tests/two_clients.rs` green throughout.
+Accepted (2026-11-16) — `UI-P01` (extension prompt in `analytics/prompt-stage3.md` §10).
+Design decision ratified by UI-P01 closure; implementation tracking: land of `crates/strangecoin-ui/` (design system + component library + 5 screens), full axe-core WCAG AA audit green, strangler migration closeout (`src/gui/` → pure launcher), `tests/two_clients.rs` green throughout — gates UI-P02..UI-P05, not this ADR.
 
 ## Context
 

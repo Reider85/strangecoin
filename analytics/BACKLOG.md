@@ -25,8 +25,7 @@
 | AI-P03 | ADR-0030 + ACP wire messages (NEGOTIATE/TASK/SETTLE/REVOKE) + EscrowVault + replay protection | queued | unassigned | -- | P1 | AI-P01 | 0030 | acp_messages.md |
 | AI-P04 | Agent JSON-RPC surface (agent_getSession / signAndSubmitBatch / sponsorTx stub / estimateTaskCost / getActivity) | queued | unassigned | -- | P1 | AI-P03 (escrow txid) | (none, extends 0028) | agent_integration.md |
 | AI-P05 | Agent SDK (Rust + TS + Python) + agent devnet + faucet + 3-agent e2e | queued | unassigned | -- | P1 | AI-P04 | (none, extends 0028) | (none) |
-| UI-P01 | ADR-0031: Professional UI replacement (render backend + design system principles) | queued | unassigned | -- | P1 | (none, design-only) | 0031 | ui_professional.md |
-| UI-P02 | Design system + 14 components + tokens + themes + i18n + a11y audit (`crates/strangecoin-ui/`) | queued | unassigned | -- | P1 | UI-P01 | (none, extends 0031) | ui_professional.md |
+| UI-P02 | Design system + 14 components + tokens + themes + i18n + a11y audit (`crates/strangecoin-ui/`) | queued | unassigned | -- | P1 | UI-P01 (closed) | (none, extends 0031) | ui_professional.md |
 | UI-P03 | Wallet screen migration (send / history / contracts) + strangler launcher | queued | unassigned | -- | P1 | UI-P02 | (none) | ui_professional.md |
 | UI-P04 | Node operator dashboard + transaction detail (receipts / witness proofs) | queued | unassigned | -- | P1 | UI-P02 | (none) | ui_professional.md |
 | UI-P05 | Agent activity feed + settings + a11y audit + strangler closeout + Changelog 4.0.0 | queued | unassigned | -- | P1 | UI-P03, UI-P04, AI-P04 (agent_getActivity) | (none) | ui_professional.md |
@@ -57,7 +56,6 @@
 |----|-------|------------|-------|
 | AI-P04 | Agent JSON-RPC | AI-P03 (needs ACP escrow txid) | |
 | AI-P05 | Agent SDK + devnet | AI-P04 | |
-| UI-P02 | Design system crate | UI-P01 ADR-0031 | |
 | UI-P03 | Wallet screen | UI-P02 | |
 | UI-P04 | Dashboard + Tx Detail | UI-P02 | |
 | UI-P05 | Agent Activity + Settings + closeout | UI-P03, UI-P04, AI-P04 | |
@@ -69,6 +67,7 @@
 | ID | Title | Commit | Close date | Notes |
 |----|-------|--------|------------|-------|
 | AI-P01 | ADR-0028: Strangecoin as cryptocurrency for AI agents (vision + account model) | `[S4-AI-P01]` (this commit) | 2026-11-16 | Design-only: ADR-0028 + `docs/spec/agent_integration.md` (+ 3 sibling specs relocated `analytics/` → `docs/spec/` — path correction, content unchanged); bip32 pin decision fixed (version resolves AI-P05); ADR content originally landed in `689ccbc analytics` (non-conforming message — deviation recorded in commit body) |
+| UI-P01 | ADR-0031: Professional UI replacement (render backend + design system principles) | `[S4-UI-P01]` | 2026-11-16 | Design-only: ADR-0031 Status Proposed → Accepted + `docs/spec/ui_professional.md` (уже существовали с `689ccbc`, доведены `a3fead3` — deviation recorded in commit body); pin policy eframe/egui `=0.22.0` + fluent зафиксированы в AGENTS.md §Stage 4 Pin Policy (Cargo.toml не трогается — design-only, прецедент AI-P01); unblocks UI-P02 |
 
 ---
 

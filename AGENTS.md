@@ -115,8 +115,10 @@ Strangecoin — Rust cryptocurrency (**v3.0.0**, edition 2021): PoW blockchain �
 | Crate | Pin | ADR | Промпт | Назначение |
 |-------|-----|-----|--------|------------|
 | `bip32` | `=x.y.z` (резолв в AI-P05) | ADR-0028 | AI-P01 | HD-деривация sub-agents/session keys (`m/44'/1234'/<agent_id>'/…`); fallback — builtin `secp256k1` HD (ADR-0028 §Decision 2) |
+| `eframe` / `egui` | `=0.22.0` (резолв lock'а; фактический `=` в root Cargo.toml — при UI-P02, design-only прецедент UI-P01) | ADR-0031 | UI-P01 | Render backend professional UI (`crates/strangecoin-ui/`); upgrade требует ADR-0031 amendment |
+| `fluent` (+ `fluent-bundle`, `unic-langid`) | `=x.y.z` (резолв в UI-P02) | ADR-0031 | UI-P01 | i18n локали en/ru/zh (`crates/strangecoin-ui/locales/`) |
 
-Ожидаемые дополнения (не закреплены до land промптов): `eframe`/`egui`, `fluent` (UI-P01..UI-P02); `snow` (Stage 2 carry, уже закреплён `=0.10.0`).
+Ожидаемые дополнения (не закреплены до land промптов): `snow` (Stage 2 carry, уже закреплён `=0.10.0`).
 
 ## Stage 2 Dependency Map
 
