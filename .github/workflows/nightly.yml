@@ -130,7 +130,7 @@ jobs:
           - compact_blocks_fill_up
           - erlay_reconciliation
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@nightly
 
@@ -184,7 +184,7 @@ jobs:
         # run on the local Windows runner).
         include: ${{ vars.RUNS_ON && fromJSON('[{"os":"windows-latest","target":"x86_64-pc-windows-msvc","target_local":"x86_64-pc-windows-gnu","artifact":"nightly-windows-x86_64"}]') || fromJSON('[{"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","artifact":"nightly-linux-x86_64"},{"os":"ubuntu-latest","target":"aarch64-unknown-linux-gnu","artifact":"nightly-linux-aarch64","cross":true},{"os":"macos-15-intel","target":"x86_64-apple-darwin","artifact":"nightly-macos-x86_64","toolchain":"1.99.1"},{"os":"macos-latest","target":"aarch64-apple-darwin","artifact":"nightly-macos-aarch64","toolchain":"1.99.1"},{"os":"windows-latest","target":"x86_64-pc-windows-msvc","target_local":"x86_64-pc-windows-gnu","artifact":"nightly-windows-x86_64"},{"os":"windows-latest","target":"aarch64-pc-windows-msvc","artifact":"nightly-windows-aarch64","cross":true,"allow_failure":true}]') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # [GITHUB-P06] resolve the effective target once (same pattern as
       # release.yml): GitHub-hosted keeps matrix.target; the local runner
@@ -273,7 +273,7 @@ jobs:
     runs-on: ${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('["ubuntu-latest"]') }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -348,7 +348,7 @@ jobs:
     continue-on-error: true
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -396,7 +396,7 @@ jobs:
     env:
       MIRIFLAGS: -Zmiri-disable-isolation
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@nightly
         with:

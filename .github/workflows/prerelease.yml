@@ -38,7 +38,7 @@ jobs:
 
     steps:
       - name: Checkout CI head commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # Bug 2 fix: pin to the SHA that ran CI, not current master HEAD.
           ref: ${{ github.event.workflow_run.head_sha }}
