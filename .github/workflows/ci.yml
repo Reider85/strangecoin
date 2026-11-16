@@ -92,7 +92,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          sharedKey: ci-ubuntu-stable
+          shared-key: ci-ubuntu-stable
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -123,7 +123,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          sharedKey: ci-ubuntu-stable
+          shared-key: ci-ubuntu-stable
 
       - name: Run tests (nextest)
         run: cargo nextest run --workspace --no-fail-fast --retries 2
@@ -161,7 +161,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          sharedKey: ci-ubuntu-stable
+          shared-key: ci-ubuntu-stable
 
       - name: Generate lcov report
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
