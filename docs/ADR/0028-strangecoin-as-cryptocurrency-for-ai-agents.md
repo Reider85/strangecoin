@@ -66,6 +66,11 @@ following architectural commitments:**
    `m/44'/1234'/<agent_id>'/1/<session_id>` (rotating session keys with short
    TTL). `coin_type = 1234` is a placeholder; SLIP-44 registration is a Stage 4
    deliverable (`AI-P05` opens the PR; if rejected, placeholder is documented).
+   **Pin policy:** HD derivation goes through the `bip32` crate (fallback —
+   `secp256k1` builtin HD if the crate is rejected at review), pinned with `=`
+   per the workspace pin policy (Stage 2/3 precedent). The concrete version is
+   resolved in `AI-P05` (SDK) and recorded in AGENTS.md Pin Policy; this ADR
+   fixes the *decision* to pin, not the version.
 
 3. **Key isolation: `OperatorKeystore` vs `AgentKeystore`.** The wallet trait is
    split into two non-overlapping types: `OperatorKeystore` (access to the

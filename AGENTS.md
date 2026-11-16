@@ -108,6 +108,16 @@ Strangecoin — Rust cryptocurrency (**v3.0.0**, edition 2021): PoW blockchain �
 ---
 
 
+## Stage 4 Pin Policy (pending; AI/UI design track)
+
+**Правила** (расширение Stage 2/3 Pin Policy): crate'ы, затрагивающие agent key management / SDK / UI, пинятся через `=`. Резолв конкретной версии — при land соответствующего промпта; обновление pinned версии — SCIP + activation height после mainnet freeze. Design-решения фиксируются в ADR до кода (FBP10).
+
+| Crate | Pin | ADR | Промпт | Назначение |
+|-------|-----|-----|--------|------------|
+| `bip32` | `=x.y.z` (резолв в AI-P05) | ADR-0028 | AI-P01 | HD-деривация sub-agents/session keys (`m/44'/1234'/<agent_id>'/…`); fallback — builtin `secp256k1` HD (ADR-0028 §Decision 2) |
+
+Ожидаемые дополнения (не закреплены до land промптов): `eframe`/`egui`, `fluent` (UI-P01..UI-P02); `snow` (Stage 2 carry, уже закреплён `=0.10.0`).
+
 ## Stage 2 Dependency Map
 
 8 жёстких гейтов (`prompt-stage2.md` §1):

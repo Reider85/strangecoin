@@ -4,6 +4,28 @@
 **Repo:** https://github.com/Reider85/strangecoin
 **Patch file:** `strangecoin-ai-agent-patch.patch` (apply with `git apply`)
 
+## Follow-up: AI-P01 closure (2026-11-16, commit `[S4-AI-P01]`)
+
+Closing `AI-P01` (`prompt-stage3.md` §9) surfaced three discrepancies between
+this patch's claims and the repo — all corrected in that commit:
+
+1. **Spec files relocated `analytics/` → `docs/spec/`.** The four specs
+   (`agent_integration.md`, `mcp_server.md`, `acp_messages.md`,
+   `ui_professional.md`) were landed in `analytics/` by the original patch, but
+   every inbound reference (ADRs 0028..0031 `Related`, BACKLOG, ARCHITECT §19,
+   `prompt-stage3.md` artifact lists) and the specs' own relative links
+   (`../ADR/…`, `../../analytics/…`) assume `docs/spec/` — from `analytics/`
+   those links were broken. Moved with `git mv` (content unchanged).
+2. **`docs/spec/README.md` "AI Agent integration specs" section** was claimed
+   above (rows for line counts + verification checklist) but never landed;
+   added now (spec → prompt → ADR → ARCHITECT §19 mapping table).
+3. **Pin policy for `bip32`** (AI-P01 task 3) was missing from both ADR-0028
+   and AGENTS.md; added to ADR-0028 Decision 2 (version resolves in AI-P05) and
+   a new `## Stage 4 Pin Policy (pending)` section in AGENTS.md.
+
+Original ADR/spec content landed in commit `689ccbc` with a non-conforming
+message (`analytics`) — deviation recorded in the `[S4-AI-P01]` commit body.
+
 ## Goal
 
 Position Strangecoin as a **cryptocurrency for AI agents** by adding:

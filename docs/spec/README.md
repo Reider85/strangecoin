@@ -1,7 +1,8 @@
 # TLA+ Specification for Strangecoin Consensus
 
 This directory contains a TLA+ **bounded model** of the Strangecoin consensus
-safety rules, designed to be model-checked end-to-end by TLC (BUG-S0-026).
+safety rules, designed to be model-checked end-to-end by TLC (BUG-S0-026), plus
+the Stage 4 design-track agent/UI protocol specs (see below).
 
 ## Files
 
@@ -10,6 +11,26 @@ safety rules, designed to be model-checked end-to-end by TLC (BUG-S0-026).
   schedule, plus safety invariants and a mining-liveness property.
 - `consensus.cfg` — TLC configuration (`SPECIFICATION Spec`, small constants,
   10 invariants, 1 temporal property).
+
+## AI Agent integration specs (Stage 4 design track)
+
+Design-only specs landed alongside Stage 3 per the extension-prompt gate
+(`prompt-stage3.md` §8.3 #1: ADRs `0028`..`0031` and these spec files may be
+created during Stage 3; **code** ships only after tag `v3.0.0-stage3`). Each
+spec maps to its implementation prompt, authoritative ADR, and the
+ARCHITECT.md §19 invariant/threat numbering:
+
+| Spec | Prompt | ADR | ARCHITECT §19 mapping |
+|------|--------|-----|------------------------|
+| `agent_integration.md` | AI-P01 | [ADR-0028](../ADR/0028-strangecoin-as-cryptocurrency-for-ai-agents.md) | identity/key model; invariants #26; threats V-46 (agent key theft), V-48 (sponsor paymaster) |
+| `mcp_server.md` | AI-P02 | [ADR-0029](../ADR/0029-mcp-server.md) | MCP tools/resources/transports; threat V-43 (MCP tool poisoning), output determinism #23 |
+| `acp_messages.md` | AI-P03 | [ADR-0030](../ADR/0030-acp-agent-communication-protocol.md) | ACP wire messages + escrow; invariants #24/#25; threats V-44 (ACP spam), V-45 (escrow fraud) |
+| `ui_professional.md` | UI-P01..UI-P05 | [ADR-0031](../ADR/0031-professional-ui-replacement.md) | design system + screens; threat V-47 (UI accessibility); WCAG AA gate |
+
+All four specs are cross-linked to each other and to
+[ARCHITECT.md §19](../../analytics/ARCHITECT.md) (AI Agent orientation) and
+[prompt-stage3.md §8..§14](../../analytics/prompt-stage3.md) (extension
+prompts). Status of every work item: [BACKLOG.md](../../analytics/BACKLOG.md).
 
 ## Model scope (bounded, deliberately small)
 
@@ -210,5 +231,5 @@ always 0 — vacuous). The results above replace it.
 - [Specifying Systems](https://lamport.azurewebsites.net/tla/tla.html) §14.3.5 —
   why state constraints + liveness checking are unsound (why this model bounds
   the state space in the actions, not via `CONSTRAINT`)
-- [ARCHITECT3.md §5](../../analytics/ARCHITECT3.md) — 22 invariants
+- [ARCHITECT.md §5](../../analytics/ARCHITECT.md) — 22 invariants
 - [BUG-S0-026](../../analytics/bugfixes-stage0.md) — the bug this run closes

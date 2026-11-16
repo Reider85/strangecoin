@@ -21,7 +21,6 @@
 
 | ID | Title | Status | Owner | ETA | Priority | Depends on | ADR | Spec |
 |----|-------|--------|-------|-----|----------|------------|-----|------|
-| AI-P01 | ADR-0028: Strangecoin as cryptocurrency for AI agents (vision + account model) | queued | unassigned | -- | P1 | (none, design-only) | 0028 | agent_integration.md |
 | AI-P02 | ADR-0029 + MCP server scaffold (7 tools, 4 resources, stdio + HTTP+SSE transports) | queued | unassigned | -- | P1 | AI-P01 | 0029 | mcp_server.md |
 | AI-P03 | ADR-0030 + ACP wire messages (NEGOTIATE/TASK/SETTLE/REVOKE) + EscrowVault + replay protection | queued | unassigned | -- | P1 | AI-P01 | 0030 | acp_messages.md |
 | AI-P04 | Agent JSON-RPC surface (agent_getSession / signAndSubmitBatch / sponsorTx stub / estimateTaskCost / getActivity) | queued | unassigned | -- | P1 | AI-P03 (escrow txid) | (none, extends 0028) | agent_integration.md |
@@ -56,8 +55,6 @@
 
 | ID | Title | Blocked on | Notes |
 |----|-------|------------|-------|
-| AI-P02 | MCP server scaffold | Stage 3 tag `v3.0.0-stage3` (hard gate §8.3 #1) + AI-P01 ADR-0028 (hard gate §8.3 #2) | ADR + spec can be written during Stage 3 (design-only artefacts); code after tag |
-| AI-P03 | ACP transport | Stage 3 tag + AI-P01 ADR-0028 | Same as above |
 | AI-P04 | Agent JSON-RPC | AI-P03 (needs ACP escrow txid) | |
 | AI-P05 | Agent SDK + devnet | AI-P04 | |
 | UI-P02 | Design system crate | UI-P01 ADR-0031 | |
@@ -71,7 +68,7 @@
 
 | ID | Title | Commit | Close date | Notes |
 |----|-------|--------|------------|-------|
-| (none yet) | | | | Stage 4 not started; v2.0.0-stage2 is the latest tag |
+| AI-P01 | ADR-0028: Strangecoin as cryptocurrency for AI agents (vision + account model) | `[S4-AI-P01]` (this commit) | 2026-11-16 | Design-only: ADR-0028 + `docs/spec/agent_integration.md` (+ 3 sibling specs relocated `analytics/` → `docs/spec/` — path correction, content unchanged); bip32 pin decision fixed (version resolves AI-P05); ADR content originally landed in `689ccbc analytics` (non-conforming message — deviation recorded in commit body) |
 
 ---
 
