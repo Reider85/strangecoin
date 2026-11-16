@@ -79,7 +79,14 @@ jobs:
         with:
           # [GITHUB-P06] local runner pins the gnu-flavor toolchain (matches
           # the dev machine's rustup default; the msvc flavor would need MSVC).
-          toolchain: ${{ vars.RUNS_ON && 'stable-x86_64-pc-windows-gnu' || 'stable' }}
+          # [S3-P15] hosted cells pin 1.98.1 (was floating `stable`): rustc
+          # 1.99 stable (Nov 2026) broke objc2 0.3.0-beta.3.patch-leaks.3
+          # (E0277 in ivar_forwarding_impls.rs; winit 0.28/glutin/accesskit
+          # macos chain) -> both macos cells of run 43922667672 died in <1min.
+          # 1.98.1 = known-good combo (v2.0.0-stage2 macos build + all local
+          # S3-P15 verification); pin = reproducible builds (DoD #22), bump
+          # deliberately when the macos GUI stack is upgraded.
+          toolchain: ${{ vars.RUNS_ON && 'stable-x86_64-pc-windows-gnu' || '1.98.1' }}
           targets: ${{ steps.tgt.outputs.target }}
 
       - uses: Swatinem/rust-cache@v2
@@ -90,7 +97,11 @@ jobs:
         if: matrix.cross && runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          # [S3-P15] g++-aarch64-linux-gnu added: Stage 3 rocksdb is C++ and
+          # cc-rs cross-invokes `aarch64-linux-gnu-g++` (v2 had no C++ cross
+          # deps, gcc alone sufficed) - run 43922667672 linux-aarch64 cell
+          # died ~2min into `cargo build --release`.
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
 
       - name: Install cross-compilation tools (Windows aarch64)
