@@ -739,5 +739,83 @@ P5 — **событийный триггер** (синхронный запус�
 
 ---
 
+## 10. Branch protection & merge gate [GITHUB-P17]
+
+Настройки branch protection для `master` — **settings-side** (применяются
+через `gh api`, в файлах репозитория не живут; этот раздел — их запись в
+репо). Контекст и первопричина: CI4 §0 — 12+ dependabot-коммитов за
+22 минуты смержены в master без CI-gate («blind merge»), один из бампов
+(secp256k1 0.29→0.33) был breaking → CI красный ~13 часов, prerelease
+скипал dev-теги. GITHUB-P16 закрыл dependabot-side (ignore + grouped);
+этот раздел закрывает merge-side.
+
+### 10.1. Применённые правила (`PUT /repos/.../branches/master/protection`)
+
+| Параметр | Значение | Комментарий |
+| --- | --- | --- |
+| `required_status_checks.contexts` | `Lint (fmt + clippy)`, `Test (ubuntu, stable)`, `Source gates (rg audits)` | Имена сверены с фактическими check-runs API на `a47187b`; все три — джобы `ci.yml`, уникальны в workspace |
+| `required_status_checks.strict` | `true` | «Require branches to be up to date before merging» — снимает гонку «merge green PR into red master» |
+| `enforce_admins` | `true` | **Bypass: никто** — администратор не может смерджить красный PR вручную (иначе вернулся бы blind-merge) |
+| `required_pull_request_reviews.required_approving_review_count` | **`0`** | **Deviation от спеки Промпта 2 (=1)**, решение мейнтейнера: solo-репо — автор не может одобрить собственный PR, а `enforce_admins=true` убирает admin-bypass → при =1 владелец был бы полностью отрезан от master. CI-gate достигается без reviews: PR обязателен, проверки обязательны |
+| `required_pull_request_reviews.dismiss_stale_reviews` | `true` | Новый коммит в PR → прежнее одобрение сбрасывается |
+| `restrictions` | `null` | Ограничение push по пользователям/командам не включается (solo-репо; на personal-репо bypass-списки недоступны вообще) |
+| `required_linear_history` | `true` | Только squash/rebase-merge (в репо должны быть разрешены — проверяется перед PUT) |
+| `allow_force_pushes` | `false` | Force-push в master запрещён |
+| `allow_deletions` | `false` | Удаление master запрещено |
+| **Coverage** | **не требуется** | `continue-on-error: true` (GITHUB-P2 dev.7) — нестабильный coverage не должен блокировать merge |
+
+### 10.2. Merge queue — deferred (не включена)
+
+Пункт 5 Промпта 2 (опциональный) **не выполнен**, причины:
+
+1. **REST API не имеет поля merge queue** в `Update branch protection`
+   (сверено с docs.github.com/rest, api-version 2026-03-10) — включение
+   возможно только вручную в UI (Settings → Branches → правило →
+   «Require merge queue»).
+2. **Требует `merge_group:`-триггер в `ci.yml`** — по спеке GitHub, без
+   него required-checks никогда не отчитаются на merge-group коммитах и
+   очередь будет вечно ждать (docs: «You must use the merge_group
+   event»). Отдельный код-коммит, не входил в scope GITHUB-P17.
+3. На solo-репо с единичными PR польза минимальна — гонку уже закрывает
+   `strict=true` (up-to-date перед merge).
+
+Включение: отдельным решением = (а) UI-тоггл «Require merge queue» на
+правиле `master`, (б) коммит с `on.merge_group` в `ci.yml` (учесть fork-
+guard `if:` — для merge_group нет `github.event.pull_request`), (в)
+дата включения фиксируется здесь.
+
+### 10.3. Следствия включения (осознанные, вне literal спеки)
+
+- **Прямой `git push origin master` теперь отклоняется (GH006)** —
+  required status checks требуют зелёные чеки на коммит до приёма, у
+  нового коммита их нет. Рабочий процесс мейнтейнера: ветка → PR →
+  зелёный CI → merge (см. §10.1 deviation reviews=0 — одобрение не
+  требуется). Это и есть цель: красный код физически не может попасть
+  в master.
+- **Residual: часовые snapshot-workflow будут падать GH006** —
+  `star-monitor.yml` (git-auto-commit-action@v7) и `stargazer.yml`
+  (ручной `git push`) пушат `chore(stars): hourly snapshot NNN`
+  напрямую в master через GITHUB_TOKEN. GITHUB_TOKEN не является
+  администратором, bypass-списков на personal-репо нет → их push'и
+  будут отклоняться каждый час (красный ран + снапшоты
+  `analytics/stargazer-history.csv` / README-счётчик перестанут
+  обновляться). **Принято решением мейнтейнера при GITHUB-P17**
+  (вариант «принять + задокументировать»); follow-up — отдельный
+  промпт (перенос снапшотов в незащищённую ветку или отказ от
+  прямого push).
+
+### 10.4. Верификация
+
+1. `gh api repos/Reider85/strangecoin/branches/master/protection` —
+   JSON содержит ровно три контекста из §10.1 + все флаги.
+2. Тестовый PR (ветка с пробелом в README) — плашка «Required checks
+   are pending», кнопка Merge заблокирована без зелёного CI; PR закрыт,
+   ветка удалена.
+3. Наблюдательно: следующий dependabot run не может попасть в master,
+   пока его CI не зелёный; в истории master нет `chore(deps): bump X`
+   без предшествующего успешного CI на том же SHA.
+
+---
+
 *Документ сгенерирован 2026-11-08 на основе анализа открытого репозитория
 `github.com/Reider85/strangecoin` и журнала его GitHub Actions.*
