@@ -129,3 +129,50 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             "/repos/${REPO}/commits/${HEAD_SHA}/comments" \
             -f body="Dev build created: ${TAG} — https://github.com/${REPO}/releases/tag/${TAG}"
+
+  notify-skipped:
+    name: Notify on skipped dev-tag (CI was red)
+    runs-on: ubuntu-latest
+    # [GITHUB-P19] the inverse of create-dev-tag's gate: this job
+    # runs ONLY when CI failed, leaving a visible breadcrumb on the
+    # CI head SHA — otherwise a red CI shows up only as "skipped"
+    # in the Actions list, indistinguishable from the idempotency
+    # skip path. Without this, the maintainer does not see that
+    # dev-tag pipeline has stopped producing releases.
+    if: ${{ github.event.workflow_run.conclusion != 'success' }}
+    permissions:
+      contents: read
+      pull-requests: write   # commit-comments need this scope
+    timeout-minutes: 3
+    steps:
+      - name: Post commit comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          body=$(cat <<EOF
+          ⚠️ **Dev-tag pipeline skipped**: CI conclusion was \`${CI_CONCLUSION}\`
+          (not \`success\`). The \`vX.Y.Z-dev.N\` pre-release was NOT created
+          for this commit.
+
+          - CI run: https://github.com/${REPO}/actions/runs/${CI_RUN_ID}
+          - Once CI is green again, the next \`workflow_run\` event will
+            resume creating dev-tags automatically.
+
+          Investigate the failing CI job above. Common causes:
+          - dependabot major bump (secp256k1 0.29→0.33, toml 0.5→1.x —
+            see [GITHUB-P16] ignore rules);
+          - cargo fmt drift (run \`cargo fmt --all\` locally);
+          - clippy::correctness regression (run
+            \`cargo clippy --workspace --all-targets -- -D clippy::correctness\`).
+          EOF
+          )
+          gh api --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${REPO}/commits/${HEAD_SHA}/comments" \
+            -f body="$body"
