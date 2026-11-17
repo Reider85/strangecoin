@@ -11,18 +11,19 @@ name: GitHub Pages
 #   - pull_request trigger removed — Dependabot PRs (e.g. actions/checkout
 #     bumps) produced phantom Pages-runs; the job-level guard below stays
 #     as belt-and-suspenders if the trigger is ever re-added.
-#   - push is paths-filtered to docs-only changes: star-monitor hourly
-#     snapshots (analytics/stargazer-history.csv) and prerelease README
-#     star-count commits must NOT trigger Pages.
+#   - push is paths-filtered to specific source files: README.md,
+#     analytics/ARCHITECT.md, docs sources, and pages.yml itself; ADR-only
+#     changes (analytics/ADR/) must NOT trigger Pages.
 #   - workflow_dispatch kept for manual runs (CI2 prompt 4, check #2).
 
 on:
   push:
     branches: [ master ]
     paths:
-      - 'docs/**'
-      - 'book/**'
-      - 'mdbook.toml'
+      - 'docs/src/**'      # mdbook source root
+      - 'docs/book.toml'   # mdbook config
+      - 'README.md'        # copied into docs/src/README.md
+      - 'analytics/ARCHITECT.md'  # copied into docs/src/index.md
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -48,12 +49,33 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-      
-      - name: Setup mdBook
-        # [GITHUB-P09] pinned: v1 was node16-era; 'latest' mdbook is not reproducible.
-        uses: peaceiris/actions-mdbook@v2.0.0
+
+      - name: Install Rust toolchain
+        # [GITHUB-P06] local runner pins gnu-flavor (matches dev
+        # machine rustup default; msvc flavor would need MSVC).
+        uses: dtolnay/rust-toolchain@stable
         with:
-          mdbook-version: '0.4.52'
+          toolchain: ${{ vars.RUNS_ON && 'stable-x86_64-pc-windows-gnu' || 'stable' }}
+
+      - name: Cargo cache (mdbook)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: pages-mdbook
+
+      - name: Install mdBook
+        # [GITHUB-P18] peaceiris/actions-mdbook@v2.0.0 was Node 16,
+        # deprecated by GitHub (Oct 2024). GitHub has been force-running
+        # node16 actions on node20 (setup steps still passed), but the
+        # dependency is unmaintained (last release Sep 2024). Switch to
+        # cargo install: no third-party action, no node-versions,
+        # runner-portable (works on ubuntu-latest and on the RUNS_ON
+        # self-hosted Windows runner with Rust toolchain installed).
+        # [GITHUB-P06] shell: bash — the local Windows runner's
+        # default pwsh treats `&&` differently; explicit bash.
+        shell: bash
+        run: |
+          # Pin mdbook to 0.4.52 (reproducible build; bump deliberately).
+          cargo install mdbook --version 0.4.52 --locked
       
       # [GITHUB-P06] shell: bash — the heredoc below is bash syntax; the
       # local Windows runner's default shell is pwsh.
@@ -66,7 +88,7 @@ jobs:
         run: |
           # Stage content into docs/src (mdbook source root)
           mkdir -p docs/src
-          cp analytics/ARCHITECT3.md docs/src/index.md
+          cp analytics/ARCHITECT.md docs/src/index.md
           cp README.md docs/src/README.md
           cat > docs/src/SUMMARY.md << EOF
           # Summary
@@ -75,6 +97,13 @@ jobs:
           EOF
 
           # Create book.toml
+          # [GITHUB-P18] removed the former [output.html.redirect]
+          # "/analytics/" = "/strangecoin/analytics/" block: mdbook
+          # File::create on a trailing-slash path fails on both OSes
+          # (Windows os error 267, Linux EISDIR), the source and target
+          # URLs were identical (self-loop), and the target chapter does
+          # not exist in this 2-page book. It never ran on CI (the
+          # cp analytics/ARCHITECT3.md step always failed first).
           cat > docs/book.toml << EOF
           [book]
           title = "Strangecoin Documentation"
@@ -99,9 +128,6 @@ jobs:
           [output.html.search]
           enable = true
           limit-results = 20
-          
-          [output.html.redirect]
-          "/analytics/" = "/strangecoin/analytics/"
           EOF
           
           # Build the documentation
