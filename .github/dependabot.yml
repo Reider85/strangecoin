@@ -7,6 +7,14 @@
 # are proposals only — never auto-merge; manual review with the pin policy
 # applies (labels: [dependencies]).
 #
+# [GITHUB-P16] Ignore rules below enforce the crypto/consensus policy at the
+# Dependabot level: minor/major bumps of secp256k1/rand/aes-gcm/pbkdf2 (and
+# major of rand_core/blake3/wasmi/wasmtime) never open a PR — those bumps are
+# SCIP-gated (AGENTS.md §Stage 3 Pin Policy). Patch bumps within the current
+# minor line stay enabled (semver-compatible, incl. RUSTSEC fixes).
+# [GITHUB-P16] Grouped updates collapse the remaining weekly bumps into one
+# PR per ecosystem instead of the 12 blind-merge commits of 2026-11-16.
+#
 # Deviation from spec: `/fuzz` is a separate Cargo workspace
 # (fuzz/Cargo.toml carries its own `[workspace]`) and is not covered by the
 # root `cargo` entry — the spec asks for exactly two ecosystems, so a
@@ -20,6 +28,44 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - dependencies
+    ignore:
+      - dependency-name: "secp256k1"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "secp256k1-sys"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "rand"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "rand_core"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "aes-gcm"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "pbkdf2"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "blake3"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "wasmtime"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "wasmi"
+        update-types:
+          - "version-update:semver-major"
+    groups:
+      cargo-minor:
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
 
   - package-ecosystem: github-actions
     directory: "/"
@@ -28,3 +74,8 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - dependencies
+    groups:
+      github-actions-minor:
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"

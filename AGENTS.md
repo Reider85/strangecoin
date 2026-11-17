@@ -61,15 +61,26 @@ Strangecoin — Rust cryptocurrency (**v3.0.0**, edition 2021): PoW blockchain �
 
 ## Stage 3 Pin Policy
 
-**Правило** (продолжение Stage 2 Pin Policy): все crate-зависимости, затрагивающие data layout / consensus-adjacent persistence / криптографию, — **pinned через `=`**. Обновление pinned версии — только через SCIP + activation height после mainnet freeze.
+**Правило** (продолжение Stage 2 Pin Policy): crate-зависимости, затрагивающие data layout / consensus-adjacent persistence / криптографию, делятся на два класса:
+
+1. **Точные пины `=`** (data layout / persistence / API-churn): обновление — только через SCIP + activation height после mainnet freeze.
+2. **Caret-зависимости crypto/consensus** (семантика защищена не пином, а Dependabot ignore-правилами, GITHUB-P16): caret `"0.29"` = `>=0.29, <0.30` — patch-бампы внутри minor-линейки разрешены автоматически (обратно-совместимы, включая RUSTSEC), **minor/major-бампы — SCIP, не Dependabot** (`.github/dependabot.yml` `ignore` закрывает PR на `secp256k1 0.30+` и т.п. — регресс blind-merge `e464ba7` 2026-11-16, CI4 Промпт 1). Точный pin `=x.y.z` на этих крейтах НЕ ставится — он заблокировал бы security-patch.
 
 | Crate | Pin | ADR | Промпт | Назначение |
 |-------|-----|-----|---------|------------|
 | `rocksdb` (rust-rocksdb) | **`=0.25.0`** — резолв 2026-10-30 в S3-P04 (зафиксирован здесь и в ADR-0024 §Decision) | ADR-0008 + ADR-0024 | S3-P04 | RocksDB storage engine (C++ via cc-rs; API churn между минорами; data layout) |
 | `rusty-leveldb` | **`=4.0.0`** — пин добавлен в S3-P08 (с Stage 0 шёл как caret `"4.0.0"` без пина) | ADR-0008 + ADR-0024 | S3-P08 | Read-only legacy LevelDB reader one-shot миграции (optional default-on feature `legacy-migrate`; единственный оставшийся потребитель — выпиливание вместе с reader'ом в Stage 4+) |
 | `lru` | **`=0.19.0`** — резолв в S3-P10 (2026-11-14; MSRV 1.85) | ADR-0024 | S3-P10 | block/tx read cache (capacity-bounded `CachedEngine`, eviction order = read-path контракт) |
+| `secp256k1` | caret **`0.29`** — можно минор внутри 0.29.x; `>=0.30` — SCIP (dependabot ignore major+minor) | — | GITHUB-P16 | ECDSA подписи транзакций / ecrecover (consensus path; 0.30.0 удалил `secp256k1::rand` re-export + API recovery — сломал 4 файла при blind-merge `e464ba7`) |
+| `secp256k1-sys` | transitive — не pin явно, версию решает `secp256k1` (dependabot ignore major+minor) | — | GITHUB-P16 | C++ binding rust-secp256k1 (cc-rs; идёт в комплекте с родителем) |
+| `rand` | caret **`0.10`** — bump SCIP (dependabot ignore major+minor) | — | GITHUB-P16 | `OsRng` для keygen (wallet/node keystore, offline genesis key) |
+| `rand_core` | caret **`0.10.1`** — пин `=` при mainnet freeze (dependabot ignore major) | — | GITHUB-P16 | RNG core traits (косвенно связан с rand-линейкой) |
+| `aes-gcm` | caret **`0.10`** — bump SCIP (dependabot ignore major+minor) | — | GITHUB-P16 | Keystore encryption (PBKDF2+AES-GCM, `src/wallet.rs`) |
+| `pbkdf2` | caret **`0.12.2`** — bump SCIP (dependabot ignore major+minor) | — | GITHUB-P16 | Keystore KDF (wallet password → key) |
+| `blake3` | caret **`1`** — bump SCIP (dependabot ignore major) | — | GITHUB-P16 | Canonical serialization / PoW / SMT / txid хеширование |
+| `base64` | caret **`0.22.1`** — bump SCIP | — | GITHUB-P16 | Legacy address codec (Stage 0→1 миграция БД) |
 
-**Почему pin**: rust-rocksdb меняет API между минорами (0.21→0.22 CF-handle смена, 0.23 DefaultThreadMode) и сидит на data-layout пути (WAL/compaction semantics — crash-recovery инвариант S3-P10); C++ toolchain-поведение чувствительно к версии. После mainnet freeze любая смена = SCIP с activation height (синхронное обновление всех узлов обязательно — расхождение recovery-семантик = форк на restart). `rusty-leveldb` запинен в S3-P08 a posteriori: caret-бамп, меняющий семантику чтения legacy-блобов, = тихая порча one-shot миграции; деп умирающий, поэтому pin — постфактум-фиксация, не новый резолв.
+**Почему pin**: rust-rocksdb меняет API между минорами (0.21→0.22 CF-handle смена, 0.23 DefaultThreadMode) и сидит на data-layout пути (WAL/compaction semantics — crash-recovery инвариант S3-P10); C++ toolchain-поведение чувствительно к версии. После mainnet freeze любая смена = SCIP с activation height (синхронное обновление всех узлов обязательно — расхождение recovery-семантик = форк на restart). `rusty-leveldb` запинен в S3-P08 a posteriori: caret-бамп, меняющий семантику чтения legacy-блобов, = тихая порча one-shot миграции; деп умирающий, поэтому pin — постфактум-фиксация, не новый резолв. Crypto/consensus caret-зависимости (класс 2) защищены комбинацией caret-границы + Dependabot ignore (GITHUB-P16): `secp256k1 0.29→0.33` semver-formally minor для 0.x, Dependabot его не останавливает — останавливают ignore-правила; без них каждый blind-merge major-бампа повторяет инцидент CI4 §0.2 (CI красный → prerelease скипает dev-теги).
 
 ---
 
