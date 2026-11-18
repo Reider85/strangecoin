@@ -1,0 +1,58 @@
+[package]
+name = "strangecoin-mcp"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Strangecoin MCP (Model Context Protocol) server: 7 tools, 4 resources, stdio + HTTP+SSE transports (ADR-0029)"
+
+[dependencies]
+# Pure-core types (Block/Transaction/Receipt/ExecutionContext) — the MCP
+# handler is a thin shell over them (gate 3 of prompt-stage3.md §8.3).
+strangecoin-core = { path = "../strangecoin-core", version = "3.0.0" }
+# Noise-XX reuse for HTTP+SSE auth + Ed25519 response signing keys
+# (ADR-0029: `strangecoin_net::noise`, ADR-0020 transport). The Stage 2
+# `snow = "=0.10.0"` pin is inherited transitively through this crate —
+# strangecoin-mcp never names `snow` directly (AI-P02 deviation note).
+strangecoin-net = { path = "../strangecoin-net", version = "0.1.0" }
+tokio = { version = "1", features = ["rt", "net", "sync", "time", "macros", "io-util"] }
+serde = { version = "1.0", features = ["derive"] }
+# Pinned exact per AI-P02 KГ ("serde_json pinned, storage precedent");
+# resolution against Cargo.lock 2026-11-18 -> 1.0.154. Canonical JSON for
+# response signing goes through serde_json::Value (BTreeMap = sorted keys,
+# spec mcp_server.md §5).
+serde_json = "=1.0.154"
+thiserror = "2"
+tracing = "0.1"
+hex = "0.4"
+# Deterministic ids for HTTP handshake/session bookkeeping (derived from the
+# Noise handshake transcript + a monotonic counter — no RNG, checklist #2).
+blake3 = "1"
+# base64 framing for Noise ciphertext on the HTTP transport (same version
+# as the root crate; pinned exact per Stage 3/4 pin discipline).
+base64 = "=0.22.1"
+# Response signing (V-43): same crate + pin as the Stage 2 node_id keys
+# (strangecoin-net Cargo.toml), so signers/verifiers interoperate.
+ed25519-dalek = "=2.0"
+# HTTP+SSE transport (ADR-0029 Decision: "axum or hyper — pinned").
+# Resolution 2026-11-18 -> 0.8.9.
+axum = "=0.8.9"
+# Stream adapter for the SSE response (axum Sse needs futures_core::Stream;
+# we hand-impl it over tokio mpsc instead of pulling tokio-stream).
+futures-core = "=0.3.34"
+
+[features]
+default = ["stdio", "http-sse"]
+# Newline-delimited JSON-RPC over stdin/stdout (spec mcp_server.md §4.1).
+stdio = []
+# HTTP + SSE transport with Noise-XX session auth (spec §4.2).
+http-sse = []
+# Extra determinism suites (KГ: `cargo test --features determinism-fuzz`):
+# mock-backend N-node cross-check inside the crate. The always-on real-facade
+# 3-node cross-check lives in the root tests/mcp_server.rs.
+determinism-fuzz = []
+
+[dev-dependencies]
+# In-process HTTP tests via ServiceExt::oneshot — no real socket, no
+# reqwest (AI-P02 test design). Pinned exact per pin discipline;
+# resolution 2026-11-18 -> 0.5.3.
+tower = { version = "=0.5.3", features = ["util"] }

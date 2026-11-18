@@ -1,13 +1,13 @@
 # Strangecoin MCP (Model Context Protocol) Server Spec
 
-**Status:** Proposed (2026-11-04)
+**Status:** Implemented (2026-11-18, commit `[S4-AI-P02]` — deviations in §12)
 **Implementation prompt:** `analytics/prompt-stage3.md` §9 `AI-P02`
-**Authoritative ADR:** [ADR-0029](../ADR/0029-mcp-server.md)
+**Authoritative ADR:** [ADR-0029](../ADR/0029-mcp-server.md) (Accepted)
 **Related specs:** [agent_integration.md](agent_integration.md), [acp_messages.md](acp_messages.md)
-**Invariants enforced:** #23 (MCP tool output determinism)
-**Threat vectors mitigated:** V-43 (MCP tool poisoning), V-46 (Agent key theft via stdio)
+**Invariants enforced:** #23 (MCP tool output determinism — ARCHITECT §19.5 numbering)
+**Threat vectors mitigated:** V-43 (MCP tool poisoning), V-46 (Agent key theft via stdio pipe) — ARCHITECT §19.6 numbering
 **MCP spec version:** 2024-11-05 (pinned; upgrade requires ADR amendment)
-**Spec version:** 1.0
+**Spec version:** 1.1
 
 ---
 
@@ -462,23 +462,54 @@ crates/strangecoin-mcp/
 
 ## 9. Test plan
 
-`tests/mcp_server.rs`:
+`tests/mcp_server.rs` (root crate — facade-based tests cannot live in the
+mcp crate, ADR-0029 amendment 3):
 
-| Test | What it verifies |
-|------|------------------|
-| `mcp_stdio_get_block_round_trip` | stdio transport, `tools/call get_block(1)` → JSON response, byte-identical across N=3 nodes (#23) |
-| `mcp_http_sse_auth` | HTTP+SSE requires Noise-XX; reject unauthenticated requests |
-| `mcp_response_signature` | Every response carries Ed25519 signature; client verifies (V-43 mitigation) |
-| `mcp_cli_reference_compat` | Round-trip with reference `mcp-cli` client (documented setup) |
-| `mcp_determinism_3_nodes` | N=3 nodes started from same snapshot; `get_block(h)` byte-identical on all 3 |
-| `mcp_subscribe_events_sse` | `subscribe_events` SSE stream delivers `BlockApplied` events on new blocks |
-| `mcp_resource_chain_tip` | `resources/read chain://tip` returns latest block header |
+| Test | What it verifies | Status (AI-P02) |
+|------|------------------|-----------------|
+| `mcp_stdio_get_block_round_trip` | stdio transport, `tools/call get_block(1)` → JSON response, byte-identical across N=3 nodes (#23) | ✅ green (adopt-pattern chain, shared signing seed → whole envelope byte-identical) |
+| `mcp_http_sse_auth` | HTTP+SSE requires Noise-XX; reject unauthenticated | ✅ green (401 no/unknown session, 400 kind-mismatch, encrypted+signed round-trip after handshake) |
+| `mcp_response_signature` | Every response carries Ed25519 signature; client verifies | ✅ green (tamper/unsigned/wrong-key all rejected) |
+| `mcp_cli_reference_compat` | Round-trip with reference `mcp-cli` client | ✅ env-gated — setup below |
+| `mcp_lifecycle_mcp_cli_sequence` | Always-on scripted version of the same wire sequence (initialize → initialized → tools/list → tools/call → resources/* → shutdown) | ✅ green |
+| `mcp_determinism_3_nodes` | N=3 nodes from the same snapshot; `get_block`/`get_balance`/`estimate_fee`/`chain://tip` byte-identical | ✅ green |
+| `mcp_subscribe_events_sse` | `GET /mcp/events` delivers encrypted, signed `BlockApplied` notifications | ✅ green |
+| `mcp_resource_chain_tip` | `resources/read chain://tip` returns the latest block header | ✅ green |
+
+Crate-level (`crates/strangecoin-mcp/`):
+
+- `cargo test -p strangecoin-mcp` — unit suite (signing, filters, canonical
+  JSON, resource routing).
+- `cargo test -p strangecoin-mcp --features determinism-fuzz` — mock-backend
+  N=3 cross-check over every dispatch arm (`tests/determinism.rs`).
 
 CI gates:
 
 - `cargo test -p strangecoin-mcp` (all tests green)
 - `cargo clippy -p strangecoin-mcp -- -D warnings` (green)
 - `cargo +nightly fuzz run mcp_determinism -- -max_total_time=600` (no panic)
+  — coverage-guided runs live in `.github/workflows/nightly.yml` (matrix
+  entry `mcp_determinism`, uniform 1800 s per target); not runnable on the
+  Windows dev host (cargo-fuzz gotcha, `fuzz/README.md`), verified locally
+  via the stub-harness fallback (S2-P21 precedent).
+
+### 9.1. `mcp-cli` reference-client setup (documented)
+
+```text
+# prerequisites: `uvx` on PATH (Python 3.11+), network for the first download
+set STRANGECOIN_MCP_CLI_TEST=1
+cargo test --test mcp_server mcp_cli_reference_compat -- --nocapture
+```
+
+The test seeds a temp regtest chain, writes `server_config.json` pointing
+`command` at the built `strangecoin.exe` with
+`["--mcp-stdio", "--mcp-data-dir", <temp>]`, then runs
+`uvx mcp-cli tools --server strangecoin` with the temp directory as the
+client's CWD (mcp-cli discovers `server_config.json` there — the published
+releases ignore a pre-subcommand `--config-file`) and asserts all 7 tool
+names come back. Without the env var the test skips (CI stays offline);
+everything it exercises is covered by
+`mcp_lifecycle_mcp_cli_sequence`.
 
 ---
 
@@ -497,7 +528,50 @@ CI gates:
 
 ---
 
-## 11. References
+## 11. Implementation notes (AI-P02 land)
+
+Wire-level decisions taken while landing the scaffold (full deviation list:
+ADR-0029 «Implementation amendments»):
+
+- **Response envelope.** Every JSON-RPC response object carries `signature`
+  + `signer` as top-level members next to `result`/`error` (JSON-RPC allows
+  extra members): `signature = Ed25519(node_key, canonical_json(result))`,
+  `signer = hex(node Ed25519 pubkey)`, `node_id = blake3(signer)` (Stage 2
+  binding). Canonical JSON = `serde_json::Value` serialization (BTreeMap ⇒
+  sorted keys); Ed25519 signatures are RFC 8032 deterministic, so identical
+  payloads on identical keys are byte-identical.
+- **`tools/call` result shape.** MCP 2024-11-05 `CallToolResult`:
+  `{"content":[{"type":"text","text":"<canonical JSON of the tool output>"}],
+  "isError":false}` — the §2 `outputSchema`s describe the JSON *inside*
+  `text`. Backend failures (revert, missing account, unknown txid) are
+  results with `isError:true`; argument-shape failures are JSON-RPC
+  `-32602`.
+- **HTTP handshake flow.** `POST /mcp/handshake` with
+  `{"round":1,"kind":"rpc"|"sse","message":<b64 msg1>}` →
+  `{"handshake_id","message":<b64 msg2>}`; then
+  `{"round":3,"handshake_id","message":<b64 msg3>}` →
+  `{"session","kind","node_id","signer"}`. Session ids are
+  `blake3(handshake_hash ‖ counter)` — derived from the transcript, no RNG.
+- **Session discipline.** One in-flight request per session (strict Noise
+  nonce ordering); use a second `kind=sse` session for
+  `GET /mcp/events?session=…` so POST responses and SSE events never
+  interleave on one send-nonce sequence. Unauthenticated/unknown/wrong-kind
+  sessions → 401/400 before any chain state is read.
+- **`call_contract` payload rule.** `calldata` (hex) overrides;
+  otherwise `method` must be an 8-hex-char selector and each `args` entry
+  encodes as: `0x`-prefixed string → hex bytes, other string → UTF-8,
+  integer → 8-byte LE, bool → one byte, array → flattened, object →
+  `-32602` (no ABI on the node to type it).
+- **stdio line cap** 4 MiB (`MAX_MESSAGE_BYTES`); over-limit → signed
+  `-32600`. Tracing goes to **stderr** whenever `--mcp-stdio` is active.
+- **CLI/config.** `strangecoin --mcp-stdio [--mcp-data-dir <path>]` runs
+  the MCP-only child process (spec §4.1; requires the node *not* to hold
+  the same RocksDB directory — exclusive process lock). The running node
+  spawns the HTTP listener from `[mcp] enabled/transport/http_listen`
+  (`enabled = false` by default — opt-in port). `transport = "stdio"` in
+  config.toml only documents intent; stdio is flag-driven.
+
+## 12. References
 
 - [ADR-0029](../ADR/0029-mcp-server.md)
 - [MCP](https://modelcontextprotocol.io)

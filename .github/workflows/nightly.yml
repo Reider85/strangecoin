@@ -122,7 +122,8 @@ jobs:
       fail-fast: false
       matrix:
         # S1.5-P16: canonical decode + four VM targets; S2-P21: + four
-        # network targets — 9 targets total (moved out of ci.yml in P2).
+        # network targets; AI-P02: + MCP determinism (#23) — 10 targets
+        # total (moved out of ci.yml in P2).
         target:
           - canonical_decode
           - host_functions
@@ -133,6 +134,7 @@ jobs:
           - gossip_inv
           - compact_blocks_fill_up
           - erlay_reconciliation
+          - mcp_determinism
     steps:
       - uses: actions/checkout@v7
 

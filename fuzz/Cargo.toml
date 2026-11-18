@@ -26,6 +26,17 @@ path = "../crates/strangecoin-vm-wasm"
 [dependencies.strangecoin-net]
 path = "../crates/strangecoin-net"
 
+# AI-P02: MCP determinism target (invariant #23) — 3 mock-backend servers
+# must emit byte-identical signed envelopes for the same fuzz input.
+[dependencies.strangecoin-mcp]
+path = "../crates/strangecoin-mcp"
+
+# tokio::sync::mpsc appears in the `McpBackend::subscribe_events` trait
+# signature the mock implements.
+[dependencies.tokio]
+version = "1"
+features = ["sync"]
+
 # Differential-testing oracle (S1.5-P16): raw engines on identical import-free
 # modules; fuel semantics intentionally differ between engines, so only
 # outcome classes and return values are compared, never gas units.
@@ -97,6 +108,14 @@ bench = false
 [[bin]]
 name = "erlay_reconciliation"
 path = "fuzz_targets/erlay_reconciliation.rs"
+test = false
+doc = false
+bench = false
+
+# AI-P02: MCP output determinism (#23) — N=3 cross-check per fuzz input.
+[[bin]]
+name = "mcp_determinism"
+path = "fuzz_targets/mcp_determinism.rs"
 test = false
 doc = false
 bench = false

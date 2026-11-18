@@ -26,6 +26,38 @@ this patch's claims and the repo — all corrected in that commit:
 Original ADR/spec content landed in commit `689ccbc` with a non-conforming
 message (`analytics`) — deviation recorded in the `[S4-AI-P01]` commit body.
 
+## Follow-up: AI-P02 closure (2026-11-18, commit `[S4-AI-P02]`)
+
+First Stage 4 **implementation** prompt (everything before was design-only):
+
+1. **`crates/strangecoin-mcp/` landed** — MCP server per ADR-0029/spec:
+   `McpServer` JSON-RPC 2.0 dispatch (initialize/tools/resources/ping/
+   shutdown), 7 tools, 4 `chain://` resources, Ed25519-signed response
+   envelopes (V-43), stdio transport (newline-delimited, notification push
+   for `subscribe_events`) and HTTP+SSE transport (Noise-XX handshake over
+   POSTs, base64 `encrypt_frame` bodies, encrypted+signed SSE events).
+2. **Root wiring** — feature `mcp` (default-on), `impl McpBackend for
+   BlockchainFacade` (`src/blockchain/mcp_backend.rs`), `--mcp-stdio`
+   [+ `--mcp-data-dir`] MCP-only CLI mode with stderr logging, `[mcp]`
+   config table + in-process HTTP listener, `StrangecoinError::Mcp`.
+3. **ADR-0029 Proposed → Accepted** with a new «Implementation
+   amendments» section (12 recorded deviations: snow-via-net, tests in
+   root `tests/`, raw-calldata `call_contract`, `FEE_SC_PER_GAS = 0`,
+   derived events, Noise-over-HTTP session discipline, env-gated mcp-cli,
+   #23/V-43 numbering collision note, …). Broken `mcp-cli` reference link
+   (404 at `modelcontextprotocol/mcp-cli`) repointed to
+   `chrishayuk/mcp-cli` (PyPI, `uvx mcp-cli`).
+4. **`docs/spec/mcp_server.md` → Implemented (v1.1)** — §9 test-plan
+   statuses + §9.1 documented `mcp-cli` setup (env gate
+   `STRANGECOIN_MCP_CLI_TEST=1`) + §11 wire-level implementation notes.
+5. **Tests** — `tests/mcp_server.rs` (8 green) + crate unit suite (10) +
+   `determinism-fuzz` feature suite (2) + fuzz target `mcp_determinism`
+   (10th entry of the nightly matrix).
+6. **BACKLOG** — AI-P02 §1 → §4 (done); AGENTS.md — architecture block,
+   Stage 4 pin-policy rows (`axum =0.8.9`, `serde_json =1.0.154`,
+   `futures-core =0.3.34`, dev `tower =0.5.3`/`http-body-util =0.1.5`),
+   test notes, key constraint.
+
 ## Goal
 
 Position Strangecoin as a **cryptocurrency for AI agents** by adding:

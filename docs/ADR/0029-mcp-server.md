@@ -2,8 +2,13 @@
 
 ## Status
 
-Proposed (2026-11-04) — `AI-P02` (extension prompt in `analytics/prompt-stage3.md` §9). 
-Acceptance gate: land of MCP server scaffold (`crates/strangecoin-mcp/`) with 7 tools, 4 resources, stdio + HTTP+SSE transports, deterministic output (#23), and `mcp-cli` reference client round-trip.
+Accepted (2026-11-18) — design ratified together with the land of the MCP
+server scaffold in commit `[S4-AI-P02]` (`crates/strangecoin-mcp/`: 7 tools,
+4 resources, stdio + HTTP+SSE transports, deterministic signed output,
+`mcp-cli` round-trip). Originally Proposed (2026-11-04); the acceptance
+gate (scaffold land) closed with that commit. Implementation-level
+deviations from the original text are recorded in
+[Implementation amendments](#implementation-amendments-ai-p02-land) below.
 
 ## Context
 
@@ -161,10 +166,80 @@ crates/strangecoin-mcp/
 ### Pin policy
 
 - `snow` (Noise-XX) — pinned `=x.y.z` (Stage 2 precedent, ADR-0020).
+  *Resolved:* `strangecoin-mcp` never names `snow` directly — Noise goes
+  through `strangecoin-net`, which pins `snow = "=0.10.0"`; the pin is
+  inherited transitively (see amendments).
 - `serde_json` — pinned (Stage 3 storage precedent, ADR-0024).
+  *Resolved:* `=1.0.154` (Cargo.lock resolution, 2026-11-18).
 - `axum` or `hyper` (HTTP+SSE server) — pinned `=x.y.z`.
+  *Resolved:* `axum = "=0.8.9"` (2026-11-18); test-only `tower = "=0.5.3"`,
+  `http-body-util = "=0.1.5"`.
 - MCP spec version — pinned to 2024-11-05; spec churn risk documented in ADR
   (amendment required to upgrade).
+
+### Implementation amendments (AI-P02 land)
+
+Deviations from the original (2026-11-04) text, recorded per FBP:
+
+1. **`snow` not a direct dependency.** The handshake/crypto surface is
+   reached through `strangecoin_net::{NoiseHandshake, NoiseTransport,
+   NodeKeypair}` (ADR-0020 reuse); `snow = "=0.10.0"` is inherited from
+   strangecoin-net's pin instead of being listed twice.
+2. **`McpNode` not needed.** The trait impl is
+   `impl McpBackend for BlockchainFacade` in the root crate
+   (`src/blockchain/mcp_backend.rs`, feature `mcp`) — the exact strangler
+   pattern of `impl BlockchainView for BlockchainFacade` (S2-P06).
+3. **Integration tests live in root `tests/mcp_server.rs`**, not
+   `crates/strangecoin-mcp/tests/` as the crate-structure diagram below
+   shows: facade-based tests cannot live in the mcp crate (a dev-dependency
+   on the root crate would invert the dependency direction). The crate's own
+   `tests/determinism.rs` (feature `determinism-fuzz`) holds the
+   mock-backend cross-check instead.
+4. **`call_contract` accepts raw calldata / 4-byte selectors only.** ABI
+   method names cannot be encoded because the node never persists ABIs
+   (pre-existing gap: `WasmiExecutor::insert_abi` has no production call
+   site); the spec §2.5 `method` field is therefore selector-hex (or the
+   raw `calldata` override added to the schema). The frame runs with
+   `read_only: true` (spec: staticcall semantics); `caller = callee` since
+   the schema carries no `from`.
+5. **`estimate_fee` → `fee_sc = gas_units × 0`.** Stage 4 has no fee market
+   (`fee_market.rs` is a Stage 5 TODO; constructors default `fee = 0`), so
+   the fixed gas price constant is 0 and the gas estimate is the useful
+   half. `type=create` reports `BLOCK_GAS_LIMIT` as an upper bound (the
+   schema carries no deploy code to dry-run).
+6. **`TxConfirmed`/`EventLog` are derived events.** The root `NodeEvent`
+   bus carries only `BlockApplied`; the backend derives tx confirmations
+   from the applied block's transactions and event logs from
+   `tip_receipts()` while the block is the tip. Receipts exist only for the
+   tip block (ADR-0024 has no receipts CF) — `chain://tx/{txid}` reports
+   `receipt: null` for older transactions with the confirmed `height`.
+7. **`--mcp-data-dir <path>` CLI flag** (overrides `storage.path` +
+   `data_dir`) — testability hook for the `mcp-cli` round-trip; spec §4.1
+   spawn example unchanged.
+8. **HTTP wire = Noise-XX over HTTP POSTs.** `POST /mcp/handshake`
+   carries the three XX messages as base64 bodies; `POST /mcp` bodies are
+   base64 `encrypt_frame` ciphertext under `X-Mcp-Session`. Consequences:
+   one in-flight request per session (strict Noise nonce ordering), a
+   *second* session for `GET /mcp/events` (POST responses and SSE events
+   would otherwise interleave on one send-nonce sequence), and **standard
+   MCP HTTP clients cannot connect** — stdio is the interop transport, as
+   the Alternatives section already assumed. Every SSE `data:` line is an
+   encrypted, signed notification.
+9. **`subscribe_events` is transport-split.** stdio: ack + server-pushed
+   `notifications/strangecoin/event` lines. HTTP+SSE: ack pointing at
+   `/mcp/events`; the filter travels as `?types=&addresses=&event_sigs=`
+   query params (a filter passed in the tool arguments applies on stdio).
+10. **`resources/templates/list` is served** (same four URIs) as an
+    extra MCP primitive, and each tool entry carries `outputSchema` — both
+    are supersets of the 2024-11-05 wire shape.
+11. **`mcp-cli` round-trip is env-gated** (`STRANGECOIN_MCP_CLI_TEST=1`,
+    needs `uvx` + network for the package download); the same wire sequence
+    runs always-on in `mcp_lifecycle_mcp_cli_sequence`.
+12. **Numbering note.** References to invariant **#23** (MCP output
+    determinism) and threat **V-43** (MCP tool poisoning) use the
+    `ARCHITECT.md` §19.5/§19.6 extension numbering — distinct from the
+    Stage 3 `docs/stage3/INVARIANTS_ENFORCED.md` #23 (schema-version guard)
+    and `THREAT_MODEL.md` V-43 (snapshot forging).
 
 ## Consequences
 
@@ -247,4 +322,6 @@ crates/strangecoin-mcp/
 - [docs/spec/mcp_server.md](../spec/mcp_server.md) — MCP server spec (tool schemas, resource URIs, transport details, auth flow, determinism, response signing, lifecycle)
 - [Model Context Protocol](https://modelcontextprotocol.io) — MCP standard
 - [MCP spec 2024-11-05](https://spec.modelcontextprotocol.io/spec/2024-11-05/) — pinned spec version
-- [mcp-cli](https://github.com/modelcontextprotocol/mcp-cli) — reference client (for round-trip testing)
+- [mcp-cli](https://github.com/chrishayuk/mcp-cli) — reference client used
+  for the round-trip test (PyPI `mcp-cli`, installed via `uvx`; the
+  original `modelcontextprotocol/mcp-cli` link 404s)

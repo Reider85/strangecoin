@@ -1038,18 +1038,26 @@ pub fn run() {
 }
 
 pub async fn run_async() {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_target(false)
-        .init();
-
     // Handle CLI commands
     let args: Vec<String> = std::env::args().collect();
+
     // [UI-P02-B] `--help`/`-h` exits before node startup (CI4 Prompt 6 КГ
     // smoke test); previously the flag fell through to the full node+GUI run.
     if args.len() > 1 && (args[1] == "--help" || args[1] == "-h") {
         crate::cli::print_help();
         return;
+    }
+
+    // AI-P02 (spec mcp_server.md §4.1): `--mcp-stdio` hands stdout to the
+    // MCP JSON-RPC stream — tracing must go to stderr in that mode (the
+    // fmt writer defaults to stdout).
+    let tracing_builder = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_target(false);
+    if args.iter().any(|arg| arg == "--mcp-stdio") {
+        tracing_builder.with_writer(std::io::stderr).init();
+    } else {
+        tracing_builder.init();
     }
     if args.len() > 1 && args[1] == "--print-genesis-hash" {
         crate::cli::print_genesis_hash();
@@ -1116,6 +1124,9 @@ pub async fn run_async() {
                 ..Default::default()
             },
             pruning: Default::default(),
+            // AI-P02: `[mcp]` table absent in the migrated config → defaults
+            // (listener off).
+            mcp: Default::default(),
             log_level: "info".into(),
             data_dir: exe_dir.join("data"),
             allow_grant_blocks: false,
@@ -1132,6 +1143,17 @@ pub async fn run_async() {
     } else {
         crate::config::Config::default()
     };
+
+    // AI-P02 (ADR-0029, spec mcp_server.md §4.1): `--mcp-stdio` — MCP-only
+    // child process over stdin/stdout; no P2P/mining/network services start.
+    #[cfg(feature = "mcp")]
+    if args.iter().any(|arg| arg == "--mcp-stdio") {
+        if let Err(err) = crate::cli::mcp_stdio::run(&args, &config).await {
+            eprintln!("mcp-stdio failed: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
 
     let network_path = exe_dir.join("network.json");
     let network_config: serde_json::Value = match fs::read_to_string(&network_path) {
@@ -1203,6 +1225,11 @@ pub async fn run_async() {
     // persists next to the legacy network.json (known_peers/banned_peers).
     let node_identity = wallet::load_or_create_node_keypair(&config.data_dir)
         .expect("Не удалось загрузить или создать Ed25519 node keypair");
+    // AI-P02 (ADR-0029): the MCP listener signs responses with the same
+    // node identity the P2P layer authenticates with (V-43 binding:
+    // node_id = blake3(signer)).
+    #[cfg(feature = "mcp")]
+    let mcp_identity = node_identity.clone();
     let mut peer_manager_config = config.peer_manager_config();
     peer_manager_config.network_json_path = Some(network_path.clone());
     let peer_manager = Arc::new(strangecoin_net::PeerManager::new(
@@ -1232,6 +1259,27 @@ pub async fn run_async() {
     node.blockchain.set_pruning(config.pruning_config());
     node.start_server(port, sync_tx.clone()).await;
     node.discover_peers();
+
+    // AI-P02 (ADR-0029): in-process HTTP+SSE MCP listener, driven by the
+    // `[mcp]` table (spec mcp_server.md §4.2). Stdio is flag-driven only
+    // (`--mcp-stdio` above) — a running node shares stdout with its logs.
+    #[cfg(feature = "mcp")]
+    if config.mcp.http_enabled() {
+        let mcp_listen: std::net::SocketAddr = config
+            .mcp
+            .http_listen
+            .parse()
+            .expect("mcp.http_listen validated at config load");
+        let identity = mcp_identity;
+        let mcp_server = strangecoin_mcp::McpServer::new(node.blockchain.clone(), identity.clone());
+        tokio::spawn(async move {
+            if let Err(err) =
+                strangecoin_mcp::http_sse::serve(mcp_server, identity, mcp_listen).await
+            {
+                tracing::error!(target: "mcp", %err, "MCP HTTP+SSE server exited");
+            }
+        });
+    }
 
     // Spawn sync task on the tokio runtime (ADR-0007: polling loop migrated to async)
     let shutdown_sync = Arc::clone(&shutdown);

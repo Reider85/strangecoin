@@ -32,6 +32,55 @@ pub struct NodeConfig {
     pub mode: NodeMode,
 }
 
+/// `[mcp]` table of `config.toml` (AI-P02, ADR-0029, spec
+/// `docs/spec/mcp_server.md` §4.2).
+///
+/// The stdio transport is *not* started from this table — a running node
+/// shares stdout with its logs, so stdio MCP runs only in the dedicated
+/// `--mcp-stdio` child-process mode (spec §4.1). This table drives the
+/// in-process HTTP+SSE listener.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpConfig {
+    /// Master switch for the in-process HTTP+SSE endpoint. Default `false`:
+    /// a scaffold default of `true` would bind a port no operator asked
+    /// for (the spec §4.2 example shows `enabled = true` on an explicitly
+    /// configured node).
+    #[serde(default)]
+    pub enabled: bool,
+    /// `"stdio"` | `"http-sse"` | `"both"` (spec §4.2). Only the HTTP side
+    /// has an effect in-process; stdio is flag-driven (`--mcp-stdio`).
+    #[serde(default = "default_mcp_transport")]
+    pub transport: String,
+    /// Bind address of the HTTP+SSE listener (spec §4.2 example).
+    #[serde(default = "default_mcp_listen")]
+    pub http_listen: String,
+}
+
+fn default_mcp_transport() -> String {
+    "both".into()
+}
+
+fn default_mcp_listen() -> String {
+    "127.0.0.1:9001".into()
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            transport: default_mcp_transport(),
+            http_listen: default_mcp_listen(),
+        }
+    }
+}
+
+impl McpConfig {
+    /// Should the running node spawn the HTTP+SSE listener?
+    pub fn http_enabled(&self) -> bool {
+        self.enabled && matches!(self.transport.as_str(), "http-sse" | "both")
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     // Scalar keys first, tables last: TOML emission (and therefore the
@@ -59,6 +108,10 @@ pub struct Config {
     /// [`Config::pruning_config`].
     #[serde(default)]
     pub pruning: PruningConfig,
+    /// MCP server surface (AI-P02, ADR-0029 `[mcp]`). Table — stays last
+    /// (TOML `ValueAfterTable` rule above).
+    #[serde(default)]
+    pub mcp: McpConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -548,6 +601,20 @@ impl Config {
                 "storage.path must not be empty".into(),
             ));
         }
+        // AI-P02 (ADR-0029): `[mcp]` surface sanity — a typo'd transport or
+        // unparseable bind address must fail at load, not at listener start.
+        if !matches!(self.mcp.transport.as_str(), "stdio" | "http-sse" | "both") {
+            return Err(StrangecoinError::ConfigError(format!(
+                "mcp.transport must be one of \"stdio\" | \"http-sse\" | \"both\", got {:?}",
+                self.mcp.transport
+            )));
+        }
+        if self.mcp.enabled && self.mcp.http_listen.parse::<SocketAddr>().is_err() {
+            return Err(StrangecoinError::ConfigError(format!(
+                "mcp.http_listen must be a socket address (ip:port), got {:?}",
+                self.mcp.http_listen
+            )));
+        }
         Ok(())
     }
 
@@ -646,6 +713,7 @@ impl Default for Config {
             network: NetworkConfig::default(),
             storage: StorageConfig::default(),
             pruning: PruningConfig::default(),
+            mcp: McpConfig::default(),
             log_level: "info".into(),
             data_dir: "./data".into(),
             allow_grant_blocks: false,

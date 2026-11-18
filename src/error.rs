@@ -88,6 +88,10 @@ pub enum StrangecoinError {
     RbfReplacementLimit(u32),
     #[error("block gas limit exceeded: total {total}, limit {limit}")]
     BlockGasLimitExceeded { total: u64, limit: u64 },
+    /// MCP server failure (AI-P02): transport/dispatch errors surfaced at
+    /// the CLI boundary (`--mcp-stdio`) or the HTTP listener task.
+    #[error("mcp error: {0}")]
+    Mcp(String),
 }
 
 impl From<strangecoin_core::CoreError> for StrangecoinError {

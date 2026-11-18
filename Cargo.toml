@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/strangecoin-core", "crates/strangecoin-vm-wasm", "crates/strangecoin-net", "crates/strangecoin-storage"]
+members = [".", "crates/strangecoin-core", "crates/strangecoin-vm-wasm", "crates/strangecoin-net", "crates/strangecoin-storage", "crates/strangecoin-mcp"]
 resolver = "2"
 
 [package]
@@ -16,6 +16,10 @@ strangecoin-net = { path = "crates/strangecoin-net", version = "0.1.0", optional
 # Stage 3 storage crate (S3-P04); monolith migrates onto it in S3-P07.
 # Default features (rocksdb, default-on) link the pinned C++ backend.
 strangecoin-storage = { path = "crates/strangecoin-storage" }
+# Stage 4 MCP server (AI-P02, ADR-0029): MCP facade over the node facade
+# (tools/resources, stdio + HTTP+SSE transports). Default-on per ADR-0029
+# Decision ("feature `mcp` default-on Stage 4").
+strangecoin-mcp = { path = "crates/strangecoin-mcp", version = "0.1.0", optional = true }
 ctrlc = "3.4"
 # S3-P08: transitional — only the read-only LevelDB reader of the one-shot
 # LevelDB -> RocksDB migration (`src/storage/migrations.rs`) still needs this
@@ -61,6 +65,8 @@ tokio = { version = "1", features = [
     "net",
     "signal",
     "io-util",
+    # AI-P02: `--mcp-stdio` serves tokio::io::stdin/stdout (spec §4.1).
+    "io-std",
 ] }
 
 [features]
@@ -73,11 +79,17 @@ tokio = { version = "1", features = [
 # auto-migration must read the legacy `<exe_dir>/blockchain_db_{port}`
 # directory in production builds (ADR-0008 "run automatically on first
 # startup"); --no-default-features builds drop it with everything else.
-default = ["net", "vm-wasm", "gui", "legacy-migrate"]
+default = ["net", "vm-wasm", "gui", "legacy-migrate", "mcp"]
 net = ["dep:strangecoin-net"]
 vm-wasm = ["dep:strangecoin-vm-wasm"]
 gui = ["dep:eframe"]
 legacy-migrate = ["dep:rusty-leveldb"]
+# AI-P02 (ADR-0029): MCP server facade, default-on Stage 4.
+mcp = ["dep:strangecoin-mcp"]
+# AI-P02 KГ: `cargo test --features determinism-fuzz` runs the extra
+# determinism-fuzz test suites (mcp crate, feature-gated) on top of the
+# always-on 3-node cross-check in tests/mcp_server.rs.
+determinism-fuzz = ["dep:strangecoin-mcp", "strangecoin-mcp/determinism-fuzz"]
 
 [profile.dev]
 # Disk-budget guard (incident 2026-11-18: target/ reached 615 GB, ENOSPC):
@@ -94,6 +106,12 @@ strip = true
 
 [dev-dependencies]
 proptest = "1"
+# AI-P02 tests: in-process axum requests (ServiceExt::oneshot) without a
+# real socket, and incremental SSE frame reads. Both already sit in the
+# lock through axum/tower — pinned exact per pin discipline; resolutions
+# 2026-11-18.
+tower = { version = "=0.5.3", features = ["util"] }
+http-body-util = "=0.1.5"
 
 # Vendored minisketch-rs 0.1.9 (S3-P04, 2026-10-30): the registry crate's
 # build-dep bindgen 0.49 (clang-sys 0.28, links = "clang") conflicts with

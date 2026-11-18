@@ -9,6 +9,8 @@
 //! `sc` — тоже Stage 4 (сейчас `strangecoin shadow replay …` /
 //! `strangecoin snapshot export …`).
 
+#[cfg(feature = "mcp")]
+pub mod mcp_stdio;
 pub mod snapshot;
 
 use crate::consensus;
