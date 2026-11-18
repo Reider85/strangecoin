@@ -479,7 +479,9 @@ pub async fn run(app: WalletApp) {
         eframe::run_native(
             "Blockchain Wallet",
             eframe::NativeOptions::default(),
-            Box::new(|_cc| Box::new(app)),
+            // [UI-P02-A] eframe 0.24+ AppCreator returns Result — the 0.22
+            // closure returned Box<dyn App> directly.
+            Box::new(|_cc| Ok(Box::new(app))),
         )
         .expect("Ошибка запуска приложения");
     })

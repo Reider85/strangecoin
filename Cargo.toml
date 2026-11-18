@@ -33,34 +33,14 @@ uuid = { version = "1.17.0", features = ["v4"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.142"
 rand = "0.10"
-eframe = { version = "0.22", optional = true }
-# eframe 0.22 uses winapi without declaring features; winit 0.28 (its transitive
-# dep) moved to windows-sys, so nothing in the graph enables winapi features and
-# eframe fails to compile with "no `winuser` in `um`". Declare them explicitly.
-winapi = { version = "0.3", optional = true, features = [
-    "winuser",
-    "commctrl",
-    "commoncontrols",
-    "shellapi",
-    "winbase",
-    "winsock2",
-    "wincon",
-    "winerror",
-    "wingdi",
-    "winspool",
-    "winnt",
-    "minwindef",
-    "windef",
-    "std",
-    "stringapiset",
-    "winver",
-    "objbase",
-    "objidlbase",
-    "libloaderapi",
-    "ntstatus",
-    "synchapi",
-    "processthreadsapi",
-] }
+# [UI-P02-A] eframe 0.22 -> 0.30.0 (exact pin per AGENTS.md Stage 4 Pin
+# Policy; ADR-0031 Amendment). Fixes the objc2 0.3.0-beta.3 macOS build break
+# on rustc >= 1.99 (winit 0.28/glutin 0.30/accesskit 0.14 chain) that forced
+# the release/nightly toolchain pins (S3-P15 / GITHUB-P08 deviation 10c). The
+# winapi feature workaround below was eframe 0.22-specific (winit 0.28 moved
+# to windows-sys without declaring winapi features); eframe 0.30 depends on
+# windows-sys directly and needs no winapi shim.
+eframe = { version = "=0.30.0", optional = true }
 toml = "1.1"
 pbkdf2 = { version = "0.12.2", features = ["simple"] }
 rand_core = "0.10.1"
@@ -96,7 +76,7 @@ tokio = { version = "1", features = [
 default = ["net", "vm-wasm", "gui", "legacy-migrate"]
 net = ["dep:strangecoin-net"]
 vm-wasm = ["dep:strangecoin-vm-wasm"]
-gui = ["dep:eframe", "dep:winapi"]
+gui = ["dep:eframe"]
 legacy-migrate = ["dep:rusty-leveldb"]
 
 [profile.dev]
