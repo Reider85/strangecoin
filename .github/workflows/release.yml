@@ -13,6 +13,21 @@ name: Release
 # no attestation on fallback releases). `aggregate-hashes`/`sign`/`release`
 # are portable shell jobs -> they follow RUNS_ON too. See
 # .github/SELF_HOSTED_RUNNERS.md.
+#
+# [GITHUB-P21] upload@v7 + download@v8: NOT a version bug — companion majors
+# released together 26 Feb (upload v7 direct-upload ↔ download v8
+# direct-download), both marked Latest as of Nov 2026 (v7.0.2 / v8.0.2), both
+# on the same @actions/artifact v6.3.1 core (v4+ artifact semantics: named,
+# immutable, 90-day retention). The two action repos intentionally diverged
+# their major numbering; forcing one number would downgrade one side off its
+# Latest line (v4 rollback = old line, see CI4 Prompt 7 variant A, rejected).
+# Proven in this repo: Release run #13 uploaded all artifacts with upload@v7;
+# CI is green with upload@v7 (ci.yml / nightly.yml use it too). If either
+# breaks: roll BOTH back to v4 (last common major line) — never one side.
+# `merge-multiple` is intentionally NOT set on download steps (see the
+# aggregate-hashes comment below: it would overwrite identically-named
+# hash.txt files). Dependabot major bumps of these two are ignore-ruled in
+# .github/dependabot.yml [GITHUB-P21].
 
 on:
   push:

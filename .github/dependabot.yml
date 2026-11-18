@@ -74,6 +74,20 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - dependencies
+    # [GITHUB-P21] release-pipeline artifact actions: major bumps of
+    # actions/upload-artifact + actions/download-artifact are SCIP-style
+    # deliberate bumps only — the blind-merged 4→7 / 4→8 majors (CI4 root
+    # cause, PRs #1/#2) are exactly what this blocks. Patch/minor within the
+    # current major line stay enabled and flow through the grouped PR below.
+    # Keep both sides on their Latest lines (upload v7 / download v8 —
+    # companion majors, see release.yml header).
+    ignore:
+      - dependency-name: "actions/upload-artifact"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "actions/download-artifact"
+        update-types:
+          - "version-update:semver-major"
     groups:
       github-actions-minor:
         update-types:
