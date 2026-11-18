@@ -99,6 +99,14 @@ vm-wasm = ["dep:strangecoin-vm-wasm"]
 gui = ["dep:eframe", "dep:winapi"]
 legacy-migrate = ["dep:rusty-leveldb"]
 
+[profile.dev]
+# Disk-budget guard (incident 2026-11-18: target/ reached 615 GB, ENOSPC):
+# rustc incremental caches alone held 54 GB in target/debug/incremental and
+# never got pruned. Disabling incremental trades slightly slower iterative
+# rebuilds for a hard cap on that growth; the one-time invalidation after
+# this change is a normal partial rebuild. See AGENTS.md "Disk budget".
+incremental = false
+
 [profile.release]
 lto = true
 codegen-units = 1
