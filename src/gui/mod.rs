@@ -1,6 +1,13 @@
 //! GUI-клиент (egui/eframe) за feature-флагом `gui` (скелет P02; перенесён из
 //! `lib.rs` при исправлении BUG-S0-020). До Stage 4 живёт здесь; в Stage 4
 //! переедет в отдельный крейт `strangecoin-gui` (ARCHITECT3 §10.6).
+//!
+//! [UI-P02-B] eframe 0.22 → 0.30 API audit: the ONLY breaking change on this
+//! file's surface was `AppCreator` returning `Result` (fixed in [UI-P02-A]).
+//! `NativeOptions::default()`, `eframe::App::update(&mut self, ctx, frame)`,
+//! `ctx.request_repaint()`, `ctx.input(|i| i.time)` and the widget calls used
+//! here (CentralPanel/TextEdit/spinner) are unchanged in 0.30 — no
+//! ViewportBuilder or font-API migration was required.
 
 use eframe::egui;
 use std::path::PathBuf;
@@ -474,6 +481,14 @@ if let Some(ref progress_rx) = self.progress_rx {
 /// Запускает egui event loop на выделенном blocking-потоке (ADR-0007):
 /// `eframe::run_native` блокирующий и владеет windowing event loop, поэтому
 /// не должен занимать worker runtime.
+///
+/// [UI-P02-B] Known PRE-EXISTING issue (not introduced by the 0.22 → 0.30
+/// bump — the identical panic exists in winit 0.28.7 `event_loop.rs`): winit
+/// panics when the EventLoop is created off the main thread on Windows, and
+/// `spawn_blocking` is not the main thread. The Windows GUI has failed this
+/// way since ADR-0007; fixing it (either `EventLoopBuilderExtWindows::
+/// any_thread` through `NativeOptions::event_loop_builder`, or moving the
+/// GUI back to the main thread) is a separate follow-up, outside CI4 Prompt 6.
 pub async fn run(app: WalletApp) {
     tokio::task::spawn_blocking(move || {
         eframe::run_native(

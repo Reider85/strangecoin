@@ -34,6 +34,44 @@ pub fn print_genesis_hash() {
     let _ = writeln!(std::io::stdout(), "0x{}", hex::encode(hash));
 }
 
+/// [UI-P02-B] `--help` / `-h` usage text (CI4 Prompt 6 КГ: the release smoke
+/// test `strangecoin --help` must exit 0). Before this dispatch the flag fell
+/// through to the full node + GUI startup, so the smoke test could never
+/// print usage — it started a node instead.
+pub fn print_help() {
+    let mut out = std::io::stdout();
+    let _ = writeln!(
+        out,
+        "strangecoin {} — PoW blockchain node (bech32 sc1 addresses, blake3, RocksDB)",
+        env!("CARGO_PKG_VERSION")
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Usage: strangecoin [COMMAND]");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Commands:");
+    let _ = writeln!(
+        out,
+        "  (no arguments)         Start the node (GUI wallet when built with the \
+         `gui` feature, headless loop otherwise)"
+    );
+    let _ = writeln!(
+        out,
+        "  --print-genesis-hash   Print the canonical genesis block hash and exit"
+    );
+    let _ = writeln!(
+        out,
+        "  snapshot export|import File-based snapshot sync (ADR-0026); see \
+         `strangecoin snapshot` for flags"
+    );
+    #[cfg(feature = "net")]
+    let _ = writeln!(
+        out,
+        "  shadow replay          Replay a blocks file against a local chain \
+         (Stage 6 prep); needs --blocks-file"
+    );
+    let _ = writeln!(out, "  --help, -h             Print this help and exit");
+}
+
 /// `sc shadow replay` (S2-P20): parsed CLI arguments — a
 /// [`strangecoin_net::ReplayConfig`] plus the staging-facade opening
 /// parameters that are not part of the replay config itself.

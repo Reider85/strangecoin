@@ -311,14 +311,21 @@ jobs:
 
       - name: cargo audit (RUSTSEC advisories)
         if: always()
-        # Baseline ignores (deviation 8): the 10 pre-existing vulnerabilities
-        # in Cargo.lock — cargo-audit does not read deny.toml, so the IDs are
+        # Baseline ignores (deviation 8): pre-existing vulnerabilities in
+        # Cargo.lock — cargo-audit does not read deny.toml, so the IDs are
         # repeated here. Warnings (unmaintained/unsound/yanked) do not fail
         # cargo-audit by default. A NEW vulnerability still fails this step.
+        # [UI-P02-B] +2 (quick-xml 0194/0195): the eframe 0.30 bump pulls
+        # accesskit_unix -> zbus-lockstep -> zbus_xml 4.0.0 -> quick-xml
+        # ^0.30 (no patched 0.30.x exists); mirrors the deny.toml ignore.
+        # libz-sys 0544 is NOT ignored: fixed for real by the 1.1.31 ->
+        # 1.1.33 lock update in the same commit.
         shell: bash
         run: >
           cargo audit
           --ignore RUSTSEC-2026-0007
+          --ignore RUSTSEC-2026-0194
+          --ignore RUSTSEC-2026-0195
           --ignore RUSTSEC-2026-0378
           --ignore RUSTSEC-2026-0379
           --ignore RUSTSEC-2026-0422

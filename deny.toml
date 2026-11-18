@@ -18,20 +18,28 @@ yanked = "warn"
 # preserved). Removal obligation = follow-up dependency-update prompt:
 #   - fixable via `cargo update`: bytes(0007), tokio(0386), rand(0097),
 #     zstd/zstd-safe(0391/0398/0403);
-#   - pinned dev-only: wasmtime 49.0.3 =49.0.3 (0378/0379/0422/0423/0424);
-#   - no fix without eframe 0.22 stack upgrade: webbrowser(0257),
-#     derivative(0388), instant(0384), paste(0436), ttf-parser(0192),
-#     zbus_names(0371), zvariant(0370/0372).
+#   - pinned dev-only: wasmtime =49.0.3-era (0378/0379/0422/0423/0424 —
+#     stale: the lock now carries wasmtime 50.0.1, see advisory-not-detected
+#     warnings; cleanup = separate dependency-update prompt);
+#   - still-reached unmaintained crates: paste(0436), ttf-parser(0192),
+#     zbus_names(0371), zvariant(0370/0372);
+#   - eframe 0.22 stack entries webbrowser(0257)/instant(0384)/derivative(0388)
+#     dropped from this baseline by [UI-P02-B]: the eframe 0.30 subtree no
+#     longer matches them (new zbus 5.x dropped `derivative` as well);
+#   - [UI-P02-B] quick-xml(0194/0195): NEW via eframe 0.30 ->
+#     accesskit_winit -> accesskit_unix -> zbus-lockstep -> zbus_xml 4.0.0,
+#     which pins `quick-xml ^0.30` and has no patched 0.30.x release. The
+#     parse path is local a11y D-Bus introspection (not network-reachable);
+#     removal obligation = eframe >= 0.31 / accesskit bump prompt.
 # The mirror list for `cargo audit` lives in .github/workflows/nightly.yml
 # (cargo-audit does not read this file).
 ignore = [
-    "RUSTSEC-2024-0384", # instant — unmaintained, eframe stack
-    "RUSTSEC-2024-0388", # derivative — unmaintained, zbus stack
+    "RUSTSEC-2026-0192", # ttf-parser — unmaintained, egui font stack
     "RUSTSEC-2024-0436", # paste — unmaintained, accesskit stack
     "RUSTSEC-2026-0007", # bytes — vuln, fixable via cargo update
     "RUSTSEC-2026-0097", # rand — unsound, fixable via cargo update
-    "RUSTSEC-2026-0192", # ttf-parser — unmaintained, egui font stack
-    "RUSTSEC-2026-0257", # webbrowser — vuln, fix needs eframe upgrade
+    "RUSTSEC-2026-0194", # quick-xml — via eframe 0.30 a11y stack, no ^0.30 patch ([UI-P02-B])
+    "RUSTSEC-2026-0195", # quick-xml — via eframe 0.30 a11y stack, no ^0.30 patch ([UI-P02-B])
     "RUSTSEC-2026-0370", # zvariant — unmaintained, zbus stack
     "RUSTSEC-2026-0371", # zbus_names — unmaintained, zbus stack
     "RUSTSEC-2026-0372", # zvariant_derive — unmaintained, zbus stack
@@ -62,16 +70,22 @@ allow = [
     "MIT-0",
     "Unlicense",
     "Unicode-3.0",
-    # epaint 0.22 (egui font stack) is "(MIT OR Apache-2.0) AND OFL-1.1
-    # AND LicenseRef-UFL-1.0" — OFL-1.1 is a real SPDX license, the
-    # non-SPDX UFL part is granted per-crate below.
+    # [UI-P02-B] epaint_default_fonts 0.30 (egui font stack; was epaint 0.22
+    # before the eframe 0.30 bump) is "(MIT OR Apache-2.0) AND OFL-1.1 AND
+    # LicenseRef-UFL-1.0" — OFL-1.1 is a real SPDX license, the non-SPDX UFL
+    # part is granted per-crate below.
     "OFL-1.1",
 ]
 
-# LicenseRef-UFL-1.0 is not an SPDX id, so it can only be allowed as a
-# per-crate exception (epaint -> egui -> eframe GUI stack).
+# [UI-P02-B] eframe 0.30 split the default fonts out of epaint into the new
+# `epaint_default_fonts` crate, which carries the font license: epaint itself
+# is now plain "(MIT OR Apache-2.0)" (no exception needed) while
+# epaint_default_fonts is "(MIT OR Apache-2.0) AND OFL-1.1 AND
+# LicenseRef-UFL-1.0". OFL-1.1 is a real SPDX license; the non-SPDX UFL part
+# is granted per-crate below (the crate name moved with the eframe 0.30
+# bump — the old `epaint` exception became license-exception-not-encountered).
 [[licenses.exceptions]]
-crate = "epaint"
+crate = "epaint_default_fonts"
 allow = ["LicenseRef-UFL-1.0"]
 
 [bans]

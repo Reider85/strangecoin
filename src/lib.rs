@@ -1045,6 +1045,12 @@ pub async fn run_async() {
 
     // Handle CLI commands
     let args: Vec<String> = std::env::args().collect();
+    // [UI-P02-B] `--help`/`-h` exits before node startup (CI4 Prompt 6 КГ
+    // smoke test); previously the flag fell through to the full node+GUI run.
+    if args.len() > 1 && (args[1] == "--help" || args[1] == "-h") {
+        crate::cli::print_help();
+        return;
+    }
     if args.len() > 1 && args[1] == "--print-genesis-hash" {
         crate::cli::print_genesis_hash();
         return;
