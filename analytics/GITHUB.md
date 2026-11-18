@@ -820,43 +820,30 @@ guard `if:` — для merge_group нет `github.event.pull_request`), (в)
 *Документ сгенерирован 2026-11-08 на основе анализа открытого репозитория
 `github.com/Reider85/strangecoin` и журнала его GitHub Actions.*
 
- 
- # #   P 8 .   g i t h u b - s c r i p t @ v 9   a u d i t   f i n d i n g s   ( G I T H U B - P 2 0 ) 
- 
- * * D a t e * * :   2 0 2 6 - 1 1 - 1 8     
- * * T a r g e t * * :   . g i t h u b / w o r k f l o w s / s t a r - a l e r t . y m l : 7 1     
- * * A c t i o n * * :    c t i o n s / g i t h u b - s c r i p t @ v 9   ( b u m p e d   f r o m   v 7   b y   d e p e n d a b o t ) 
- 
- # # #   '  * * A u d i t   R e s u l t :   S A F E * * 
- 
- * * M i g r a t i o n   f r o m   v 7   t o   v 9   i s   c o m p l e t e l y   s a f e * *   f o r   t h i s   s c r i p t .   N o   r e g r e s s i o n s   f o u n d . 
- 
- # # #   K e y   F i n d i n g s : 
- 
- 1 .   * * N o   D e p r e c a t e d   C o n t e x t   P r o p e r t i e s * * 
-       -   '  N o   c o n t e x t . s t e p _ i d   o r   c o n t e x t . t a g   u s a g e 
-       -   '  N o   s t e p s   c o n t e x t   d e p e n d e n c y   ( p r o b l e m a t i c   i n   v 7 ) 
-       -   '  O n l y   s a f e   g i t h u b . e v e n t _ n a m e   i s   u s e d 
- 
- 2 .   * * R e c o m m e n d e d   P a t t e r n s   U s e d * * 
-       -   '  * * N a t i v e   N o d e   f e t c h ( ) * * :   L i n e   1 0 5   u s e s    e t c h ( )   i n s t e a d   o f   d e p r e c a t e d   g i t h u b . r e s t 
-       -   '  * * E n v i r o n m e n t   v a r i a b l e   i n t e r p o l a t i o n * * :   L i n e s   7 2 - 7 6   p r o p e r l y   s e t   e n v i r o n m e n t   v a r i a b l e s   b e f o r e   s c r i p t   e x e c u t i o n 
-       -   '  * * c o r e . n o t i c e ( )   a n d   c o r e . s e t F a i l e d ( ) * * :   L i n e s   8 1 - 8 4   a n d   1 1 1   u s e   c o r r e c t   A P I 
- 
- 3 .   * * N o d e   2 0   C o m p a t i b i l i t y * * 
-       -   '  N o   c o r e . d e b u g ( )   u s a g e   ( w h i c h   h a d   N o d e   2 0   c o m p a t i b i l i t y   i s s u e s ) 
-       -   '  A l l   A P I s   u s e d   a r e   c o m p a t i b l e   w i t h   N o d e   2 0 
- 
- 4 .   * * G I T H U B - P 1 5   C o m p l i a n c e * * 
-       -   '  N o   s t e p s . < i d > . o u t p u t s . < n a m e >   u s a g e   ( p r o b l e m a t i c   i n   v 7 ) 
-       -   '  N o   d y n a m i c   c o n t e x t   p r o p e r t i e s 
-       -   '  E n v i r o n m e n t   v a r i a b l e s   p r o p e r l y   p a s s e d   t h r o u g h   e n v :   s e c t i o n 
- 
- # # #   S a f e   U s a g e   P a t t e r n s   C o n f i r m e d : 
- 
- T h e   s c r i p t   f o l l o w s   a l l   c u r r e n t   b e s t   p r a c t i c e s   a n d   i s   f u l l y   c o m p a t i b l e   w i t h    c t i o n s / g i t h u b - s c r i p t @ v 9 .   T h e   m i g r a t i o n   f r o m   v 7   t o   v 9   i n t r o d u c e s   n o   b r e a k i n g   c h a n g e s   f o r   t h i s   i m p l e m e n t a t i o n . 
- 
- - - - 
- 
-  
- 
+---
+
+## 11. github-script@v9 audit post-bump [GITHUB-P20]
+
+**Дата**: 2026-11-18
+**Цель**: `.github/workflows/star-alert.yml:71` — единственное использование github-script в репо (проверено `rg 'actions/github-script' .github/`).
+**Bump**: dependabot `4da092a` от 16 Nov 2026 «chore(deps): bump actions/github-script from 7 to 9» (major через две версии: v7 -> v8 -> v9).
+**Прецедент**: GITHUB-P15 (CI3 Промпт 4) — аудит для v7.
+
+### Результат: SAFE — правки не требуются
+
+1. **Нет deprecated context-свойств.** В скрипте отсутствуют `context.tag` / `context.steps` / `context.payload.releases` и обращения к `steps.<id>.outputs` внутри JS — баги GITHUB-P15 не вернулись после bump. Единственный context-источник — `github.event_name`, переданный через `env.MODE` (строка 76).
+
+2. **Нативный `fetch()` вместо `github.rest`.** v9 убрал дефолтный `github.rest` — скрипт его не использует: POST на Discord webhook идёт через `fetch()` (строка 105), значения читаются из `env:`-блока (строки 72-76), интерполяция `${{ ... }}` происходит вне скрипта, до запуска JS. Пустой `steps.snap.outputs.*` (guard'ы `exit 1` в шаге snap) даёт пустую строку -> `process.env.COUNT || '?'` отрабатывает корректно.
+
+3. **`core.notice()` / `core.setFailed()` совместимы с v9 (Node 20):**
+   - `core.notice` — строки 81 (secret не задан -> graceful skip, exit 0), 94 (delta < 10 -> алерт не нужен), 114 (алерт отправлен);
+   - `core.setFailed` — строка 111 (Discord webhook вернул HTTP >= 400);
+   - `core.debug()` не используется -> ограничение Node 20 «debug-вывод только при `ACTIONS_STEP_DEBUG=true`» неактуально.
+
+4. **Node 20 / @octokit v6.** Inline JS в YAML не типизирован — breaking changes v8 (`@octokit/webhooks` types) и v9 (`context.payload: unknown` вместо `any`) затрагивают только TypeScript-юзеров; в JS-коде таких типов не существует. Используемые API (env, fetch, core.notice/setFailed) совместимы с Node 20.
+
+5. **actionlint** (v1.7.12, собран из исходников): `actionlint .github/workflows/*.yml` -> **exit 0**, 0 diagnostics по всем 8 workflow-файлам (проверено 2026-11-18).
+
+### Будущие usage / bump'ы
+
+Любой новый usage `actions/github-script` или major-bump самого action — повторить аудит по чек-листу GITHUB-P15 (CI3, Промпт 4, пункты a-d). Чек-лист здесь не дублируется — только ссылка (требование CI4, Промпт 5: «НЕ дублировать чек-лист GITHUB-P15 — ссылаться на него»).
