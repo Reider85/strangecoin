@@ -5,6 +5,21 @@
 Accepted (2026-11-16) — `UI-P01` (extension prompt in `analytics/prompt-stage3.md` §10).
 Design decision ratified by UI-P01 closure; implementation tracking: land of `crates/strangecoin-ui/` (design system + component library + 5 screens), full axe-core WCAG AA audit green, strangler migration closeout (`src/gui/` → pure launcher), `tests/two_clients.rs` green throughout — gates UI-P02..UI-P05, not this ADR.
 
+**Amendment A (2026-11-18, CI4 Prompt 6 / `[UI-P02-A..C]`)** — the eframe
+pin moves `=0.22.x` → `=0.30.0` (this is the "upgrade requires an ADR
+amendment" event anticipated by §Pin policy below). Trigger: eframe 0.22's
+dependency tree pins `objc2 0.3.0-beta.3` (via winit 0.28 / glutin 0.30 /
+accesskit 0.14), which stopped compiling on rustc ≥ 1.99 and forced the
+release.yml `1.98.1` / nightly macOS `1.99.1` toolchain pins. The bump to
+`eframe = "=0.30.0"` (exact pin, Stage 4 Pin Policy) removes that subtree
+(objc2 → 0.5.3+/0.6.x), drops the `winapi` feature workaround (eframe 0.27+
+uses `windows-sys` with declared features), and unpins the CI toolchains.
+Migration cost was one API change (`AppCreator` now returns `Result`);
+`NativeOptions`/widget/font APIs used by `src/gui/` were unchanged. The
+retention decision of this ADR (retain eframe/egui, `crates/strangecoin-ui/`
+strangler plan, a11y/i18n consequences) is unchanged. macOS CI cells are the
+verification surface (not locally verifiable on the Windows dev host).
+
 ## Context
 
 Strangecoin today ships an `eframe`/`egui 0.22` immediate-mode GUI in
@@ -27,7 +42,8 @@ Strangecoin today ships an `eframe`/`egui 0.22` immediate-mode GUI in
 - **No i18n** — English-only labels.
 - **Windows `winapi` features declared explicitly** in `Cargo.toml` (eframe
   0.22 depends on `winapi` without declaring needed features — this repo
-  declares them).
+  declares them; workaround removed by Amendment A with the eframe 0.30
+  bump — 0.27+ uses `windows-sys` with declared features).
 
 The forces in tension:
 
@@ -222,8 +238,11 @@ emulation layer.
 
 ### Pin policy
 
-- `eframe` / `egui` — pinned `=0.22.x` (Stage 2 precedent; upgrade requires
-  ADR amendment to this ADR).
+- `eframe` / `egui` — pinned `=0.30.0` (Amendment A, 2026-11-18; was
+  `=0.22.x` under the Stage 2 precedent — the upgrade that the original
+  text deferred to an ADR amendment has now happened and is recorded in
+  §Status). egui rides transitively with eframe and is locked by
+  `Cargo.lock`. Further upgrades again require an amendment here.
 - `fluent` / `fluent-bundle` — pinned `=x.y.z`.
 - `axe-core` (via `cargo test` headless audit) — dev-dep only, not in
   runtime Cargo.toml.
@@ -258,8 +277,9 @@ emulation layer.
   + a11y audit + i18n) to Stage 4 is significant work. Mitigation: extension
   prompts `UI-P01`..`UI-P05` are gated (§8.3) and can slip to Stage 4.x if
   needed without blocking Stage 4 core.
-- **eframe/egui upgrade path is locked.** Pinning `=0.22.x` means upgrades
-  require an ADR amendment. If eframe/egui 0.23+ adds native a11y support,
+- **eframe/egui upgrade path is locked.** Pinning `=x.y.z` means upgrades
+  require an ADR amendment (first exercised by Amendment A: `=0.22.x` →
+  `=0.30.0`). If a future eframe/egui line adds native a11y support,
   upgrading requires re-auditing all screens.
 
 ### Neutral

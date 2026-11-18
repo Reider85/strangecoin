@@ -79,14 +79,14 @@ jobs:
         with:
           # [GITHUB-P06] local runner pins the gnu-flavor toolchain (matches
           # the dev machine's rustup default; the msvc flavor would need MSVC).
-          # [S3-P15] hosted cells pin 1.98.1 (was floating `stable`): rustc
-          # 1.99 stable (Nov 2026) broke objc2 0.3.0-beta.3.patch-leaks.3
-          # (E0277 in ivar_forwarding_impls.rs; winit 0.28/glutin/accesskit
-          # macos chain) -> both macos cells of run 43922667672 died in <1min.
-          # 1.98.1 = known-good combo (v2.0.0-stage2 macos build + all local
-          # S3-P15 verification); pin = reproducible builds (DoD #22), bump
-          # deliberately when the macos GUI stack is upgraded.
-          toolchain: ${{ vars.RUNS_ON && 'stable-x86_64-pc-windows-gnu' || '1.98.1' }}
+          # [UI-P02-C] hosted cells are back on floating `stable` (the 1.98.1
+          # pin from [S3-P15] is removed): the objc2 0.3.0-beta.3 break on
+          # rustc >= 1.99 was caused by the eframe 0.22 -> 0.30 dependency
+          # tree (winit 0.28/glutin 0.30/accesskit 0.14), and [UI-P02-A/B]
+          # replaced that subtree (objc2 now resolves to 0.5.3+/0.6.x).
+          # Reproducible-build policy (DoD #22) is served by the =-pinned
+          # eframe in Cargo.toml + Cargo.lock, not by an old toolchain.
+          toolchain: ${{ vars.RUNS_ON && 'stable-x86_64-pc-windows-gnu' || 'stable' }}
           targets: ${{ steps.tgt.outputs.target }}
 
       - uses: Swatinem/rust-cache@v2

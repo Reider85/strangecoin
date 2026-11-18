@@ -126,7 +126,7 @@ Strangecoin — Rust cryptocurrency (**v3.0.0**, edition 2021): PoW blockchain �
 | Crate | Pin | ADR | Промпт | Назначение |
 |-------|-----|-----|--------|------------|
 | `bip32` | `=x.y.z` (резолв в AI-P05) | ADR-0028 | AI-P01 | HD-деривация sub-agents/session keys (`m/44'/1234'/<agent_id>'/…`); fallback — builtin `secp256k1` HD (ADR-0028 §Decision 2) |
-| `eframe` / `egui` | `=0.22.0` (резолв lock'а; фактический `=` в root Cargo.toml — при UI-P02, design-only прецедент UI-P01) | ADR-0031 | UI-P01 | Render backend professional UI (`crates/strangecoin-ui/`); upgrade требует ADR-0031 amendment |
+| `eframe` / `egui` | `=0.30.0` (eframe — фактический `=` в root Cargo.toml с `[UI-P02-A]`; egui транзитивен через eframe, лок в `Cargo.lock`; ранее `=0.22.0` — см. ADR-0031 Amendment A) | ADR-0031 (Amendment A) | UI-P01, CI4 Промпт 6 (`[UI-P02-A..C]`) | Render backend professional UI (`crates/strangecoin-ui/`); upgrade требует ADR-0031 amendment |
 | `fluent` (+ `fluent-bundle`, `unic-langid`) | `=x.y.z` (резолв в UI-P02) | ADR-0031 | UI-P01 | i18n локали en/ru/zh (`crates/strangecoin-ui/locales/`) |
 
 Ожидаемые дополнения (не закреплены до land промптов): `snow` (Stage 2 carry, уже закреплён `=0.10.0`).

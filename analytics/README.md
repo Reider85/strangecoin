@@ -148,7 +148,6 @@ Every non-trivial decision is captured in an **ADR** (0001 through 0026 at last 
 | **cargo-fuzz** *(optional)* | latest | Only needed to run `fuzz/` targets. |
 
 **First-class platforms:** Linux · macOS · Windows 10+
-(On Windows the `winapi` features are declared explicitly in `Cargo.toml` — do not strip them or the GUI will not link.)
 
 No external services, databases, or runtime daemons are required — everything is embedded.
 
@@ -177,13 +176,16 @@ cargo build --release --no-default-features --features net
 | --------- | ------------------------------------------------ | ------- |
 | `net`     | `strangecoin-net` — P2P networking               | yes     |
 | `vm-wasm` | `strangecoin-vm-wasm` — on-chain smart contracts | yes     |
-| `gui`     | `eframe` + `winapi` — the egui desktop wallet   | yes     |
+| `gui`     | `eframe` — the egui desktop wallet              | yes     |
 
 ### Key dependencies
 
-`tokio` (multi-thread runtime) · `secp256k1` · `blake3` · `aes-gcm` · `pbkdf2` · `eframe`/`egui 0.22` · `rusty-leveldb` · `tracing` + `tracing-subscriber` · `crossbeam-channel` · `serde`/`serde_json` · `toml` · `hex`
+`tokio` (multi-thread runtime) · `secp256k1` · `blake3` · `aes-gcm` · `pbkdf2` · `eframe`/`egui 0.30` · `rusty-leveldb` · `tracing` + `tracing-subscriber` · `crossbeam-channel` · `serde`/`serde_json` · `toml` · `hex`
 
-> **Windows build note.** `eframe 0.22` depends on `winapi` without declaring the features it needs (`winuser`, `commctrl`, `shellapi`, …). This repo declares them explicitly. Do not strip them.
+> **Windows build note (updated [UI-P02-C]).** eframe 0.30 depends on
+> `windows-sys` with declared features — the old `winapi` feature shim for
+> eframe 0.22 (winit 0.28) was removed with the 0.22 → 0.30 bump and must
+> not be reintroduced.
 
 ---
 
