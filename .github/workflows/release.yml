@@ -366,3 +366,54 @@ jobs:
           body_path: release-notes-extra.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify-failed:
+    name: Notify on Release failure
+    runs-on: ubuntu-latest
+    # [GITHUB-P25] post commit-comment on release.yml failure — parity with
+    # prerelease.yml notify-skipped (GITHUB-P19, commit a6212b8). Without
+    # this, the only signal of a failed v*-tag release is a red mark in the
+    # Actions UI, which the maintainer does not see during active development.
+    if: ${{ always() && (needs.build.result == 'failure' || needs.aggregate-hashes.result == 'failure' || needs.provenance.result == 'failure' || needs.sign.result == 'failure' || needs.release.result == 'failure') }}
+    needs: [build, aggregate-hashes, sign, release]
+    permissions:
+      contents: read
+      pull-requests: write   # commit-comments scope (matches prerelease notify-skipped)
+    timeout-minutes: 3
+    steps:
+      - name: Post commit comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          HEAD_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          body=$(cat <<EOF
+          ⚠️ **Release pipeline failed**: tag \`${TAG}\` did NOT produce a
+          GitHub Release. The tag exists, but the Release workflow run
+          failed in one of: build / aggregate-hashes / sign / release.
+
+          - Release run: https://github.com/${REPO}/actions/runs/${RUN_ID}
+          - Tag: \`${TAG}\` → commit \`${HEAD_SHA:0:7}\`
+          - After fixing the failing job, re-run the workflow from Actions
+            UI (Re-run failed jobs), OR delete and re-push the tag
+            (\`git push origin :refs/tags/${TAG} && git tag -a ${TAG}
+            <sha> -m "..." && git push origin refs/tags/${TAG}\`).
+
+          Common causes:
+          - macOS cells fail on eframe/objc2/accesskit regression
+            (see [UI-P02-A/B/C] commits 2caa74e/e5191f6/67901a9);
+          - \`release-notes-extra.md\` ENOENT in softprops/action-gh-release@v2
+            (see [GITHUB-P24] release.yml fix);
+          - SLSA provenance reusable workflow pinned to v2.1.0 may need a bump
+            (check slsa-framework/slsa-github-generator releases);
+          - cosign OIDC keyless signing failure (transient, retry helps).
+          EOF
+          )
+          gh api --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${REPO}/commits/${HEAD_SHA}/comments" \
+            -f body="$body"
