@@ -899,4 +899,11 @@ impl strangecoin_net::BlockchainView for BlockchainFacade {
     fn blocks_by_hashes(&self, hashes: &[[u8; 32]], max: usize) -> Vec<Block> {
         self.blocks_by_hashes(hashes, max)
     }
+
+    /// AI-P03 / invariant #24: O(1) `transactions` CF point-get for ACP
+    /// escrow verification (delegates to the S3-P09 inherent `get_tx`;
+    /// inherent resolution wins over the trait method — the pattern above).
+    fn get_tx(&self, txid: &[u8; 32]) -> Option<Transaction> {
+        BlockchainFacade::get_tx(self, txid)
+    }
 }

@@ -2,8 +2,11 @@
 
 ## Status
 
-Proposed (2026-11-04) — `AI-P03` (extension prompt in `analytics/prompt-stage3.md` §9). 
-Acceptance gate: land of ACP wire messages (`ACP_NEGOTIATE` / `ACP_TASK` / `ACP_SETTLE` / `ACP_REVOKE`), `AcpHandler`, `EscrowVault` WASM contract, and `tests/acp_messages.rs` end-to-end test.
+Accepted (2026-11-19) — `AI-P03` (extension prompt in `analytics/prompt-stage3.md` §9).
+Acceptance gate: land of ACP wire messages (`ACP_NEGOTIATE` / `ACP_TASK` / `ACP_SETTLE` / `ACP_REVOKE`),
+`AcpHandler`, `EscrowVault` WASM contract, and `tests/acp_messages.rs`
+end-to-end suite — done in the `[S4-AI-P03]` commit (see *Implementation
+amendments* below for the deviations recorded at landing).
 
 ## Context
 
@@ -207,6 +210,92 @@ tests/
 fuzz/fuzz_targets/
 └── acp_handler.rs     # NEW: fuzz AcpHandler with random messages
 ```
+
+## Implementation amendments (AI-P03 landing, 2026-11-19)
+
+Deviations from the literal text above, recorded per the FBP "deviations are
+explicit" rule:
+
+1. **`sc.value` host function added** (ADR-0014-class gas weight 3,
+   `strangecoin-vm-wasm/src/host/context/value.rs`). The design assumed the
+   contract could enforce "deposit records what it moved"; the VM exposes no
+   value/caller view, and calldata alone is attackable — a deposit claiming
+   1_000_000 SC while transferring 1 SC would later drain co-mingled
+   escrows through `release`. The contract therefore binds
+   `record.amount := sc.value()` and reverts unless the calldata amount
+   equals it (host additive, pre-mainnet; existing contracts unaffected —
+   only modules importing `sc.value` need it).
+2. **Settlement is trait-injected; production wires `NoopEscrowVault` until
+   AI-P04.** §"Settlement flow" has the handler "trigger" the on-chain call,
+   but a settlement tx needs an agent signing key — which lands with
+   AI-P04 `agent_signAndSubmitBatch` (session keys). Signing with the
+   operator wallet would violate invariant #26, so `AcpHandler` holds an
+   `EscrowSettlement` adapter: tests inject a chain-backed adapter (real
+   `release`/`refund` txs, mined — the e2e proves the on-chain path), the
+   node wires the Noop adapter (valid SETTLE/REVOKE pass validation, then
+   surface locally as a non-scored `Settlement` reject until AI-P04).
+3. **`escrow_id = blake3(deposit_calldata)[0..8]`**, not the §8 monotonic
+   counter and not literally "derived from `escrow_txid`" (§3.3): the
+   handler cannot know the contract's counter from the txid, and the
+   contract cannot see the txid. Both sides recompute the id from identical
+   bytes (handler: `tx.data`; contract: its own input). Signatures cover
+   `blake3(id_bytes)` (32 B — the secp256k1 host takes a digest). A repeated
+   *identical* deposit maps to an occupied storage key and reverts (the
+   duplicate guard replacing counter uniqueness).
+4. **Deposit calldata carries both bech32 addresses *and* both compressed
+   pubkeys** (§8.1 ABI extended): the contract verifies settle/refund
+   signatures (host needs 33-byte pubkeys — no bech32 decode exists) and
+   pays out to bech32 addresses (no address-derivation host exists). Fixed
+   flat layout with length-prefixed addresses; codec shared through
+   `strangecoin_core::escrow`.
+5. **Self-dispatch inside the `main` export** — the monolith still never
+   registers `AbiDocument`s (ADR-0029 amendment), so the VM's selector
+   dispatch always falls back to `main`; the contract compares the first
+   four calldata bytes itself. Selectors remain `method_selector` blake3
+   prefixes, so a future ABI registry stays compatible.
+6. **Amount-vs-quote check is conditional on a recorded quote.** The
+   counterparty's node never receives the B → A quote response (§5 «Amount»
+   assumes the checker saw it), and quotes are session-scoped memory (no
+   meta-CF persistence). Unconditional checks remain: parties (sender,
+   calldata addresses, calldata pubkeys) and `tx.value ≥ amount`.
+7. **Settlement acceptance rule tightened**: handler requires
+   `tx.value ≥ recorded amount`, contract requires equality (amendment 1);
+   `ACP_TASK.deadline_block` must equal the on-chain deposit deadline
+   (mismatched deadlines would desync revoke rights).
+8. **Scoring channels**: escrow failures use the spec §5/§9 table mapped to
+   ADR-0022 violation units at default weights (−0.1 → 2, −0.2 → 4, −0.3 →
+   6; `peer/scoring.rs::AcpViolation`). Replays, bad envelope signatures,
+   non-party senders and malformed frames have no ACP row in §9 — they ride
+   the generic protocol-violation channel (+1 unit each). The §9
+   "valid message +0.01" row is **not modeled**: ADR-0022 has no
+   positive-score channel.
+9. **Feature `acp` in `strangecoin-net` is default-off**; the root crate's
+   `net` feature enables it (`net = [..., "strangecoin-net/acp"]`), so every
+   production node speaks ACP while a bare `-p strangecoin-net` build
+   compiles both feature states (the КГ `--features acp` stays meaningful).
+   A feature-off build never registers the tags — an ACP peer's frames
+   decode as `UnknownMessage` and are log+ignored (S2-P18 forward-compat).
+10. **`ConnectionContext.acp: Option<AcpHandler>`** (cfg'd field; the root
+    call sites are unconditional since the root always enables `acp`), no
+    `Capability::Acp` HELLO bit — the ADR never specified one; capability
+    gating can arrive as a later amendment if cross-version negotiation
+    becomes necessary.
+11. **Nonce persistence = lazy dual-read** `MetaNonceStore` (memory map with
+    `meta` CF fall-through, write-ahead on store, fail-closed): equivalent to
+    §"on restart the map is loaded" without a bulk-load step. Key:
+    `meta_key("acp_nonce:{sender_hex}:{counterparty_hex}")`, value BE `u64`.
+12. **`ACP_NEGOTIATE.quote.amount_sc` is a JSON number** (u64) — §3.1's
+    example showed a quoted string. ACP envelopes are capped at **64 KiB**
+    (`MAX_ACP_ENVELOPE`) ahead of the 32 MiB frame cap.
+13. **EscrowVault source lives at
+    `crates/strangecoin-vm-wasm/examples/escrow_vault.rs`** (WAT assembled at
+    runtime from the shared selectors); `tests/acp_messages.rs` pulls it in
+    via `#[path]` so the contract has exactly one home, and the example's
+    own unit matrix runs under `cargo test -p strangecoin-vm-wasm --example
+    escrow_vault`.
+14. **No on-chain ACP storage and no relay** (§"No on-chain ACP message
+    storage", spec §12) unchanged: ACP frames are transport-layer only; the
+    chain carries exactly the `EscrowVault` deposit/release/refund txs.
 
 ## Consequences
 

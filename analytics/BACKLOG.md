@@ -21,7 +21,6 @@
 
 | ID | Title | Status | Owner | ETA | Priority | Depends on | ADR | Spec |
 |----|-------|--------|-------|-----|----------|------------|-----|------|
-| AI-P03 | ADR-0030 + ACP wire messages (NEGOTIATE/TASK/SETTLE/REVOKE) + EscrowVault + replay protection | queued | unassigned | -- | P1 | AI-P01 | 0030 | acp_messages.md |
 | AI-P04 | Agent JSON-RPC surface (agent_getSession / signAndSubmitBatch / sponsorTx stub / estimateTaskCost / getActivity) | queued | unassigned | -- | P1 | AI-P03 (escrow txid) | (none, extends 0028) | agent_integration.md |
 | AI-P05 | Agent SDK (Rust + TS + Python) + agent devnet + faucet + 3-agent e2e | queued | unassigned | -- | P1 | AI-P04 | (none, extends 0028) | (none) |
 | UI-P02 | Design system + 14 components + tokens + themes + i18n + a11y audit (`crates/strangecoin-ui/`) | queued | unassigned | -- | P1 | UI-P01 (closed) | (none, extends 0031) | ui_professional.md |
@@ -53,7 +52,6 @@
 
 | ID | Title | Blocked on | Notes |
 |----|-------|------------|-------|
-| AI-P04 | Agent JSON-RPC | AI-P03 (needs ACP escrow txid) | |
 | AI-P05 | Agent SDK + devnet | AI-P04 | |
 | UI-P03 | Wallet screen | UI-P02 | |
 | UI-P04 | Dashboard + Tx Detail | UI-P02 | |
@@ -65,6 +63,7 @@
 
 | ID | Title | Commit | Close date | Notes |
 |----|-------|--------|------------|-------|
+| AI-P03 | ADR-0030 + ACP wire messages + EscrowVault + replay protection | `[S4-AI-P03]` (this commit) | 2026-11-19 | Code prompt: `strangecoin-net` `protocol/acp.rs` (4 messages `0x0E..=0x11`, secp256k1-signed canonical-JSON envelopes, feature `acp`) + `acp/{handler,nonce}` (escrow verification #24, write-ahead replay #25, `EscrowSettlement` trait with production `NoopEscrowVault` until AI-P04) + shared `strangecoin_core::escrow` calldata codec + `sc.value` host fn (deposit value-binding — pooled-drain guard) + `EscrowVault` WAT example (8 unit tests) + `tests/acp_messages.rs` (8 green: 5 КГ + 3 spec §11 extras) + fuzz target `acp_handler` (nightly matrix #11, stub-harness green) + ADR-0030 Proposed→Accepted with 14 implementation amendments + spec v1.1; found latent `collect_block_codes` off-by-one (mempool 1-based creates miskey the code registry — deploys ride a craft-path workaround in tests, recorded in the commit) |
 | AI-P02 | ADR-0029 + MCP server scaffold (7 tools, 4 resources, stdio + HTTP+SSE) | `[S4-AI-P02]` (this commit) | 2026-11-18 | Code prompt: `crates/strangecoin-mcp/` (McpServer JSON-RPC dispatch + Ed25519 signing, 7 tools, 4 resources, stdio + Noise-XX-over-HTTP SSE transports) + root wiring (feature `mcp` default-on, `impl McpBackend for BlockchainFacade`, `--mcp-stdio` + `--mcp-data-dir`, `[mcp]` config, in-process HTTP listener) + `tests/mcp_server.rs` (8 green: 4 КГ + 4 spec extras) + fuzz target `mcp_determinism` (nightly matrix #10) + ADR-0029 Proposed→Accepted with 12 implementation amendments + spec §9/§11/§12; `mcp-cli` round-trip env-gated (`STRANGECOIN_MCP_CLI_TEST=1`, documented setup spec §9.1) |
 | AI-P01 | ADR-0028: Strangecoin as cryptocurrency for AI agents (vision + account model) | `[S4-AI-P01]` (this commit) | 2026-11-16 | Design-only: ADR-0028 + `docs/spec/agent_integration.md` (+ 3 sibling specs relocated `analytics/` → `docs/spec/` — path correction, content unchanged); bip32 pin decision fixed (version resolves AI-P05); ADR content originally landed in `689ccbc analytics` (non-conforming message — deviation recorded in commit body) |
 | UI-P01 | ADR-0031: Professional UI replacement (render backend + design system principles) | `[S4-UI-P01]` | 2026-11-16 | Design-only: ADR-0031 Status Proposed → Accepted + `docs/spec/ui_professional.md` (уже существовали с `689ccbc`, доведены `a3fead3` — deviation recorded in commit body); pin policy eframe/egui `=0.22.0` + fluent зафиксированы в AGENTS.md §Stage 4 Pin Policy (Cargo.toml не трогается — design-only, прецедент AI-P01); unblocks UI-P02 |

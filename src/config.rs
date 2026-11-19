@@ -81,6 +81,32 @@ impl McpConfig {
     }
 }
 
+/// ACP (Agent Communication Protocol) operator surface — AI-P03, ADR-0030
+/// `[acp]` table.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AcpConfig {
+    /// Deployed `EscrowVault` address (bech32 on this network). Empty =
+    /// escrow-referencing ACP messages (`ACP_TASK`/`ACP_SETTLE`/
+    /// `ACP_REVOKE`) reject locally without peer-score damage — the node
+    /// cannot verify an escrow it has no vault address for (ADR-0030
+    /// amendment). `validate()` checks the address decodes and sits on
+    /// `network_id`.
+    #[serde(default)]
+    pub escrow_contract: String,
+}
+
+impl AcpConfig {
+    /// `Some(address)` when a vault is configured, `None` when empty — the
+    /// shape `Node` stores.
+    pub fn contract_option(&self) -> Option<String> {
+        if self.escrow_contract.is_empty() {
+            None
+        } else {
+            Some(self.escrow_contract.clone())
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     // Scalar keys first, tables last: TOML emission (and therefore the
@@ -112,6 +138,10 @@ pub struct Config {
     /// (TOML `ValueAfterTable` rule above).
     #[serde(default)]
     pub mcp: McpConfig,
+    /// ACP escrow surface (AI-P03, ADR-0030 `[acp]`). Table — grouped with
+    /// the other sub-tables (TOML `ValueAfterTable` rule above).
+    #[serde(default)]
+    pub acp: AcpConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -254,6 +284,19 @@ pub struct RateLimitPerTypeConfig {
     /// Legacy `GET_BLOCKS` sync sub-bucket (ADR-0023 Stage 1 carry-over).
     #[serde(default = "default_rl_get_blocks")]
     pub get_blocks: String,
+    /// `ACP_NEGOTIATE` sub-bucket (AI-P03, ADR-0030 spec §7: 100/10s) —
+    /// V-44 ACP spam surfacing.
+    #[serde(default = "default_rl_acp_negotiate")]
+    pub acp_negotiate: String,
+    /// `ACP_TASK` sub-bucket (spec §7: 20/2s).
+    #[serde(default = "default_rl_acp_task")]
+    pub acp_task: String,
+    /// `ACP_SETTLE` sub-bucket (spec §7: 20/2s).
+    #[serde(default = "default_rl_acp_settle")]
+    pub acp_settle: String,
+    /// `ACP_REVOKE` sub-bucket (spec §7: 10/1s).
+    #[serde(default = "default_rl_acp_revoke")]
+    pub acp_revoke: String,
 }
 
 fn default_rl_inv() -> String {
@@ -274,6 +317,25 @@ fn default_rl_get_headers() -> String {
 
 fn default_rl_get_blocks() -> String {
     "100/10s".into()
+}
+
+fn default_rl_acp_negotiate() -> String {
+    "100/10s".into()
+}
+
+fn default_rl_acp_task() -> String {
+    // capacity 20 / window 10 s ⇒ refill 2/s (spec §7 `task_refill = 2`).
+    "20/10s".into()
+}
+
+fn default_rl_acp_settle() -> String {
+    // capacity 20 / window 10 s ⇒ refill 2/s (spec §7 `settle_refill = 2`).
+    "20/10s".into()
+}
+
+fn default_rl_acp_revoke() -> String {
+    // capacity 10 / window 10 s ⇒ refill 1/s (spec §7 `revoke_refill = 1`).
+    "10/10s".into()
 }
 
 // S2-P17 peer-scoring defaults — mirrors of strangecoin_net::peer::scoring
@@ -327,6 +389,10 @@ impl Default for RateLimitPerTypeConfig {
             tx: default_rl_tx(),
             get_headers: default_rl_get_headers(),
             get_blocks: default_rl_get_blocks(),
+            acp_negotiate: default_rl_acp_negotiate(),
+            acp_task: default_rl_acp_task(),
+            acp_settle: default_rl_acp_settle(),
+            acp_revoke: default_rl_acp_revoke(),
         }
     }
 }
@@ -583,6 +649,12 @@ impl Config {
                 ("tx", &pt.tx),
                 ("get_headers", &pt.get_headers),
                 ("get_blocks", &pt.get_blocks),
+                // AI-P03 (ADR-0030 spec §7) — `net` implies `net/acp`, so
+                // the ACP tunables always exist on this path.
+                ("acp_negotiate", &pt.acp_negotiate),
+                ("acp_task", &pt.acp_task),
+                ("acp_settle", &pt.acp_settle),
+                ("acp_revoke", &pt.acp_revoke),
             ] {
                 if let Err(err) = strangecoin_net::rate_limiter::parse_rate_spec(spec) {
                     return Err(StrangecoinError::ConfigError(format!(
@@ -614,6 +686,26 @@ impl Config {
                 "mcp.http_listen must be a socket address (ip:port), got {:?}",
                 self.mcp.http_listen
             )));
+        }
+        // AI-P03 (ADR-0030): a configured `[acp] escrow_contract` must be a
+        // valid bech32 address on *this* network — a typo'd contract would
+        // make every ACP escrow check fail the #24 `Type` comparison
+        // against an address no deposit can ever carry.
+        if !self.acp.escrow_contract.is_empty() {
+            match strangecoin_core::address::decode_address(&self.acp.escrow_contract) {
+                Ok((_, address_network)) if address_network == self.network_id => {}
+                Ok((_, address_network)) => {
+                    return Err(StrangecoinError::ConfigError(format!(
+                        "acp.escrow_contract belongs to network {address_network}, node runs {}",
+                        self.network_id
+                    )));
+                }
+                Err(err) => {
+                    return Err(StrangecoinError::ConfigError(format!(
+                        "acp.escrow_contract: {err}"
+                    )));
+                }
+            }
         }
         Ok(())
     }
@@ -698,6 +790,13 @@ impl Config {
             inv: spec(&pt.inv, defaults.inv),
             block: spec(&pt.block, defaults.block),
             tx: spec(&pt.tx, defaults.tx),
+            // AI-P03 (ADR-0030 spec §7): ACP sub-buckets — the root `net`
+            // feature always enables `strangecoin-net/acp`, so the fields
+            // are unconditionally present on this path.
+            acp_negotiate: spec(&pt.acp_negotiate, defaults.acp_negotiate),
+            acp_task: spec(&pt.acp_task, defaults.acp_task),
+            acp_settle: spec(&pt.acp_settle, defaults.acp_settle),
+            acp_revoke: spec(&pt.acp_revoke, defaults.acp_revoke),
             ban_threshold: self.network.rate_limit_ban_threshold,
             ban_window: Duration::from_secs(self.network.rate_limit_ban_window_sec),
             ban_duration: Duration::from_secs(self.network.rate_limit_ban_duration_sec),
@@ -714,6 +813,7 @@ impl Default for Config {
             storage: StorageConfig::default(),
             pruning: PruningConfig::default(),
             mcp: McpConfig::default(),
+            acp: AcpConfig::default(),
             log_level: "info".into(),
             data_dir: "./data".into(),
             allow_grant_blocks: false,

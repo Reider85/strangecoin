@@ -25,10 +25,12 @@
 //!
 //! [`migrations`]: migrations
 
+pub mod acp_nonce;
 pub mod codec;
 #[cfg(feature = "legacy-migrate")]
 pub mod migrations;
 
+pub use acp_nonce::MetaNonceStore;
 pub use strangecoin_storage::schema;
 pub use strangecoin_storage::{
     // schema::* per S3-P07 task 1 — key constructors + version constants

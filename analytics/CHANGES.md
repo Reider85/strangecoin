@@ -58,6 +58,64 @@ First Stage 4 **implementation** prompt (everything before was design-only):
    `futures-core =0.3.34`, dev `tower =0.5.3`/`http-body-util =0.1.5`),
    test notes, key constraint.
 
+## Follow-up: AI-P03 closure (2026-11-19, commit `[S4-AI-P03]`)
+
+Second Stage 4 implementation prompt — the ACP transport of ADR-0030:
+
+1. **ACP wire surface in `strangecoin-net`** — feature `acp` (default-off;
+   the root `net` feature enables it) gating four message tags
+   `0x0E..=0x11` in `KNOWN_TAGS`, connection-loop dispatch and the
+   per-type rate-limit sub-buckets (`rate_limit_per_type.acp_*`, spec §7
+   defaults). `protocol/acp.rs`: `AcpEnvelope` (secp256k1 signature over
+   `blake3(canonical_json({message, sender_agent_id}))`, 64 KiB frame cap,
+   tag↔kind consistency) + the four message structs. Feature-off builds
+   treat ACP frames as unknown future messages (log + ignore, S2-P18).
+2. **`acp/{handler,nonce}.rs`** — the validation pipeline: decode →
+   envelope authenticate → party/direction checks → **write-ahead nonce
+   admission** (invariant #25; `AcpNonceStore` seam with the in-memory
+   impl + the monolith's `MetaNonceStore` over the RocksDB `meta` CF) →
+   escrow verification (invariant #24: existence, `Call` to the configured
+   vault, parties incl. calldata pubkeys, `value ≥ amount` ≥ recorded
+   quote, deadline, signatures over `blake3(id_bytes)`) → injected
+   `EscrowSettlement`. Scoring: `scoring::AcpViolation` maps the spec §5/§9
+   table to ADR-0022 violation units; replays/bad envelopes ride the
+   generic protocol channel.
+3. **Shared codec + contract** — `strangecoin_core::escrow` (flat calldata
+   layout, selectors from `method_selector`, `escrow_id =
+   blake3(deposit_calldata)[0..8]`) used by handler, contract and tests;
+   `EscrowVault` WAT in `crates/strangecoin-vm-wasm/examples/escrow_vault.rs`
+   (self-dispatch in `main`, duplicate-id guard, timeout/mutual refund modes)
+   + a new **`sc.value` host function** (gas 3): the contract binds the
+   recorded amount to the value the frame actually received — without it a
+   pooled vault could be drained by a deposit that claims more than it
+   moved (ADR-0030 amendment 1).
+4. **Root wiring** — `[acp] escrow_contract` config (validated bech32 on
+   `network_id`), `AcpHandler` built in `Node::start_server` (accept + dial
+   loops; `NoopEscrowVault` until AI-P04 session signing, invariant #26),
+   `ConnectionContext.acp`, `BlockchainView::get_tx` (default `None`,
+   facade override = O(1) `transactions` CF point-get).
+5. **Tests** — `tests/acp_messages.rs` (8 green: 5 КГ + 3 spec §11 extras;
+   full negotiate → quote → deposit → task → settle chain with a *real*
+   mined `EscrowVault.release`, timeout/mutual refunds, fraud/forged/premature
+   rejects, injected-clock spam flood through the Stage 2 sub-bucket) +
+   EscrowVault example matrix (8) + net codec/nonce units; fuzz target
+   `acp_handler` (11th nightly-matrix entry; stub-harness green locally —
+   coverage-guided run CI-only, FBP08/FBP11).
+6. **Docs** — ADR-0030 Proposed → **Accepted** with a 14-item
+   *Implementation amendments* section; `docs/spec/acp_messages.md` →
+   **Implemented v1.1** (§11.1 test statuses + §11.2 implementation notes);
+   BACKLOG AI-P03 §1 → §4; AGENTS.md architecture/test-notes/important-files.
+7. **Found: latent `collect_block_codes` off-by-one** (pre-existing, not
+   introduced here) — the facade's code registry keys deploys by
+   `create.nonce`, but mempool creates are 1-based (`validate_nonce`) while
+   `apply_create` derives the contract address from the *pre-state* nonce:
+   a mempool-deployed contract's code lands under the wrong address and
+   every later `Call` fails `NoCode`. No shipped flow hit it yet (no
+   JSON-RPC deploy path); `tests/acp_messages.rs` deploys through a crafted
+   0-based block (the block-apply convention) as a workaround. Needs its
+   own fix prompt (state-aware `collect_block_codes` walking per-sender
+   pre-nonces).
+
 ## Goal
 
 Position Strangecoin as a **cryptocurrency for AI agents** by adding:

@@ -21,6 +21,9 @@
 //!      lives in the node's announcer);
 //!    * Erlay `ERLAY_RECONCILE` sketches (S2-P15 live wiring, gated on
 //!      `Capability::Erlay`);
+//!    * ACP `ACP_NEGOTIATE`/`ACP_TASK`/`ACP_SETTLE`/`ACP_REVOKE`
+//!      (`0x0E..=0x11`, AI-P03 `acp` feature) — handler-validated, scored,
+//!      never session-fatal;
 //!    * unknown future tags — log + ignore (S2-P18 forward-compat, never a
 //!      crash and never a ban).
 //!
@@ -87,6 +90,12 @@ pub struct ConnectionContext {
     pub rate_limiter: Arc<RateLimiter>,
     pub reconciliation: Arc<Mutex<ReconciliationState>>,
     pub shutdown: Arc<AtomicBool>,
+    /// ACP handler (AI-P03) for tags `0x0E..=0x11`; `None` = frames are
+    /// dropped with a debug log (handler not wired — e.g. test harnesses).
+    /// Field exists only under the `acp` feature (struct-literal call sites
+    /// carry a matching `#[cfg]`).
+    #[cfg(feature = "acp")]
+    pub acp: Option<Arc<crate::acp::AcpHandler>>,
 }
 
 /// Drive one registered connection until shutdown, EOF, timeout or ban.
@@ -273,7 +282,18 @@ fn dispatch_frame(
             }
             true
         }
-        Ok(InboundMessage::KnownTag(_tag)) => dispatch_gossip(ctx, conn, payload, pending_compact),
+        Ok(InboundMessage::KnownTag(tag)) => {
+            // ACP (AI-P03): app-layer messages between agents — the handler
+            // owns validation + peer scoring; the session never closes on an
+            // ACP refusal (the ADR-0022 ladder lives in scoring).
+            #[cfg(feature = "acp")]
+            if crate::protocol::acp::AcpKind::from_tag(tag).is_some() {
+                return dispatch_acp(ctx, node_id, payload);
+            }
+            #[cfg(not(feature = "acp"))]
+            let _ = tag;
+            dispatch_gossip(ctx, conn, payload, pending_compact)
+        }
         Ok(InboundMessage::UnknownMessage(bytes)) => {
             debug!(
                 target = "net::conn",
@@ -295,6 +315,43 @@ fn dispatch_frame(
             false
         }
     }
+}
+
+/// ACP dispatch (AI-P03, ADR-0030): the rate-limit charge already happened
+/// in [`dispatch_frame`] through the ACP sub-buckets (spec §7, V-44); here
+/// the handler validates the envelope, nonce and escrow and scores the peer
+/// itself. Every refusal keeps the session alive — bans happen through the
+/// ADR-0022 scoring ladder, never by dropping the connection mid-message.
+#[cfg(feature = "acp")]
+fn dispatch_acp(ctx: &ConnectionContext, node_id: NodeId, payload: &[u8]) -> bool {
+    let Some(handler) = ctx.acp.as_ref() else {
+        debug!(
+            target = "net::acp",
+            peer = %node_id,
+            "acp frame dropped — handler not wired on this node"
+        );
+        return true;
+    };
+    match handler.handle(payload, node_id) {
+        Ok(accepted) => {
+            debug!(
+                target = "net::acp",
+                peer = %node_id,
+                kind = accepted.kind.as_str(),
+                escrow_id = ?accepted.escrow_id,
+                "acp message accepted"
+            );
+        }
+        Err(err) => {
+            warn!(
+                target = "net::acp",
+                peer = %node_id,
+                error = %err,
+                "acp message rejected"
+            );
+        }
+    }
+    true
 }
 
 /// Gossip-layer dispatch for every known non-sync tag.
@@ -620,6 +677,14 @@ fn message_type(tag: u8) -> Option<MessageType> {
         MSG_BLOCK_TXN => Some(MessageType::BlockTxn),
         MSG_ERLAY_RECONCILE => Some(MessageType::ErlayReconcile),
         MSG_ADDR => Some(MessageType::Addr),
+        #[cfg(feature = "acp")]
+        crate::protocol::acp::MSG_ACP_NEGOTIATE => Some(MessageType::AcpNegotiate),
+        #[cfg(feature = "acp")]
+        crate::protocol::acp::MSG_ACP_TASK => Some(MessageType::AcpTask),
+        #[cfg(feature = "acp")]
+        crate::protocol::acp::MSG_ACP_SETTLE => Some(MessageType::AcpSettle),
+        #[cfg(feature = "acp")]
+        crate::protocol::acp::MSG_ACP_REVOKE => Some(MessageType::AcpRevoke),
         _ => None,
     }
 }

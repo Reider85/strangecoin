@@ -529,6 +529,21 @@ impl PeerManager {
         self.record_event(node_id, BanReason::RateLimit, Counter::Violation);
     }
 
+    /// ACP escrow-verification penalty (AI-P03, ADR-0030 + spec §9): the
+    /// class's `violation_count` units (−0.1 → 2, −0.2 → 4, −0.3 → 6 at
+    /// default weights) land in the same `protocol_violations` channel —
+    /// the ADR-0022 ladder (warn → temp 1 h → persistent 30 d) escalates
+    /// repeated ACP fraud exactly like repeated protocol violations
+    /// (V-45: reject + ban peer).
+    pub fn record_acp_violation(&self, node_id: NodeId, violation: scoring::AcpViolation) {
+        self.record_event_weighted(
+            node_id,
+            BanReason::ProtocolViolation,
+            Counter::Violation,
+            violation.units(),
+        );
+    }
+
     /// Apply a rate-limiter verdict to the slow path (ADR-0023 §Integration,
     /// S2-P16).
     ///
@@ -609,6 +624,20 @@ impl PeerManager {
     }
 
     fn record_event(&self, node_id: NodeId, reason: BanReason, counter: Counter) {
+        self.record_event_weighted(node_id, reason, counter, 1);
+    }
+
+    /// [`record_event`](Self::record_event) with a multi-unit weight —
+    /// `Counter::Violation` adds `weight` to `violation_count`,
+    /// `Counter::Invalid` adds `weight` to `invalid_count` (AI-P03 ACP
+    /// penalties use multi-unit violations, spec §9).
+    fn record_event_weighted(
+        &self,
+        node_id: NodeId,
+        reason: BanReason,
+        counter: Counter,
+        weight: u32,
+    ) {
         let now = Instant::now();
         let outcome = {
             let mut store = self.store();
@@ -621,8 +650,12 @@ impl PeerManager {
                 return;
             };
             match counter {
-                Counter::Invalid => record.invalid_count += 1,
-                Counter::Violation => record.violation_count += 1,
+                Counter::Invalid => {
+                    record.invalid_count = record.invalid_count.saturating_add(weight)
+                }
+                Counter::Violation => {
+                    record.violation_count = record.violation_count.saturating_add(weight)
+                }
             }
             scoring::note_message(record);
             record.last_seen = now;

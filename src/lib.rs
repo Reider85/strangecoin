@@ -88,6 +88,10 @@ pub struct Node {
     pub gossip_state: Arc<Mutex<strangecoin_net::GossipState>>,
     /// S2-P19: shared Erlay reconciliation state (known-tx set + triggers).
     pub reconciliation_state: Arc<Mutex<strangecoin_net::ReconciliationState>>,
+    /// AI-P03 (ADR-0030 `[acp] escrow_contract`): deployed EscrowVault
+    /// address for ACP escrow verification (#24); `None` = escrow ACP
+    /// messages reject locally (not scored).
+    pub acp_escrow_contract: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -99,9 +103,10 @@ pub enum MiningStatus {
 }
 
 impl Node {
-    // Eight parameters since S3-P07 (storage config is wired through the
-    // orchestrator); bundling them into a struct would churn every call
-    // site for a constructor called exactly once.
+    // Nine parameters since AI-P03 (storage config is wired through the
+    // orchestrator, ACP escrow address rides the `[acp]` table); bundling
+    // them into a struct would churn every call site for a constructor
+    // called exactly once.
     #[allow(clippy::too_many_arguments)]
     fn new(
         address: String,
@@ -112,6 +117,7 @@ impl Node {
         rate_limit_config: crate::network::RateLimitConfig,
         peer_manager: Arc<strangecoin_net::PeerManager>,
         storage: crate::config::StorageConfig,
+        acp_escrow_contract: Option<String>,
     ) -> Self {
         let blockchain = Arc::new(BlockchainFacade::with_event_bus(
             port,
@@ -142,6 +148,7 @@ impl Node {
             peer_manager: peer_manager.clone(),
             gossip_state: gossip_state.clone(),
             reconciliation_state: reconciliation_state.clone(),
+            acp_escrow_contract,
         };
         // ADR-0011: the mining worker is a tokio task. It is spawned with the
         // same dual-mode rule as the old `sync_engine::spawn`: on a runtime it
@@ -302,6 +309,30 @@ impl Node {
             .inbox
             .clone()
             .expect("SyncEngine inbox must be spawned before the server starts");
+        // AI-P03 (ADR-0030): one ACP handler shared by the accept-side and
+        // dial-side connection loops. Replay nonces persist in the `meta`
+        // CF (restart survival, invariant #25); settlement is the Noop
+        // adapter until AI-P04 session signing lands (ADR amendment — the
+        // operator wallet key must never sign agent actions, #26).
+        let acp = Arc::new(strangecoin_net::AcpHandler::new(
+            // Plain `clone()` for the unsized coercion at the argument
+            // position (the `Arc::clone(&x)` pitfall, AGENTS.md).
+            blockchain.clone(),
+            Arc::new(crate::storage::MetaNonceStore::new(
+                blockchain.storage_engine(),
+            )),
+            Arc::new(strangecoin_net::NoopEscrowVault),
+            Arc::clone(&peer_manager),
+            strangecoin_net::AcpHandlerConfig {
+                network_id: self.network_id,
+                escrow_contract: self.acp_escrow_contract.clone(),
+            },
+        ));
+        // Both async blocks are `move`: hand each its own handle so `acp`
+        // itself is never captured (and never moved out from under the
+        // other spawn).
+        let acp_accept = Arc::clone(&acp);
+        let acp_dial = Arc::clone(&acp);
         let address = format!("0.0.0.0:{}", port);
         let listener = TcpListener::bind(&address)
             .await
@@ -334,6 +365,7 @@ impl Node {
                                 rate_limiter: Arc::clone(&rate_limiter),
                                 reconciliation: Arc::clone(&reconciliation_state),
                                 shutdown: Arc::clone(&shutdown),
+                                acp: Some(Arc::clone(&acp_accept)),
                             };
                             let pm = Arc::clone(&peer_manager);
                             let sd = Arc::clone(&shutdown);
@@ -426,6 +458,7 @@ impl Node {
                                         rate_limiter: Arc::clone(&rate),
                                         reconciliation: Arc::clone(&recon),
                                         shutdown: Arc::clone(&sd),
+                                        acp: Some(Arc::clone(&acp_dial)),
                                     };
                                     tokio::spawn(
                                         strangecoin_net::run_connection(conn, ctx).instrument(
@@ -942,6 +975,8 @@ async fn mining_worker_loop(
                 peer_manager: peer_manager.clone(),
                 gossip_state: gossip_state.clone(),
                 reconciliation_state: reconciliation_state.clone(),
+                // Temp sync node — never runs `start_server`, no ACP side.
+                acp_escrow_contract: None,
             };
             sync_node.sync_blockchain().await;
             event_bus.publish(events::NodeEvent::BlockApplied {
@@ -1127,6 +1162,10 @@ pub async fn run_async() {
             // AI-P02: `[mcp]` table absent in the migrated config → defaults
             // (listener off).
             mcp: Default::default(),
+            // AI-P03: `[acp]` table absent in the migrated config → no
+            // escrow contract configured (escrow ACP messages reject
+            // locally until the operator sets the vault address).
+            acp: Default::default(),
             log_level: "info".into(),
             data_dir: exe_dir.join("data"),
             allow_grant_blocks: false,
@@ -1250,6 +1289,9 @@ pub async fn run_async() {
         config.rate_limit_config(),
         Arc::clone(&peer_manager),
         config.storage.clone(),
+        // AI-P03: `[acp] escrow_contract` — `None` means "no vault
+        // configured" (handler rejects escrow ACP messages locally).
+        config.acp.contract_option(),
     );
     node.blockchain
         .set_allow_grant_blocks(config.allow_grant_blocks);
@@ -1295,6 +1337,7 @@ pub async fn run_async() {
     let node_peer_manager = Arc::clone(&node.peer_manager);
     let node_gossip_state = Arc::clone(&node.gossip_state);
     let node_reconciliation_state = Arc::clone(&node.reconciliation_state);
+    let node_acp_escrow_contract = node.acp_escrow_contract.clone();
 
     let sync_task_handle = tokio::spawn(async move {
         let mut sync_node = Node {
@@ -1312,6 +1355,8 @@ pub async fn run_async() {
             peer_manager: node_peer_manager,
             gossip_state: node_gossip_state,
             reconciliation_state: node_reconciliation_state,
+            // Sync-task twin never runs `start_server` — no ACP side.
+            acp_escrow_contract: node_acp_escrow_contract,
         };
         // Tick at SYNC_TICK for prompt shutdown checks, but only sync every
         // SYNC_TICKS_PER_SYNC ticks to preserve the original ~1s sync period.
@@ -1352,6 +1397,8 @@ pub async fn run_async() {
             peer_manager: Arc::clone(&node.peer_manager),
             gossip_state: Arc::clone(&node.gossip_state),
             reconciliation_state: Arc::clone(&node.reconciliation_state),
+            // GUI twin never runs `start_server` — no ACP side.
+            acp_escrow_contract: None,
         },
         wallet_address: String::new(),
         password: String::new(),
@@ -1612,6 +1659,81 @@ pub mod test_support {
         assert!(block.is_some(), "Mining current transaction failed");
     }
 
+    /// Craft, seal and commit one block carrying `txs` on top of the
+    /// facade's live state (AI-P03 `tests/acp_messages.rs`).
+    ///
+    /// Unlike the pure-core `craft_child` helper (which replays the whole
+    /// prefix through the VM-less `apply_block`), this seals the header's
+    /// roots against the *facade's current state* through
+    /// `apply_block_with_vm` — chains that already contain a `Create` block
+    /// walk fine because every block is re-applied with the seeded codes.
+    /// A zero-amount coinbase is prepended (every non-genesis block needs
+    /// one). Sender nonces follow the **block-apply 0-based convention**
+    /// (`tx.nonce == pre-state nonce`): `apply_create` derives the contract
+    /// address from the pre-state nonce, which for a crafted chain equals
+    /// the tx nonce — keeping `collect_block_codes`' key in step. (Mempool
+    /// 1-based creates are miskeyed by that helper — a latent pre-existing
+    /// off-by-one recorded in the AI-P03 commit; deploys ride this craft
+    /// path until it gets its own fix.)
+    pub fn craft_block_with(blockchain: &BlockchainFacade, txs: Vec<crate::Transaction>) {
+        blockchain.with_inner_mut(|inner| {
+            let previous = inner.chain.last().expect("chain must not be empty").clone();
+            let height = previous.index + 1;
+            let mut transactions = vec![crate::Transaction::coinbase(
+                "coinbase",
+                "miner",
+                0,
+                inner.chain_id,
+            )];
+            transactions.extend(txs);
+            let mut block = crate::Block {
+                index: height,
+                timestamp: std::cmp::max(
+                    crate::blockchain::block_executor::now_secs(),
+                    previous.timestamp + 1,
+                ),
+                transactions,
+                previous_hash: previous.hash.clone(),
+                hash: String::new(),
+                nonce: 0,
+                target: previous.target.clone(),
+                consensus_version: inner.rules.expected_version(height),
+                state_root: [0u8; 32],
+                tx_root: [0u8; 32],
+                receipts_root: [0u8; 32],
+            };
+            block.tx_root = strangecoin_core::serialize::compute_tx_root(&block.transactions);
+            let parent_state = inner.balances.to_state();
+            #[cfg(feature = "vm-wasm")]
+            let post = {
+                let mut vm = strangecoin_vm_wasm::WasmiExecutor::new();
+                for (address, wasm) in &inner.codes {
+                    vm.insert_code(address, wasm.clone());
+                }
+                strangecoin_core::state::apply_block_with_vm(
+                    &parent_state,
+                    &block,
+                    inner.chain_id,
+                    &mut vm,
+                )
+            };
+            #[cfg(not(feature = "vm-wasm"))]
+            let post = strangecoin_core::state::apply_block(&parent_state, &block, inner.chain_id);
+            let post = post.expect("crafted block must apply to the facade state");
+            block.state_root = strangecoin_core::state::compute_state_root(&post.balances);
+            block.receipts_root = strangecoin_core::state::receipts_root(&post.receipts);
+            block.hash = hex::encode(strangecoin_core::serialize::block_hash(&block));
+            inner
+                .commit_block(&block)
+                .expect("crafted block must pass full validation");
+        });
+    }
+
+    /// Walk one coinbase-only height (escrow deadline advancement).
+    pub fn advance_height(blockchain: &BlockchainFacade) {
+        craft_block_with(blockchain, Vec::new());
+    }
+
     pub fn sync_to_longest(wallets: &[Arc<BlockchainFacade>]) {
         use crate::blockchain::chain_selector::ChainSelector;
 
@@ -1760,6 +1882,7 @@ pub mod test_support {
             reconciliation_state: Arc::new(Mutex::new(
                 strangecoin_net::ReconciliationState::with_defaults(),
             )),
+            acp_escrow_contract: None,
         };
         (node, peers)
     }
@@ -1788,6 +1911,7 @@ pub mod test_support {
             reconciliation_state: Arc::new(Mutex::new(
                 strangecoin_net::ReconciliationState::with_defaults(),
             )),
+            acp_escrow_contract: None,
         }
     }
 

@@ -262,6 +262,8 @@ impl Node {
             rate_limiter: Arc::clone(&self.rate),
             reconciliation: Arc::clone(&self.recon),
             shutdown: Arc::clone(&self.shutdown),
+            #[cfg(feature = "acp")]
+            acp: None,
         }
     }
 
@@ -684,6 +686,8 @@ async fn junk_flood_bans_peer_and_closes_connection() {
         rate_limiter: Arc::clone(&server_rate),
         reconciliation: Arc::clone(&server.recon),
         shutdown: Arc::clone(&server.shutdown),
+        #[cfg(feature = "acp")]
+        acp: None,
     };
     let server_task = tokio::spawn(async move {
         let (stream, peer_addr) = listener.accept().await.expect("accept");

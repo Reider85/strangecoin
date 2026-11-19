@@ -23,8 +23,16 @@ path = "../crates/strangecoin-vm-wasm"
 # Network runtime (S2-P21): noise handshake, gossip INV, compact blocks,
 # Erlay reconciliation. Path dep, not published — same pin discipline as the
 # parent workspace (the crate's own Cargo.toml carries the Stage 2 `=` pins).
+# `features = ["acp"]` (AI-P03): the ACP wire surface + handler are gated;
+# the acp_handler target needs them (applies to every fuzz binary — the
+# other targets are indifferent).
 [dependencies.strangecoin-net]
 path = "../crates/strangecoin-net"
+features = ["acp"]
+
+# AI-P03: agent-envelope keys for the acp_handler target (fixed seeds —
+# the same caret as the parent workspace, crypto class 2).
+secp256k1 = "0.29"
 
 # AI-P02: MCP determinism target (invariant #23) — 3 mock-backend servers
 # must emit byte-identical signed envelopes for the same fuzz input.
@@ -116,6 +124,15 @@ bench = false
 [[bin]]
 name = "mcp_determinism"
 path = "fuzz_targets/mcp_determinism.rs"
+test = false
+doc = false
+bench = false
+
+# AI-P03: ACP handler robustness (#24/#25) — decode/authenticate/nonce/validate
+# never panic and classify deterministically across fresh handler states.
+[[bin]]
+name = "acp_handler"
+path = "fuzz_targets/acp_handler.rs"
 test = false
 doc = false
 bench = false

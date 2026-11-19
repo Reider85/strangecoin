@@ -21,6 +21,7 @@ deterministic value is a pass.**
 | `compact_blocks_fill_up` | random block → `CompactBlock` → `fill_up` against a random mempool, plus wire-byte corruption before re-parse (S2-P21, S2-P14) | no panic; `Complete` ⇒ rebuilt `tx_root` matches its txs (never a false block); `Missing` ⇒ in-range indices and the `GET_BLOCK_TXN` round-trip completes |
 | `erlay_reconciliation` | two random tx sets (varying overlap) → `create_sketch` / `decode_difference` + `ReconciliationState::reconcile_at` + corrupted sketches (S2-P21, ADR-0021) | no panic; decode = exact sorted symmetric difference of short-ID sets; state-level delta = local-exclusive TxIds; ≥50% bandwidth reduction verified as math whenever overlap qualifies; failures are typed (fallback signal) |
 | `mcp_determinism` | the MCP protocol layer over identical mock chain state: fuzz bytes pick the dispatch arm (initialize / tools / resources / malformed method) and N=3 `McpServer`s process the same request (AI-P02, ADR-0029, invariant #23) | no panic; every response is a *valid* signed envelope; the three byte-strings are identical — a divergence is a determinism bug |
+| `acp_handler` | the ACP inbound pipeline (`AcpHandler::handle`) over three lanes — raw fuzz bytes at the decoder, fuzz-built *signed* envelopes (kind/counterparty/nonce/txid/signatures carved from the input), and signed-then-tampered wire bytes (AI-P03, ADR-0030, invariants #24/#25) | no panic; classification (`ok:<kind>` / `err:<reject>`) identical across two fresh handler states; redelivery on the same handler follows ADR-0030 §6.2 write-ahead: a post-auth frame (accepted or body-rejected) classifies as `Replay`, a pre-auth rejection (decode/signature/party) repeats its exact class with the nonce window untouched |
 
 ### Differential methodology
 
@@ -165,12 +166,13 @@ zeroed `Unstructured` buffer:
 | 2026-10-29 | stub-harness `cargo check` | 4 | 0 | `noise_handshake`, `gossip_inv`, `compact_blocks_fill_up`, `erlay_reconciliation` compile clean |
 | 2026-10-29 | stub-harness zeroed-input run | 4 | 0 | one deterministic zeroed input per target; all bodies complete |
 | 2026-11-18 | stub-harness run (AI-P02) | 1 | 0 | `mcp_determinism`: zeroed + 8 sample inputs across every dispatch arm, no panic; harness = temp crate with a stub `fuzz_target!` macro over the real target source (S2-P21 approach) |
+| 2026-11-19 | stub-harness run (AI-P03) | 1 | 0 | `acp_handler`: zeroed + raw-lane + signed-lane + tampered-lane (incl. tag-byte tamper and a 70 KiB oversize frame) inputs, no panic; the harness caught one over-strict contract in the target itself (write-ahead nonce consumption on post-auth rejects — ADR-0030 §6.2), fixed before green; same stub-crate approach (CARGO_TARGET_DIR on an ASCII path — the temp dir under the non-ASCII profile breaks GNU ld) |
 
 **Not verified from this host:** the 10-minute coverage-guided soak per
 target (no cargo-fuzz — reasons above) and the CI matrix run (GitHub
 infrastructure this machine cannot observe); «CI extended» is verified by
-the workflow diff — the fuzz matrix now lives in `nightly.yml` (10 targets
-since AI-P02, uniform 1800 s each), per the precedent in the CI section.
+the workflow diff — the fuzz matrix now lives in `nightly.yml` (11 targets
+since AI-P03, uniform 1800 s each), per the precedent in the CI section.
 
 ## Relationship to THREAT_MODEL.md
 
@@ -192,6 +194,12 @@ since AI-P02, uniform 1800 s each), per the precedent in the CI section.
   ARCHITECT §19.5 numbering) and threat **V-43** (MCP tool poisoning): the
   same request over the same state must yield the same signed bytes on
   every server instance, and every envelope must verify.
+- `acp_handler` → invariants **#24/#25** (escrow txid real, ACP replay
+  protection — ARCHITECT §19.5 numbering) and threats **V-44/V-45** (ACP
+  spam, escrow fraud): decode → authenticate → nonce → validate must fail
+  with typed rejects on adversarial frames, never panic, never consume the
+  nonce window before authentication (pre-auth rejects repeat verbatim),
+  and classify identically across fresh handler states.
 
 S1.5-P18 folds the outcomes into `docs/security/THREAT_MODEL.md`
 Monitoring.

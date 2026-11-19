@@ -14,6 +14,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// encrypted framing below, right after the Noise handshake finishes.
 pub mod hello;
 
+/// ACP (Agent Communication Protocol) envelopes — AI-P03, ADR-0030.
+/// Gated on the `acp` feature: a build without it never registers the ACP
+/// tags, so an ACP-speaking peer's frames decode as `UnknownMessage` and
+/// are logged+ignored (S2-P18 forward-compat), never scored or banned.
+#[cfg(feature = "acp")]
+pub mod acp;
+
 /// Framing/parse size violation, folded into the Stage 2 `NetError`
 /// taxonomy (S2-P06 migration): a malformed or over-sized peer message is a
 /// protocol violation. Keeps the legacy `size limit exceeded: {0}` payload
@@ -49,10 +56,18 @@ pub const MAX_BLOCKS_BATCH: usize = 128;
 
 /// Every first-byte tag the Stage 2 wire format defines: the sync codecs
 /// `0x01..=0x04` (this module), `ADDR` gossip `0x05`, the gossip/compact
-/// codecs `0x06..=0x0C` and the Erlay reconcile envelope `0x0D` (S2-P19).
-/// Anything outside this set — including the removed v0.8.6 text protocol —
-/// is an unknown *future* message type.
-pub const KNOWN_TAGS: [u8; 13] = [
+/// codecs `0x06..=0x0C` and the Erlay reconcile envelope `0x0D` (S2-P19) —
+/// plus, with the `acp` feature (AI-P03), the four ACP tags
+/// `0x0E..=0x11`. Anything outside this set — including the removed v0.8.6
+/// text protocol — is an unknown *future* message type.
+const ACP_TAG_COUNT: usize = if cfg!(feature = "acp") { 4 } else { 0 };
+
+/// Size of [`KNOWN_TAGS`] — 13 Stage 2 tags + 4 ACP tags under the
+/// `acp` feature.
+pub const KNOWN_TAGS_LEN: usize = 13 + ACP_TAG_COUNT;
+
+/// Every known first-byte tag (see [`ACP_TAG_COUNT`] for the gated tail).
+pub const KNOWN_TAGS: [u8; KNOWN_TAGS_LEN] = [
     MSG_GET_HEADERS,
     MSG_HEADERS,
     MSG_GET_BLOCKS,
@@ -66,6 +81,14 @@ pub const KNOWN_TAGS: [u8; 13] = [
     crate::gossip::compact_blocks::MSG_GET_BLOCK_TXN,
     crate::gossip::compact_blocks::MSG_BLOCK_TXN,
     crate::gossip::erlay::MSG_ERLAY_RECONCILE,
+    #[cfg(feature = "acp")]
+    acp::MSG_ACP_NEGOTIATE,
+    #[cfg(feature = "acp")]
+    acp::MSG_ACP_TASK,
+    #[cfg(feature = "acp")]
+    acp::MSG_ACP_SETTLE,
+    #[cfg(feature = "acp")]
+    acp::MSG_ACP_REVOKE,
 ];
 
 /// Whether `tag` is a message type this build knows ([`KNOWN_TAGS`]).

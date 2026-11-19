@@ -275,6 +275,67 @@ pub fn dominant_reason(record: &PeerRecord, config: &ScoringConfig) -> BanReason
     }
 }
 
+/// ACP violation classes (AI-P03, ADR-0030 + `docs/spec/acp_messages.md`
+/// §5/§9): the score delta each escrow-verification failure costs, expressed
+/// in ADR-0022 `violation_count` units.
+///
+/// Unit economics: one violation unit costs `w_violation /
+/// violation_full_weight` score points — **0.05 at the ADR-0022 defaults**
+/// (`0.2 / 4`), which is exactly the spec §9 table granularity. The unit
+/// counts below are `spec points / 0.05`: -0.1 → 2, -0.2 → 4, -0.3 → 6.
+/// Operators tuning `peer_scoring_w_*` scale the drop linearly with their
+/// own weights (the same relationship every other violation has).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcpViolation {
+    /// `escrow_txid` missing from the chain (invariant #24, spec §5
+    /// «Existence», −0.1).
+    MissingEscrowTx,
+    /// tx is not a `call` to the configured EscrowVault (spec §5 «Type»,
+    /// −0.2).
+    WrongEscrowType,
+    /// Deposit sender is not agent A / calldata counterparty is not agent B
+    /// (V-45 likely fraud, spec §5 «Parties», −0.3).
+    EscrowPartyMismatch,
+    /// Escrow amount below the negotiated quote, or tx value below the
+    /// recorded amount (spec §5 «Amount», −0.3).
+    EscrowAmountMismatch,
+    /// Settle after `deadline_block`, or revoke claiming
+    /// `deadline_passed` before it did (spec §5 «Deadline», −0.1).
+    EscrowDeadline,
+    /// Forged settle/revoke signature over the escrow id (V-45, spec §5
+    /// «Settle signatures», −0.3).
+    ForgedEscrowSignature,
+}
+
+impl AcpViolation {
+    /// ADR-0022 `violation_count` units this class costs (see the type doc
+    /// for the points ↔ units mapping).
+    pub fn units(self) -> u32 {
+        match self {
+            AcpViolation::MissingEscrowTx => 2,
+            AcpViolation::WrongEscrowType => 4,
+            AcpViolation::EscrowPartyMismatch => 6,
+            AcpViolation::EscrowAmountMismatch => 6,
+            AcpViolation::EscrowDeadline => 2,
+            AcpViolation::ForgedEscrowSignature => 6,
+        }
+    }
+
+    /// Nominal spec §9 score penalty (diagnostics/tests; the live score
+    /// moves through [`units`](Self::units) × the operator's weights).
+    pub fn spec_points(self) -> f32 {
+        self.units() as f32 * 0.05
+    }
+}
+
+/// Fold an [`AcpViolation`] into the record: the penalty lands in the same
+/// unclamped `protocol_violations` channel as every other misuse (ADR-0022
+/// ladder unchanged — warn → temp → persistent), so repeated ACP fraud
+/// escalates exactly like repeated protocol violations.
+pub fn record_acp_violation(record: &mut PeerRecord, violation: AcpViolation) {
+    record.violation_count = record.violation_count.saturating_add(violation.units());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

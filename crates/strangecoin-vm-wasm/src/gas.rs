@@ -34,6 +34,10 @@ pub enum HostCallWeight {
     GasLeft,
     /// `input_read` — 3 (calldata copy out of the frame context, S1.5-FBP03).
     InputRead,
+    /// `value` — 3 (frame-entry value view; added AI-P03 for the EscrowVault
+    /// deposit↔value binding — ADR-0030 amendment, same weight class as the
+    /// other context snapshots).
+    Value,
     /// `emit_log` — 375 + 375 per topic.
     EmitLog { topics: u64 },
     /// One 64KiB `memory.grow` page — 3 (ADR-0014 memory metering).
@@ -57,6 +61,7 @@ impl HostCallWeight {
             HostCallWeight::BlockContext => 3,
             HostCallWeight::GasLeft => 3,
             HostCallWeight::InputRead => 3,
+            HostCallWeight::Value => 3,
             HostCallWeight::EmitLog { topics } => 375 + 375 * topics,
             HostCallWeight::MemoryGrow => 3,
         }

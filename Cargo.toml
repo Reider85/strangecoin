@@ -80,7 +80,11 @@ tokio = { version = "1", features = [
 # directory in production builds (ADR-0008 "run automatically on first
 # startup"); --no-default-features builds drop it with everything else.
 default = ["net", "vm-wasm", "gui", "legacy-migrate", "mcp"]
-net = ["dep:strangecoin-net"]
+# `net` implies `strangecoin-net/acp` (AI-P03, ADR-0030): every production
+# node speaks ACP over its Noise connections; the net crate keeps `acp`
+# default-off so a bare `-p strangecoin-net` build compiles both feature
+# states (КГ runs `cargo test -p strangecoin-net --features acp`).
+net = ["dep:strangecoin-net", "strangecoin-net/acp"]
 vm-wasm = ["dep:strangecoin-vm-wasm"]
 gui = ["dep:eframe"]
 legacy-migrate = ["dep:rusty-leveldb"]

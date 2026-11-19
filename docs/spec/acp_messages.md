@@ -1,12 +1,15 @@
 # Strangecoin ACP (Agent Communication Protocol) Messages Spec
 
-**Status:** Proposed (2026-11-04)
+**Status:** Implemented v1.1 (2026-11-19, `[S4-AI-P03]`) — original
+Proposed v1.0 of 2026-11-04
 **Implementation prompt:** `analytics/prompt-stage3.md` §9 `AI-P03`
 **Authoritative ADR:** [ADR-0030](../ADR/0030-acp-agent-communication-protocol.md)
+(superseded-in-part by its *Implementation amendments* section — deviations
+are listed there, mirrored in §11.1 below)
 **Related specs:** [agent_integration.md](agent_integration.md), [mcp_server.md](mcp_server.md)
 **Invariants enforced:** #24 (ACP escrow txid real), #25 (ACP replay protection)
 **Threat vectors mitigated:** V-44 (ACP spam), V-45 (ACP escrow fraud)
-**Spec version:** 1.0
+**Spec version:** 1.1
 
 ---
 
@@ -433,26 +436,84 @@ fuzz/fuzz_targets/
 
 ## 11. Test plan
 
-`tests/acp_messages.rs`:
+### 11.1. Status (all green, `[S4-AI-P03]`, 2026-11-19)
 
-| Test | What it verifies |
-|------|------------------|
-| `acp_negotiate_task_settle_e2e` | Two-agent session: A negotiates, B quotes, A assigns + escrows, B fulfills, A settles → on-chain release to B |
-| `acp_revoke_after_timeout` | A assigns, B no response, deadline passes, A revokes → on-chain refund to A |
-| `acp_revoke_mutual_cancel` | A assigns, B cannot complete, mutual revoke → on-chain refund to A |
-| `acp_escrow_fraud_rejected` | A sends SETTLE with fake txid → rejected + peer banned (#24, V-45) |
-| `acp_replay_rejected` | A replays old ACP_NEGOTIATE with stale nonce → rejected (#25) |
-| `acp_spam_rate_limited` | A floods ACP_NEGOTIATE → rate-limited by Stage 2 token-bucket (V-44) |
-| `acp_premature_revoke_rejected` | A sends REVOKE with deadline_passed=true before deadline → rejected + peer score -0.1 |
-| `acp_forged_settle_signature_rejected` | A sends SETTLE with forged sig_b → rejected + peer banned |
+`tests/acp_messages.rs` (root integration suite) — 8/8:
+
+| Test | What it verifies | Status |
+|------|------------------|--------|
+| `acp_negotiate_task_settle_e2e` | Two-agent session: A negotiates, B quotes, A assigns + escrows, B fulfills, A settles → on-chain release to B (real `EscrowVault.release` tx mined; B's balance +50, vault → 0) | ✅ |
+| `acp_revoke_after_timeout` | A assigns, B no response, chain walked past `deadline_block` (crafted blocks, no wall time), A revokes → on-chain refund to A | ✅ |
+| `acp_revoke_mutual_cancel` | Mutual cancel before deadline (both sigs, `deadline_passed = false`) → refund to A | ✅ |
+| `acp_escrow_fraud_rejected` | SETTLE with a never-mined txid → `MissingEscrowTx` rejected + peer banned (−0.1 = 2 violation units under tuned weights; V-45) | ✅ |
+| `acp_replay_rejected` | Byte-identical redelivery with the same `agent_nonce` → `Replay`, nonce window monotonic, peer charged one protocol violation (#25) | ✅ |
+| `acp_spam_rate_limited` | 300 `ACP_NEGOTIATE` at one injected instant → exactly the spec §7 burst (100) admitted through the Stage 2 sub-bucket, the rest refused, `apply_rate_verdict` escalates to a peer ban (V-44) | ✅ |
+| `acp_premature_revoke_rejected` | `deadline_passed = true` before the deadline → `EscrowDeadline` (−0.1), funds untouched | ✅ |
+| `acp_forged_settle_signature_rejected` | SETTLE over the real escrow with a forged agent-B signature → `ForgedEscrowSignature` (−0.3) + ban (V-45) | ✅ |
+
+Contract-level matrix — `cargo test -p strangecoin-vm-wasm --example
+escrow_vault` (8/8): deposit record/event/value-binding, value-mismatch
+revert (drain guard), duplicate-calldata revert, release pays B once
+(double-release traps), forged settle sigs, timeout refund before/after
+deadline + double-refund trap, mutual cancel + forged mutual sig.
+
+Wire/handler units — `cargo test -p strangecoin-net --features acp`
+(86 lib tests incl. codec round-trips, canonical signing bytes, envelope
+tamper/tag-mismatch/oversize, nonce-store round-trip) plus
+`tests/acp_messages.rs` (8) and `tests/determinism`-style cross-checks.
 
 CI gates:
 
 - `cargo test -p strangecoin-net --features acp` (all tests green)
-- `cargo clippy -p strangecoin-net -- -D warnings` (green)
-- `cargo +nightly fuzz run acp_handler -- -max_total_time=600` (no panic)
+- `cargo clippy -p strangecoin-net --features acp --all-targets -- -D warnings`
+  (green; the literal bare `cargo clippy -p strangecoin-net -- -D warnings`
+  from the prompt also green)
+- `cargo +nightly fuzz run acp_handler -- -max_total_time=600` — target
+  added to the nightly matrix (11th); local verification via the S2-P21
+  stub-harness fallback (see `fuzz/README.md`), coverage-guided run is
+  CI-only on this host (FBP08/FBP11 precedent)
 
----
+### 11.2. Implementation notes (v1.1 deltas vs the v1.0 text above)
+
+1. **§2/§3 wire**: exactly as specified; `quote.amount_sc` is a JSON number
+   (u64), not the §3.1 example's string; envelopes capped at 64 KiB.
+2. **§3.2 deadline binding**: `ACP_TASK.deadline_block` must equal the
+   on-chain deposit `deadline_block` — mismatch rejects as `EscrowDeadline`
+   (hardening beyond v1.0).
+3. **§5 checks**: implemented in `strangecoin-net/src/acp/handler.rs` in
+   the documented order (existence → type → parties → amount → deadline →
+   signatures). Amount-vs-quote runs only when this node recorded a quote
+   (session-scoped memory; the counterparty node never saw the B → A
+   response); `tx.value ≥ amount` and the pubkey/address party checks are
+   unconditional. The contract independently enforces
+   `record.amount == sc.value()` (new `sc.value` host function — ADR-0030
+   amendment 1).
+4. **§6 nonce**: as specified, write-ahead + fail-closed; production store
+   is `src/storage/acp_nonce.rs` (`meta` CF, lazy dual-read), tests use the
+   in-memory `MemoryNonceStore`.
+5. **§7 rate limit**: sub-buckets wired as `rate_limit_per_type` keys
+   `acp_negotiate` / `acp_task` / `acp_settle` / `acp_revoke` (spec §7
+   defaults) mapped onto `MessageType::Acp*`.
+6. **§8 ABI**: fixed flat calldata layout (addresses length-prefixed +
+   compressed pubkeys; release/refund `id ‖ sig_a ‖ [sig_b]`, mode by 76 vs
+   140 byte length) — codec `strangecoin_core::escrow`, single source for
+   handler, contract and tests. `escrow_id = blake3(deposit_calldata)[0..8]`
+   (ADR-0030 amendment 3). Events: `topic0 = [tag, 0*31]` with
+   tag ∈ {1 deposited, 2 released, 3 refunded}; data carries
+   `id ‖ amount ‖ deadline` (deposit) or `id` (release/refund).
+7. **§9 scoring**: escrow rows map to violation units (−0.1 → 2, −0.2 → 4,
+   −0.3 → 6 at default weights; `scoring::AcpViolation`). Replay /
+   bad-signature / non-party ride the generic protocol channel (+1); the
+   "valid +0.01" row is not modeled (ADR-0022 has no positive channel).
+   Rate-limit drops already cost exactly −0.05 per refusal through
+   `record_rate_violation`.
+8. **§8 caller**: production `EscrowSettlement` = Noop until AI-P04
+   session keys; the e2e suite injects a chain-backed adapter (ADR-0030
+   amendment 2).
+9. **§10 crate structure**: as built, plus `strangecoin_core::escrow`
+   (shared codec) and `src/storage/acp_nonce.rs` (monolith nonce store);
+   the contract example doubles as the WAT source pulled into the e2e via
+   `#[path]`.
 
 ## 12. Anti-goals
 

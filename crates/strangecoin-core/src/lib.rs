@@ -4,6 +4,9 @@ pub mod chain_selector;
 pub mod consensus;
 pub mod economics;
 pub mod error;
+/// EscrowVault calldata codec (AI-P03, ADR-0030) — shared by the ACP
+/// handler, the WAT contract example and tests (see the module docs).
+pub mod escrow;
 pub mod governance;
 pub mod serialize;
 pub mod state;

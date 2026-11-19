@@ -4642,6 +4642,7 @@ dependencies = [
  "hickory-resolver",
  "hkdf",
  "minisketch-rs",
+ "secp256k1",
  "serde",
  "serde_json",
  "sha2",

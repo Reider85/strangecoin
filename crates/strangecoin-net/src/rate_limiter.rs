@@ -73,6 +73,19 @@ pub enum MessageType {
     ErlayReconcile,
     /// `MSG_ADDR` gossip — main bucket only.
     Addr,
+    /// `ACP_NEGOTIATE` (AI-P03, ADR-0030 spec §7: 100 burst / 10 per s) —
+    /// V-44 ACP spam mitigation rides this dedicated sub-bucket.
+    #[cfg(feature = "acp")]
+    AcpNegotiate,
+    /// `ACP_TASK` (spec §7: 20 burst / 2 per s).
+    #[cfg(feature = "acp")]
+    AcpTask,
+    /// `ACP_SETTLE` (spec §7: 20 burst / 2 per s).
+    #[cfg(feature = "acp")]
+    AcpSettle,
+    /// `ACP_REVOKE` (spec §7: 10 burst / 1 per s).
+    #[cfg(feature = "acp")]
+    AcpRevoke,
 }
 
 /// Legacy Stage 1 classification, kept as the type-to-sub-bucket mapping
@@ -195,6 +208,18 @@ pub struct RateLimitConfig {
     pub block: BucketSpec,
     /// `TX` sub-bucket.
     pub tx: BucketSpec,
+    /// `ACP_NEGOTIATE` sub-bucket (AI-P03, ADR-0030 spec §7: 100/10s).
+    #[cfg(feature = "acp")]
+    pub acp_negotiate: BucketSpec,
+    /// `ACP_TASK` sub-bucket (spec §7: 20/2s).
+    #[cfg(feature = "acp")]
+    pub acp_task: BucketSpec,
+    /// `ACP_SETTLE` sub-bucket (spec §7: 20/2s).
+    #[cfg(feature = "acp")]
+    pub acp_settle: BucketSpec,
+    /// `ACP_REVOKE` sub-bucket (spec §7: 10/1s).
+    #[cfg(feature = "acp")]
+    pub acp_revoke: BucketSpec,
     /// Violations (inside `ban_window`) that trigger the fast-path ban.
     pub ban_threshold: u32,
     /// Rolling violation window.
@@ -212,6 +237,14 @@ impl Default for RateLimitConfig {
             inv: BucketSpec::new(100, 10),
             block: BucketSpec::new(30, 3),
             tx: BucketSpec::new(1000, 100),
+            #[cfg(feature = "acp")]
+            acp_negotiate: BucketSpec::new(100, 10),
+            #[cfg(feature = "acp")]
+            acp_task: BucketSpec::new(20, 2),
+            #[cfg(feature = "acp")]
+            acp_settle: BucketSpec::new(20, 2),
+            #[cfg(feature = "acp")]
+            acp_revoke: BucketSpec::new(10, 1),
             ban_threshold: 5,
             ban_window: Duration::from_secs(60),
             ban_duration: Duration::from_secs(300),
@@ -357,6 +390,26 @@ impl PeerRateLimiter {
             TokenBucket::with_spec(config.block, now),
         );
         per_type_buckets.insert(MessageType::Tx, TokenBucket::with_spec(config.tx, now));
+        // ACP sub-buckets (AI-P03, ADR-0030 spec §7 — V-44 spam surfacing).
+        #[cfg(feature = "acp")]
+        {
+            per_type_buckets.insert(
+                MessageType::AcpNegotiate,
+                TokenBucket::with_spec(config.acp_negotiate, now),
+            );
+            per_type_buckets.insert(
+                MessageType::AcpTask,
+                TokenBucket::with_spec(config.acp_task, now),
+            );
+            per_type_buckets.insert(
+                MessageType::AcpSettle,
+                TokenBucket::with_spec(config.acp_settle, now),
+            );
+            per_type_buckets.insert(
+                MessageType::AcpRevoke,
+                TokenBucket::with_spec(config.acp_revoke, now),
+            );
+        }
         PeerRateLimiter {
             main_bucket: TokenBucket::with_spec(config.main, now),
             per_type_buckets,

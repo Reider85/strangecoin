@@ -16,8 +16,11 @@
 //! (`gossip::erlay`), the token-bucket rate limiter in S2-P16
 //! (`rate_limiter`), the ADR-0022 scoring formula in S2-P17
 //! (`peer::scoring`) and the shadow replay tooling in S2-P20
-//! (`shadow`). The remaining stub modules are populated by
-//! the later Stage 2 prompts (see `analytics/prompt-stage2.md`).
+//! (`shadow`). AI-P03 adds the ACP application layer (ADR-0030): the
+//! `acp` feature gates the wire tags + dispatch, while the handler /
+//! nonce / codec modules compile whenever the crate does (see
+//! `acp::handler` and `protocol::acp`). The remaining stub modules are
+//! populated by the later Stage 2 prompts (see `analytics/prompt-stage2.md`).
 
 pub mod blockchain_view;
 pub mod discovery;
@@ -31,6 +34,19 @@ pub mod shadow;
 pub mod sync;
 pub mod sync_engine;
 
+/// ACP (Agent Communication Protocol) — AI-P03, ADR-0030. Gated with the
+/// `acp` feature together with the wire surface (tags/`KNOWN_TAGS`/dispatch)
+/// so feature-off builds never accept ACP frames; the module types below
+/// re-export only exist on feature-on builds (the root crate always enables
+/// `acp` through its `net` feature).
+#[cfg(feature = "acp")]
+pub mod acp;
+
+#[cfg(feature = "acp")]
+pub use acp::{
+    AcpAccepted, AcpHandler, AcpHandlerConfig, AcpNonceStore, AcpReject, EscrowAction,
+    EscrowSettlement, MemoryNonceStore, NoopEscrowVault,
+};
 pub use blockchain_view::BlockchainView;
 pub use error::NetError;
 pub use gossip::{
@@ -47,6 +63,11 @@ pub use peer::{
     run_connection, BanDecision, BanReason, BanRecord, Connection, ConnectionContext,
     ConnectionPool, PeerManager, PeerManagerConfig, PeerRecord, PeerStore, ScoringConfig,
     TickReport,
+};
+#[cfg(feature = "acp")]
+pub use protocol::acp::{
+    AcpEnvelope, AcpKind, AcpMessage, AcpNegotiate, AcpQuote, AcpRevoke, AcpSettle, AcpTask,
+    AgentId, MSG_ACP_NEGOTIATE, MSG_ACP_REVOKE, MSG_ACP_SETTLE, MSG_ACP_TASK,
 };
 pub use rate_limiter::{
     parse_rate_spec, BucketSpec, MessageClass, MessageType, RateLimitConfig, RateLimitError,

@@ -64,4 +64,15 @@ pub trait BlockchainView: Send + Sync {
     /// Up to `max` canonical blocks matching `hashes` (S2-P19: `GET_BLOCKS`
     /// serving over the Noise connection loop).
     fn blocks_by_hashes(&self, hashes: &[[u8; 32]], max: usize) -> Vec<Block>;
+    /// A confirmed transaction by txid, if present in the canonical chain
+    /// (AI-P03 ACP escrow verification, invariant #24: `AcpHandler` proves
+    /// `escrow_txid` exists — mined, `transactions` CF — before accepting
+    /// TASK/SETTLE/REVOKE).
+    ///
+    /// Default `None` keeps the cheap test/fuzz views compiling (they never
+    /// serve ACP traffic); the production facade overrides it with its O(1)
+    /// `transactions` CF point-get (S3-P09 `txid → (height, index)` index).
+    fn get_tx(&self, _txid: &[u8; 32]) -> Option<Transaction> {
+        None
+    }
 }

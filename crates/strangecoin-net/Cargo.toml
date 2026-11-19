@@ -63,12 +63,26 @@ hickory-resolver = { version = "=0.26.3", features = ["dnssec-ring"] }
 # envelope, same decode-failure semantics). The feature is reserved for the
 # SCIP-gated full impl; nothing enables it today.
 minisketch-rs = { version = "=0.1.9", optional = true }
+# ACP agent-envelope signatures (AI-P03, ADR-0030): secp256k1 ECDSA over the
+# canonical-JSON digest of `(message, sender_agent_id)` — same curve as EOAs
+# (ADR-0001). Caret, NOT `=`: crypto/consensus class 2 of the pin policy
+# (GITHUB-P16 — patch bumps inside 0.29.x auto-allowed, minor/major via SCIP;
+# precedent root Cargo.toml `secp256k1 = "0.29"`). Optional: only the `acp`
+# feature pulls it in.
+secp256k1 = { version = "0.29", optional = true }
 
 [features]
 # SCIP-gated: enables the real minisketch-rs PinSketch payload (requires
 # libclang on the build host — see the dependency comment above). Default off;
 # the stub in `gossip/erlay/mincut.rs` is the active implementation.
 minisketch = ["dep:minisketch-rs"]
+# ACP wire surface (AI-P03, ADR-0030): `ACP_NEGOTIATE/TASK/SETTLE/REVOKE`
+# tags 0x0E..=0x11 in KNOWN_TAGS, connection-loop dispatch, per-type rate-limit
+# sub-buckets. Default off (КГ runs `--features acp`); the root crate enables
+# it through its `net` feature (`net = [..., "strangecoin-net/acp"]`), so every
+# production node speaks ACP. A build without the feature treats ACP tags as
+# unknown future messages — log + ignore (S2-P18 forward-compat), never a ban.
+acp = ["dep:secp256k1"]
 
 [dev-dependencies]
 # `test-util` powers `#[tokio::test(start_paused = true)]` — the simulated
