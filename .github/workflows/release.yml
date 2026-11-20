@@ -35,10 +35,42 @@ name: Release
 # Linux fallback rather than silently fail entirely. Remove allow_failure
 # on macOS cells once eframe 0.30 has 3 months of clean CI history
 # (target: Feb 2027).
+# [GITHUB-P26] workflow_dispatch: manual re-run of Release on existing tag
+# without delete + re-push. Inputs:
+#   ref       — git ref to build from (default: master HEAD)
+#   tag_name  — tag to publish (must exist OR will be created on the ref)
+#   prerelease— mark GitHub Release as pre-release (skips SLSA + full matrix
+#               semantics if set; matrix still runs but release is marked
+#               pre-release on GitHub)
+# Use case: tag v3.0.0-stage3 was pushed on a broken commit; instead of
+# delete + re-push (Промпт 1), maintainer can workflow_dispatch with
+# ref=master and tag_name=v3.0.0-stage3 — the workflow rebuilds on the
+# current master HEAD and re-publishes the release under the same tag.
+# NOTE: if the tag v3.0.0-stage3 already exists on a DIFFERENT commit,
+# workflow_dispatch with inputs.ref=master will create the release but
+# the tag will still point to the old commit. To move the tag itself,
+# use Промпт 1 (delete + re-push). workflow_dispatch only creates the
+# GitHub Release metadata + uploads assets; it does not move git refs.
 
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Commit SHA, branch, or existing tag to release from (default: master HEAD)'
+        required: false
+        default: 'master'
+        type: string
+      tag_name:
+        description: 'Tag name to create/release (e.g. v3.0.0-stage3.1). If the tag already exists, the workflow will attempt to release it without re-tagging.'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release (skips SLSA + full matrix)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -68,7 +100,9 @@ jobs:
     # "context matrix is not allowed here"; a job-level `matrix.local` guard
     # made the whole file invalid -> phantom 0-job runs). It lives in the
     # dynamic `matrix.include` below instead (vars is allowed in strategy).
-    if: ${{ !contains(github.ref_name, '-dev.') }}
+    # [GITHUB-P26] manual dispatch may release any ref (incl. dev-tags — the
+    # maintainer's explicit choice); push triggers keep the -dev. exclusion.
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-dev.') }}
     strategy:
       fail-fast: false
       matrix:
@@ -80,6 +114,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          # [GITHUB-P26] push -> github.ref (the tag, unchanged semantics);
+          # workflow_dispatch -> inputs.ref (branch/SHA/tag to build from).
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+          persist-credentials: true
 
       # [GITHUB-P06] resolve the effective target once: GitHub-hosted keeps
       # matrix.target; the local runner builds the host gnu triple instead
@@ -269,6 +308,12 @@ jobs:
     with:
       base64-subjects: "${{ needs.aggregate-hashes.outputs.hashes }}"
       upload-assets: true
+      # [GITHUB-P26] on workflow_dispatch github.ref is refs/heads/<branch>,
+      # so the generator's upload-assets guard (startsWith(github.ref,
+      # 'refs/tags/') || upload-tag-name != '') would skip the attestation
+      # upload. Pass the release tag explicitly; on push this is '' and the
+      # generator falls back to github.ref (the tag) as before.
+      upload-tag-name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || '' }}
       draft-release: false
 
   sign:
@@ -361,6 +406,11 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # [GITHUB-P26] on workflow_dispatch github.ref_name is the branch
+          # name ("master"), not a tag — the required tag_name input carries
+          # the release tag instead. On push this stays github.ref_name.
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
           generate_release_notes: true
           files: release/*
           body_path: release-notes-extra.md
@@ -375,7 +425,12 @@ jobs:
     # this, the only signal of a failed v*-tag release is a red mark in the
     # Actions UI, which the maintainer does not see during active development.
     if: ${{ always() && (needs.build.result == 'failure' || needs.aggregate-hashes.result == 'failure' || needs.provenance.result == 'failure' || needs.sign.result == 'failure' || needs.release.result == 'failure') }}
-    needs: [build, aggregate-hashes, sign, release]
+    # [GITHUB-P26] provenance added to needs: the if-expression above
+    # references needs.provenance.result, which actionlint rejects unless
+    # the job is declared here (pre-existing GITHUB-P25 lint failure).
+    # provenance is skipped while vars.RUNS_ON is set — always() keeps this
+    # job running regardless of that skip.
+    needs: [build, aggregate-hashes, provenance, sign, release]
     permissions:
       contents: read
       pull-requests: write   # commit-comments scope (matches prerelease notify-skipped)
@@ -384,7 +439,9 @@ jobs:
       - name: Post commit comment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          # [GITHUB-P26] on workflow_dispatch github.ref_name is the branch
+          # ("master"), not the release tag — use the tag_name input.
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
           HEAD_SHA: ${{ github.sha }}
           RUN_ID: ${{ github.run_id }}
           REPO: ${{ github.repository }}
