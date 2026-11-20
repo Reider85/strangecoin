@@ -26,4 +26,6 @@ blake3 = "1"
 # Differential-testing oracle (S1.5-P16): wasmi (consensus runtime) vs
 # wasmtime (reference engine) on identical bounded modules. Dev-only — the
 # production binary never links wasmtime.
-wasmtime = "=50.0.1"
+# [GITHUB-P27] 50.0.1 -> 50.0.3: fixes RUSTSEC-2026-0566..0573 (published
+# 2026-11-16, Nightly audit job red since 17 Nov); all 8 patched in >=50.0.2.
+wasmtime = "=50.0.3"
