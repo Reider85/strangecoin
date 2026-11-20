@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/strangecoin-core", "crates/strangecoin-vm-wasm", "crates/strangecoin-net", "crates/strangecoin-storage", "crates/strangecoin-mcp"]
+members = [".", "crates/strangecoin-core", "crates/strangecoin-vm-wasm", "crates/strangecoin-net", "crates/strangecoin-storage", "crates/strangecoin-mcp", "crates/strangecoin-api"]
 resolver = "2"
 
 [package]

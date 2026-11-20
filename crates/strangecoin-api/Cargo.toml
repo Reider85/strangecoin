@@ -1,0 +1,39 @@
+[package]
+name = "strangecoin-api"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+strangecoin-core = { path = "../strangecoin-core" }
+strangecoin-mcp = { path = "../strangecoin-mcp", optional = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.142"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net"] }
+axum = { version = "0.8.9", features = ["json", "ws"] }
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.6.1", features = ["cors", "auth"] }
+uuid = { version = "1.17.0", features = ["v4"] }
+thiserror = "2"
+hex = "0.4"
+blake3 = "1"
+tracing = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+secp256k1 = { version = "0.29", features = ["rand", "serde", "global-context", "recovery"] }
+crossbeam-channel = "0.5"
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tower-http = { version = "0.6.1", features = ["cors"] }
+http-body-util = "=0.1.5"
+http = "1.1"
+async-trait = "0.1"
+
+[features]
+default = []
+mcp-integration = ["strangecoin-mcp"]
+
+[lib]
+name = "strangecoin_api"
+path = "src/lib.rs"

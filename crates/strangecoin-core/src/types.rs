@@ -582,3 +582,50 @@ pub struct ChainSnapshot {
     pub mempool_txs: Vec<Transaction>,
     pub total_work: U256,
 }
+
+/// Agent identifier for AI agent operations (33-byte secp256k1 public key)
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AgentId(pub [u8; 33]);
+
+impl Serialize for AgentId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_bytes(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct AgentIdVisitor;
+        
+        impl<'de> serde::de::Visitor<'de> for AgentIdVisitor {
+            type Value = AgentId;
+            
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("33-byte agent ID")
+            }
+            
+            fn visit_bytes<E>(self, bytes: &[u8]) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if bytes.len() != 33 {
+                    return Err(E::custom(format!("Expected 33 bytes, got {}", bytes.len())));
+                }
+                let mut array = [0u8; 33];
+                array.copy_from_slice(bytes);
+                Ok(AgentId(array))
+            }
+        }
+        
+        deserializer.deserialize_bytes(AgentIdVisitor)
+    }
+}
+
+/// Address type for blockchain operations (bech32-encoded string)
+pub type Address = String;
