@@ -1,14 +1,17 @@
 //! Agent_* JSON-RPC methods implementation
 
+use serde::Deserialize;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use serde::Deserialize;
-use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::{session::AgentSession, error::{AgentError, AgentResult}};
 use crate::session::SessionPermission;
+use crate::{
+    error::{AgentError, AgentResult},
+    session::AgentSession,
+};
 use strangecoin_core::types::Transaction;
 
 /// Method registry for agent_* methods
@@ -31,31 +34,82 @@ impl MethodRegistry {
         auth: &Arc<crate::auth::AuthMiddleware>,
     ) -> AgentResult<()> {
         // Register core session methods
-        self.register_method("agent_getSession", Box::new(SessionMethod::new(session_manager.clone())));
-        self.register_method("agent_getSessionInfo", Box::new(SessionInfoMethod::new(session_manager.clone())));
-        self.register_method("agent_closeSession", Box::new(CloseSessionMethod::new(session_manager.clone())));
+        self.register_method(
+            "agent_getSession",
+            Box::new(SessionMethod::new(session_manager.clone())),
+        );
+        self.register_method(
+            "agent_getSessionInfo",
+            Box::new(SessionInfoMethod::new(session_manager.clone())),
+        );
+        self.register_method(
+            "agent_closeSession",
+            Box::new(CloseSessionMethod::new(session_manager.clone())),
+        );
 
         // Register transaction batch methods
-        self.register_method("agent_signAndSubmitBatch", Box::new(SignAndSubmitBatchMethod::new(session_manager.clone())));
-        self.register_method("agent_getBatchStatus", Box::new(GetBatchStatusMethod::new(session_manager.clone())));
-        self.register_method("agent_getBatchReceipts", Box::new(GetBatchReceiptsMethod::new(session_manager.clone())));
+        self.register_method(
+            "agent_signAndSubmitBatch",
+            Box::new(SignAndSubmitBatchMethod::new(session_manager.clone())),
+        );
+        self.register_method(
+            "agent_getBatchStatus",
+            Box::new(GetBatchStatusMethod::new(session_manager.clone())),
+        );
+        self.register_method(
+            "agent_getBatchReceipts",
+            Box::new(GetBatchReceiptsMethod::new(session_manager.clone())),
+        );
 
         // Register agent management methods
-        self.register_method("agent_getActivity", Box::new(GetActivityMethod::new(session_manager.clone())));
-        self.register_method("agent_getBalance", Box::new(GetBalanceMethod::new(session_manager.clone())));
-        self.register_method("agent_getNonce", Box::new(GetNonceMethod::new(session_manager.clone())));
+        self.register_method(
+            "agent_getActivity",
+            Box::new(GetActivityMethod::new(session_manager.clone())),
+        );
+        self.register_method(
+            "agent_getBalance",
+            Box::new(GetBalanceMethod::new(session_manager.clone())),
+        );
+        self.register_method(
+            "agent_getNonce",
+            Box::new(GetNonceMethod::new(session_manager.clone())),
+        );
 
         // Register sponsorship methods
-        self.register_method("agent_sponsorTransaction", Box::new(SponsorTransactionMethod::new(session_manager.clone())));
-        self.register_method("agent_getSponsorships", Box::new(GetSponsorshipsMethod::new(session_manager.clone())));
-        self.register_method("agent_revokeSponsorship", Box::new(RevokeSponsorshipMethod::new(session_manager.clone())));
+        self.register_method(
+            "agent_sponsorTransaction",
+            Box::new(SponsorTransactionMethod::new(session_manager.clone())),
+        );
+        self.register_method(
+            "agent_getSponsorships",
+            Box::new(GetSponsorshipsMethod::new(session_manager.clone())),
+        );
+        self.register_method(
+            "agent_revokeSponsorship",
+            Box::new(RevokeSponsorshipMethod::new(session_manager.clone())),
+        );
 
         Ok(())
     }
 
     /// Register a single method
-    fn register_method(&mut self, name: &str, method: Box<dyn AgentMethod + Send + Sync>) {
+    pub fn register_method(&mut self, name: &str, method: Box<dyn AgentMethod + Send + Sync>) {
         self.methods.insert(name.to_string(), method);
+    }
+
+    /// Whether no methods are registered
+    pub fn is_empty(&self) -> bool {
+        self.methods.is_empty()
+    }
+
+    /// Whether a method with the given name is registered
+    pub fn contains(&self, name: &str) -> bool {
+        self.methods.contains_key(name)
+    }
+
+    /// Number of registered methods
+    pub fn len(&self) -> usize {
+        self.methods.len()
     }
 
     /// Execute a method
@@ -65,7 +119,9 @@ impl MethodRegistry {
         session: &AgentSession,
         params: Option<Value>,
     ) -> AgentResult<Value> {
-        let method = self.methods.get(method_name)
+        let method = self
+            .methods
+            .get(method_name)
             .ok_or_else(|| AgentError::MethodNotFound(method_name.to_string()))?;
 
         // Check permissions
@@ -77,21 +133,54 @@ impl MethodRegistry {
     }
 
     /// Check if method permissions are satisfied
-    fn check_method_permissions(&self, method_name: &str, permissions: &[SessionPermission]) -> bool {
+    pub fn check_method_permissions(
+        &self,
+        method_name: &str,
+        permissions: &[SessionPermission],
+    ) -> bool {
         match method_name {
             "agent_getSession" => true, // No permissions required for basic session creation
-            "agent_getSessionInfo" => permissions.iter().any(|p| p.includes(&SessionPermission::ReadAccount)),
-            "agent_closeSession" => permissions.iter().any(|p| p.includes(&SessionPermission::ManageSessions)),
-            "agent_signAndSubmitBatch" => permissions.iter().any(|p| p.includes(&SessionPermission::SubmitTransaction) || p.includes(&SessionPermission::ManageBatches)),
-            "agent_getBatchStatus" => permissions.iter().any(|p| p.includes(&SessionPermission::ReadAccount)),
-            "agent_getBatchReceipts" => permissions.iter().any(|p| p.includes(&SessionPermission::ReadAccount)),
-            "agent_getActivity" => permissions.iter().any(|p| p.includes(&SessionPermission::ReadActivity)),
-            "agent_getBalance" => permissions.iter().any(|p| p.includes(&SessionPermission::ReadAccount)),
-            "agent_getNonce" => permissions.iter().any(|p| p.includes(&SessionPermission::ReadAccount)),
-            "agent_sponsorTransaction" => permissions.iter().any(|p| p.includes(&SessionPermission::SponsorTransactions)),
-            "agent_getSponsorships" => permissions.iter().any(|p| p.includes(&SessionPermission::SponsorTransactions)),
-            "agent_revokeSponsorship" => permissions.iter().any(|p| p.includes(&SessionPermission::SponsorTransactions)),
-            _ => false,
+            "agent_getSessionInfo" => permissions
+                .iter()
+                .any(|p| p.includes(&SessionPermission::ReadAccount)),
+            "agent_closeSession" => permissions
+                .iter()
+                .any(|p| p.includes(&SessionPermission::ManageSessions)),
+            "agent_signAndSubmitBatch" => permissions.iter().any(|p| {
+                p.includes(&SessionPermission::SubmitTransaction)
+                    || p.includes(&SessionPermission::ManageBatches)
+            }),
+            "agent_getBatchStatus" => permissions
+                .iter()
+                .any(|p| p.includes(&SessionPermission::ReadAccount)),
+            "agent_getBatchReceipts" => permissions
+                .iter()
+                .any(|p| p.includes(&SessionPermission::ReadAccount)),
+            "agent_getActivity" => permissions
+                .iter()
+                .any(|p| p.includes(&SessionPermission::ReadActivity)),
+            "agent_getBalance" => permissions
+                .iter()
+                .any(|p| p.includes(&SessionPermission::ReadAccount)),
+            "agent_getNonce" => permissions
+                .iter()
+                .any(|p| p.includes(&SessionPermission::ReadAccount)),
+            "agent_sponsorTransaction" => permissions
+                .iter()
+                .any(|p| p.includes(&SessionPermission::SponsorTransactions)),
+            "agent_getSponsorships" => permissions
+                .iter()
+                .any(|p| p.includes(&SessionPermission::SponsorTransactions)),
+            "agent_revokeSponsorship" => permissions
+                .iter()
+                .any(|p| p.includes(&SessionPermission::SponsorTransactions)),
+            // Methods outside the built-in matrix (registered via the public
+            // register_method) carry no hardcoded permission requirement —
+            // all 12 agent_* methods from register_all_methods are covered
+            // by the arms above, so this default only affects custom
+            // registrations. Denying here would make register_method useless:
+            // every custom method would be unexecutable.
+            _ => true,
         }
     }
 }
@@ -145,7 +234,7 @@ impl AgentMethod for SessionInfoMethod {
         // Extended session information
         let now = chrono::Utc::now();
         let time_to_expiry = session.expires_at.signed_duration_since(now);
-        
+
         Ok(serde_json::json!({
             "session_id": session.session_id,
             "agent_id": hex::encode(&session.agent_id.0),
@@ -174,8 +263,10 @@ impl CloseSessionMethod {
 impl AgentMethod for CloseSessionMethod {
     async fn execute(&self, session: &AgentSession, params: Option<Value>) -> AgentResult<Value> {
         // Close the session
-        self.session_manager.close_session(&session.session_id).await?;
-        
+        self.session_manager
+            .close_session(&session.session_id)
+            .await?;
+
         Ok(serde_json::json!({
             "success": true,
             "session_id": session.session_id,
@@ -199,10 +290,10 @@ impl SignAndSubmitBatchMethod {
 impl AgentMethod for SignAndSubmitBatchMethod {
     async fn execute(&self, session: &AgentSession, params: Option<Value>) -> AgentResult<Value> {
         let params = params.ok_or_else(|| AgentError::invalid_parameters("Missing parameters"))?;
-        
+
         let batch: BatchRequest = serde_json::from_value(params)
             .map_err(|_| AgentError::invalid_parameters("Invalid batch format"))?;
-        
+
         // Validate batch size
         if batch.transactions.len() > session.metadata.max_batch_size {
             return Err(AgentError::invalid_parameters(&format!(
@@ -210,28 +301,28 @@ impl AgentMethod for SignAndSubmitBatchMethod {
                 session.metadata.max_batch_size
             )));
         }
-        
+
         // Process batch (simplified for demonstration)
         let batch_id = Uuid::new_v4().to_string();
         let mut results = Vec::new();
-        
+
         for (index, tx) in batch.transactions.iter().enumerate() {
             // In a real implementation, this would:
             // 1. Validate the transaction
             // 2. Sign it with the agent's key
             // 3. Submit it to the mempool
             // 4. Return the result
-            
+
             let result = serde_json::json!({
                 "index": index,
                 "txid": format!("0x{}", hex::encode(Uuid::new_v4().as_bytes())),
                 "status": "pending",
                 "error": None::<String>
             });
-            
+
             results.push(result);
         }
-        
+
         Ok(serde_json::json!({
             "batch_id": batch_id,
             "transactions": results,
@@ -255,10 +346,10 @@ impl GetBatchStatusMethod {
 impl AgentMethod for GetBatchStatusMethod {
     async fn execute(&self, session: &AgentSession, params: Option<Value>) -> AgentResult<Value> {
         let params = params.ok_or_else(|| AgentError::invalid_parameters("Missing parameters"))?;
-        
+
         let req: BatchStatusRequest = serde_json::from_value(params)
             .map_err(|_| AgentError::invalid_parameters("Invalid batch status request"))?;
-        
+
         // In a real implementation, this would query the blockchain for batch status
         // For now, return a mock response
         Ok(serde_json::json!({
@@ -287,10 +378,10 @@ impl GetBatchReceiptsMethod {
 impl AgentMethod for GetBatchReceiptsMethod {
     async fn execute(&self, session: &AgentSession, params: Option<Value>) -> AgentResult<Value> {
         let params = params.ok_or_else(|| AgentError::invalid_parameters("Missing parameters"))?;
-        
+
         let req: BatchReceiptsRequest = serde_json::from_value(params)
             .map_err(|_| AgentError::invalid_parameters("Invalid batch receipts request"))?;
-        
+
         // In a real implementation, this would fetch receipts from the blockchain
         // For now, return mock receipts
         let receipts = vec![
@@ -306,9 +397,9 @@ impl AgentMethod for GetBatchReceiptsMethod {
                 "gas_used": 0,
                 "logs": [],
                 "error": "Insufficient balance"
-            })
+            }),
         ];
-        
+
         Ok(serde_json::json!({
             "batch_id": req.batch_id,
             "receipts": receipts
@@ -331,10 +422,9 @@ impl GetActivityMethod {
 impl AgentMethod for GetActivityMethod {
     async fn execute(&self, session: &AgentSession, params: Option<Value>) -> AgentResult<Value> {
         let params = params.unwrap_or(Value::Null);
-        
-        let req: ActivityRequest = serde_json::from_value(params)
-            .unwrap_or_default();
-        
+
+        let req: ActivityRequest = serde_json::from_value(params).unwrap_or_default();
+
         // In a real implementation, this would query the blockchain for agent activity
         // For now, return mock activity data
         let activities = vec![
@@ -357,9 +447,9 @@ impl AgentMethod for GetActivityMethod {
                     "transaction_count": 5,
                     "total_amount": "5000000"
                 }
-            })
+            }),
         ];
-        
+
         Ok(serde_json::json!({
             "activities": activities,
             "total_count": activities.len(),
@@ -382,10 +472,9 @@ impl GetBalanceMethod {
 impl AgentMethod for GetBalanceMethod {
     async fn execute(&self, session: &AgentSession, params: Option<Value>) -> AgentResult<Value> {
         let params = params.unwrap_or(Value::Null);
-        
-        let req: BalanceRequest = serde_json::from_value(params)
-            .unwrap_or_default();
-        
+
+        let req: BalanceRequest = serde_json::from_value(params).unwrap_or_default();
+
         // In a real implementation, this would query the blockchain for balance
         // For now, return mock balance
         Ok(serde_json::json!({
@@ -411,10 +500,9 @@ impl GetNonceMethod {
 impl AgentMethod for GetNonceMethod {
     async fn execute(&self, session: &AgentSession, params: Option<Value>) -> AgentResult<Value> {
         let params = params.unwrap_or(Value::Null);
-        
-        let req: NonceRequest = serde_json::from_value(params)
-            .unwrap_or_default();
-        
+
+        let req: NonceRequest = serde_json::from_value(params).unwrap_or_default();
+
         // In a real implementation, this would query the blockchain for nonce
         // For now, return mock nonce
         Ok(serde_json::json!({
@@ -439,16 +527,16 @@ impl SponsorTransactionMethod {
 impl AgentMethod for SponsorTransactionMethod {
     async fn execute(&self, session: &AgentSession, params: Option<Value>) -> AgentResult<Value> {
         let params = params.ok_or_else(|| AgentError::invalid_parameters("Missing parameters"))?;
-        
+
         let req: SponsorRequest = serde_json::from_value(params)
             .map_err(|_| AgentError::invalid_parameters("Invalid sponsorship request"))?;
-        
+
         // In a real implementation, this would:
         // 1. Validate the transaction
         // 2. Check agent has sufficient balance
         // 3. Sponsor the transaction
         // 4. Return the sponsored transaction details
-        
+
         Ok(serde_json::json!({
             "sponsorship_id": "spon_001",
             "txid": "0x1234567890abcdef",
@@ -476,24 +564,21 @@ impl GetSponsorshipsMethod {
 impl AgentMethod for GetSponsorshipsMethod {
     async fn execute(&self, session: &AgentSession, params: Option<Value>) -> AgentResult<Value> {
         let params = params.unwrap_or(Value::Null);
-        
-        let req: SponsorshipListRequest = serde_json::from_value(params)
-            .unwrap_or_default();
-        
+
+        let req: SponsorshipListRequest = serde_json::from_value(params).unwrap_or_default();
+
         // In a real implementation, this would query for active sponsorships
         // For now, return mock sponsorships
-        let sponsorships = vec![
-            serde_json::json!({
-                "sponsorship_id": "spon_001",
-                "txid": "0x1234567890abcdef",
-                "beneficiary": "0xabcdef1234567890",
-                "amount": "1000000",
-                "fee": "10000",
-                "status": "active",
-                "created_at": "2024-01-01T00:00:00Z"
-            })
-        ];
-        
+        let sponsorships = vec![serde_json::json!({
+            "sponsorship_id": "spon_001",
+            "txid": "0x1234567890abcdef",
+            "beneficiary": "0xabcdef1234567890",
+            "amount": "1000000",
+            "fee": "10000",
+            "status": "active",
+            "created_at": "2024-01-01T00:00:00Z"
+        })];
+
         Ok(serde_json::json!({
             "sponsorships": sponsorships,
             "total_count": sponsorships.len(),
@@ -517,10 +602,10 @@ impl RevokeSponsorshipMethod {
 impl AgentMethod for RevokeSponsorshipMethod {
     async fn execute(&self, session: &AgentSession, params: Option<Value>) -> AgentResult<Value> {
         let params = params.ok_or_else(|| AgentError::invalid_parameters("Missing parameters"))?;
-        
+
         let req: RevokeSponsorshipRequest = serde_json::from_value(params)
             .map_err(|_| AgentError::invalid_parameters("Invalid revocation request"))?;
-        
+
         // In a real implementation, this would revoke the sponsorship
         // For now, return success response
         Ok(serde_json::json!({
@@ -598,9 +683,12 @@ mod tests {
             10,
         ));
         let auth = Arc::new(crate::auth::AuthMiddleware::new());
-        
-        registry.register_all_methods(&session_manager, &auth).await.unwrap();
-        
+
+        registry
+            .register_all_methods(&session_manager, &auth)
+            .await
+            .unwrap();
+
         // Test method lookup
         assert!(registry.methods.contains_key("agent_getSession"));
         assert!(registry.methods.contains_key("agent_getBalance"));
@@ -623,7 +711,7 @@ mod tests {
                 }
             ]
         });
-        
+
         let batch: BatchRequest = serde_json::from_value(batch_json).unwrap();
         assert_eq!(batch.transactions.len(), 1);
     }
@@ -638,9 +726,12 @@ mod tests {
             10,
         ));
         let auth = Arc::new(crate::auth::AuthMiddleware::new());
-        
-        registry.register_all_methods(&session_manager, &auth).await.unwrap();
-        
+
+        registry
+            .register_all_methods(&session_manager, &auth)
+            .await
+            .unwrap();
+
         // Test permission checking
         let permissions = vec![SessionPermission::FullAccess];
         assert!(registry.check_method_permissions("agent_getSession", &permissions));

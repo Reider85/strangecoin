@@ -1,10 +1,5 @@
 //! JSON-RPC server for agent operations
 
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::collections::HashMap;
-use std::time::Duration;
-use tokio::net::TcpListener;
 use axum::{
     extract::State,
     response::Json,
@@ -12,11 +7,16 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
-use tracing::{info, error, warn};
+use tracing::{error, info, warn};
 
-use crate::{session::AgentSessionManager, auth::AuthMiddleware, error::AgentResult};
 use crate::methods::MethodRegistry;
+use crate::{auth::AuthMiddleware, error::AgentResult, session::AgentSessionManager};
 
 /// Server configuration
 #[derive(Debug, Clone)]
@@ -146,13 +146,15 @@ impl RateLimiter {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         let mut requests = self.requests.write().await;
-        let session_requests = requests.entry(session_id.to_string()).or_insert_with(Vec::new);
-        
+        let session_requests = requests
+            .entry(session_id.to_string())
+            .or_insert_with(Vec::new);
+
         // Remove old requests (older than 1 minute)
         session_requests.retain(|&timestamp| now - timestamp < 60);
-        
+
         // Check if we can add a new request
         if session_requests.len() < self.max_requests_per_minute {
             session_requests.push(now);
@@ -174,10 +176,10 @@ impl AgentApiServer {
     pub async fn new(config: ServerConfig) -> AgentResult<Self> {
         // Initialize session store
         let session_store = Arc::new(crate::session::InMemorySessionStore::new());
-        
+
         // Initialize authentication
         let auth = Arc::new(AuthMiddleware::new());
-        
+
         // Initialize session manager
         let session_manager = Arc::new(AgentSessionManager::new(
             session_store,
@@ -185,19 +187,21 @@ impl AgentApiServer {
             Duration::from_secs(config.session_timeout),
             config.max_sessions_per_agent,
         ));
-        
+
         // Initialize method registry
         let mut methods = MethodRegistry::new();
-        methods.register_all_methods(&session_manager, &auth).await?;
+        methods
+            .register_all_methods(&session_manager, &auth)
+            .await?;
         let methods = Arc::new(methods);
-        
+
         // Initialize rate limiter
         let rate_limiter = if config.enable_rate_limit {
             Some(Arc::new(RateLimiter::new(config.rate_limit_per_minute)))
         } else {
             None
         };
-        
+
         let state = ServerState {
             session_manager,
             auth,
@@ -205,7 +209,7 @@ impl AgentApiServer {
             rate_limiter,
             config: Arc::new(config.clone()),
         };
-        
+
         Ok(AgentApiServer { config, state })
     }
 
@@ -220,16 +224,22 @@ impl AgentApiServer {
             } else {
                 tower_http::cors::CorsLayer::new()
             });
-        
-        let listener = TcpListener::bind(self.config.listen_addr).await
-            .map_err(|e| crate::error::AgentError::InternalError(format!("Failed to bind to {}: {}", self.config.listen_addr, e)))?;
-        
+
+        let listener = TcpListener::bind(self.config.listen_addr)
+            .await
+            .map_err(|e| {
+                crate::error::AgentError::InternalError(format!(
+                    "Failed to bind to {}: {}",
+                    self.config.listen_addr, e
+                ))
+            })?;
+
         info!("Agent API server listening on {}", self.config.listen_addr);
-        
+
         axum::serve(listener, app)
             .await
             .map_err(|e| crate::error::AgentError::InternalError(format!("Server error: {}", e)))?;
-        
+
         Ok(())
     }
 
@@ -246,7 +256,7 @@ pub async fn handle_json_rpc(
     Json(request): Json<JsonRpcRequest>,
 ) -> Json<JsonRpcResponse> {
     info!("JSON-RPC request: {} {:?}", request.method, request.params);
-    
+
     // Extract session token from headers
     let session = match state.auth.extract_session_token(&headers) {
         Ok(session) => session,
@@ -259,7 +269,7 @@ pub async fn handle_json_rpc(
             ));
         }
     };
-    
+
     // Check rate limit
     if state.config.enable_rate_limit {
         if let Some(limiter) = &state.rate_limiter {
@@ -272,21 +282,26 @@ pub async fn handle_json_rpc(
             }
         }
     }
-    
+
     // Get the actual session from the session manager
     let actual_session = match state.session_manager.get_session(&session.session_id).await {
         Ok(session) => session,
         Err(e) => {
             return Json(JsonRpcResponse::error(
                 request.id,
-                crate::error::AgentError::SessionNotFound("Session not found".to_string()).json_rpc_code(),
+                crate::error::AgentError::SessionNotFound("Session not found".to_string())
+                    .json_rpc_code(),
                 format!("Session not found: {}", e),
             ));
         }
     };
-    
+
     // Find and execute the method
-    match state.methods.execute_method(&request.method, &actual_session, request.params).await {
+    match state
+        .methods
+        .execute_method(&request.method, &actual_session, request.params)
+        .await
+    {
         Ok(result) => Json(JsonRpcResponse::success(request.id, result)),
         Err(e) => {
             error!("Method execution failed: {}", e);
@@ -333,7 +348,7 @@ pub async fn handle_batch_json_rpc(
     Json(requests): Json<Vec<BatchJsonRpcRequest>>,
 ) -> Json<Vec<BatchJsonRpcResponse>> {
     let mut responses = Vec::new();
-    
+
     // Extract session token once for all requests in the batch
     let session = match state.auth.extract_session_token(&headers) {
         Ok(session) => session,
@@ -354,11 +369,14 @@ pub async fn handle_batch_json_rpc(
             return Json(responses);
         }
     };
-    
+
     // Process each request in the batch
     for request in requests {
-        info!("Batch JSON-RPC request: {} {:?}", request.method, request.params);
-        
+        info!(
+            "Batch JSON-RPC request: {} {:?}",
+            request.method, request.params
+        );
+
         // Check rate limit for each request
         if state.config.enable_rate_limit {
             if let Some(limiter) = &state.rate_limiter {
@@ -377,7 +395,7 @@ pub async fn handle_batch_json_rpc(
                 }
             }
         }
-        
+
         // Execute method
         // Get the actual session from the session manager
         let actual_session = match state.session_manager.get_session(&session.session_id).await {
@@ -396,8 +414,12 @@ pub async fn handle_batch_json_rpc(
                 continue;
             }
         };
-        
-        match state.methods.execute_method(&request.method, &actual_session, request.params).await {
+
+        match state
+            .methods
+            .execute_method(&request.method, &actual_session, request.params)
+            .await
+        {
             Ok(result) => {
                 responses.push(BatchJsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
@@ -421,7 +443,7 @@ pub async fn handle_batch_json_rpc(
             }
         }
     }
-    
+
     Json(responses)
 }
 
@@ -438,7 +460,7 @@ mod tests {
             "method": "agent_getSession",
             "params": {}
         });
-        
+
         let rpc_request: JsonRpcRequest = serde_json::from_value(request).unwrap();
         assert_eq!(rpc_request.jsonrpc, "2.0");
         assert_eq!(rpc_request.id, serde_json::Value::Number(1.into()));
@@ -450,9 +472,9 @@ mod tests {
     async fn test_json_rpc_response_creation() {
         let response = JsonRpcResponse::success(
             serde_json::Value::Number(1.into()),
-            json!({"session_id": "test"})
+            json!({"session_id": "test"}),
         );
-        
+
         assert_eq!(response.jsonrpc, "2.0");
         assert_eq!(response.id, serde_json::Value::Number(1.into()));
         assert!(response.result.is_some());
@@ -464,26 +486,29 @@ mod tests {
         let response = JsonRpcResponse::error(
             serde_json::Value::Number(1.into()),
             -32001,
-            "Session not found".to_string()
+            "Session not found".to_string(),
         );
-        
+
         assert_eq!(response.jsonrpc, "2.0");
         assert_eq!(response.id, serde_json::Value::Number(1.into()));
         assert!(response.result.is_none());
         assert!(response.error.is_some());
         assert_eq!(response.error.as_ref().unwrap().code, -32001);
-        assert_eq!(response.error.as_ref().unwrap().message, "Session not found");
+        assert_eq!(
+            response.error.as_ref().unwrap().message,
+            "Session not found"
+        );
     }
 
     #[tokio::test]
     async fn test_rate_limiter() {
         let limiter = RateLimiter::new(3);
-        
+
         // Should allow first 3 requests
         assert!(limiter.check_rate_limit("test").await);
         assert!(limiter.check_rate_limit("test").await);
         assert!(limiter.check_rate_limit("test").await);
-        
+
         // Should reject 4th request
         assert!(!limiter.check_rate_limit("test").await);
     }

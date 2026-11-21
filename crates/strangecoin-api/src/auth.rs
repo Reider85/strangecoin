@@ -1,10 +1,10 @@
 //! Agent authentication and session token management
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use serde::{Deserialize, Serialize};
 use blake3::Hasher;
-use secp256k1::Secp256k1;
 use hex;
+use secp256k1::Secp256k1;
+use serde::{Deserialize, Serialize};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::error::{AgentError, AgentResult};
 use strangecoin_core::types::AgentId;
@@ -39,15 +39,22 @@ impl SessionToken {
         let mut hasher = Hasher::new();
         hasher.update(session_id.as_bytes());
         hasher.update(&agent_id.0);
-        hasher.update(&expires_at.duration_since(UNIX_EPOCH).unwrap().as_secs().to_be_bytes());
-        
+        hasher.update(
+            &expires_at
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                .to_be_bytes(),
+        );
+
         let hash = hasher.finalize();
         hex::encode(hash.as_bytes())
     }
 
     /// Verify the token signature
     pub fn verify_signature(&self) -> bool {
-        let expected_signature = Self::generate_signature(&self.session_id, &self.agent_id, self.expires_at);
+        let expected_signature =
+            Self::generate_signature(&self.session_id, &self.agent_id, self.expires_at);
         self.signature == expected_signature
     }
 
@@ -104,7 +111,13 @@ impl AgentAuth {
         let mut bytes = [0u8; 32];
         // In a real implementation, this would use a secure RNG
         // For now, we'll use a simple approach for demonstration
-        bytes[0..8].copy_from_slice(&SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs().to_be_bytes());
+        bytes[0..8].copy_from_slice(
+            &SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                .to_be_bytes(),
+        );
         // Add a counter to ensure uniqueness within the same second
         static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -122,10 +135,11 @@ impl AgentAuth {
         // In a real implementation, this would verify the signature
         // against the agent's public key
         // For now, we'll just check the length
-        if signature.len() != 65 { // Standard secp256k1 signature length
+        if signature.len() != 65 {
+            // Standard secp256k1 signature length
             return Err(AgentError::InvalidSignature);
         }
-        
+
         // TODO: Implement actual signature verification using agent_id as public key
         Ok(())
     }
@@ -133,7 +147,10 @@ impl AgentAuth {
     /// Create an authentication challenge
     pub fn create_challenge(&self) -> String {
         let nonce = self.generate_nonce();
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         format!("{}:{}", nonce, timestamp)
     }
 }
@@ -151,35 +168,40 @@ impl AuthMiddleware {
             auth: AgentAuth::new(),
         }
     }
-    
+
     /// Get a reference to the inner AgentAuth
     pub fn auth(&self) -> &AgentAuth {
         &self.auth
     }
 
     /// Extract and validate session token from HTTP headers
-    pub fn extract_session_token(&self, headers: &axum::http::HeaderMap) -> AgentResult<SessionToken> {
+    pub fn extract_session_token(
+        &self,
+        headers: &axum::http::HeaderMap,
+    ) -> AgentResult<SessionToken> {
         // Extract Authorization header
-        let auth_header = headers
-            .get("Authorization")
-            .ok_or_else(|| AgentError::AuthenticationFailed("Missing Authorization header".to_string()))?;
-        
-        let auth_str = auth_header
-            .to_str()
-            .map_err(|_| AgentError::AuthenticationFailed("Invalid Authorization header".to_string()))?;
-        
+        let auth_header = headers.get("Authorization").ok_or_else(|| {
+            AgentError::AuthenticationFailed("Missing Authorization header".to_string())
+        })?;
+
+        let auth_str = auth_header.to_str().map_err(|_| {
+            AgentError::AuthenticationFailed("Invalid Authorization header".to_string())
+        })?;
+
         // Parse Bearer token
         if !auth_str.starts_with("Bearer ") {
-            return Err(AgentError::AuthenticationFailed("Invalid token format".to_string()));
+            return Err(AgentError::AuthenticationFailed(
+                "Invalid token format".to_string(),
+            ));
         }
-        
+
         let token_str = &auth_str[7..]; // Remove "Bearer "
         let token: SessionToken = serde_json::from_str(token_str)
             .map_err(|_| AgentError::AuthenticationFailed("Invalid token format".to_string()))?;
-        
+
         // Verify token
         self.auth.verify_session_token(&token)?;
-        
+
         Ok(token)
     }
 
@@ -189,7 +211,10 @@ impl AuthMiddleware {
     }
 
     /// Create a permission check middleware
-    pub fn require_permission(&self, required_permission: &str) -> impl Fn() -> Result<(), AgentError> {
+    pub fn require_permission(
+        &self,
+        required_permission: &str,
+    ) -> impl Fn() -> Result<(), AgentError> {
         let _required_permission = required_permission.to_string();
         move || {
             // In a real implementation, this would check the session permissions
@@ -209,9 +234,9 @@ mod tests {
         let session_id = "test_session".to_string();
         let agent_id = AgentId([0u8; 33]);
         let expires_in = Duration::from_secs(3600);
-        
+
         let token = auth.create_session_token(session_id, agent_id, expires_in);
-        
+
         assert!(!token.session_id.is_empty());
         assert!(!token.is_expired());
         assert!(token.verify_signature());
@@ -223,12 +248,12 @@ mod tests {
         let session_id = "test_session".to_string();
         let agent_id = AgentId([0u8; 33]);
         let expires_in = Duration::from_millis(100); // Very short expiration
-        
+
         let token = auth.create_session_token(session_id, agent_id, expires_in);
-        
+
         // Wait for expiration
         std::thread::sleep(Duration::from_millis(200));
-        
+
         assert!(token.is_expired());
         assert!(auth.verify_session_token(&token).is_err());
     }
@@ -238,10 +263,10 @@ mod tests {
         let auth = AgentAuth::new();
         let nonce1 = auth.generate_nonce();
         let nonce2 = auth.generate_nonce();
-        
+
         // Nonces should be different
         assert_ne!(nonce1, nonce2);
-        
+
         // Nonces should be valid hex
         assert!(hex::decode(&nonce1).is_ok());
         assert!(hex::decode(&nonce2).is_ok());
@@ -251,13 +276,13 @@ mod tests {
     fn test_challenge_creation() {
         let auth = AgentAuth::new();
         let challenge = auth.create_challenge();
-        
+
         // Challenge should contain nonce and timestamp
         assert!(challenge.contains(':'));
-        
+
         let parts: Vec<&str> = challenge.split(':').collect();
         assert_eq!(parts.len(), 2);
-        
+
         // Both parts should be valid hex
         assert!(hex::decode(parts[0]).is_ok());
         assert!(parts[1].parse::<u64>().is_ok());
@@ -267,14 +292,14 @@ mod tests {
     fn test_auth_middleware() {
         let middleware = AuthMiddleware::new();
         let mut headers = http::HeaderMap::new();
-        
+
         // Test missing header
         assert!(middleware.extract_session_token(&headers).is_err());
-        
+
         // Test invalid header format
         headers.insert("Authorization", "Invalid".parse().unwrap());
         assert!(middleware.extract_session_token(&headers).is_err());
-        
+
         // Test valid token (would need proper serialization in real implementation)
         // This test is simplified for demonstration
     }

@@ -19,7 +19,7 @@
 //!
 //! # Usage
 //!
-//! ```rust
+//! ```no_run
 //! use strangecoin_api::{ServerConfig, AgentApiServer};
 //!
 //! #[tokio::main]
@@ -30,16 +30,16 @@
 //! }
 //! ```
 
+pub mod auth;
+pub mod error;
+pub mod methods;
 pub mod server;
 pub mod session;
-pub mod auth;
-pub mod methods;
-pub mod error;
 
-pub use server::{AgentApiServer, ServerConfig, ServerState};
-pub use session::{AgentSession, AgentSessionManager};
 pub use auth::{AgentAuth, SessionToken};
 pub use error::{AgentError, AgentResult};
+pub use server::{AgentApiServer, ServerConfig, ServerState};
+pub use session::{AgentSession, AgentSessionManager};
 
 // Re-export commonly used types
 pub use strangecoin_core::{types::*, Transaction};

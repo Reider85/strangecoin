@@ -602,14 +602,14 @@ impl<'de> Deserialize<'de> for AgentId {
         D: serde::Deserializer<'de>,
     {
         struct AgentIdVisitor;
-        
+
         impl<'de> serde::de::Visitor<'de> for AgentIdVisitor {
             type Value = AgentId;
-            
+
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
                 formatter.write_str("33-byte agent ID")
             }
-            
+
             fn visit_bytes<E>(self, bytes: &[u8]) -> Result<Self::Value, E>
             where
                 E: serde::de::Error,
@@ -621,8 +621,29 @@ impl<'de> Deserialize<'de> for AgentId {
                 array.copy_from_slice(bytes);
                 Ok(AgentId(array))
             }
+
+            // serde_json (and other self-describing formats) serialize
+            // `serialize_bytes` as a JSON array of numbers and replay it back
+            // via `visit_seq`, not `visit_bytes` — without this arm the
+            // serialize/deserialize round-trip fails with
+            // "invalid type: sequence, expected 33-byte agent ID".
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut array = [0u8; 33];
+                for (i, slot) in array.iter_mut().enumerate() {
+                    *slot = seq
+                        .next_element()?
+                        .ok_or_else(|| serde::de::Error::invalid_length(i, &"33 bytes"))?;
+                }
+                if seq.next_element::<u8>()?.is_some() {
+                    return Err(serde::de::Error::invalid_length(34, &"exactly 33 bytes"));
+                }
+                Ok(AgentId(array))
+            }
         }
-        
+
         deserializer.deserialize_bytes(AgentIdVisitor)
     }
 }

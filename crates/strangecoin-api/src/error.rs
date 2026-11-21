@@ -123,8 +123,17 @@ mod tests {
 
     #[test]
     fn test_json_rpc_codes() {
-        assert_eq!(AgentError::session_not_found("test").json_rpc_code(), -32001);
-        assert_eq!(AgentError::permission_denied("test").json_rpc_code(), -32005);
-        assert_eq!(AgentError::invalid_parameters("test").json_rpc_code(), -32006);
+        assert_eq!(
+            AgentError::session_not_found("test").json_rpc_code(),
+            -32001
+        );
+        assert_eq!(
+            AgentError::permission_denied("test").json_rpc_code(),
+            -32005
+        );
+        assert_eq!(
+            AgentError::invalid_parameters("test").json_rpc_code(),
+            -32006
+        );
     }
 }

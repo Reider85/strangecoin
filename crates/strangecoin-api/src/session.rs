@@ -1,15 +1,15 @@
 //! Agent session management
 
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use uuid::Uuid;
-use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 
+use crate::auth::{AgentAuth, SessionToken};
 use crate::error::{AgentError, AgentResult};
-use crate::auth::{SessionToken, AgentAuth};
 use strangecoin_core::types::AgentId;
 
 /// Session permissions
@@ -201,11 +201,11 @@ impl AgentSessionStore for InMemorySessionStore {
             .filter(|(_, session)| session.is_expired())
             .map(|(id, _)| id.clone())
             .collect();
-        
+
         for session_id in &expired {
             sessions.remove(session_id);
         }
-        
+
         Ok(expired.len())
     }
 }
@@ -262,7 +262,10 @@ impl AgentSessionManager {
 
     /// Get a session by ID
     pub async fn get_session(&self, session_id: &str) -> AgentResult<AgentSession> {
-        let session = self.store.get_session(session_id).await?
+        let session = self
+            .store
+            .get_session(session_id)
+            .await?
             .ok_or_else(|| AgentError::session_not_found(session_id))?;
         Ok(session)
     }
@@ -270,7 +273,7 @@ impl AgentSessionManager {
     /// Validate a session token
     pub async fn validate_session_token(&self, token: &SessionToken) -> AgentResult<AgentSession> {
         let mut session = self.get_session(&token.session_id).await?;
-        
+
         // Validate session ownership
         if session.agent_id != token.agent_id {
             return Err(AgentError::InvalidSessionToken);
@@ -282,7 +285,10 @@ impl AgentSessionManager {
     }
 
     /// List all sessions for an agent
-    pub async fn list_sessions_for_agent(&self, agent_id: &AgentId) -> AgentResult<Vec<AgentSession>> {
+    pub async fn list_sessions_for_agent(
+        &self,
+        agent_id: &AgentId,
+    ) -> AgentResult<Vec<AgentSession>> {
         let sessions = self.store.list_sessions(agent_id).await?;
         Ok(sessions)
     }
@@ -298,11 +304,11 @@ impl AgentSessionManager {
     pub async fn close_agent_sessions(&self, agent_id: &AgentId) -> AgentResult<usize> {
         let sessions = self.store.list_sessions(agent_id).await?;
         let count = sessions.len();
-        
+
         for session in sessions {
             self.store.delete_session(&session.session_id).await?;
         }
-        
+
         Ok(count)
     }
 
@@ -318,7 +324,11 @@ impl AgentSessionManager {
     }
 
     /// Extend session expiration
-    pub async fn extend_session(&self, session_id: &str, additional_time: Duration) -> AgentResult<()> {
+    pub async fn extend_session(
+        &self,
+        session_id: &str,
+        additional_time: Duration,
+    ) -> AgentResult<()> {
         let mut session = self.get_session(session_id).await?;
         session.extend_expiration(additional_time);
         self.store.store_session(session).await
@@ -333,18 +343,16 @@ mod tests {
     async fn test_session_creation() {
         let store = Arc::new(InMemorySessionStore::new());
         let auth = AgentAuth::new();
-        let manager = AgentSessionManager::new(
-            store,
-            auth,
-            Duration::from_secs(3600),
-            10,
-        );
+        let manager = AgentSessionManager::new(store, auth, Duration::from_secs(3600), 10);
 
         let agent_id = AgentId([0u8; 33]); // Dummy agent ID
         let permissions = vec![SessionPermission::FullAccess];
         let metadata = SessionMetadata::default();
 
-        let session = manager.create_session(agent_id, permissions, metadata).await.unwrap();
+        let session = manager
+            .create_session(agent_id, permissions, metadata)
+            .await
+            .unwrap();
         assert!(!session.session_id.is_empty());
         assert!(!session.is_expired());
     }
@@ -364,11 +372,14 @@ mod tests {
         let permissions = vec![SessionPermission::FullAccess];
         let metadata = SessionMetadata::default();
 
-        let session = manager.create_session(agent_id.clone(), permissions, metadata).await.unwrap();
-        
+        let session = manager
+            .create_session(agent_id.clone(), permissions, metadata)
+            .await
+            .unwrap();
+
         // Wait for expiration
         tokio::time::sleep(Duration::from_millis(200)).await;
-        
+
         let result = manager.get_session(&session.session_id).await;
         assert!(result.is_err());
         if let Err(AgentError::SessionExpired(_)) = result {
@@ -394,13 +405,21 @@ mod tests {
         let metadata = SessionMetadata::default();
 
         // Create first session
-        manager.create_session(agent_id.clone(), permissions.clone(), metadata.clone()).await.unwrap();
-        
+        manager
+            .create_session(agent_id.clone(), permissions.clone(), metadata.clone())
+            .await
+            .unwrap();
+
         // Create second session
-        manager.create_session(agent_id.clone(), permissions.clone(), metadata.clone()).await.unwrap();
-        
+        manager
+            .create_session(agent_id.clone(), permissions.clone(), metadata.clone())
+            .await
+            .unwrap();
+
         // Try to create third session - should fail
-        let result = manager.create_session(agent_id, permissions, metadata).await;
+        let result = manager
+            .create_session(agent_id, permissions, metadata)
+            .await;
         assert!(result.is_err());
         if let Err(AgentError::SessionLimitExceeded) = result {
             // Expected
