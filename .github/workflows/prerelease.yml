@@ -102,42 +102,97 @@ jobs:
           cp target/release/strangecoin strangecoin-linux-x86_64
           shasum -a 256 strangecoin-linux-x86_64 > strangecoin-linux-x86_64.sha256
 
+      # [GITHUB-P28] root cause of Pre-release #60 (run 44383029624, 18 Nov
+      # 19:52:23Z): `gh release create` failed with HTTP 403 "Resource not
+      # accessible by integration" on POST /releases 0.7s after step start.
+      # Build (9.5 min) and commit-comment both succeeded — Hypotheses A (OOM)
+      # and C (comment rate-limit) refuted; Hypothesis B confirmed (error class
+      # 403, not 5xx). Identical workflow + permissions succeeded 30 min later
+      # in run #61 => transient GitHub-side auth failure (exact trigger unknown:
+      # no githubstatus incident at 19:52 UTC 18 Nov). Fix: 3x retry with
+      # backoff on the network-bound gh call only (cargo build stays deterministic).
       - name: Create and push dev release
         if: steps.check-release.outputs.skip != 'true'
+        id: create-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          set -euo pipefail
+          # [GITHUB-P28] NOT set -e — the retry loop must survive the first
+          # failure; only the final verdict (exit 0/1) decides the step.
+          set -uo pipefail
           TAG="${{ steps.compute-tag.outputs.tag }}"
           HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
-          gh release create "$TAG" \
-            --target "$HEAD_SHA" \
-            --prerelease \
-            --title "$TAG" \
-            --notes "Automated dev build, not for production" \
-            --generate-notes \
-            strangecoin-linux-x86_64 strangecoin-linux-x86_64.sha256
+          FILES=(strangecoin-linux-x86_64 strangecoin-linux-x86_64.sha256)
+          for attempt in 1 2 3; do
+            # [GITHUB-P28] D1 (deviation from literal CI5 snippet): a partial
+            # prior attempt (release created, asset upload failed) would make
+            # `gh release create` retry fail with 422 already_exists — detect
+            # the existing release and upload assets with --clobber instead.
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "Release $TAG already exists (partial prior attempt?) — uploading assets."
+              if gh release upload "$TAG" "${FILES[@]}" --clobber; then
+                echo "Assets uploaded on attempt $attempt."
+                exit 0
+              fi
+            elif gh release create "$TAG" \
+              --target "$HEAD_SHA" \
+              --prerelease \
+              --title "$TAG" \
+              --notes "Automated dev build, not for production" \
+              --generate-notes \
+              "${FILES[@]}"; then
+              echo "Release created on attempt $attempt."
+              exit 0
+            fi
+            echo "Attempt $attempt failed. Sleeping $((attempt * 30))s before retry..."
+            sleep $((attempt * 30))
+          done
+          echo "All 3 attempts failed."
+          exit 1
 
+      # [GITHUB-P28] Hypothesis C hardening: commit-comment is best-effort —
+      # retry 3x on transient API failures (rate-limit/5xx), then warn instead
+      # of failing the job (the release itself already succeeded at this point).
+      # D2 (deviation from literal CI5 snippet): message depends on the create
+      # step outcome — #60 posted a FALSE "Dev build created" comment (id
+      # 210717333) while `gh release create` had just failed with 403; an
+      # unconditional success claim must not survive a failed create.
       - name: Post commit comment
         if: always() && steps.check-release.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
           TAG="${{ steps.compute-tag.outputs.tag }}"
           HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
           REPO="${{ github.repository }}"
+          RUN_URL="https://github.com/${REPO}/actions/runs/${{ github.run_id }}"
           if [[ "${{ steps.check-release.outputs.skip }}" == "true" ]]; then
             echo "Tag $TAG already exists — skipping comment"
             exit 0
           fi
-          gh api \
-            --method POST \
-            -H "Accept: application/vnd.github+json" \
-            "/repos/${REPO}/commits/${HEAD_SHA}/comments" \
-            -f body="Dev build created: ${TAG} — https://github.com/${REPO}/releases/tag/${TAG}"
+          if [[ "${{ steps.create-release.outcome }}" == "success" ]]; then
+            BODY="Dev build created: ${TAG} — https://github.com/${REPO}/releases/tag/${TAG}"
+          else
+            BODY="⚠️ Dev release create FAILED for ${TAG} after retries — no GitHub Release was created. Run: ${RUN_URL}"
+          fi
+          for attempt in 1 2 3; do
+            if gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${REPO}/commits/${HEAD_SHA}/comments" \
+              -f body="$BODY"; then
+              exit 0
+            fi
+            echo "Comment attempt $attempt failed. Sleeping $((attempt * 15))s..."
+            sleep $((attempt * 15))
+          done
+          # Non-fatal: release outcome is already decided; a missing comment
+          # must not redden the run (CI5 «Не делай»: comment never critical).
+          echo "::warning::commit-comment failed after 3 retries (rate-limit?), release itself succeeded."
+          exit 0
 
   notify-skipped:
     name: Notify on skipped dev-tag (CI was red)
