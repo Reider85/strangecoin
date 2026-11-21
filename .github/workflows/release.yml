@@ -432,8 +432,12 @@ jobs:
     # job running regardless of that skip.
     needs: [build, aggregate-hashes, provenance, sign, release]
     permissions:
-      contents: read
-      pull-requests: write   # commit-comments scope (matches prerelease notify-skipped)
+      # [GITHUB-P30] commit-comment API requires Contents: write — the old
+      # contents: read + pull-requests: write pair returns HTTP 403 'Resource
+      # not accessible by integration' (observed on every notify-skipped run
+      # in prerelease.yml, 20 Nov; same endpoint, same token type). Latent here:
+      # notify-failed has not fired since GITHUB-P25, but would 403 identically.
+      contents: write
     timeout-minutes: 3
     steps:
       - name: Post commit comment

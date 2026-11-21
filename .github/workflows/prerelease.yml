@@ -205,8 +205,14 @@ jobs:
     # dev-tag pipeline has stopped producing releases.
     if: ${{ github.event.workflow_run.conclusion != 'success' }}
     permissions:
-      contents: read
-      pull-requests: write   # commit-comments need this scope
+      # [GITHUB-P30] commit-comment API (POST /repos/{o}/{r}/commits/{sha}/comments)
+      # requires Contents: write — contents: read + pull-requests: write returned
+      # HTTP 403 'Resource not accessible by integration' on every run of this
+      # job (Pre-release runs 44720309295 / 44723823113 / 44753258536 /
+      # 44810881229 / 44817753642, 20 Nov). Empirical proof: create-dev-tag
+      # posts the same endpoint successfully under workflow-level contents:write
+      # (comments 210717333, 210722771). pull-requests scope was a wrong guess.
+      contents: write
     timeout-minutes: 3
     steps:
       - name: Post commit comment
