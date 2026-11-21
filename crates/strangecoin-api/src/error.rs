@@ -71,6 +71,11 @@ pub enum AgentError {
     /// Agent not found
     #[error("Agent not found: {0}")]
     AgentNotFound(String),
+
+    /// Method exists but is not implemented yet (JSON-RPC `-32601` — the
+    /// `agent_sponsorTx` Stage 4 stub, spec §5.3).
+    #[error("{0}")]
+    NotImplemented(String),
 }
 
 impl AgentError {
@@ -93,6 +98,9 @@ impl AgentError {
             AgentError::SponsorshipNotFound(_) => -32014,
             AgentError::InvalidSignature => -32015,
             AgentError::AgentNotFound(_) => -32016,
+            // JSON-RPC spec code for "method exists but is disabled" —
+            // the agent_sponsorTx Stage 4 stub (spec §5.3 pins -32601).
+            AgentError::NotImplemented(_) => -32601,
         }
     }
 

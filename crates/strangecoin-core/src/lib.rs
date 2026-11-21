@@ -1,5 +1,6 @@
 pub mod abi;
 pub mod address;
+pub mod batch;
 pub mod chain_selector;
 pub mod consensus;
 pub mod economics;

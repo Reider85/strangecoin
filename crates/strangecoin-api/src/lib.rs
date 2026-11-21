@@ -31,12 +31,16 @@
 //! ```
 
 pub mod auth;
+pub mod backend;
+pub mod context;
 pub mod error;
 pub mod methods;
 pub mod server;
 pub mod session;
 
 pub use auth::{AgentAuth, SessionToken};
+pub use backend::{AgentBackend, MockBackend, SimOutcome, TxConfirmation, TxRecord};
+pub use context::{derive_session_subkey, subkey_address, ApiContext, ChallengeStore};
 pub use error::{AgentError, AgentResult};
 pub use server::{AgentApiServer, ServerConfig, ServerState};
 pub use session::{AgentSession, AgentSessionManager};

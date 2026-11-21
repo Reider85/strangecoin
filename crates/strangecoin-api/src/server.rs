@@ -33,6 +33,26 @@ pub struct ServerConfig {
     pub enable_rate_limit: bool,
     /// Rate limit requests per minute per session
     pub rate_limit_per_minute: usize,
+    /// Challenge TTL in seconds for the session-open flow (spec §5.1) —
+    /// single-use, unauthenticated `agent_getChallenge` challenges expire
+    /// after this many seconds.
+    pub challenge_ttl_sec: u64,
+    /// Server seed for session-scoped batch subkey derivation (spec §5.2).
+    /// `None` → a random seed is generated once at server construction
+    /// (session subkeys are in-memory anyway — they die with the server).
+    pub subkey_seed: Option<[u8; 32]>,
+    /// Deployed `BatchExecutor` address — `agent_signAndSubmitBatch`
+    /// target; empty string = batch submit returns a clear error.
+    pub batch_executor: String,
+    /// EscrowVault address for `agent_estimateTaskCost` simulations;
+    /// empty string = acp_task estimates return a clear error.
+    pub escrow_vault: String,
+    /// Gas budget for the outer batch `Call` tx (the block gas limit is
+    /// 1M — keep well under it so a batch never blocks block assembly).
+    pub batch_gas_limit: u64,
+    /// How many block heights `agent_getActivity` scans back (bounded
+    /// chain scan — the Stage 4 indexer S4-core-P07 replaces it later).
+    pub activity_scan_blocks: u64,
 }
 
 impl Default for ServerConfig {
@@ -44,7 +64,42 @@ impl Default for ServerConfig {
             enable_cors: true,
             enable_rate_limit: true,
             rate_limit_per_minute: 60,
+            challenge_ttl_sec: 300,
+            subkey_seed: None,
+            batch_executor: String::new(),
+            escrow_vault: String::new(),
+            batch_gas_limit: 200_000,
+            activity_scan_blocks: 1_000,
         }
+    }
+}
+
+impl ServerConfig {
+    /// Deterministic config for tests: fixed subkey seed so session
+    /// subkeys (and their addresses) are reproducible across runs.
+    pub fn test_default() -> Self {
+        ServerConfig {
+            subkey_seed: Some([0x5A; 32]),
+            ..ServerConfig::default()
+        }
+    }
+
+    /// The seed subkeys are derived from — a server-generated random one
+    /// when `subkey_seed` is `None` (generated once, kept for the
+    /// server's lifetime; sessions are in-memory so nothing outlives it).
+    pub fn effective_subkey_seed(&self) -> [u8; 32] {
+        self.subkey_seed.unwrap_or_else(|| {
+            use std::sync::OnceLock;
+            static SEED: OnceLock<[u8; 32]> = OnceLock::new();
+            *SEED.get_or_init(|| {
+                let a = uuid::Uuid::new_v4();
+                let b = uuid::Uuid::new_v4();
+                let mut seed = [0u8; 32];
+                seed[..16].copy_from_slice(a.as_bytes());
+                seed[16..].copy_from_slice(b.as_bytes());
+                seed
+            })
+        })
     }
 }
 

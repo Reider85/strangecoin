@@ -1,8 +1,9 @@
-//! `estimate_fee(tx)` — spec §2.6. Stage 4 fixed-gas-price semantics: the
-//! fee market is a Stage 5 item (ADR-0032 / SCIP-0003, `fee_market.rs` is a
-//! TODO), so `fee_sc` is `gas_units × FEE_SC_PER_GAS` with
-//! [`FEE_SC_PER_GAS`] — today `0`, matching the chain's current zero-fee
-//! default; the *gas estimate* is the useful half of the answer.
+//! `estimate_fee(tx)` - spec 2.6. Stage 4 fixed-gas-price semantics: the
+//! fee market is a Stage 5 item (ADR-0032 / SCIP-0003; the shared price
+//! constant lives in `strangecoin_core::economics::fee_market`), so
+//! `fee_sc` is `gas_units * FEE_SC_PER_GAS` with [`FEE_SC_PER_GAS`] -
+//! today `0`, matching the chain's current zero-fee default; the *gas*
+//! estimate* is the useful half of the answer.
 
 use serde_json::{json, Value};
 use strangecoin_core::vm::gas::BLOCK_GAS_LIMIT;
@@ -10,12 +11,10 @@ use strangecoin_core::vm::gas::BLOCK_GAS_LIMIT;
 use super::call_contract::build_calldata;
 use crate::{McpBackend, McpError};
 
-/// Fixed Stage 4 gas price in atomic units per gas unit. Zero until the
-/// EIP-1559 fee market lands (Stage 5, SCIP-gated) — every constructor on
-/// the current chain defaults `fee = 0` and the mempool requires no
-/// minimum, so recommending a non-zero fee would fabricate economics no ADR
-/// defines.
-pub const FEE_SC_PER_GAS: u64 = 0;
+/// Fixed Stage 4 gas price in atomic units per gas unit - re-exported from
+/// `strangecoin_core::economics::fee_market` so this tool and the agent
+/// JSON-RPC `agent_estimateTaskCost` (AI-P04) quote one source.
+pub use strangecoin_core::economics::fee_market::FEE_SC_PER_GAS;
 
 pub fn schema() -> Value {
     json!({
