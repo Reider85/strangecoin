@@ -8,6 +8,10 @@
 //! `ctx.request_repaint()`, `ctx.input(|i| i.time)` and the widget calls used
 //! here (CentralPanel/TextEdit/spinner) are unchanged in 0.30 — no
 //! ViewportBuilder or font-API migration was required.
+//!
+//! This module now includes the strangler migration from the old GUI to the new
+//! professional UI in `crates/strangecoin-ui`. The migration is implemented in
+//! `strangler_migration.rs`.
 
 use eframe::egui;
 use std::path::PathBuf;
@@ -17,6 +21,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::error::StrangecoinError;
 use crate::{wallet, MiningStatus, MiningTask, Node, Transaction};
+
+pub mod strangler_migration;
 
 pub struct WalletApp {
     pub node: Node,
@@ -36,7 +42,11 @@ pub struct WalletApp {
     pub last_repaint: f64,
     pub new_wallet_password: String,
     pub data_dir: PathBuf,
+    pub use_strangler_migration: bool,
 }
+
+/// Strangler migration launcher
+pub use strangler_migration::{StranglerLauncher, ScreenType, MigrationPhase, run_strangler_launcher};
 
 impl eframe::App for WalletApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -484,22 +494,35 @@ if let Some(ref progress_rx) = self.progress_rx {
 ///
 /// [UI-P02-B] Known PRE-EXISTING issue (not introduced by the 0.22 → 0.30
 /// bump — the identical panic exists in winit 0.28.7 `event_loop.rs`): winit
-/// panics when the EventLoop is created off the main thread on Windows, and
+/// panics when the EventLoop is created off the main thread on Windows, и
 /// `spawn_blocking` is not the main thread. The Windows GUI has failed this
 /// way since ADR-0007; fixing it (either `EventLoopBuilderExtWindows::
 /// any_thread` through `NativeOptions::event_loop_builder`, or moving the
 /// GUI back to the main thread) is a separate follow-up, outside CI4 Prompt 6.
 pub async fn run(app: WalletApp) {
-    tokio::task::spawn_blocking(move || {
-        eframe::run_native(
-            "Blockchain Wallet",
-            eframe::NativeOptions::default(),
-            // [UI-P02-A] eframe 0.24+ AppCreator returns Result — the 0.22
-            // closure returned Box<dyn App> directly.
-            Box::new(|_cc| Ok(Box::new(app))),
-        )
-        .expect("Ошибка запуска приложения");
-    })
-    .await
-    .expect("GUI task panicked");
+    if app.use_strangler_migration {
+        // Use the strangler migration launcher
+        let strangler_app = StranglerLauncher::new(app.node, app.data_dir);
+        run_strangler_launcher(strangler_app).await;
+    } else {
+        // Use the original WalletApp
+        tokio::task::spawn_blocking(move || {
+            eframe::run_native(
+                "Blockchain Wallet",
+                eframe::NativeOptions::default(),
+                // [UI-P02-A] eframe 0.24+ AppCreator returns Result — the 0.22
+                // closure returned Box<dyn App> directly.
+                Box::new(|_cc| Ok(Box::new(app))),
+            )
+            .expect("Ошибка запуска приложения");
+        })
+        .await
+        .expect("GUI task panicked");
+    }
+}
+
+/// Run the strangler migration launcher directly
+pub async fn run_strangler_gui(node: Node, data_dir: PathBuf) {
+    let strangler_app = StranglerLauncher::new(node, data_dir);
+    run_strangler_launcher(strangler_app).await;
 }

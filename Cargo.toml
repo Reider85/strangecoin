@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/strangecoin-core", "crates/strangecoin-vm-wasm", "crates/strangecoin-net", "crates/strangecoin-storage", "crates/strangecoin-mcp", "crates/strangecoin-api"]
+members = [".", "crates/strangecoin-core", "crates/strangecoin-vm-wasm", "crates/strangecoin-net", "crates/strangecoin-storage", "crates/strangecoin-mcp", "crates/strangecoin-api", "crates/strangecoin-ui"]
 resolver = "2"
 
 [package]
@@ -20,6 +20,9 @@ strangecoin-storage = { path = "crates/strangecoin-storage" }
 # (tools/resources, stdio + HTTP+SSE transports). Default-on per ADR-0029
 # Decision ("feature `mcp` default-on Stage 4").
 strangecoin-mcp = { path = "crates/strangecoin-mcp", version = "0.1.0", optional = true }
+# Stage 4 professional UI (UI-P01, ADR-0031): Professional UI replacement
+# with design system, components, and 5 screens. Default-on per ADR-0031.
+strangecoin-ui = { path = "crates/strangecoin-ui", version = "0.1.0", optional = true }
 ctrlc = "3.4"
 # S3-P08: transitional — only the read-only LevelDB reader of the one-shot
 # LevelDB -> RocksDB migration (`src/storage/migrations.rs`) still needs this
@@ -56,6 +59,11 @@ hex = "0.4"
 blake3 = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# UI-P01: i18n support for professional UI
+fluent = "0.16"
+fluent-langneg = "0.13"
+fluent-bundle = "0.15"
+unic-langid = "0.9"
 crossbeam-channel = "0.5"
 tokio = { version = "1", features = [
     "rt-multi-thread",
@@ -79,7 +87,7 @@ tokio = { version = "1", features = [
 # auto-migration must read the legacy `<exe_dir>/blockchain_db_{port}`
 # directory in production builds (ADR-0008 "run automatically on first
 # startup"); --no-default-features builds drop it with everything else.
-default = ["net", "vm-wasm", "gui", "legacy-migrate", "mcp"]
+default = ["net", "vm-wasm", "gui", "legacy-migrate", "mcp", "ui"]
 # `net` implies `strangecoin-net/acp` (AI-P03, ADR-0030): every production
 # node speaks ACP over its Noise connections; the net crate keeps `acp`
 # default-off so a bare `-p strangecoin-net` build compiles both feature
@@ -94,6 +102,9 @@ mcp = ["dep:strangecoin-mcp"]
 # determinism-fuzz test suites (mcp crate, feature-gated) on top of the
 # always-on 3-node cross-check in tests/mcp_server.rs.
 determinism-fuzz = ["dep:strangecoin-mcp", "strangecoin-mcp/determinism-fuzz"]
+# UI-P01 (ADR-0031): Professional UI replacement with design system, components,
+# and 5 screens. Default-on per ADR-0031.
+ui = ["dep:strangecoin-ui"]
 
 [profile.dev]
 # Disk-budget guard (incident 2026-11-18: target/ reached 615 GB, ENOSPC):

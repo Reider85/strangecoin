@@ -24,6 +24,12 @@ pub mod events;
 pub mod governance;
 #[cfg(feature = "gui")]
 pub mod gui;
+
+#[cfg(feature = "gui")]
+pub use gui::run_strangler_gui;
+
+#[cfg(all(feature = "ui", feature = "gui"))]
+pub use gui::strangler_migration::StranglerLauncher;
 pub mod mempool;
 pub mod network;
 pub mod storage;
@@ -1416,6 +1422,7 @@ pub async fn run_async() {
         last_repaint: 0.0,
         new_wallet_password: String::new(),
         data_dir: config.data_dir.clone(),
+        use_strangler_migration: false,
     };
     // Headless: keep the mining sender alive (the mining worker idles on recv) and
     // retain the sync receiver so adoption events can be drained below.
