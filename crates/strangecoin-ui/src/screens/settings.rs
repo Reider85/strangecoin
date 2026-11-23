@@ -1,9 +1,9 @@
 //! Settings screen implementation
 
+use crate::components::{Button, Card, CardText, Input, Tabs};
+use crate::i18n::Localization;
 use crate::screens::Screen;
 use crate::theme::ThemeManager;
-use crate::i18n::Localization;
-use crate::components::{Button, Input, Card, CardText, Tabs};
 use eframe::egui;
 
 /// Settings screen with configuration options
@@ -177,14 +177,19 @@ impl SettingsScreen {
 }
 
 impl Screen for SettingsScreen {
-    fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager, localization: &Localization) {
+    fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme_manager: &ThemeManager,
+        localization: &Localization,
+    ) {
         let tokens = theme_manager.tokens();
 
         // Header
         ui.label(
             egui::RichText::new(localization.settings_title())
                 .size(tokens.typography.xl.size)
-                .strong()
+                .strong(),
         );
 
         ui.add_space(tokens.spacing.lg);
@@ -283,7 +288,12 @@ impl Screen for SettingsScreen {
 }
 
 impl SettingsScreen {
-    fn show_general_tab(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager, localization: &Localization) {
+    fn show_general_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme_manager: &ThemeManager,
+        localization: &Localization,
+    ) {
         let _tokens = theme_manager.tokens();
 
         Card::new()
@@ -291,75 +301,69 @@ impl SettingsScreen {
             .child(
                 Card::new()
                     .child(
-                        Card::new()
-                            .child(CardText::new("Language"))
-                            .child(Input::new("language")
+                        Card::new().child(CardText::new("Language")).child(
+                            Input::new("language")
                                 .placeholder("Select language")
                                 .value(&self.general_tab.language)
                                 .on_change(|value| {
                                     println!("Language changed to: {}", value);
-                                })
-                            )
+                                }),
+                        ),
                     )
                     .child(
-                        Card::new()
-                            .child(CardText::new("Currency"))
-                            .child(Input::new("currency")
+                        Card::new().child(CardText::new("Currency")).child(
+                            Input::new("currency")
                                 .placeholder("Select currency")
                                 .value(&self.general_tab.currency)
                                 .on_change(|value| {
                                     println!("Currency changed to: {}", value);
-                                })
-                            )
+                                }),
+                        ),
                     )
                     .child(
-                        Card::new()
-                            .child(CardText::new("Notifications"))
-                            .child(
-                                crate::components::Button::new(
-                                    if self.general_tab.notifications {
-                                        "Enabled"
-                                    } else {
-                                        "Disabled"
-                                    }
-                                )
-                                .onclick(|| {
-                                    println!("Toggle notifications");
-                                })
-                            )
+                        Card::new().child(CardText::new("Notifications")).child(
+                            crate::components::Button::new(if self.general_tab.notifications {
+                                "Enabled"
+                            } else {
+                                "Disabled"
+                            })
+                            .onclick(|| {
+                                println!("Toggle notifications");
+                            }),
+                        ),
                     )
                     .child(
-                        Card::new()
-                            .child(CardText::new("Auto Update"))
-                            .child(
-                                crate::components::Button::new(
-                                    if self.general_tab.auto_update {
-                                        "Enabled"
-                                    } else {
-                                        "Disabled"
-                                    }
-                                )
-                                .onclick(|| {
-                                    println!("Toggle auto update");
-                                })
-                            )
+                        Card::new().child(CardText::new("Auto Update")).child(
+                            crate::components::Button::new(if self.general_tab.auto_update {
+                                "Enabled"
+                            } else {
+                                "Disabled"
+                            })
+                            .onclick(|| {
+                                println!("Toggle auto update");
+                            }),
+                        ),
                     )
                     .child(
-                        Card::new()
-                            .child(CardText::new("Data Directory"))
-                            .child(Input::new("data_directory")
+                        Card::new().child(CardText::new("Data Directory")).child(
+                            Input::new("data_directory")
                                 .placeholder("Enter data directory")
                                 .value(&self.general_tab.data_directory)
                                 .on_change(|value| {
                                     println!("Data directory changed to: {}", value);
-                                })
-                            )
-                    )
+                                }),
+                        ),
+                    ),
             )
             .show(ui, theme_manager);
     }
 
-    fn show_network_tab(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager, localization: &Localization) {
+    fn show_network_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme_manager: &ThemeManager,
+        localization: &Localization,
+    ) {
         let _tokens = theme_manager.tokens();
 
         Card::new()
@@ -367,79 +371,73 @@ impl SettingsScreen {
             .child(
                 Card::new()
                     .child(
-                        Card::new()
-                            .child(CardText::new("Node Address"))
-                            .child(Input::new("node_address")
+                        Card::new().child(CardText::new("Node Address")).child(
+                            Input::new("node_address")
                                 .placeholder("Enter node address")
                                 .value(&self.network_tab.node_address)
                                 .on_change(|value| {
                                     println!("Node address changed to: {}", value);
-                                })
-                            )
+                                }),
+                        ),
                     )
                     .child(
-                        Card::new()
-                            .child(CardText::new("Port"))
-                            .child(Input::new("port")
+                        Card::new().child(CardText::new("Port")).child(
+                            Input::new("port")
                                 .input_type(crate::components::InputType::Number)
                                 .value(&self.network_tab.port.to_string())
                                 .on_change(|value| {
                                     if let Ok(port) = value.parse::<u16>() {
                                         println!("Port changed to: {}", port);
                                     }
-                                })
-                            )
+                                }),
+                        ),
                     )
                     .child(
-                        Card::new()
-                            .child(CardText::new("Use TLS"))
-                            .child(
-                                crate::components::Button::new(
-                                    if self.network_tab.use_tls {
-                                        "Enabled"
-                                    } else {
-                                        "Disabled"
-                                    }
-                                )
-                                .onclick(|| {
-                                    println!("Toggle TLS");
-                                })
-                            )
+                        Card::new().child(CardText::new("Use TLS")).child(
+                            crate::components::Button::new(if self.network_tab.use_tls {
+                                "Enabled"
+                            } else {
+                                "Disabled"
+                            })
+                            .onclick(|| {
+                                println!("Toggle TLS");
+                            }),
+                        ),
                     )
                     .child(
-                        Card::new()
-                            .child(CardText::new("Sync Mode"))
-                            .child(
-                                crate::components::Button::new(
-                                    match self.network_tab.sync_mode {
-                                        SyncMode::Full => "Full",
-                                        SyncMode::Fast => "Fast",
-                                        SyncMode::Light => "Light",
-                                    }
-                                )
-                                .onclick(|| {
-                                    println!("Change sync mode");
-                                })
-                            )
+                        Card::new().child(CardText::new("Sync Mode")).child(
+                            crate::components::Button::new(match self.network_tab.sync_mode {
+                                SyncMode::Full => "Full",
+                                SyncMode::Fast => "Fast",
+                                SyncMode::Light => "Light",
+                            })
+                            .onclick(|| {
+                                println!("Change sync mode");
+                            }),
+                        ),
                     )
                     .child(
-                        Card::new()
-                            .child(CardText::new("Max Peers"))
-                            .child(Input::new("max_peers")
+                        Card::new().child(CardText::new("Max Peers")).child(
+                            Input::new("max_peers")
                                 .input_type(crate::components::InputType::Number)
                                 .value(&self.network_tab.max_peers.to_string())
                                 .on_change(|value| {
                                     if let Ok(peers) = value.parse::<u32>() {
                                         println!("Max peers changed to: {}", peers);
                                     }
-                                })
-                            )
-                    )
+                                }),
+                        ),
+                    ),
             )
             .show(ui, theme_manager);
     }
 
-    fn show_security_tab(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager, localization: &Localization) {
+    fn show_security_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme_manager: &ThemeManager,
+        localization: &Localization,
+    ) {
         let _tokens = theme_manager.tokens();
 
         Card::new()
@@ -447,87 +445,77 @@ impl SettingsScreen {
             .child(
                 Card::new()
                     .child(
-                        Card::new()
-                            .child(CardText::new("Wallet Encryption"))
-                            .child(
-                                crate::components::Button::new(
-                                    if self.security_tab.wallet_encryption {
-                                        "Enabled"
-                                    } else {
-                                        "Disabled"
-                                    }
-                                )
-                                .onclick(|| {
-                                    println!("Toggle wallet encryption");
-                                })
+                        Card::new().child(CardText::new("Wallet Encryption")).child(
+                            crate::components::Button::new(
+                                if self.security_tab.wallet_encryption {
+                                    "Enabled"
+                                } else {
+                                    "Disabled"
+                                },
                             )
+                            .onclick(|| {
+                                println!("Toggle wallet encryption");
+                            }),
+                        ),
                     )
                     .child(
-                        Card::new()
-                            .child(CardText::new("Biometric Auth"))
-                            .child(
-                                crate::components::Button::new(
-                                    if self.security_tab.biometric_auth {
-                                        "Enabled"
-                                    } else {
-                                        "Disabled"
-                                    }
-                                )
-                                .onclick(|| {
-                                    println!("Toggle biometric auth");
-                                })
-                            )
+                        Card::new().child(CardText::new("Biometric Auth")).child(
+                            crate::components::Button::new(if self.security_tab.biometric_auth {
+                                "Enabled"
+                            } else {
+                                "Disabled"
+                            })
+                            .onclick(|| {
+                                println!("Toggle biometric auth");
+                            }),
+                        ),
                     )
                     .child(
-                        Card::new()
-                            .child(CardText::new("Two-Factor Auth"))
-                            .child(
-                                crate::components::Button::new(
-                                    if self.security_tab.two_factor_auth {
-                                        "Enabled"
-                                    } else {
-                                        "Disabled"
-                                    }
-                                )
-                                .onclick(|| {
-                                    println!("Toggle two-factor auth");
-                                })
-                            )
+                        Card::new().child(CardText::new("Two-Factor Auth")).child(
+                            crate::components::Button::new(if self.security_tab.two_factor_auth {
+                                "Enabled"
+                            } else {
+                                "Disabled"
+                            })
+                            .onclick(|| {
+                                println!("Toggle two-factor auth");
+                            }),
+                        ),
                     )
                     .child(
-                        Card::new()
-                            .child(CardText::new("Auto Lock"))
-                            .child(
-                                crate::components::Button::new(
-                                    if self.security_tab.auto_lock {
-                                        "Enabled"
-                                    } else {
-                                        "Disabled"
-                                    }
-                                )
-                                .onclick(|| {
-                                    println!("Toggle auto lock");
-                                })
-                            )
+                        Card::new().child(CardText::new("Auto Lock")).child(
+                            crate::components::Button::new(if self.security_tab.auto_lock {
+                                "Enabled"
+                            } else {
+                                "Disabled"
+                            })
+                            .onclick(|| {
+                                println!("Toggle auto lock");
+                            }),
+                        ),
                     )
                     .child(
-                        Card::new()
-                            .child(CardText::new("Lock Timeout"))
-                            .child(Input::new("lock_timeout")
+                        Card::new().child(CardText::new("Lock Timeout")).child(
+                            Input::new("lock_timeout")
                                 .input_type(crate::components::InputType::Number)
                                 .value(&self.security_tab.lock_timeout.to_string())
                                 .on_change(|value| {
                                     if let Ok(timeout) = value.parse::<u32>() {
                                         println!("Lock timeout changed to: {}", timeout);
                                     }
-                                })
-                            )
-                    )
+                                }),
+                        ),
+                    ),
             )
             .show(ui, theme_manager);
     }
 
-    fn show_appearance_tab(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager, localization: &Localization) {
+    fn show_appearance_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme_manager: &ThemeManager,
+        localization: &Localization,
+    ) {
         let _tokens = theme_manager.tokens();
 
         Card::new()
@@ -535,93 +523,95 @@ impl SettingsScreen {
             .child(
                 Card::new()
                     .child(
-                        Card::new()
-                            .child(CardText::new("Theme"))
-                            .child(
-                                crate::components::Button::new(
-                                    match self.appearance_tab.theme {
-                                        ThemeMode::Light => "Light",
-                                        ThemeMode::Dark => "Dark",
-                                        ThemeMode::System => "System",
-                                    }
-                                )
-                                .onclick(|| {
-                                    println!("Change theme");
-                                })
-                            )
+                        Card::new().child(CardText::new("Theme")).child(
+                            crate::components::Button::new(match self.appearance_tab.theme {
+                                ThemeMode::Light => "Light",
+                                ThemeMode::Dark => "Dark",
+                                ThemeMode::System => "System",
+                            })
+                            .onclick(|| {
+                                println!("Change theme");
+                            }),
+                        ),
                     )
                     .child(
-                        Card::new()
-                            .child(CardText::new("Font Size"))
-                            .child(
-                                crate::components::Button::new(
-                                    match self.appearance_tab.font_size {
-                                        FontSize::Small => "Small",
-                                        FontSize::Medium => "Medium",
-                                        FontSize::Large => "Large",
-                                    }
-                                )
-                                .onclick(|| {
-                                    println!("Change font size");
-                                })
-                            )
+                        Card::new().child(CardText::new("Font Size")).child(
+                            crate::components::Button::new(match self.appearance_tab.font_size {
+                                FontSize::Small => "Small",
+                                FontSize::Medium => "Medium",
+                                FontSize::Large => "Large",
+                            })
+                            .onclick(|| {
+                                println!("Change font size");
+                            }),
+                        ),
                     )
                     .child(
-                        Card::new()
-                            .child(CardText::new("Compact Mode"))
-                            .child(
-                                crate::components::Button::new(
-                                    if self.appearance_tab.compact_mode {
-                                        "Enabled"
-                                    } else {
-                                        "Disabled"
-                                    }
-                                )
-                                .onclick(|| {
-                                    println!("Toggle compact mode");
-                                })
-                            )
+                        Card::new().child(CardText::new("Compact Mode")).child(
+                            crate::components::Button::new(if self.appearance_tab.compact_mode {
+                                "Enabled"
+                            } else {
+                                "Disabled"
+                            })
+                            .onclick(|| {
+                                println!("Toggle compact mode");
+                            }),
+                        ),
                     )
                     .child(
-                        Card::new()
-                            .child(CardText::new("Animations"))
-                            .child(
-                                crate::components::Button::new(
-                                    if self.appearance_tab.animations {
-                                        "Enabled"
-                                    } else {
-                                        "Disabled"
-                                    }
-                                )
-                                .onclick(|| {
-                                    println!("Toggle animations");
-                                })
-                            )
-                    )
+                        Card::new().child(CardText::new("Animations")).child(
+                            crate::components::Button::new(if self.appearance_tab.animations {
+                                "Enabled"
+                            } else {
+                                "Disabled"
+                            })
+                            .onclick(|| {
+                                println!("Toggle animations");
+                            }),
+                        ),
+                    ),
             )
             .show(ui, theme_manager);
     }
 
-    fn show_about_tab(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager, localization: &Localization) {
+    fn show_about_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme_manager: &ThemeManager,
+        localization: &Localization,
+    ) {
         let _tokens = theme_manager.tokens();
 
         Card::new()
             .title(localization.settings_about())
             .child(
                 Card::new()
-                    .child(CardText::new(&format!("Version: {}", self.about_tab.version)))
-                    .child(CardText::new(&format!("Build Date: {}", self.about_tab.build_date)))
-                    .child(CardText::new(&format!("Commit Hash: {}", self.about_tab.commit_hash)))
-                    .child(CardText::new(&format!("License: {}", self.about_tab.license)))
+                    .child(CardText::new(&format!(
+                        "Version: {}",
+                        self.about_tab.version
+                    )))
+                    .child(CardText::new(&format!(
+                        "Build Date: {}",
+                        self.about_tab.build_date
+                    )))
+                    .child(CardText::new(&format!(
+                        "Commit Hash: {}",
+                        self.about_tab.commit_hash
+                    )))
+                    .child(CardText::new(&format!(
+                        "License: {}",
+                        self.about_tab.license
+                    )))
                     .child(
-                        Card::new()
-                            .child(CardText::new("Contributors"))
-                            .child(
-                                crate::components::CodeBlock::new("contributors", &self.about_tab.contributors.join("\n"))
-                                    .language("text")
-                                    .theme(crate::components::CodeTheme::Dark)
+                        Card::new().child(CardText::new("Contributors")).child(
+                            crate::components::CodeBlock::new(
+                                "contributors",
+                                &self.about_tab.contributors.join("\n"),
                             )
-                    )
+                            .language("text")
+                            .theme(crate::components::CodeTheme::Dark),
+                        ),
+                    ),
             )
             .show(ui, theme_manager);
     }
@@ -671,16 +661,16 @@ mod tests {
     fn test_settings_screen_tab_switching() {
         let mut screen = SettingsScreen::new();
         assert_eq!(screen.active_tab, SettingsTab::General);
-        
+
         screen.set_active_tab(SettingsTab::Network);
         assert_eq!(screen.active_tab, SettingsTab::Network);
-        
+
         screen.set_active_tab(SettingsTab::Security);
         assert_eq!(screen.active_tab, SettingsTab::Security);
-        
+
         screen.set_active_tab(SettingsTab::Appearance);
         assert_eq!(screen.active_tab, SettingsTab::Appearance);
-        
+
         screen.set_active_tab(SettingsTab::About);
         assert_eq!(screen.active_tab, SettingsTab::About);
     }
@@ -688,23 +678,23 @@ mod tests {
     #[test]
     fn test_settings_screen_tab_accessors() {
         let mut screen = SettingsScreen::new();
-        
+
         let general = screen.general_tab_mut();
         general.language = "fr".to_string();
         assert_eq!(general.language, "fr");
-        
+
         let network = screen.network_tab_mut();
         network.port = 8443;
         assert_eq!(network.port, 8443);
-        
+
         let security = screen.security_tab_mut();
         security.two_factor_auth = true;
         assert!(security.two_factor_auth);
-        
+
         let appearance = screen.appearance_tab_mut();
         appearance.compact_mode = true;
         assert!(appearance.compact_mode);
-        
+
         let about = screen.about_tab_mut();
         about.version = "3.1.0".to_string();
         assert_eq!(about.version, "3.1.0");

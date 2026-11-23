@@ -3,10 +3,10 @@
 //! This module provides accessibility testing using axe-core to ensure
 //! WCAG AA compliance for the UI components and screens.
 
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use serde_json::Value;
 use std::process::Command;
 
 /// Accessibility audit results
@@ -92,7 +92,8 @@ impl AccessibilityAuditor {
         }
 
         // Create JavaScript audit script
-        let js_script = format!(r#"
+        let js_script = format!(
+            r#"
             const axe = require('{axe_path}');
             axe.run('#{{document.body}}', {{
                 rules: {{
@@ -121,20 +122,23 @@ impl AccessibilityAuditor {
                     score: results.violations.len() / (results.violations.len() + results.passes.len()) * 100
                 }}));
             }});
-        "#, axe_path = axe_script.display(), rules = self.rules, exclude_rules = self.exclude_rules);
+        "#,
+            axe_path = axe_script.display(),
+            rules = self.rules,
+            exclude_rules = self.exclude_rules
+        );
 
         // Run Node.js to execute the audit
         let output = Command::new("node")
-            .args([
-                "-e",
-                &js_script,
-                &format!("{}", html_file.display()),
-            ])
+            .args(["-e", &js_script, &format!("{}", html_file.display())])
             .output()
             .map_err(|e| format!("Failed to execute Node.js: {}", e))?;
 
         if !output.status.success() {
-            return Err(format!("Node.js execution failed: {}", String::from_utf8_lossy(&output.stderr)));
+            return Err(format!(
+                "Node.js execution failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
         }
 
         let result_json = String::from_utf8_lossy(&output.stdout);
@@ -174,32 +178,34 @@ impl AccessibilityAuditor {
             .as_array()
             .ok_or("Missing violations array")?
             .iter()
-            .map(|v| {
-                AccessibilityViolation {
-                    id: v["id"].as_str().unwrap_or("").to_string(),
-                    impact: v["impact"].as_str().unwrap_or("").to_string(),
-                    description: v["description"].as_str().unwrap_or("").to_string(),
-                    help: v["help"].as_str().unwrap_or("").to_string(),
-                    help_url: v["helpUrl"].as_str().unwrap_or("").to_string(),
-                    tags: v["tags"].as_array().unwrap_or(&vec![])
-                        .iter()
-                        .map(|t| t.as_str().unwrap_or("").to_string())
-                        .collect(),
-                    nodes: v["nodes"].as_array().unwrap_or(&vec![])
-                        .iter()
-                        .map(|n| {
-                            AccessibilityNode {
-                                html: n["html"].as_str().unwrap_or("").to_string(),
-                                selector: n["selector"].as_str().unwrap_or("").to_string(),
-                                target: n["target"].as_array().unwrap_or(&vec![])
-                                    .iter()
-                                    .map(|t| t.as_str().unwrap_or("").to_string())
-                                    .collect(),
-                                summary: n["summary"].as_str().unwrap_or("").to_string(),
-                            }
-                        })
-                        .collect(),
-                }
+            .map(|v| AccessibilityViolation {
+                id: v["id"].as_str().unwrap_or("").to_string(),
+                impact: v["impact"].as_str().unwrap_or("").to_string(),
+                description: v["description"].as_str().unwrap_or("").to_string(),
+                help: v["help"].as_str().unwrap_or("").to_string(),
+                help_url: v["helpUrl"].as_str().unwrap_or("").to_string(),
+                tags: v["tags"]
+                    .as_array()
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .map(|t| t.as_str().unwrap_or("").to_string())
+                    .collect(),
+                nodes: v["nodes"]
+                    .as_array()
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .map(|n| AccessibilityNode {
+                        html: n["html"].as_str().unwrap_or("").to_string(),
+                        selector: n["selector"].as_str().unwrap_or("").to_string(),
+                        target: n["target"]
+                            .as_array()
+                            .unwrap_or(&vec![])
+                            .iter()
+                            .map(|t| t.as_str().unwrap_or("").to_string())
+                            .collect(),
+                        summary: n["summary"].as_str().unwrap_or("").to_string(),
+                    })
+                    .collect(),
             })
             .collect();
 
@@ -229,14 +235,19 @@ impl AccessibilityAuditor {
     }
 
     /// Run audit on component HTML
-    pub fn audit_component(&self, component_name: &str, html: &str) -> Result<AccessibilityAuditResult, String> {
+    pub fn audit_component(
+        &self,
+        component_name: &str,
+        html: &str,
+    ) -> Result<AccessibilityAuditResult, String> {
         let full_html = self.wrap_html_with_axe(component_name, html);
         self.audit_html(&full_html)
     }
 
     /// Wrap HTML with axe-core script
     fn wrap_html_with_axe(&self, component_name: &str, html: &str) -> String {
-        format!(r#"
+        format!(
+            r#"
             <!DOCTYPE html>
             <html lang="en">
             <head>
@@ -256,7 +267,9 @@ impl AccessibilityAuditor {
                 <script src="https://cdnjs.cloudflare.com/ajax/libs/axe-core/{}/axe.min.js"></script>
             </body>
             </html>
-        "#, component_name, component_name, html, self.axe_version)
+        "#,
+            component_name, component_name, html, self.axe_version
+        )
     }
 }
 
@@ -283,7 +296,8 @@ impl AccessibilityTestSuite {
 
     /// Register a component test
     pub fn register_component_test(&mut self, component_name: &str, html: &str) {
-        self.component_tests.insert(component_name.to_string(), html.to_string());
+        self.component_tests
+            .insert(component_name.to_string(), html.to_string());
     }
 
     /// Run all component tests
@@ -319,44 +333,41 @@ impl AccessibilityTestSuite {
         report.push_str("# Accessibility Audit Report\n\n");
         report.push_str("## Summary\n\n");
         report.push_str(&format!("Total components tested: {}\n", results.len()));
-        
-        let total_violations = results.values()
-            .map(|r| r.violations.len())
-            .sum::<usize>();
-        
-        let total_passes = results.values()
-            .map(|r| r.passes.len())
-            .sum::<usize>();
-        
-        let average_score = results.values()
-            .map(|r| r.score)
-            .sum::<f64>() / results.len() as f64;
-        
+
+        let total_violations = results.values().map(|r| r.violations.len()).sum::<usize>();
+
+        let total_passes = results.values().map(|r| r.passes.len()).sum::<usize>();
+
+        let average_score = results.values().map(|r| r.score).sum::<f64>() / results.len() as f64;
+
         report.push_str(&format!("Total violations: {}\n", total_violations));
         report.push_str(&format!("Total passes: {}\n", total_passes));
         report.push_str(&format!("Average score: {:.1}%\n\n", average_score));
-        
+
         report.push_str("## Component Details\n\n");
-        
+
         for (component_name, result) in results {
             report.push_str(&format!("### {}\n", component_name));
             report.push_str(&format!("Score: {:.1}%\n", result.score));
             report.push_str(&format!("{} violations\n", result.violations.len()));
             report.push_str(&format!("Passes: {}\n", result.passes.len()));
-            
+
             if !result.violations.is_empty() {
                 report.push_str("\n**Violations:**\n");
                 for violation in &result.violations {
-                    report.push_str(&format!("- **{}**: {}\n", violation.id, violation.description));
+                    report.push_str(&format!(
+                        "- **{}**: {}\n",
+                        violation.id, violation.description
+                    ));
                     report.push_str(&format!("  - Impact: {}\n", violation.impact));
                     report.push_str(&format!("  - Help: {}\n", violation.help));
                     report.push_str(&format!("  - Tags: {:?}\n", violation.tags));
                 }
             }
-            
+
             report.push_str("\n\n");
         }
-        
+
         report
     }
 }
@@ -378,7 +389,7 @@ impl AccessibilityCIGate {
     pub fn new() -> Self {
         Self {
             threshold_score: 90.0, // 90% score threshold
-            max_violations: 5,    // Maximum 5 violations allowed
+            max_violations: 5,     // Maximum 5 violations allowed
         }
     }
 
@@ -398,11 +409,7 @@ impl AccessibilityCIGate {
             if result.score < self.threshold_score {
                 return false;
             }
-            if result
-                .violations
-                .iter()
-                .any(|v| v.impact == "critical")
-            {
+            if result.violations.iter().any(|v| v.impact == "critical") {
                 return false;
             }
         }
@@ -415,45 +422,54 @@ impl AccessibilityCIGate {
     }
 
     /// Generate CI gate report
-    pub fn generate_ci_report(&self, results: &HashMap<String, AccessibilityAuditResult>) -> String {
+    pub fn generate_ci_report(
+        &self,
+        results: &HashMap<String, AccessibilityAuditResult>,
+    ) -> String {
         let mut report = String::new();
         report.push_str("# Accessibility CI Gate Report\n\n");
-        
-        let total_violations = results.values()
-            .map(|r| r.violations.len())
-            .sum::<usize>();
-        
+
+        let total_violations = results.values().map(|r| r.violations.len()).sum::<usize>();
+
         let total_components = results.len();
-        let average_score = results.values()
-            .map(|r| r.score)
-            .sum::<f64>() / total_components as f64;
-        
+        let average_score =
+            results.values().map(|r| r.score).sum::<f64>() / total_components as f64;
+
         report.push_str("## Gate Status\n\n");
-        
+
         let passes = self.check_compliance(results);
-        report.push_str(&format!("Status: {}\n\n", if passes { "✅ PASS" } else { "❌ FAIL" }));
-        
+        report.push_str(&format!(
+            "Status: {}\n\n",
+            if passes { "✅ PASS" } else { "❌ FAIL" }
+        ));
+
         report.push_str("## Thresholds:\n\n");
         report.push_str(&format!("Score threshold: {:.1}%\n", self.threshold_score));
         report.push_str(&format!("Max violations: {}\n\n", self.max_violations));
-        
+
         report.push_str("## Results:\n\n");
         report.push_str(&format!("Components tested: {}\n", total_components));
         report.push_str(&format!("Average score: {:.1}%\n", average_score));
         report.push_str(&format!("Total violations: {}\n\n", total_violations));
-        
+
         if !passes {
             report.push_str("## Failures\n\n");
-            
+
             if average_score < self.threshold_score {
-                report.push_str(&format!("- Average score ({:.1}%) below threshold ({:.1}%)\n", average_score, self.threshold_score));
+                report.push_str(&format!(
+                    "- Average score ({:.1}%) below threshold ({:.1}%)\n",
+                    average_score, self.threshold_score
+                ));
             }
-            
+
             if total_violations > self.max_violations {
-                report.push_str(&format!("- Total violations ({}) exceeds maximum allowed ({})\n", total_violations, self.max_violations));
+                report.push_str(&format!(
+                    "- Total violations ({}) exceeds maximum allowed ({})\n",
+                    total_violations, self.max_violations
+                ));
             }
         }
-        
+
         report
     }
 }
@@ -467,7 +483,9 @@ mod tests {
         let auditor = AccessibilityAuditor::new();
         assert_eq!(auditor.axe_version, "4.9.1");
         assert!(auditor.rules.contains(&"color-contrast".to_string()));
-        assert!(auditor.exclude_rules.contains(&"color-contrast".to_string()));
+        assert!(auditor
+            .exclude_rules
+            .contains(&"color-contrast".to_string()));
     }
 
     #[test]
@@ -481,7 +499,10 @@ mod tests {
         let mut suite = AccessibilityTestSuite::new();
         suite.register_component_test("test_component", "<div>Test</div>");
         assert_eq!(suite.component_tests.len(), 1);
-        assert_eq!(suite.component_tests.get("test_component"), Some(&"<div>Test</div>".to_string()));
+        assert_eq!(
+            suite.component_tests.get("test_component"),
+            Some(&"<div>Test</div>".to_string())
+        );
     }
 
     #[test]
@@ -502,7 +523,7 @@ mod tests {
     fn test_accessibility_ci_gate_check_compliance_pass() {
         let gate = AccessibilityCIGate::new();
         let mut results = HashMap::new();
-        
+
         let result = AccessibilityAuditResult {
             violations: vec![],
             passes: vec!["test".to_string()],
@@ -510,7 +531,7 @@ mod tests {
             timestamp: 0,
             score: 95.0,
         };
-        
+
         results.insert("test_component".to_string(), result);
         assert!(gate.check_compliance(&results));
     }
@@ -519,7 +540,7 @@ mod tests {
     fn test_accessibility_ci_gate_check_compliance_fail_score() {
         let gate = AccessibilityCIGate::new();
         let mut results = HashMap::new();
-        
+
         let result = AccessibilityAuditResult {
             violations: vec![],
             passes: vec!["test".to_string()],
@@ -527,7 +548,7 @@ mod tests {
             timestamp: 0,
             score: 85.0,
         };
-        
+
         results.insert("test_component".to_string(), result);
         assert!(!gate.check_compliance(&results));
     }
@@ -536,25 +557,23 @@ mod tests {
     fn test_accessibility_ci_gate_check_compliance_fail_violations() {
         let gate = AccessibilityCIGate::new();
         let mut results = HashMap::new();
-        
+
         let result = AccessibilityAuditResult {
-            violations: vec![
-                AccessibilityViolation {
-                    id: "test-violation".to_string(),
-                    impact: "critical".to_string(),
-                    description: "Test violation".to_string(),
-                    help: "Test help".to_string(),
-                    help_url: "https://example.com".to_string(),
-                    tags: vec!["test".to_string()],
-                    nodes: vec![],
-                }
-            ],
+            violations: vec![AccessibilityViolation {
+                id: "test-violation".to_string(),
+                impact: "critical".to_string(),
+                description: "Test violation".to_string(),
+                help: "Test help".to_string(),
+                help_url: "https://example.com".to_string(),
+                tags: vec!["test".to_string()],
+                nodes: vec![],
+            }],
             passes: vec!["test".to_string()],
             incomplete: vec![],
             timestamp: 0,
             score: 95.0,
         };
-        
+
         results.insert("test_component".to_string(), result);
         assert!(!gate.check_compliance(&results));
     }
@@ -568,7 +587,7 @@ mod tests {
             timestamp: 0,
             score: 0.0,
         };
-        
+
         assert_eq!(result.violations.len(), 0);
         assert_eq!(result.passes.len(), 0);
         assert_eq!(result.incomplete.len(), 0);
@@ -587,7 +606,7 @@ mod tests {
             tags: vec!["test".to_string()],
             nodes: vec![],
         };
-        
+
         assert_eq!(violation.id, "test-violation");
         assert_eq!(violation.impact, "critical");
         assert_eq!(violation.description, "Test violation");
@@ -605,7 +624,7 @@ mod tests {
             target: vec!["div".to_string()],
             summary: "Test node".to_string(),
         };
-        
+
         assert_eq!(node.html, "<div>Test</div>");
         assert_eq!(node.selector, "div");
         assert_eq!(node.target, vec!["div".to_string()]);

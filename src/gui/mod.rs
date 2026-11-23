@@ -46,7 +46,9 @@ pub struct WalletApp {
 }
 
 /// Strangler migration launcher
-pub use strangler_migration::{StranglerLauncher, ScreenType, MigrationPhase, run_strangler_launcher};
+pub use strangler_migration::{
+    run_strangler_launcher, MigrationPhase, ScreenType, StranglerLauncher,
+};
 
 impl eframe::App for WalletApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {

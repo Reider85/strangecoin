@@ -1,9 +1,9 @@
 //! Agent activity screen implementation
 
+use crate::components::{Button, Card, CardText, Stat, Table};
+use crate::i18n::Localization;
 use crate::screens::Screen;
 use crate::theme::ThemeManager;
-use crate::i18n::Localization;
-use crate::components::{Button, Card, CardText, Table, Stat};
 use eframe::egui;
 
 /// Agent activity screen showing agent status and activities
@@ -197,8 +197,9 @@ impl AgentActivityScreen {
     }
 
     pub fn filtered_activities(&self) -> Vec<&Activity> {
-        self.activities.iter().filter(|activity| {
-            match self.filter {
+        self.activities
+            .iter()
+            .filter(|activity| match self.filter {
                 ActivityFilter::All => true,
                 ActivityFilter::Online => {
                     if let Some(agent) = self.agents.iter().find(|a| a.id == activity.agent_id) {
@@ -215,13 +216,18 @@ impl AgentActivityScreen {
                     }
                 }
                 ActivityFilter::Errors => !activity.success,
-            }
-        }).collect()
+            })
+            .collect()
     }
 }
 
 impl Screen for AgentActivityScreen {
-    fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager, localization: &Localization) {
+    fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme_manager: &ThemeManager,
+        localization: &Localization,
+    ) {
         let tokens = theme_manager.tokens();
         let colors = theme_manager.colors();
 
@@ -229,7 +235,7 @@ impl Screen for AgentActivityScreen {
         ui.label(
             egui::RichText::new(localization.agent_activity_title())
                 .size(tokens.typography.xl.size)
-                .strong()
+                .strong(),
         );
 
         ui.add_space(tokens.spacing.lg);
@@ -237,43 +243,59 @@ impl Screen for AgentActivityScreen {
         // Agents overview
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = tokens.spacing.lg;
-            
+
             // Total agents
             Card::new()
                 .title(localization.agent_activity_total_agents())
-                .child(Stat::new("total_agents", "", &self.agents.len().to_string())
-                    .icon("🤖")
-                    .size(crate::components::StatSize::Lg)
+                .child(
+                    Stat::new("total_agents", "", &self.agents.len().to_string())
+                        .icon("🤖")
+                        .size(crate::components::StatSize::Lg),
                 )
                 .show(ui, theme_manager);
-            
+
             // Online agents
-            let online_count = self.agents.iter().filter(|a| a.status == AgentStatus::Online).count();
+            let online_count = self
+                .agents
+                .iter()
+                .filter(|a| a.status == AgentStatus::Online)
+                .count();
             Card::new()
                 .title(localization.agent_activity_online_agents())
-                .child(Stat::new("online_agents", "", &online_count.to_string())
-                    .icon("✅")
-                    .size(crate::components::StatSize::Lg)
+                .child(
+                    Stat::new("online_agents", "", &online_count.to_string())
+                        .icon("✅")
+                        .size(crate::components::StatSize::Lg),
                 )
                 .show(ui, theme_manager);
-            
+
             // Offline agents
-            let offline_count = self.agents.iter().filter(|a| a.status == AgentStatus::Offline).count();
+            let offline_count = self
+                .agents
+                .iter()
+                .filter(|a| a.status == AgentStatus::Offline)
+                .count();
             Card::new()
                 .title(localization.agent_activity_offline_agents())
-                .child(Stat::new("offline_agents", "", &offline_count.to_string())
-                    .icon("❌")
-                    .size(crate::components::StatSize::Lg)
+                .child(
+                    Stat::new("offline_agents", "", &offline_count.to_string())
+                        .icon("❌")
+                        .size(crate::components::StatSize::Lg),
                 )
                 .show(ui, theme_manager);
-            
+
             // Error agents
-            let error_count = self.agents.iter().filter(|a| a.status == AgentStatus::Error).count();
+            let error_count = self
+                .agents
+                .iter()
+                .filter(|a| a.status == AgentStatus::Error)
+                .count();
             Card::new()
                 .title(localization.agent_activity_error_agents())
-                .child(Stat::new("error_agents", "", &error_count.to_string())
-                    .icon("⚠️")
-                    .size(crate::components::StatSize::Lg)
+                .child(
+                    Stat::new("error_agents", "", &error_count.to_string())
+                        .icon("⚠️")
+                        .size(crate::components::StatSize::Lg),
                 )
                 .show(ui, theme_manager);
         });
@@ -283,9 +305,17 @@ impl Screen for AgentActivityScreen {
         // Activity filter
         ui.horizontal(|ui| {
             ui.label("Filter:");
-            
-            for filter in [ActivityFilter::All, ActivityFilter::Online, ActivityFilter::Offline, ActivityFilter::Errors] {
-                if ui.selectable_label(self.filter == filter, format!("{:?}", filter)).clicked() {
+
+            for filter in [
+                ActivityFilter::All,
+                ActivityFilter::Online,
+                ActivityFilter::Offline,
+                ActivityFilter::Errors,
+            ] {
+                if ui
+                    .selectable_label(self.filter == filter, format!("{:?}", filter))
+                    .clicked()
+                {
                     self.filter = filter;
                 }
             }
@@ -304,15 +334,20 @@ impl Screen for AgentActivityScreen {
                     .column("Uptime", "Uptime")
                     .column("Score", "Score")
                     .width(120.0)
-                    .data(self.agents.iter().map(|agent| {
-                        vec![
-                            agent.name.clone(),
-                            format!("{:?}", agent.status),
-                            agent.location.clone(),
-                            format!("{:.1}%", agent.uptime),
-                            format!("{:.1}", agent.score),
-                        ]
-                    }).collect()),
+                    .data(
+                        self.agents
+                            .iter()
+                            .map(|agent| {
+                                vec![
+                                    agent.name.clone(),
+                                    format!("{:?}", agent.status),
+                                    agent.location.clone(),
+                                    format!("{:.1}%", agent.uptime),
+                                    format!("{:.1}", agent.score),
+                                ]
+                            })
+                            .collect(),
+                    ),
             )
             .show(ui, theme_manager);
 
@@ -327,22 +362,24 @@ impl Screen for AgentActivityScreen {
                 for activity in &activities {
                     Card::new()
                         .child(CardText::new(&format!("Agent: {}", activity.agent_id)))
-                        .child(CardText::new(&format!("Type: {:?}", activity.activity_type)))
+                        .child(CardText::new(&format!(
+                            "Type: {:?}",
+                            activity.activity_type
+                        )))
                         .child(CardText::new(&format!(
                             "Description: {}",
                             activity.description
                         )))
-                        .child(CardText::new(&format!(
-                            "Timestamp: {}",
-                            activity.timestamp
-                        )))
-                        .child(CardText::new(&format!("Success: {}", activity.success)).color(
-                            if activity.success {
-                                colors.success.as_egui()
-                            } else {
-                                colors.error.as_egui()
-                            },
-                        ))
+                        .child(CardText::new(&format!("Timestamp: {}", activity.timestamp)))
+                        .child(
+                            CardText::new(&format!("Success: {}", activity.success)).color(
+                                if activity.success {
+                                    colors.success.as_egui()
+                                } else {
+                                    colors.error.as_egui()
+                                },
+                            ),
+                        )
                         .child(if let Some(ref details) = activity.details {
                             CardText::new(&format!("Details: {}", details))
                         } else {
@@ -424,7 +461,7 @@ mod tests {
     fn test_agent_activity_screen_agents() {
         let mut screen = AgentActivityScreen::new();
         let agents = screen.agents_mut();
-        
+
         agents.push(Agent {
             id: "agent_005".to_string(),
             name: "Validator 5".to_string(),
@@ -435,7 +472,7 @@ mod tests {
             version: "1.0.0".to_string(),
             score: 90.0,
         });
-        
+
         assert_eq!(agents.len(), 5);
     }
 
@@ -443,7 +480,7 @@ mod tests {
     fn test_agent_activity_screen_activities() {
         let mut screen = AgentActivityScreen::new();
         let activities = screen.activities_mut();
-        
+
         activities.push(Activity {
             id: "act_005".to_string(),
             agent_id: "agent_001".to_string(),
@@ -453,7 +490,7 @@ mod tests {
             success: true,
             details: None,
         });
-        
+
         assert_eq!(activities.len(), 5);
     }
 
@@ -461,13 +498,13 @@ mod tests {
     fn test_agent_activity_screen_filter() {
         let mut screen = AgentActivityScreen::new();
         assert_eq!(screen.filter, ActivityFilter::All);
-        
+
         *screen.filter_mut() = ActivityFilter::Online;
         assert_eq!(screen.filter, ActivityFilter::Online);
-        
+
         *screen.filter_mut() = ActivityFilter::Offline;
         assert_eq!(screen.filter, ActivityFilter::Offline);
-        
+
         *screen.filter_mut() = ActivityFilter::Errors;
         assert_eq!(screen.filter, ActivityFilter::Errors);
     }
@@ -476,7 +513,7 @@ mod tests {
     fn test_agent_activity_screen_loading() {
         let mut screen = AgentActivityScreen::new();
         assert!(!*screen.loading_mut());
-        
+
         *screen.loading_mut() = true;
         assert!(*screen.loading_mut());
     }
@@ -485,7 +522,7 @@ mod tests {
     fn test_agent_activity_screen_error() {
         let mut screen = AgentActivityScreen::new();
         assert!(screen.error.is_none());
-        
+
         *screen.error_mut() = Some("Failed to load activities".to_string());
         assert_eq!(screen.error, Some("Failed to load activities".to_string()));
     }
@@ -493,22 +530,22 @@ mod tests {
     #[test]
     fn test_agent_activity_screen_filtered_activities() {
         let screen = AgentActivityScreen::new();
-        
+
         let all_activities = screen.filtered_activities();
         assert_eq!(all_activities.len(), 4);
-        
+
         // Test online filter
         let mut screen = AgentActivityScreen::new();
         *screen.filter_mut() = ActivityFilter::Online;
         let online_activities = screen.filtered_activities();
         assert!(online_activities.len() <= 4);
-        
+
         // Test offline filter
         let mut screen = AgentActivityScreen::new();
         *screen.filter_mut() = ActivityFilter::Offline;
         let offline_activities = screen.filtered_activities();
         assert!(offline_activities.len() <= 4);
-        
+
         // Test errors filter
         let mut screen = AgentActivityScreen::new();
         *screen.filter_mut() = ActivityFilter::Errors;

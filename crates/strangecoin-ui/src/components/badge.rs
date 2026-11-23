@@ -114,16 +114,14 @@ impl Badge {
             })
             .show(ui, |ui| {
                 ui.style_mut().override_text_style = Some(egui::TextStyle::Button);
-                ui.style_mut().override_font_id = Some(egui::FontId::new(
-                    font_size,
-                    egui::FontFamily::Proportional,
-                ));
+                ui.style_mut().override_font_id =
+                    Some(egui::FontId::new(font_size, egui::FontFamily::Proportional));
                 *ui.style_mut() = style;
-                
+
                 ui.label(
                     egui::RichText::new(&self.text)
                         .color(fg_color.as_egui())
-                        .strong()
+                        .strong(),
                 );
             });
     }

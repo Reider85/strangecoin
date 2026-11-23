@@ -28,8 +28,10 @@ pub mod tokens;
 
 pub use crate::i18n::Localization;
 pub use crate::theme::ThemeManager;
-pub use screens::{AgentActivityScreen, DashboardScreen, SettingsScreen, TxDetailScreen, WalletScreen};
 use eframe::egui;
+pub use screens::{
+    AgentActivityScreen, DashboardScreen, SettingsScreen, TxDetailScreen, WalletScreen,
+};
 use std::sync::Arc;
 
 /// Backend trait for UI rendering (render-backend-agnostic)
@@ -119,14 +121,12 @@ impl App {
 
         // Main content area
         let screen = self.current_screen.clone();
-        egui::CentralPanel::default().show(ctx, |ui| {
-            match screen {
-                Screen::Wallet => self.render_wallet_screen(ui),
-                Screen::Dashboard => self.render_dashboard_screen(ui),
-                Screen::TxDetail(txid) => self.render_tx_detail_screen(ui, txid),
-                Screen::AgentActivity => self.render_agent_activity_screen(ui),
-                Screen::Settings => self.render_settings_screen(ui),
-            }
+        egui::CentralPanel::default().show(ctx, |ui| match screen {
+            Screen::Wallet => self.render_wallet_screen(ui),
+            Screen::Dashboard => self.render_dashboard_screen(ui),
+            Screen::TxDetail(txid) => self.render_tx_detail_screen(ui, txid),
+            Screen::AgentActivity => self.render_agent_activity_screen(ui),
+            Screen::Settings => self.render_settings_screen(ui),
         });
 
         // Footer
@@ -146,7 +146,10 @@ impl App {
 
             for (screen, key) in buttons {
                 let label = self.localization.tr(key, std::collections::HashMap::new());
-                if ui.selectable_label(self.current_screen == screen, label).clicked() {
+                if ui
+                    .selectable_label(self.current_screen == screen, label)
+                    .clicked()
+                {
                     self.current_screen = screen;
                 }
             }
@@ -154,32 +157,47 @@ impl App {
     }
 
     fn render_wallet_screen(&mut self, ui: &mut egui::Ui) {
-        ui.heading(self.localization.tr("wallet-title", std::collections::HashMap::new()));
+        ui.heading(
+            self.localization
+                .tr("wallet-title", std::collections::HashMap::new()),
+        );
         // Wallet screen content will be implemented in UI-P03
         ui.label("Wallet screen - to be implemented in UI-P03");
     }
 
     fn render_dashboard_screen(&mut self, ui: &mut egui::Ui) {
-        ui.heading(self.localization.tr("dashboard-title", std::collections::HashMap::new()));
+        ui.heading(
+            self.localization
+                .tr("dashboard-title", std::collections::HashMap::new()),
+        );
         // Dashboard screen content will be implemented in UI-P04
         ui.label("Dashboard screen - to be implemented in UI-P04");
     }
 
     fn render_tx_detail_screen(&mut self, ui: &mut egui::Ui, txid: String) {
-        ui.heading(self.localization.tr("tx-detail-title", std::collections::HashMap::new()));
+        ui.heading(
+            self.localization
+                .tr("tx-detail-title", std::collections::HashMap::new()),
+        );
         ui.label(format!("Transaction ID: {}", txid));
         // Transaction detail content will be implemented in UI-P04
         ui.label("Transaction detail screen - to be implemented in UI-P04");
     }
 
     fn render_agent_activity_screen(&mut self, ui: &mut egui::Ui) {
-        ui.heading(self.localization.tr("agent-activity-title", std::collections::HashMap::new()));
+        ui.heading(
+            self.localization
+                .tr("agent-activity-title", std::collections::HashMap::new()),
+        );
         // Agent activity content will be implemented in UI-P05
         ui.label("Agent activity screen - to be implemented in UI-P05");
     }
 
     fn render_settings_screen(&mut self, ui: &mut egui::Ui) {
-        ui.heading(self.localization.tr("settings-title", std::collections::HashMap::new()));
+        ui.heading(
+            self.localization
+                .tr("settings-title", std::collections::HashMap::new()),
+        );
         // Settings screen content will be implemented in UI-P05
         ui.label("Settings screen - to be implemented in UI-P05");
     }

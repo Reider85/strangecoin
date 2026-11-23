@@ -124,7 +124,7 @@ impl Avatar {
         if self.online {
             let indicator_size = size * 0.25;
             let indicator_offset = size * 0.8;
-            
+
             ui.painter().circle_filled(
                 egui::pos2(
                     ui.min_rect().max.x - indicator_size / 2.0,

@@ -15,11 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create server configuration
     let config = ServerConfig {
         listen_addr: "127.0.0.1:9002".parse().unwrap(),
-        session_timeout: 3600, // 1 hour
-        max_sessions_per_agent: 10,
-        enable_cors: true,
-        enable_rate_limit: true,
-        rate_limit_per_minute: 60,
+        ..ServerConfig::default()
     };
 
     // Create and start the server

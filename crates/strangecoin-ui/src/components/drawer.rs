@@ -138,8 +138,11 @@ impl Drawer {
         };
 
         // Overlay background
-        ctx.layer_painter(egui::LayerId::background())
-            .rect_filled(screen_rect, egui::Rounding::ZERO, colors.background.as_egui());
+        ctx.layer_painter(egui::LayerId::background()).rect_filled(
+            screen_rect,
+            egui::Rounding::ZERO,
+            colors.background.as_egui(),
+        );
 
         // Drawer frame
         egui::Window::new(self.title.as_deref().unwrap_or("Drawer"))
@@ -148,11 +151,13 @@ impl Drawer {
             .resizable(true)
             .default_size(egui::vec2(drawer_width, drawer_height))
             .default_pos(drawer_rect.min)
-            .frame(egui::Frame::default()
-                .fill(colors.surface.as_egui())
-                .rounding(egui::Rounding::same(tokens.radius.lg))
-                .shadow(tokens.shadow.lg.as_egui())
-                .inner_margin(egui::Margin::same(tokens.spacing.lg)))
+            .frame(
+                egui::Frame::default()
+                    .fill(colors.surface.as_egui())
+                    .rounding(egui::Rounding::same(tokens.radius.lg))
+                    .shadow(tokens.shadow.lg.as_egui())
+                    .inner_margin(egui::Margin::same(tokens.spacing.lg)),
+            )
             .show(ctx, |ui| {
                 // Title bar
                 let title = self.title.clone();
@@ -162,7 +167,7 @@ impl Drawer {
                         ui.label(
                             egui::RichText::new(title)
                                 .size(tokens.typography.lg.size)
-                                .strong()
+                                .strong(),
                         );
 
                         if closable && ui.button("×").clicked() {
@@ -209,10 +214,7 @@ impl TextDrawerContent {
 impl DrawerContent for TextDrawerContent {
     fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let tokens = theme_manager.tokens();
-        ui.label(
-            egui::RichText::new(&self.text)
-                .size(tokens.typography.base.size)
-        );
+        ui.label(egui::RichText::new(&self.text).size(tokens.typography.base.size));
     }
 }
 
@@ -257,12 +259,14 @@ impl DrawerContent for NavigationDrawerContent {
         let _colors = theme_manager.colors();
 
         for item in &self.items {
-            let response = ui.horizontal(|ui| {
-                if let Some(ref icon) = item.icon {
-                    ui.label(icon);
-                }
-                ui.label(&item.label);
-            }).response;
+            let response = ui
+                .horizontal(|ui| {
+                    if let Some(ref icon) = item.icon {
+                        ui.label(icon);
+                    }
+                    ui.label(&item.label);
+                })
+                .response;
 
             if let Some(ref selected_id) = self.selected_item {
                 if item.id == *selected_id {

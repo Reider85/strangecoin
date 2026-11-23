@@ -1,10 +1,10 @@
 //! Toast component for notifications
 
-use crate::theme::{ThemeManager, ThemeColors};
+use crate::theme::{ThemeColors, ThemeManager};
 use eframe::egui;
-use std::time::Duration;
-use std::sync::mpsc::{Sender, Receiver};
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Toast component for notifications
 pub struct Toast {
@@ -78,7 +78,10 @@ impl Toast {
         let toast_width = 300.0;
         let toast_height = 60.0;
         let toast_rect = egui::Rect::from_min_size(
-            egui::pos2(screen_rect.max.x - toast_width - tokens.spacing.lg, screen_rect.min.y + tokens.spacing.lg),
+            egui::pos2(
+                screen_rect.max.x - toast_width - tokens.spacing.lg,
+                screen_rect.min.y + tokens.spacing.lg,
+            ),
             egui::vec2(toast_width, toast_height),
         );
 
@@ -88,11 +91,13 @@ impl Toast {
             .collapsible(false)
             .resizable(false)
             .default_pos(toast_rect.min)
-            .frame(egui::Frame::default()
-                .fill(self.get_color(&colors))
-                .rounding(egui::Rounding::same(tokens.radius.md))
-                .shadow(tokens.shadow.md.as_egui())
-                .inner_margin(egui::Margin::same(tokens.spacing.md)))
+            .frame(
+                egui::Frame::default()
+                    .fill(self.get_color(&colors))
+                    .rounding(egui::Rounding::same(tokens.radius.md))
+                    .shadow(tokens.shadow.md.as_egui())
+                    .inner_margin(egui::Margin::same(tokens.spacing.md)),
+            )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     // Icon
@@ -108,7 +113,7 @@ impl Toast {
                     ui.label(
                         egui::RichText::new(&self.message)
                             .size(tokens.typography.sm.size)
-                            .color(colors.text.as_egui())
+                            .color(colors.text.as_egui()),
                     );
 
                     // Close button
@@ -237,7 +242,11 @@ pub fn show_toast(id: &str, message: &str, level: ToastLevel) {
     if let Some(manager) = get_toast_manager() {
         let sender = manager.lock().unwrap().sender();
         {
-            let _ = sender.send(ToastAction::Show(id.to_string(), message.to_string(), level));
+            let _ = sender.send(ToastAction::Show(
+                id.to_string(),
+                message.to_string(),
+                level,
+            ));
         }
     }
 }
@@ -329,7 +338,7 @@ mod tests {
     fn test_toast_manager() {
         let mut manager = ToastManager::new();
         let toast = manager.add("test", "Hello", ToastLevel::Info);
-        
+
         assert_eq!(manager.toasts.len(), 1);
         assert_eq!(toast.id, "test");
         assert_eq!(toast.message, "Hello");
@@ -339,15 +348,15 @@ mod tests {
     #[test]
     fn test_toast_manager_actions() {
         let mut manager = ToastManager::new();
-        
+
         // Add toast
         manager.add("test", "Hello", ToastLevel::Info);
         assert_eq!(manager.toasts.len(), 1);
-        
+
         // Remove toast
         manager.remove("test");
         assert_eq!(manager.toasts.len(), 0);
-        
+
         // Clear all toasts
         manager.add("test1", "Hello1", ToastLevel::Info);
         manager.add("test2", "Hello2", ToastLevel::Info);

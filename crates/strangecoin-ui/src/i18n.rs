@@ -10,11 +10,7 @@ use std::fs;
 use unic_langid::{langid, LanguageIdentifier};
 
 /// Supported locales
-const SUPPORTED_LOCALES: &[LanguageIdentifier] = &[
-    langid!("en"),
-    langid!("ru"),
-    langid!("zh"),
-];
+const SUPPORTED_LOCALES: &[LanguageIdentifier] = &[langid!("en"), langid!("ru"), langid!("zh")];
 
 /// Default locale
 const DEFAULT_LOCALE: LanguageIdentifier = langid!("en");
@@ -73,7 +69,10 @@ impl Localization {
     }
 
     pub fn available_locales() -> Vec<String> {
-        SUPPORTED_LOCALES.iter().map(|lang| lang.to_string()).collect()
+        SUPPORTED_LOCALES
+            .iter()
+            .map(|lang| lang.to_string())
+            .collect()
     }
 
     /// Translate a message key with optional arguments

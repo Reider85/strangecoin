@@ -172,13 +172,13 @@ impl Color {
     pub fn contrast_ratio(&self, other: &Color) -> f32 {
         let luminance1 = self.relative_luminance();
         let luminance2 = other.relative_luminance();
-        
+
         let (lighter, darker) = if luminance1 > luminance2 {
             (luminance1, luminance2)
         } else {
             (luminance2, luminance1)
         };
-        
+
         (lighter + 0.05) / (darker + 0.05)
     }
 
@@ -187,9 +187,21 @@ impl Color {
         let gsrgb = self.g as f32 / 255.0;
         let bsrgb = self.b as f32 / 255.0;
 
-        let r = if rsrgb <= 0.03928 { rsrgb / 12.92 } else { ((rsrgb + 0.055) / 1.055).powf(2.4) };
-        let g = if gsrgb <= 0.03928 { gsrgb / 12.92 } else { ((gsrgb + 0.055) / 1.055).powf(2.4) };
-        let b = if bsrgb <= 0.03928 { bsrgb / 12.92 } else { ((bsrgb + 0.055) / 1.055).powf(2.4) };
+        let r = if rsrgb <= 0.03928 {
+            rsrgb / 12.92
+        } else {
+            ((rsrgb + 0.055) / 1.055).powf(2.4)
+        };
+        let g = if gsrgb <= 0.03928 {
+            gsrgb / 12.92
+        } else {
+            ((gsrgb + 0.055) / 1.055).powf(2.4)
+        };
+        let b = if bsrgb <= 0.03928 {
+            bsrgb / 12.92
+        } else {
+            ((bsrgb + 0.055) / 1.055).powf(2.4)
+        };
 
         0.2126 * r + 0.7152 * g + 0.0722 * b
     }
@@ -214,12 +226,12 @@ pub enum Shade {
 /// Spacing scale with 8 levels
 #[derive(Debug, Clone, Copy)]
 pub struct SpacingScale {
-    pub xs: f32,  // 4px
-    pub sm: f32,  // 8px
-    pub md: f32,  // 12px
+    pub xs: f32,   // 4px
+    pub sm: f32,   // 8px
+    pub md: f32,   // 12px
     pub base: f32, // 16px
-    pub lg: f32,  // 24px
-    pub xl: f32,  // 32px
+    pub lg: f32,   // 24px
+    pub xl: f32,   // 32px
     pub _2xl: f32, // 48px
     pub _3xl: f32, // 64px
 }
@@ -426,7 +438,10 @@ impl ShadowValue {
 
     pub fn new(x: f32, y: f32, blur: f32, spread: f32, color_a: f32) -> Self {
         Self {
-            x, y, blur, spread,
+            x,
+            y,
+            blur,
+            spread,
             color_r: 0.0,
             color_g: 0.0,
             color_b: 0.0,
@@ -435,10 +450,19 @@ impl ShadowValue {
     }
 
     #[allow(clippy::too_many_arguments)] // mirrors CSS box-shadow's two-layer shape
-    pub fn new_double(x: f32, y: f32, blur1: f32, spread1: f32, color_a1: f32, 
-                     _blur2: f32, _spread2: f32, _color_a2: f32) -> Self {
+    pub fn new_double(
+        x: f32,
+        y: f32,
+        blur1: f32,
+        spread1: f32,
+        color_a1: f32,
+        _blur2: f32,
+        _spread2: f32,
+        _color_a2: f32,
+    ) -> Self {
         Self {
-            x, y,
+            x,
+            y,
             blur: blur1,
             spread: spread1,
             color_r: 0.0,
