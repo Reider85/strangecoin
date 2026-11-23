@@ -108,7 +108,7 @@ impl Card {
 
     fn render_content(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let tokens = theme_manager.tokens();
-        
+
         // Title
         if let Some(ref title) = self.title {
             ui.label(
@@ -118,7 +118,7 @@ impl Card {
             );
             ui.add_space(tokens.spacing.sm);
         }
-        
+
         // Children
         for child in &mut self.children {
             child.show(ui, theme_manager);
@@ -170,25 +170,25 @@ impl CardChild for CardText {
     fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let tokens = theme_manager.tokens();
         let colors = theme_manager.colors();
-        
+
         let mut rich_text = egui::RichText::new(&self.text);
-        
+
         if let Some(size) = self.size {
             rich_text = rich_text.size(size);
         } else {
             rich_text = rich_text.size(tokens.typography.base.size);
         }
-        
+
         if let Some(weight) = self.weight {
             rich_text = weight.apply(rich_text);
         }
-        
+
         if let Some(color) = self.color {
             rich_text = rich_text.color(color);
         } else {
             rich_text = rich_text.color(colors.text.as_egui());
         }
-        
+
         ui.label(rich_text);
     }
 }
@@ -217,7 +217,7 @@ impl CardChild for CardDivider {
     fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let tokens = theme_manager.tokens();
         let _colors = theme_manager.colors();
-        
+
         ui.add_space(tokens.spacing.sm);
         ui.horizontal(|ui| {
             ui.separator();
@@ -351,9 +351,7 @@ impl Default for CardBuilder {
 
 impl CardBuilder {
     pub fn new() -> Self {
-        Self {
-            card: Card::new(),
-        }
+        Self { card: Card::new() }
     }
 
     pub fn title(mut self, title: impl Into<String>) -> Self {
@@ -392,9 +390,9 @@ impl CardBuilder {
     }
 
     pub fn text_styled(mut self, text: &str, size: f32, weight: crate::tokens::FontWeight) -> Self {
-        self.card.children.push(Box::new(
-            CardText::new(text).size(size).weight(weight)
-        ));
+        self.card
+            .children
+            .push(Box::new(CardText::new(text).size(size).weight(weight)));
         self
     }
 
@@ -437,14 +435,16 @@ impl SectionBuilder {
     }
 
     pub fn text_styled(mut self, text: &str, size: f32, weight: crate::tokens::FontWeight) -> Self {
-        self.section.children.push(Box::new(
-            CardText::new(text).size(size).weight(weight)
-        ));
+        self.section
+            .children
+            .push(Box::new(CardText::new(text).size(size).weight(weight)));
         self
     }
 
     pub fn spacer(mut self, height: f32) -> Self {
-        self.section.children.push(Box::new(CardSpacer::new(height)));
+        self.section
+            .children
+            .push(Box::new(CardSpacer::new(height)));
         self
     }
 
@@ -492,11 +492,11 @@ mod tests {
         let card = CardBuilder::new()
             .title("Main Card")
             .section("Header")
-                .text("Welcome")
-                .done()
+            .text("Welcome")
+            .done()
             .section("Content")
-                .text("Hello, World!")
-                .done()
+            .text("Hello, World!")
+            .done()
             .build();
 
         assert_eq!(card.children.len(), 2); // Two sections

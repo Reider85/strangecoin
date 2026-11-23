@@ -2,7 +2,7 @@
 //!
 //! This module implements the strangler pattern migration from the old GUI
 //! implementation in src/gui/ to the new professional UI in crates/strangecoin-ui.
-//! 
+//!
 //! The migration strategy:
 //! 1. Create a thin launcher that uses both old and new UI
 //! 2. Gradually migrate functionality from old to new UI
@@ -72,7 +72,7 @@ impl StranglerLauncher {
     pub fn new(node: Node, data_dir: PathBuf) -> Self {
         let theme_manager = ThemeManager::new();
         let localization = Localization::new();
-        
+
         Self {
             node,
             wallet_address: String::new(),
@@ -108,7 +108,7 @@ impl StranglerLauncher {
     fn show_legacy_ui(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // This is the old GUI implementation from src/gui/mod.rs
         // We keep it for backward compatibility during migration
-        
+
         let now = ctx.input(|i| i.time);
         if now - self.last_repaint > 0.01 {
             ctx.request_repaint();
@@ -193,7 +193,10 @@ impl StranglerLauncher {
 
                 if let Some(ref progress_rx) = self.progress_rx {
                     while let Ok(progress) = progress_rx.try_recv() {
-                        let mut mining_progress = self.mining_progress.lock().expect("Не удалось захватить Mutex для mining_progress");
+                        let mut mining_progress = self
+                            .mining_progress
+                            .lock()
+                            .expect("Не удалось захватить Mutex для mining_progress");
                         *mining_progress = Some(progress);
                         debug!(?mining_progress, "Прогресс майнинга обновлён в UI");
                     }
@@ -203,7 +206,10 @@ impl StranglerLauncher {
 
                 if is_mining {
                     ui.label("Майнинг блока в процессе...");
-                    let progress = self.mining_progress.lock().expect("Не удалось захватить Mutex для mining_progress");
+                    let progress = self
+                        .mining_progress
+                        .lock()
+                        .expect("Не удалось захватить Mutex для mining_progress");
                     if let Some(progress_msg) = &*progress {
                         ui.label(format!("Прогресс: {}", progress_msg));
                     }
@@ -219,7 +225,10 @@ impl StranglerLauncher {
                     ui.label("IP: ");
                     ui.text_edit_singleline(self.wallet_screen.ip_mut());
                     ui.label("Порт: ");
-                    ui.add(egui::TextEdit::singleline(self.wallet_screen.port_mut()).desired_width(50.0));
+                    ui.add(
+                        egui::TextEdit::singleline(self.wallet_screen.port_mut())
+                            .desired_width(50.0),
+                    );
                 });
                 if ui.button("Найти кошелёк").clicked() {
                     self.handle_find_wallet();
@@ -240,19 +249,24 @@ impl StranglerLauncher {
         // Show current screen
         match self.current_screen {
             ScreenType::Wallet => {
-                self.wallet_screen.render(ctx, &self.theme_manager, &self.localization);
+                self.wallet_screen
+                    .render(ctx, &self.theme_manager, &self.localization);
             }
             ScreenType::Dashboard => {
-                self.dashboard_screen.render(ctx, &self.theme_manager, &self.localization);
+                self.dashboard_screen
+                    .render(ctx, &self.theme_manager, &self.localization);
             }
             ScreenType::TxDetail => {
-                self.tx_detail_screen.render(ctx, &self.theme_manager, &self.localization);
+                self.tx_detail_screen
+                    .render(ctx, &self.theme_manager, &self.localization);
             }
             ScreenType::AgentActivity => {
-                self.agent_activity_screen.render(ctx, &self.theme_manager, &self.localization);
+                self.agent_activity_screen
+                    .render(ctx, &self.theme_manager, &self.localization);
             }
             ScreenType::Settings => {
-                self.settings_screen.render(ctx, &self.theme_manager, &self.localization);
+                self.settings_screen
+                    .render(ctx, &self.theme_manager, &self.localization);
             }
         }
     }
@@ -262,7 +276,7 @@ impl StranglerLauncher {
         egui::TopBottomPanel::top("navigation").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 20.0;
-                
+
                 // Navigation buttons
                 if ui.button("👛 Wallet").clicked() {
                     self.current_screen = ScreenType::Wallet;
@@ -309,13 +323,13 @@ impl StranglerLauncher {
         // Update wallet screen with current balance and transactions
         let balance = self.node.blockchain.get_balance(&self.wallet_address);
         self.wallet_screen.set_balance(balance);
-        
+
         // Update dashboard with statistics
         let block_count = self.node.blockchain.chain_len();
         let mempool_count = self.node.blockchain.mempool_len();
         self.dashboard_screen.set_block_count(block_count);
         self.dashboard_screen.set_mempool_count(mempool_count);
-        
+
         // Update other screens as needed
     }
 
@@ -323,30 +337,37 @@ impl StranglerLauncher {
     fn handle_login(&mut self) {
         let start_time = SystemTime::now();
         info!(wallet_address = %self.wallet_address, "Кнопка 'Войти' нажата");
-        
+
         match wallet::Wallet::list_keystores(&self.data_dir) {
             Ok(keystores) => {
-                let sanitized_address = self.wallet_address
+                let sanitized_address = self
+                    .wallet_address
                     .replace("/", "_")
                     .replace("+", "_")
                     .replace("=", "_");
                 let keystore_path = keystores.iter().find(|p| {
-                    p.file_name().and_then(|n| n.to_str()) == Some(&format!("wallet_{}.json", sanitized_address))
+                    p.file_name().and_then(|n| n.to_str())
+                        == Some(&format!("wallet_{}.json", sanitized_address))
                 });
                 let keystore_path = match keystore_path {
                     Some(p) => p,
                     None => {
-                        self.wallet_screen.set_status("Кошелёк не найден".to_string());
+                        self.wallet_screen
+                            .set_status("Кошелёк не найден".to_string());
                         return;
                     }
                 };
                 match wallet::Wallet::load(&self.password, keystore_path) {
                     Ok(wallet) => {
-                        let expected_address = crate::address::encode_address(&wallet.public_key, self.node.network_id)
-                            .unwrap_or_else(|_| "invalid_address".to_string());
+                        let expected_address = crate::address::encode_address(
+                            &wallet.public_key,
+                            self.node.network_id,
+                        )
+                        .unwrap_or_else(|_| "invalid_address".to_string());
                         if expected_address == self.wallet_address {
                             self.is_authenticated = true;
-                            self.wallet_screen.set_status("Успешная аутентификация".to_string());
+                            self.wallet_screen
+                                .set_status("Успешная аутентификация".to_string());
                             self.node.discover_peers();
                             let duration = SystemTime::now()
                                 .duration_since(start_time)
@@ -354,16 +375,21 @@ impl StranglerLauncher {
                                 .as_secs_f64();
                             info!(duration_secs = duration, "Аутентификация успешна");
                         } else {
-                            self.wallet_screen.set_status("Неверный адрес кошелька".to_string());
+                            self.wallet_screen
+                                .set_status("Неверный адрес кошелька".to_string());
                             let duration = SystemTime::now()
                                 .duration_since(start_time)
                                 .unwrap()
                                 .as_secs_f64();
-                            warn!(duration_secs = duration, "Аутентификация не удалась: неверный адрес кошелька");
+                            warn!(
+                                duration_secs = duration,
+                                "Аутентификация не удалась: неверный адрес кошелька"
+                            );
                         }
                     }
                     Err(e) => {
-                        self.wallet_screen.set_status(format!("Ошибка аутентификации: {}", e));
+                        self.wallet_screen
+                            .set_status(format!("Ошибка аутентификации: {}", e));
                         let duration = SystemTime::now()
                             .duration_since(start_time)
                             .unwrap()
@@ -373,7 +399,8 @@ impl StranglerLauncher {
                 }
             }
             Err(e) => {
-                self.wallet_screen.set_status(format!("Ошибка поиска кошельков: {}", e));
+                self.wallet_screen
+                    .set_status(format!("Ошибка поиска кошельков: {}", e));
                 let duration = SystemTime::now()
                     .duration_since(start_time)
                     .unwrap()
@@ -387,7 +414,7 @@ impl StranglerLauncher {
     fn handle_registration(&mut self) {
         let start_time = SystemTime::now();
         info!("Кнопка 'Регистрация' нажата");
-        
+
         let password = if self.new_wallet_password.is_empty() {
             wallet::Wallet::get_password_from_env()
         } else {
@@ -401,27 +428,36 @@ impl StranglerLauncher {
                     .duration_since(start_time)
                     .unwrap()
                     .as_secs_f64();
-                warn!(duration_secs = duration, "Ошибка регистрации: пустой пароль");
+                warn!(
+                    duration_secs = duration,
+                    "Ошибка регистрации: пустой пароль"
+                );
                 return;
             }
         };
-        
+
         match wallet::Wallet::new(&password, &self.data_dir) {
             Ok(wallet) => {
-                self.wallet_address = crate::address::encode_address(&wallet.public_key, self.node.network_id)
-                    .unwrap_or_else(|_| "invalid_address".to_string());
+                self.wallet_address =
+                    crate::address::encode_address(&wallet.public_key, self.node.network_id)
+                        .unwrap_or_else(|_| "invalid_address".to_string());
                 self.password = password;
                 self.is_authenticated = true;
-                self.wallet_screen.set_status(format!("Кошелёк успешно создан: {}", self.wallet_address));
+                self.wallet_screen
+                    .set_status(format!("Кошелёк успешно создан: {}", self.wallet_address));
                 self.node.discover_peers();
                 let duration = SystemTime::now()
                     .duration_since(start_time)
                     .unwrap()
                     .as_secs_f64();
                 info!(duration_secs = duration, wallet_address = %self.wallet_address, "Регистрация успешна");
-                
+
                 if !self.node.blockchain.has_account(&self.wallet_address) {
-                    match self.node.blockchain.grant_initial_balance_to_first_wallet(&self.wallet_address) {
+                    match self
+                        .node
+                        .blockchain
+                        .grant_initial_balance_to_first_wallet(&self.wallet_address)
+                    {
                         Ok(true) => {}
                         Ok(false) => {
                             self.node.blockchain.ensure_account(&self.wallet_address);
@@ -439,7 +475,8 @@ impl StranglerLauncher {
                 }
             }
             Err(e) => {
-                self.wallet_screen.set_status(format!("Ошибка регистрации: {}", e));
+                self.wallet_screen
+                    .set_status(format!("Ошибка регистрации: {}", e));
                 let duration = SystemTime::now()
                     .duration_since(start_time)
                     .unwrap()
@@ -453,9 +490,10 @@ impl StranglerLauncher {
     fn handle_send_transaction(&mut self) {
         let start_time = SystemTime::now();
         info!(receiver = %self.wallet_screen.receiver_address(), amount = %self.wallet_screen.amount(), "Кнопка 'Отправить' нажата");
-        
+
         if self.wallet_screen.receiver_address().trim().is_empty() {
-            self.wallet_screen.set_status("Адрес получателя не может быть пустым".to_string());
+            self.wallet_screen
+                .set_status("Адрес получателя не может быть пустым".to_string());
             let duration = SystemTime::now()
                 .duration_since(start_time)
                 .unwrap()
@@ -463,10 +501,11 @@ impl StranglerLauncher {
             warn!(duration_secs = duration, "Пустой адрес получателя");
             return;
         }
-        
+
         if let Ok(amount) = self.wallet_screen.amount().trim().parse::<u64>() {
             if amount == 0 {
-                self.wallet_screen.set_status("Сумма должна быть больше нуля".to_string());
+                self.wallet_screen
+                    .set_status("Сумма должна быть больше нуля".to_string());
                 let duration = SystemTime::now()
                     .duration_since(start_time)
                     .unwrap()
@@ -474,7 +513,7 @@ impl StranglerLauncher {
                 warn!(duration_secs = duration, "Сумма равна нулю");
                 return;
             }
-            
+
             let sender_nonce = self.node.blockchain.get_nonce(&self.wallet_address);
             let mut transaction = Transaction::transfer(
                 &self.wallet_address,
@@ -483,16 +522,21 @@ impl StranglerLauncher {
                 sender_nonce + 1,
                 self.node.network_id,
             );
-            
-            let sanitized_address = self.wallet_address
+
+            let sanitized_address = self
+                .wallet_address
                 .replace("/", "_")
                 .replace("+", "_")
                 .replace("=", "_");
-            let keystore_path = self.data_dir.join("keystore").join(format!("wallet_{}.json", sanitized_address));
+            let keystore_path = self
+                .data_dir
+                .join("keystore")
+                .join(format!("wallet_{}.json", sanitized_address));
             let wallet = match wallet::Wallet::load(&self.password, &keystore_path) {
                 Ok(w) => w,
                 Err(e) => {
-                    self.wallet_screen.set_status(format!("Ошибка загрузки кошелька: {}", e));
+                    self.wallet_screen
+                        .set_status(format!("Ошибка загрузки кошелька: {}", e));
                     let duration = SystemTime::now()
                         .duration_since(start_time)
                         .unwrap()
@@ -501,9 +545,10 @@ impl StranglerLauncher {
                     return;
                 }
             };
-            
+
             if let Err(e) = wallet.sign_transaction(&mut transaction) {
-                self.wallet_screen.set_status(format!("Ошибка подписи транзакции: {}", e));
+                self.wallet_screen
+                    .set_status(format!("Ошибка подписи транзакции: {}", e));
                 let duration = SystemTime::now()
                     .duration_since(start_time)
                     .unwrap()
@@ -511,19 +556,23 @@ impl StranglerLauncher {
                 error!(duration_secs = duration, error = %e, "Ошибка подписи транзакции");
                 return;
             }
-            
+
             let blockchain = Arc::clone(&self.node.blockchain);
             let mining_status = Arc::clone(&self.mining_status);
-            
+
             {
                 debug!(?transaction, "Транзакция для добавления");
                 if blockchain.apply_tx(transaction.clone()).is_err() {
-                    self.wallet_screen.set_status("Недостаточно средств или неверный адрес".to_string());
+                    self.wallet_screen
+                        .set_status("Недостаточно средств или неверный адрес".to_string());
                     let duration = SystemTime::now()
                         .duration_since(start_time)
                         .unwrap()
                         .as_secs_f64();
-                    warn!(duration_secs = duration, "Недостаточно средств или неверный адрес");
+                    warn!(
+                        duration_secs = duration,
+                        "Недостаточно средств или неверный адрес"
+                    );
                     return;
                 }
                 let duration = SystemTime::now()
@@ -532,32 +581,37 @@ impl StranglerLauncher {
                     .as_secs_f64();
                 info!(duration_secs = duration, "Транзакция успешно добавлена");
             }
-            
-            self.wallet_screen.set_status("Запуск майнинга...".to_string());
+
+            self.wallet_screen
+                .set_status("Запуск майнинга...".to_string());
             info!("Подготовка к отправке задачи майнинга");
-            
+
             let (progress_tx, progress_rx) = mpsc::channel();
             let (status_tx, status_rx) = mpsc::channel();
-            
+
             {
-                let mut mining_progress = self.mining_progress.lock().expect("Не удалось захватить Mutex для mining_progress");
+                let mut mining_progress = self
+                    .mining_progress
+                    .lock()
+                    .expect("Не удалось захватить Mutex для mining_progress");
                 *mining_progress = None;
                 self.progress_rx = Some(progress_rx);
                 self.status_rx = Some(status_rx);
                 debug!("Каналы прогресса и статуса созданы");
             }
-            
+
             if let Ok(mut mining_status) = self.mining_status.lock() {
                 *mining_status = MiningStatus::Mining;
                 info!("Статус майнинга установлен: Mining");
             } else {
-                self.wallet_screen.set_status("Ошибка: Не удалось установить статус майнинга".to_string());
+                self.wallet_screen
+                    .set_status("Ошибка: Не удалось установить статус майнинга".to_string());
                 error!("Не удалось установить статус майнинга");
                 self.progress_rx = None;
                 self.status_rx = None;
                 return;
             }
-            
+
             info!("Попытка отправки задачи майнинга");
             if let Err(e) = self.mining_tx.send(MiningTask {
                 blockchain,
@@ -570,7 +624,8 @@ impl StranglerLauncher {
                 event_bus: Arc::clone(&self.node.event_bus),
                 inbox: self.node.inbox.clone(),
             }) {
-                self.wallet_screen.set_status(format!("Ошибка отправки задачи майнинга: {}", e));
+                self.wallet_screen
+                    .set_status(format!("Ошибка отправки задачи майнинга: {}", e));
                 error!(error = %e, "Ошибка отправки задачи майнинга");
                 if let Ok(mut mining_status) = self.mining_status.lock() {
                     *mining_status = MiningStatus::Idle;
@@ -580,7 +635,7 @@ impl StranglerLauncher {
                 self.status_rx = None;
                 return;
             }
-            
+
             info!("Задача майнинга успешно отправлена");
             let duration = SystemTime::now()
                 .duration_since(start_time)
@@ -588,7 +643,8 @@ impl StranglerLauncher {
                 .as_secs_f64();
             info!(duration_secs = duration, "Запуск майнинга завершён");
         } else {
-            self.wallet_screen.set_status("Неверный формат суммы".to_string());
+            self.wallet_screen
+                .set_status("Неверный формат суммы".to_string());
             let duration = SystemTime::now()
                 .duration_since(start_time)
                 .unwrap()
@@ -601,12 +657,13 @@ impl StranglerLauncher {
     fn handle_find_wallet(&mut self) {
         let start_time = SystemTime::now();
         info!(ip = %self.wallet_screen.ip(), port = %self.wallet_screen.port(), "Кнопка 'Найти кошелёк' нажата");
-        
+
         let ip_buf = self.wallet_screen.ip().to_string();
         let port_buf = self.wallet_screen.port().to_string();
         let ip = ip_buf.trim();
         if ip.is_empty() {
-            self.wallet_screen.set_status("IP-адрес не может быть пустым".to_string());
+            self.wallet_screen
+                .set_status("IP-адрес не может быть пустым".to_string());
             let duration = SystemTime::now()
                 .duration_since(start_time)
                 .unwrap()
@@ -616,14 +673,20 @@ impl StranglerLauncher {
             let address = format!("{}:{}", ip, port_num);
             if let Some(wallet) = self.node.find_wallet_by_ip(ip, port_num) {
                 if self.node.add_peer(address.clone()) {
-                    self.wallet_screen.set_status(format!("Найден кошелёк: {} для {}:{} и добавлен в network.json", wallet, ip, port_num));
+                    self.wallet_screen.set_status(format!(
+                        "Найден кошелёк: {} для {}:{} и добавлен в network.json",
+                        wallet, ip, port_num
+                    ));
                     let duration = SystemTime::now()
                         .duration_since(start_time)
                         .unwrap()
                         .as_secs_f64();
                     info!(wallet = %wallet, ip = %ip, port = port_num, duration_secs = duration, "Кошелёк найден и добавлен в network.json");
                 } else {
-                    self.wallet_screen.set_status(format!("Найден кошелёк: {} для {}:{}, уже существует в network.json", wallet, ip, port_num));
+                    self.wallet_screen.set_status(format!(
+                        "Найден кошелёк: {} для {}:{}, уже существует в network.json",
+                        wallet, ip, port_num
+                    ));
                     let duration = SystemTime::now()
                         .duration_since(start_time)
                         .unwrap()
@@ -631,7 +694,8 @@ impl StranglerLauncher {
                     info!(wallet = %wallet, ip = %ip, port = port_num, duration_secs = duration, "Кошелёк найден, уже существует в network.json");
                 }
             } else {
-                self.wallet_screen.set_status(format!("Кошелёк не найден для {}:{}", ip, port_num));
+                self.wallet_screen
+                    .set_status(format!("Кошелёк не найден для {}:{}", ip, port_num));
                 let duration = SystemTime::now()
                     .duration_since(start_time)
                     .unwrap()
@@ -639,7 +703,8 @@ impl StranglerLauncher {
                 warn!(ip = %ip, port = port_num, duration_secs = duration, "Кошелёк не найден");
             }
         } else {
-            self.wallet_screen.set_status("Неверный формат порта".to_string());
+            self.wallet_screen
+                .set_status("Неверный формат порта".to_string());
             let duration = SystemTime::now()
                 .duration_since(start_time)
                 .unwrap()
@@ -780,25 +845,28 @@ mod tests {
         assert_eq!(launcher.migration_phase, MigrationPhase::Phase2_Hybrid);
 
         launcher.set_migration_phase(MigrationPhase::Phase3_ProfessionalOnly);
-        assert_eq!(launcher.migration_phase, MigrationPhase::Phase3_ProfessionalOnly);
+        assert_eq!(
+            launcher.migration_phase,
+            MigrationPhase::Phase3_ProfessionalOnly
+        );
     }
 
     #[test]
     fn test_screen_type_navigation() {
         let (_dir, node) = make_node("strangler_nav");
         let mut launcher = StranglerLauncher::new(node, PathBuf::from("./test_data"));
-        
+
         assert_eq!(launcher.current_screen, ScreenType::Wallet);
-        
+
         launcher.current_screen = ScreenType::Dashboard;
         assert_eq!(launcher.current_screen, ScreenType::Dashboard);
-        
+
         launcher.current_screen = ScreenType::TxDetail;
         assert_eq!(launcher.current_screen, ScreenType::TxDetail);
-        
+
         launcher.current_screen = ScreenType::AgentActivity;
         assert_eq!(launcher.current_screen, ScreenType::AgentActivity);
-        
+
         launcher.current_screen = ScreenType::Settings;
         assert_eq!(launcher.current_screen, ScreenType::Settings);
     }
@@ -810,9 +878,15 @@ mod tests {
 
         // Theme bridge
         launcher.theme_manager.set_dark_mode(true);
-        assert_eq!(launcher.theme_manager.get_theme(), strangecoin_ui::theme::Theme::Dark);
+        assert_eq!(
+            launcher.theme_manager.get_theme(),
+            strangecoin_ui::theme::Theme::Dark
+        );
         launcher.theme_manager.set_dark_mode(false);
-        assert_eq!(launcher.theme_manager.get_theme(), strangecoin_ui::theme::Theme::Light);
+        assert_eq!(
+            launcher.theme_manager.get_theme(),
+            strangecoin_ui::theme::Theme::Light
+        );
 
         // Localization bridge
         assert_eq!(launcher.localization.current_locale(), "en");
@@ -858,7 +932,7 @@ mod tests {
         assert_eq!(ScreenType::TxDetail, ScreenType::TxDetail);
         assert_eq!(ScreenType::AgentActivity, ScreenType::AgentActivity);
         assert_eq!(ScreenType::Settings, ScreenType::Settings);
-        
+
         assert_ne!(ScreenType::Wallet, ScreenType::Dashboard);
         assert_ne!(ScreenType::Dashboard, ScreenType::TxDetail);
         assert_ne!(ScreenType::TxDetail, ScreenType::AgentActivity);
@@ -868,12 +942,27 @@ mod tests {
 
     #[test]
     fn test_migration_phase_equality() {
-        assert_eq!(MigrationPhase::Phase1_LegacyOnly, MigrationPhase::Phase1_LegacyOnly);
+        assert_eq!(
+            MigrationPhase::Phase1_LegacyOnly,
+            MigrationPhase::Phase1_LegacyOnly
+        );
         assert_eq!(MigrationPhase::Phase2_Hybrid, MigrationPhase::Phase2_Hybrid);
-        assert_eq!(MigrationPhase::Phase3_ProfessionalOnly, MigrationPhase::Phase3_ProfessionalOnly);
-        
-        assert_ne!(MigrationPhase::Phase1_LegacyOnly, MigrationPhase::Phase2_Hybrid);
-        assert_ne!(MigrationPhase::Phase2_Hybrid, MigrationPhase::Phase3_ProfessionalOnly);
-        assert_ne!(MigrationPhase::Phase3_ProfessionalOnly, MigrationPhase::Phase1_LegacyOnly);
+        assert_eq!(
+            MigrationPhase::Phase3_ProfessionalOnly,
+            MigrationPhase::Phase3_ProfessionalOnly
+        );
+
+        assert_ne!(
+            MigrationPhase::Phase1_LegacyOnly,
+            MigrationPhase::Phase2_Hybrid
+        );
+        assert_ne!(
+            MigrationPhase::Phase2_Hybrid,
+            MigrationPhase::Phase3_ProfessionalOnly
+        );
+        assert_ne!(
+            MigrationPhase::Phase3_ProfessionalOnly,
+            MigrationPhase::Phase1_LegacyOnly
+        );
     }
 }

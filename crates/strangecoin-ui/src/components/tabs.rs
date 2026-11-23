@@ -100,10 +100,7 @@ impl Tabs {
             TabOrientation::Horizontal => {
                 ui.horizontal(|ui| {
                     for (i, tab) in self.tabs.iter().enumerate() {
-                        let response = ui.selectable_label(
-                            i == self.active_tab,
-                            &tab.label,
-                        );
+                        let response = ui.selectable_label(i == self.active_tab, &tab.label);
 
                         if response.clicked() && !tab.disabled {
                             self.active_tab = i;
@@ -114,10 +111,7 @@ impl Tabs {
             TabOrientation::Vertical => {
                 ui.vertical(|ui| {
                     for (i, tab) in self.tabs.iter().enumerate() {
-                        let response = ui.selectable_label(
-                            i == self.active_tab,
-                            &tab.label,
-                        );
+                        let response = ui.selectable_label(i == self.active_tab, &tab.label);
 
                         if response.clicked() && !tab.disabled {
                             self.active_tab = i;
@@ -184,10 +178,7 @@ impl TextTabContent {
 impl TabContent for TextTabContent {
     fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let tokens = theme_manager.tokens();
-        ui.label(
-            egui::RichText::new(&self.text)
-                .size(tokens.typography.base.size)
-        );
+        ui.label(egui::RichText::new(&self.text).size(tokens.typography.base.size));
     }
 }
 
@@ -204,9 +195,7 @@ impl Default for FormTabContent {
 
 impl FormTabContent {
     pub fn new() -> Self {
-        Self {
-            inputs: Vec::new(),
-        }
+        Self { inputs: Vec::new() }
     }
 
     pub fn input(mut self, input: crate::components::Input) -> Self {
@@ -219,7 +208,7 @@ impl TabContent for FormTabContent {
     fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let tokens = theme_manager.tokens();
         ui.spacing_mut().item_spacing.y = tokens.spacing.base;
-        
+
         for input in &mut self.inputs {
             input.show(ui, theme_manager);
         }
@@ -260,12 +249,9 @@ impl<T: Clone> ListTabContent<T> {
 impl<T: Clone + std::fmt::Display> TabContent for ListTabContent<T> {
     fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let tokens = theme_manager.tokens();
-        
+
         for (i, item) in self.items.iter().enumerate() {
-            let response = ui.selectable_label(
-                self.selected_item == Some(i),
-                item.to_string(),
-            );
+            let response = ui.selectable_label(self.selected_item == Some(i), item.to_string());
 
             if response.clicked() {
                 self.selected_item = Some(i);
@@ -359,7 +345,9 @@ mod tests {
         assert_eq!(text_content.text, "Hello, World!");
 
         let mut form_content = FormTabContent::new();
-        form_content.inputs.push(crate::components::Input::new("Name"));
+        form_content
+            .inputs
+            .push(crate::components::Input::new("Name"));
         assert_eq!(form_content.inputs.len(), 1);
     }
 

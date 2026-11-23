@@ -108,7 +108,7 @@ impl<T: Clone + std::fmt::Debug> Table<T> {
     pub fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let _colors = theme_manager.colors();
         let tokens = theme_manager.tokens();
-        
+
         // Table container
         egui::Frame::default()
             .inner_margin(egui::Margin::symmetric(tokens.spacing.base, 0.0))
@@ -155,9 +155,9 @@ impl<T: Clone + std::fmt::Debug> Table<T> {
                 if let Some(i) = clicked_sort {
                     self.toggle_sort(i);
                 }
-                
+
                 ui.add_space(tokens.spacing.sm);
-                
+
                 // Data rows
                 egui::ScrollArea::vertical().show_rows(
                     ui,
@@ -175,7 +175,7 @@ impl<T: Clone + std::fmt::Debug> Table<T> {
     fn show_row(&mut self, ui: &mut egui::Ui, row_index: usize, theme_manager: &ThemeManager) {
         let colors = theme_manager.colors();
         let tokens = theme_manager.tokens();
-        
+
         // Check if row is selected
         let is_selected = self.selected_row == Some(row_index);
         let is_hovered = self.hoverable && ui.rect_contains_pointer(ui.max_rect());
@@ -194,15 +194,17 @@ impl<T: Clone + std::fmt::Debug> Table<T> {
                 colors.surface.as_egui(),
             );
         }
-        
+
         // Row content
         ui.horizontal(|ui| {
             for col in &self.columns {
-                let cell_response = ui.horizontal(|ui| {
-                    // Get cell value (simplified for example)
-                    let value = format!("Row {} Col {}", row_index, col.id);
-                    ui.label(value);
-                }).response;
+                let cell_response = ui
+                    .horizontal(|ui| {
+                        // Get cell value (simplified for example)
+                        let value = format!("Row {} Col {}", row_index, col.id);
+                        ui.label(value);
+                    })
+                    .response;
 
                 // Handle row selection
                 if cell_response.clicked() {
@@ -210,7 +212,7 @@ impl<T: Clone + std::fmt::Debug> Table<T> {
                 }
             }
         });
-        
+
         ui.add_space(tokens.spacing.sm);
     }
 
@@ -224,7 +226,7 @@ impl<T: Clone + std::fmt::Debug> Table<T> {
             self.sort_column = Some(column_index);
             self.sort_direction = SortDirection::Ascending;
         }
-        
+
         // Sort data (simplified - in real implementation, this would use a proper comparator)
         // NOTE: generic `T` has no `Ord` bound, so stable sorting keys off the
         // Debug representation. Production tables sort by typed column accessors.
@@ -397,12 +399,12 @@ mod tests {
     #[test]
     fn test_table_selection() {
         let mut table = Table::<String>::new();
-        
+
         assert_eq!(table.selected_row(), None);
-        
+
         table.set_selected_row(Some(1));
         assert_eq!(table.selected_row(), Some(1));
-        
+
         table.set_selected_row(None);
         assert_eq!(table.selected_row(), None);
     }

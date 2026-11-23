@@ -195,11 +195,8 @@ impl Chart {
             }
 
             // Draw point
-            ui.painter().circle_filled(
-                egui::pos2(x, y),
-                4.0,
-                colors.primary.as_egui(),
-            );
+            ui.painter()
+                .circle_filled(egui::pos2(x, y), 4.0, colors.primary.as_egui());
         }
     }
 
@@ -231,10 +228,7 @@ impl Chart {
             let y = padding + chart_height - bar_height;
 
             ui.painter().rect_filled(
-                egui::Rect::from_min_size(
-                    egui::pos2(x, y),
-                    egui::vec2(bar_width, bar_height),
-                ),
+                egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(bar_width, bar_height)),
                 egui::Rounding::same(2.0),
                 colors.primary.as_egui(),
             );
@@ -280,7 +274,10 @@ impl Chart {
         // Close the area
         if !points.is_empty() {
             points.push(egui::pos2(points.last().unwrap().x, padding + chart_height));
-            points.push(egui::pos2(points.first().unwrap().x, padding + chart_height));
+            points.push(egui::pos2(
+                points.first().unwrap().x,
+                padding + chart_height,
+            ));
 
             // Draw filled area (30% alpha via unmultiplied construction)
             let fill = colors.primary.as_egui();

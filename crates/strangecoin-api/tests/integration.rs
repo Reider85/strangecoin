@@ -11,11 +11,7 @@ use strangecoin_core::types::AgentId;
 async fn test_agent_api_server_startup() {
     let config = ServerConfig {
         listen_addr: "127.0.0.1:0".parse().unwrap(), // Use random port
-        session_timeout: 3600,
-        max_sessions_per_agent: 10,
-        enable_cors: true,
-        enable_rate_limit: true,
-        rate_limit_per_minute: 60,
+        ..ServerConfig::default()
     };
 
     let server = AgentApiServer::new(config).await.unwrap();

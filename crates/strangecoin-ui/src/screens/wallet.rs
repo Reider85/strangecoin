@@ -1,9 +1,9 @@
 //! Wallet screen implementation
 
+use crate::components::{Button, Card, CardSpacer, CardText, Input};
+use crate::i18n::Localization;
 use crate::screens::Screen;
 use crate::theme::ThemeManager;
-use crate::i18n::Localization;
-use crate::components::{Button, Input, Card, CardText, CardSpacer};
 use eframe::egui;
 
 /// Wallet screen with tabs for Send, History, and Contracts
@@ -122,7 +122,12 @@ impl WalletScreen {
 }
 
 impl Screen for WalletScreen {
-    fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager, localization: &Localization) {
+    fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme_manager: &ThemeManager,
+        localization: &Localization,
+    ) {
         ui.horizontal(|ui| {
             // Tab navigation
             let tabs = [
@@ -180,8 +185,12 @@ pub struct SendTab {
 impl SendTab {
     pub fn new() -> Self {
         Self {
-            recipient: Input::new("Recipient").input_type(crate::components::InputType::Bech32).required(true),
-            amount: Input::new("Amount").input_type(crate::components::InputType::Number).required(true),
+            recipient: Input::new("Recipient")
+                .input_type(crate::components::InputType::Bech32)
+                .required(true),
+            amount: Input::new("Amount")
+                .input_type(crate::components::InputType::Number)
+                .required(true),
             fee: Input::new("Fee").input_type(crate::components::InputType::Number),
             balance: 1000, // Mock balance
             loading: false,
@@ -189,7 +198,12 @@ impl SendTab {
         }
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager, localization: &Localization) {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme_manager: &ThemeManager,
+        localization: &Localization,
+    ) {
         let tokens = theme_manager.tokens();
         let colors = theme_manager.colors();
 
@@ -273,8 +287,10 @@ impl HistoryTab {
             transactions: vec![
                 Transaction {
                     id: "tx_001".to_string(),
-                    from: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q6".to_string(),
-                    to: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q7".to_string(),
+                    from: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q6"
+                        .to_string(),
+                    to: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q7"
+                        .to_string(),
                     amount: 100,
                     fee: 1,
                     status: TransactionStatus::Success,
@@ -282,8 +298,10 @@ impl HistoryTab {
                 },
                 Transaction {
                     id: "tx_002".to_string(),
-                    from: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q7".to_string(),
-                    to: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q6".to_string(),
+                    from: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q7"
+                        .to_string(),
+                    to: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q6"
+                        .to_string(),
                     amount: 50,
                     fee: 1,
                     status: TransactionStatus::Pending,
@@ -294,7 +312,12 @@ impl HistoryTab {
         }
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager, _localization: &Localization) {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme_manager: &ThemeManager,
+        _localization: &Localization,
+    ) {
         let tokens = theme_manager.tokens();
 
         // Transaction list (scroll content rendered inside the card frame)
@@ -316,9 +339,7 @@ impl HistoryTab {
                                 TransactionStatus::Pending => {
                                     theme_manager.colors().warning.as_egui()
                                 }
-                                TransactionStatus::Failed => {
-                                    theme_manager.colors().error.as_egui()
-                                }
+                                TransactionStatus::Failed => theme_manager.colors().error.as_egui(),
                             },
                         ))
                         .child(CardText::new(&format!("Time: {}", tx.timestamp)))
@@ -361,12 +382,14 @@ impl ContractsTab {
         Self {
             contracts: vec![
                 Contract {
-                    address: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q6".to_string(),
+                    address: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q6"
+                        .to_string(),
                     name: "Token Contract".to_string(),
                     abi: "{}".to_string(),
                 },
                 Contract {
-                    address: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q7".to_string(),
+                    address: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q7"
+                        .to_string(),
                     name: "NFT Contract".to_string(),
                     abi: "{}".to_string(),
                 },
@@ -375,7 +398,12 @@ impl ContractsTab {
         }
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager, _localization: &Localization) {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme_manager: &ThemeManager,
+        _localization: &Localization,
+    ) {
         let tokens = theme_manager.tokens();
 
         // Contract list (scroll content rendered inside the card frame)
@@ -459,10 +487,10 @@ mod tests {
     fn test_wallet_tab_switching() {
         let mut screen = WalletScreen::new();
         assert_eq!(screen.active_tab, WalletTab::Send);
-        
+
         screen.set_active_tab(WalletTab::History);
         assert_eq!(screen.active_tab, WalletTab::History);
-        
+
         screen.set_active_tab(WalletTab::Contracts);
         assert_eq!(screen.active_tab, WalletTab::Contracts);
     }

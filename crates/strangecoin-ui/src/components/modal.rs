@@ -98,7 +98,10 @@ impl Modal {
             ModalSize::Sm => (300.0, 200.0),
             ModalSize::Md => (400.0, 300.0),
             ModalSize::Lg => (600.0, 400.0),
-            ModalSize::Full => (ctx.screen_rect().width() * 0.9, ctx.screen_rect().height() * 0.9),
+            ModalSize::Full => (
+                ctx.screen_rect().width() * 0.9,
+                ctx.screen_rect().height() * 0.9,
+            ),
         };
 
         // Center the modal
@@ -109,8 +112,11 @@ impl Modal {
         );
 
         // Overlay background
-        ctx.layer_painter(egui::LayerId::background())
-            .rect_filled(screen_rect, egui::Rounding::ZERO, colors.background.as_egui());
+        ctx.layer_painter(egui::LayerId::background()).rect_filled(
+            screen_rect,
+            egui::Rounding::ZERO,
+            colors.background.as_egui(),
+        );
 
         // Modal frame
         egui::Window::new(self.title.as_deref().unwrap_or("Modal"))
@@ -119,11 +125,13 @@ impl Modal {
             .resizable(true)
             .default_size(egui::vec2(modal_width, modal_height))
             .default_pos(modal_rect.min)
-            .frame(egui::Frame::default()
-                .fill(colors.surface.as_egui())
-                .rounding(egui::Rounding::same(tokens.radius.lg))
-                .shadow(tokens.shadow.lg.as_egui())
-                .inner_margin(egui::Margin::same(tokens.spacing.lg)))
+            .frame(
+                egui::Frame::default()
+                    .fill(colors.surface.as_egui())
+                    .rounding(egui::Rounding::same(tokens.radius.lg))
+                    .shadow(tokens.shadow.lg.as_egui())
+                    .inner_margin(egui::Margin::same(tokens.spacing.lg)),
+            )
             .show(ctx, |ui| {
                 // Title bar
                 let title = self.title.clone();
@@ -133,7 +141,7 @@ impl Modal {
                         ui.label(
                             egui::RichText::new(title)
                                 .size(tokens.typography.lg.size)
-                                .strong()
+                                .strong(),
                         );
 
                         if closable && ui.button("×").clicked() {
@@ -201,10 +209,7 @@ impl TextModalContent {
 impl ModalContent for TextModalContent {
     fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let tokens = theme_manager.tokens();
-        ui.label(
-            egui::RichText::new(&self.text)
-                .size(tokens.typography.base.size)
-        );
+        ui.label(egui::RichText::new(&self.text).size(tokens.typography.base.size));
     }
 }
 
@@ -221,9 +226,7 @@ impl Default for FormModalContent {
 
 impl FormModalContent {
     pub fn new() -> Self {
-        Self {
-            inputs: Vec::new(),
-        }
+        Self { inputs: Vec::new() }
     }
 
     pub fn input(mut self, input: crate::components::Input) -> Self {
@@ -236,7 +239,7 @@ impl ModalContent for FormModalContent {
     fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let tokens = theme_manager.tokens();
         ui.spacing_mut().item_spacing.y = tokens.spacing.base;
-        
+
         for input in &mut self.inputs {
             input.show(ui, theme_manager);
         }

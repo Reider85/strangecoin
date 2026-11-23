@@ -94,7 +94,10 @@ fn snapshot_typography_scale() {
 #[test]
 fn snapshot_radius_and_shadow() {
     let r = Radius::new();
-    assert_eq!([r.none, r.sm, r.md, r.lg, r.full], [0.0, 4.0, 8.0, 16.0, 9999.0]);
+    assert_eq!(
+        [r.none, r.sm, r.md, r.lg, r.full],
+        [0.0, 4.0, 8.0, 16.0, 9999.0]
+    );
 
     let s = Shadow::new();
     assert_eq!(s.none.color_a, 0.0);
@@ -115,15 +118,31 @@ fn snapshot_theme_colors_light_and_dark() {
 
     // Light: near-white background, near-black text.
     let lb = lc.background;
-    assert!(lb.r > 200 && lb.g > 200 && lb.b > 200, "light bg: {:?}", lb.as_css_hex());
+    assert!(
+        lb.r > 200 && lb.g > 200 && lb.b > 200,
+        "light bg: {:?}",
+        lb.as_css_hex()
+    );
     let lt = lc.text;
-    assert!(lt.r < 60 && lt.g < 60 && lt.b < 60, "light text: {:?}", lt.as_css_hex());
+    assert!(
+        lt.r < 60 && lt.g < 60 && lt.b < 60,
+        "light text: {:?}",
+        lt.as_css_hex()
+    );
 
     // Dark: near-black background, near-white text.
     let db = dc.background;
-    assert!(db.r < 40 && db.g < 40 && db.b < 40, "dark bg: {:?}", db.as_css_hex());
+    assert!(
+        db.r < 40 && db.g < 40 && db.b < 40,
+        "dark bg: {:?}",
+        db.as_css_hex()
+    );
     let dt = dc.text;
-    assert!(dt.r > 200 && dt.g > 200 && dt.b > 200, "dark text: {:?}", dt.as_css_hex());
+    assert!(
+        dt.r > 200 && dt.g > 200 && dt.b > 200,
+        "dark text: {:?}",
+        dt.as_css_hex()
+    );
 
     // Both themes share the same brand accent.
     assert_eq!(lc.primary.as_css_hex(), dc.primary.as_css_hex());
@@ -168,10 +187,7 @@ fn snapshot_font_weight_mapping() {
     let a = FontWeight::Bold.apply(rt.clone());
     let b = FontWeight::SemiBold.apply(rt);
     // Both end up strong: formatting is captured in the same layout flags.
-    assert_eq!(
-        format!("{:?}", a.text()),
-        format!("{:?}", b.text())
-    );
+    assert_eq!(format!("{:?}", a.text()), format!("{:?}", b.text()));
 }
 
 #[test]

@@ -81,7 +81,7 @@ impl Button {
     pub fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let colors = theme_manager.colors();
         let tokens = theme_manager.tokens();
-        
+
         // Calculate size
         let (padding, font_size) = match self.size {
             ButtonSize::Sm => (tokens.spacing.sm, tokens.typography.sm.size),
@@ -90,7 +90,8 @@ impl Button {
         };
 
         // Calculate colors based on variant and state
-        let (bg_color, _fg_color, stroke_color) = match (self.variant, self.disabled, self.loading) {
+        let (bg_color, _fg_color, stroke_color) = match (self.variant, self.disabled, self.loading)
+        {
             (ButtonVariant::Primary, true, _) => {
                 (colors.surface, colors.text_secondary, colors.border)
             }
@@ -103,21 +104,15 @@ impl Button {
             (ButtonVariant::Secondary, true, _) => {
                 (colors.surface, colors.text_secondary, colors.border)
             }
-            (ButtonVariant::Secondary, false, _) => {
-                (colors.surface, colors.text, colors.border)
-            }
+            (ButtonVariant::Secondary, false, _) => (colors.surface, colors.text, colors.border),
             (ButtonVariant::Ghost, true, _) => {
                 (colors.surface, colors.text_secondary, colors.border)
             }
-            (ButtonVariant::Ghost, false, _) => {
-                (colors.background, colors.text, colors.border)
-            }
+            (ButtonVariant::Ghost, false, _) => (colors.background, colors.text, colors.border),
             (ButtonVariant::Danger, true, _) => {
                 (colors.surface, colors.text_secondary, colors.border)
             }
-            (ButtonVariant::Danger, false, true) => {
-                (colors.error, colors.background, colors.error)
-            }
+            (ButtonVariant::Danger, false, true) => (colors.error, colors.background, colors.error),
             (ButtonVariant::Danger, false, false) => {
                 (colors.error, colors.background, colors.error)
             }
@@ -139,15 +134,13 @@ impl Button {
             .rounding(egui::Rounding::same(4.0))
             .show(ui, |ui| {
                 ui.style_mut().override_text_style = Some(egui::TextStyle::Button);
-                ui.style_mut().override_font_id = Some(egui::FontId::new(
-                    font_size,
-                    egui::FontFamily::Proportional,
-                ));
-                
+                ui.style_mut().override_font_id =
+                    Some(egui::FontId::new(font_size, egui::FontFamily::Proportional));
+
                 let response = ui.add_enabled(!self.disabled, egui::Button::new(&self.label));
-                
+
                 // Apply custom style
-                
+
                 // Handle click
                 if !self.disabled && !self.loading && response.clicked() {
                     if let Some(ref callback) = self.onclick {
@@ -264,7 +257,6 @@ impl ButtonBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     #[test]
     fn test_button_creation() {

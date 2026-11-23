@@ -95,7 +95,7 @@ impl Input {
     pub fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let colors = theme_manager.colors();
         let tokens = theme_manager.tokens();
-        
+
         // Container with error styling
         let frame_style = if self.error.is_some() {
             egui::Frame::default()
@@ -130,8 +130,7 @@ impl Input {
             // Disabled/readonly tint: egui 0.30 has no per-response style
             // override; the enabled flag above handles disabled state.
             if self.readonly {
-                ui.visuals_mut().widgets.noninteractive.fg_stroke.color =
-                    colors.text.as_egui();
+                ui.visuals_mut().widgets.noninteractive.fg_stroke.color = colors.text.as_egui();
             }
 
             // Handle input change
@@ -166,7 +165,7 @@ impl Input {
     pub fn show_multiline(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let colors = theme_manager.colors();
         let tokens = theme_manager.tokens();
-        
+
         // Container with error styling
         let frame_style = if self.error.is_some() {
             egui::Frame::default()
@@ -201,8 +200,7 @@ impl Input {
 
             // Disabled/readonly tint: egui 0.30 has no per-response style override.
             if self.readonly {
-                ui.visuals_mut().widgets.noninteractive.fg_stroke.color =
-                    colors.text.as_egui();
+                ui.visuals_mut().widgets.noninteractive.fg_stroke.color = colors.text.as_egui();
             }
 
             // Handle input change
@@ -250,7 +248,8 @@ impl Input {
                 }
             }
             InputType::Email => {
-                let email_regex = regex::Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$").unwrap();
+                let email_regex =
+                    regex::Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$").unwrap();
                 if !email_regex.is_match(&self.value) {
                     return Some("Please enter a valid email address".to_string());
                 }
@@ -365,7 +364,6 @@ impl InputBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     #[test]
     fn test_input_creation() {
@@ -395,19 +393,19 @@ mod tests {
     #[test]
     fn test_input_validation() {
         let mut input = Input::new("Email").input_type(InputType::Email);
-        
+
         // Valid email
         input.set_value("test@example.com");
         assert_eq!(input.validate(), None);
-        
+
         // Invalid email
         input.set_value("invalid-email");
         assert!(input.validate().is_some());
-        
+
         // Required field
         let mut input = Input::new("Required").required(true);
         assert_eq!(input.validate(), Some("This field is required".to_string()));
-        
+
         input.set_value("value");
         assert_eq!(input.validate(), None);
     }
@@ -415,11 +413,11 @@ mod tests {
     #[test]
     fn test_bech32_validation() {
         let mut input = Input::new("Address").input_type(InputType::Bech32);
-        
+
         // Valid bech32 address (simplified pattern)
         input.set_value("sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q6");
         assert_eq!(input.validate(), None);
-        
+
         // Invalid bech32 address
         input.set_value("invalid-address");
         assert!(input.validate().is_some());

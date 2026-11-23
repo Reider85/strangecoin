@@ -22,9 +22,7 @@ pub use avatar::{Avatar, AvatarSize};
 pub use badge::{Badge, BadgeVariant};
 pub use breadcrumb::Breadcrumb;
 pub use button::{Button, ButtonVariant};
-pub use card::{
-    Card, CardBuilder, CardChild, CardDivider, CardSection, CardSpacer, CardText,
-};
+pub use card::{Card, CardBuilder, CardChild, CardDivider, CardSection, CardSpacer, CardText};
 pub use chart::{Chart, ChartDataPoint, ChartType};
 pub use codeblock::{CodeBlock, CodeTheme};
 pub use drawer::Drawer;

@@ -81,9 +81,21 @@ impl Stat {
 
         // Calculate size
         let (padding, title_size, value_size) = match self.size {
-            StatSize::Sm => (tokens.spacing.xs, tokens.typography.xs.size, tokens.typography.sm.size),
-            StatSize::Md => (tokens.spacing.sm, tokens.typography.sm.size, tokens.typography.base.size),
-            StatSize::Lg => (tokens.spacing.base, tokens.typography.base.size, tokens.typography.lg.size),
+            StatSize::Sm => (
+                tokens.spacing.xs,
+                tokens.typography.xs.size,
+                tokens.typography.sm.size,
+            ),
+            StatSize::Md => (
+                tokens.spacing.sm,
+                tokens.typography.sm.size,
+                tokens.typography.base.size,
+            ),
+            StatSize::Lg => (
+                tokens.spacing.base,
+                tokens.typography.base.size,
+                tokens.typography.lg.size,
+            ),
         };
 
         // Stat container
@@ -105,7 +117,7 @@ impl Stat {
                     ui.label(
                         egui::RichText::new(&self.title)
                             .size(title_size)
-                            .color(colors.text_secondary.as_egui())
+                            .color(colors.text_secondary.as_egui()),
                     );
 
                     // Value
@@ -113,7 +125,7 @@ impl Stat {
                         egui::RichText::new(&self.value)
                             .size(value_size)
                             .strong()
-                            .color(colors.text.as_egui())
+                            .color(colors.text.as_egui()),
                     );
 
                     // Change and trend
@@ -144,13 +156,13 @@ impl Stat {
                             ui.label(
                                 egui::RichText::new(&change_text)
                                     .color(change_color)
-                                    .strong()
+                                    .strong(),
                             );
                             if !trend_icon.is_empty() {
                                 ui.label(
                                     egui::RichText::new(trend_icon)
                                         .color(change_color)
-                                        .size(title_size)
+                                        .size(title_size),
                                 );
                             }
                         });
@@ -255,7 +267,13 @@ mod tests {
         assert_eq!(stat.id, "test");
         assert_eq!(stat.title, "Revenue");
         assert_eq!(stat.value, "$1,000");
-        assert_eq!(stat.change, Some(StatChange { value: 10.5, percentage: true }));
+        assert_eq!(
+            stat.change,
+            Some(StatChange {
+                value: 10.5,
+                percentage: true
+            })
+        );
         assert_eq!(stat.trend, Some(StatTrend::Up));
         assert_eq!(stat.icon, Some("💰".to_string()));
         assert_eq!(stat.size, StatSize::Lg);

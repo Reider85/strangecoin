@@ -77,7 +77,7 @@ impl CodeBlock {
                         ui.label(
                             egui::RichText::new(language)
                                 .size(tokens.typography.sm.size)
-                                .color(colors.text_secondary.as_egui())
+                                .color(colors.text_secondary.as_egui()),
                         );
                     }
 
@@ -104,7 +104,7 @@ impl CodeBlock {
                                 egui::TextEdit::multiline(&mut self.code)
                                     .frame(false)
                                     .desired_width(f32::INFINITY)
-                                    .lock_focus(true)
+                                    .lock_focus(true),
                             );
                         } else {
                             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -112,7 +112,7 @@ impl CodeBlock {
                                     egui::TextEdit::multiline(&mut self.code)
                                         .frame(false)
                                         .desired_width(f32::INFINITY)
-                                        .lock_focus(true)
+                                        .lock_focus(true),
                                 );
                             });
                         }
@@ -185,9 +185,13 @@ pub struct SyntaxHighlighter;
 
 impl SyntaxHighlighter {
     /// Apply syntax highlighting to code
-    pub fn highlight<'a>(&self, code: &'a str, language: Option<&str>) -> Vec<(egui::Color32, &'a str)> {
+    pub fn highlight<'a>(
+        &self,
+        code: &'a str,
+        language: Option<&str>,
+    ) -> Vec<(egui::Color32, &'a str)> {
         let mut tokens = Vec::new();
-        
+
         if let Some(lang) = language {
             match lang {
                 "rust" => self.highlight_rust(code, &mut tokens),
@@ -200,20 +204,27 @@ impl SyntaxHighlighter {
         } else {
             self.highlight_plain(code, &mut tokens);
         }
-        
+
         tokens
     }
 
     fn highlight_rust<'a>(&self, code: &'a str, tokens: &mut Vec<(egui::Color32, &'a str)>) {
         // Simplified Rust syntax highlighting
         let mut current_pos = 0;
-        
+
         for word in code.split_whitespace() {
             let start = code[current_pos..].find(word).unwrap() + current_pos;
             let end = start + word.len();
-            
+
             // Rust keywords
-            if ["fn", "let", "mut", "const", "static", "struct", "enum", "impl", "trait", "mod", "pub", "use", "crate", "self", "super", "async", "await", "move", "match", "if", "else", "for", "while", "loop", "return", "break", "continue", "true", "false", "Some", "None", "Ok", "Err", "Result", "Option"].contains(&word) {
+            if [
+                "fn", "let", "mut", "const", "static", "struct", "enum", "impl", "trait", "mod",
+                "pub", "use", "crate", "self", "super", "async", "await", "move", "match", "if",
+                "else", "for", "while", "loop", "return", "break", "continue", "true", "false",
+                "Some", "None", "Ok", "Err", "Result", "Option",
+            ]
+            .contains(&word)
+            {
                 tokens.push((egui::Color32::from_rgb(0, 128, 0), word));
             } else if word.starts_with('"') && word.ends_with('"') {
                 // String literals
@@ -234,7 +245,7 @@ impl SyntaxHighlighter {
                 // Default
                 tokens.push((egui::Color32::from_rgb(255, 255, 255), word));
             }
-            
+
             current_pos = end;
         }
     }
@@ -242,13 +253,48 @@ impl SyntaxHighlighter {
     fn highlight_javascript<'a>(&self, code: &'a str, tokens: &mut Vec<(egui::Color32, &'a str)>) {
         // Simplified JavaScript syntax highlighting
         let mut current_pos = 0;
-        
+
         for word in code.split_whitespace() {
             let start = code[current_pos..].find(word).unwrap() + current_pos;
             let end = start + word.len();
-            
+
             // JavaScript keywords
-            if ["function", "const", "let", "var", "if", "else", "for", "while", "do", "return", "break", "continue", "true", "false", "null", "undefined", "class", "extends", "import", "export", "default", "async", "await", "try", "catch", "throw", "new", "this", "super", "static", "get", "set"].contains(&word) {
+            if [
+                "function",
+                "const",
+                "let",
+                "var",
+                "if",
+                "else",
+                "for",
+                "while",
+                "do",
+                "return",
+                "break",
+                "continue",
+                "true",
+                "false",
+                "null",
+                "undefined",
+                "class",
+                "extends",
+                "import",
+                "export",
+                "default",
+                "async",
+                "await",
+                "try",
+                "catch",
+                "throw",
+                "new",
+                "this",
+                "super",
+                "static",
+                "get",
+                "set",
+            ]
+            .contains(&word)
+            {
                 tokens.push((egui::Color32::from_rgb(0, 0, 255), word));
             } else if (word.starts_with('"') && word.ends_with('"'))
                 || (word.starts_with("'") && word.ends_with("'"))
@@ -268,7 +314,7 @@ impl SyntaxHighlighter {
                 // Default
                 tokens.push((egui::Color32::from_rgb(255, 255, 255), word));
             }
-            
+
             current_pos = end;
         }
     }
@@ -276,13 +322,20 @@ impl SyntaxHighlighter {
     fn highlight_python<'a>(&self, code: &'a str, tokens: &mut Vec<(egui::Color32, &'a str)>) {
         // Simplified Python syntax highlighting
         let mut current_pos = 0;
-        
+
         for word in code.split_whitespace() {
             let start = code[current_pos..].find(word).unwrap() + current_pos;
             let end = start + word.len();
-            
+
             // Python keywords
-            if ["def", "class", "if", "elif", "else", "for", "while", "try", "except", "finally", "return", "break", "continue", "pass", "import", "from", "as", "lambda", "and", "or", "not", "in", "is", "None", "True", "False", "global", "nonlocal", "assert", "with", "yield", "async", "await"].contains(&word) {
+            if [
+                "def", "class", "if", "elif", "else", "for", "while", "try", "except", "finally",
+                "return", "break", "continue", "pass", "import", "from", "as", "lambda", "and",
+                "or", "not", "in", "is", "None", "True", "False", "global", "nonlocal", "assert",
+                "with", "yield", "async", "await",
+            ]
+            .contains(&word)
+            {
                 tokens.push((egui::Color32::from_rgb(0, 0, 255), word));
             } else if (word.starts_with('"') && word.ends_with('"'))
                 || (word.starts_with("'") && word.ends_with("'"))
@@ -304,7 +357,7 @@ impl SyntaxHighlighter {
                 // Default
                 tokens.push((egui::Color32::from_rgb(255, 255, 255), word));
             }
-            
+
             current_pos = end;
         }
     }
@@ -312,11 +365,11 @@ impl SyntaxHighlighter {
     fn highlight_json<'a>(&self, code: &'a str, tokens: &mut Vec<(egui::Color32, &'a str)>) {
         // Simplified JSON syntax highlighting
         let mut current_pos = 0;
-        
+
         for word in code.split_whitespace() {
             let start = code[current_pos..].find(word).unwrap() + current_pos;
             let end = start + word.len();
-            
+
             if word.starts_with('"') && word.ends_with('"') {
                 // String literals (keys and values)
                 tokens.push((egui::Color32::from_rgb(255, 0, 0), word));
@@ -330,7 +383,7 @@ impl SyntaxHighlighter {
                 // Default
                 tokens.push((egui::Color32::from_rgb(255, 255, 255), word));
             }
-            
+
             current_pos = end;
         }
     }
@@ -338,11 +391,11 @@ impl SyntaxHighlighter {
     fn highlight_toml<'a>(&self, code: &'a str, tokens: &mut Vec<(egui::Color32, &'a str)>) {
         // Simplified TOML syntax highlighting
         let mut current_pos = 0;
-        
+
         for word in code.split_whitespace() {
             let start = code[current_pos..].find(word).unwrap() + current_pos;
             let end = start + word.len();
-            
+
             if word.starts_with('"') && word.ends_with('"') {
                 // String literals
                 tokens.push((egui::Color32::from_rgb(255, 0, 0), word));
@@ -356,7 +409,7 @@ impl SyntaxHighlighter {
                 // Default
                 tokens.push((egui::Color32::from_rgb(255, 255, 255), word));
             }
-            
+
             current_pos = end;
         }
     }
@@ -402,23 +455,23 @@ mod tests {
     #[test]
     fn test_syntax_highlighter() {
         let highlighter = SyntaxHighlighter;
-        
+
         let rust_code = "fn main() { let x = 5; }";
         let tokens = highlighter.highlight(rust_code, Some("rust"));
         assert!(!tokens.is_empty());
-        
+
         let js_code = "function test() { let x = 5; }";
         let tokens = highlighter.highlight(js_code, Some("javascript"));
         assert!(!tokens.is_empty());
-        
+
         let python_code = "def test(): x = 5";
         let tokens = highlighter.highlight(python_code, Some("python"));
         assert!(!tokens.is_empty());
-        
+
         let json_code = r#"{"name": "test", "value": 5}"#;
         let tokens = highlighter.highlight(json_code, Some("json"));
         assert!(!tokens.is_empty());
-        
+
         let plain_code = "Hello, World!";
         let tokens = highlighter.highlight(plain_code, None);
         assert!(!tokens.is_empty());

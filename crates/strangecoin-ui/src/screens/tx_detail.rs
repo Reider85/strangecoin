@@ -1,9 +1,9 @@
 //! Transaction detail screen implementation
 
+use crate::components::{Button, Card, CardText, Input, Table};
+use crate::i18n::Localization;
 use crate::screens::Screen;
 use crate::theme::ThemeManager;
-use crate::i18n::Localization;
-use crate::components::{Button, Input, Card, CardText, Table};
 use eframe::egui;
 
 /// Transaction detail screen with detailed transaction information
@@ -66,13 +66,14 @@ impl TxDetailScreen {
         self.transaction_id = Some(id.to_string());
         self.loading = true;
         self.error = None;
-        
+
         // In a real implementation, this would fetch the transaction
         // For now, we'll create a mock transaction
         self.transaction = Some(TransactionDetail {
             id: id.to_string(),
             hash: format!("0x{}", hex::encode(id.as_bytes())),
-            block_hash: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
+            block_hash: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+                .to_string(),
             block_number: 12345,
             timestamp: 1642697400,
             from: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q6".to_string(),
@@ -85,7 +86,7 @@ impl TxDetailScreen {
             input: "0x".to_string(),
             confirmations: 12,
         });
-        
+
         self.loading = false;
     }
 
@@ -107,7 +108,12 @@ impl TxDetailScreen {
 }
 
 impl Screen for TxDetailScreen {
-    fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager, localization: &Localization) {
+    fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme_manager: &ThemeManager,
+        localization: &Localization,
+    ) {
         let tokens = theme_manager.tokens();
         let colors = theme_manager.colors();
 
@@ -116,9 +122,9 @@ impl Screen for TxDetailScreen {
             ui.label(
                 egui::RichText::new(localization.tx_detail_title())
                     .size(tokens.typography.xl.size)
-                    .strong()
+                    .strong(),
             );
-            
+
             // Transaction ID input
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Load Transaction").clicked() {
@@ -169,14 +175,13 @@ impl Screen for TxDetailScreen {
                         .child(CardText::new(&format!("Hash: {}", tx.hash)))
                         .child(CardText::new(&format!("Block: {}", tx.block_number)))
                         .child(CardText::new(&format!("Timestamp: {}", tx.timestamp)))
-                        .child(
-                            CardText::new(&format!("Status: {:?}", tx.status))
-                                .color(match tx.status {
-                                    TransactionStatus::Pending => colors.warning.as_egui(),
-                                    TransactionStatus::Success => colors.success.as_egui(),
-                                    TransactionStatus::Failed => colors.error.as_egui(),
-                                })
-                        )
+                        .child(CardText::new(&format!("Status: {:?}", tx.status)).color(
+                            match tx.status {
+                                TransactionStatus::Pending => colors.warning.as_egui(),
+                                TransactionStatus::Success => colors.success.as_egui(),
+                                TransactionStatus::Failed => colors.error.as_egui(),
+                            },
+                        )),
                 )
                 .show(ui, theme_manager);
 
@@ -191,7 +196,10 @@ impl Screen for TxDetailScreen {
                         .child(CardText::new(&format!("To: {}", tx.to)))
                         .child(CardText::new(&format!("Value: {} SC", tx.value)))
                         .child(CardText::new(&format!("Fee: {} SC", tx.fee)))
-                        .child(CardText::new(&format!("Confirmations: {}", tx.confirmations)))
+                        .child(CardText::new(&format!(
+                            "Confirmations: {}",
+                            tx.confirmations
+                        ))),
                 )
                 .show(ui, theme_manager);
 
@@ -204,7 +212,10 @@ impl Screen for TxDetailScreen {
                     Card::new()
                         .child(CardText::new(&format!("Gas Used: {}", tx.gas_used)))
                         .child(CardText::new(&format!("Gas Limit: {}", tx.gas_limit)))
-                        .child(CardText::new(&format!("Gas Price: {} SC", tx.fee / tx.gas_used)))
+                        .child(CardText::new(&format!(
+                            "Gas Price: {} SC",
+                            tx.fee / tx.gas_used
+                        ))),
                 )
                 .show(ui, theme_manager);
 
@@ -278,7 +289,9 @@ impl Screen for TxDetailScreen {
         } else {
             Card::new()
                 .title("No Transaction Selected")
-                .child(CardText::new("Please enter a transaction ID to view details."))
+                .child(CardText::new(
+                    "Please enter a transaction ID to view details.",
+                ))
                 .show(ui, theme_manager);
         }
     }
@@ -319,7 +332,7 @@ mod tests {
     fn test_tx_detail_screen_set_transaction_id() {
         let mut screen = TxDetailScreen::new();
         screen.set_transaction_id("tx_001");
-        
+
         assert_eq!(screen.transaction_id, Some("tx_001".to_string()));
         assert!(screen.transaction.is_some());
         assert!(!screen.loading);
@@ -330,7 +343,7 @@ mod tests {
     fn test_tx_detail_screen_loading() {
         let mut screen = TxDetailScreen::new();
         assert!(!*screen.loading_mut());
-        
+
         *screen.loading_mut() = true;
         assert!(*screen.loading_mut());
     }
@@ -339,7 +352,7 @@ mod tests {
     fn test_tx_detail_screen_error() {
         let mut screen = TxDetailScreen::new();
         assert!(screen.error.is_none());
-        
+
         *screen.error_mut() = Some("Transaction not found".to_string());
         assert_eq!(screen.error, Some("Transaction not found".to_string()));
     }

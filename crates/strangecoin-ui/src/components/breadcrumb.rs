@@ -76,8 +76,7 @@ impl Breadcrumb {
 
                 if item.disabled {
                     ui.label(
-                        egui::RichText::new(&item.label)
-                            .color(colors.text_secondary.as_egui())
+                        egui::RichText::new(&item.label).color(colors.text_secondary.as_egui()),
                     );
                 } else {
                     let response = ui.label(&item.label);

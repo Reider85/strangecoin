@@ -1,9 +1,9 @@
 //! Dashboard screen implementation
 
+use crate::components::{Button, Card, CardSpacer, CardText, Chart, Stat};
+use crate::i18n::Localization;
 use crate::screens::Screen;
 use crate::theme::ThemeManager;
-use crate::i18n::Localization;
-use crate::components::{Button, Card, CardText, CardSpacer, Stat, Chart};
 use eframe::egui;
 
 /// Dashboard screen with overview statistics and charts
@@ -83,8 +83,10 @@ impl DashboardScreen {
             transactions: vec![
                 Transaction {
                     id: "tx_001".to_string(),
-                    from: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q6".to_string(),
-                    to: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q7".to_string(),
+                    from: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q6"
+                        .to_string(),
+                    to: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q7"
+                        .to_string(),
                     amount: 100,
                     fee: 1,
                     status: TransactionStatus::Success,
@@ -92,8 +94,10 @@ impl DashboardScreen {
                 },
                 Transaction {
                     id: "tx_002".to_string(),
-                    from: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q7".to_string(),
-                    to: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q6".to_string(),
+                    from: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q7"
+                        .to_string(),
+                    to: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q6"
+                        .to_string(),
                     amount: 50,
                     fee: 1,
                     status: TransactionStatus::Pending,
@@ -171,7 +175,12 @@ impl DashboardScreen {
 }
 
 impl Screen for DashboardScreen {
-    fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager, localization: &Localization) {
+    fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme_manager: &ThemeManager,
+        localization: &Localization,
+    ) {
         let tokens = theme_manager.tokens();
 
         // Header
@@ -179,13 +188,23 @@ impl Screen for DashboardScreen {
             ui.label(
                 egui::RichText::new(localization.dashboard_title())
                     .size(tokens.typography.xl.size)
-                    .strong()
+                    .strong(),
             );
-            
+
             // Chart selector
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                for chart_type in [ChartType::Balance, ChartType::Transactions, ChartType::Network] {
-                    if ui.selectable_label(self.selected_chart == chart_type, format!("{:?}", chart_type)).clicked() {
+                for chart_type in [
+                    ChartType::Balance,
+                    ChartType::Transactions,
+                    ChartType::Network,
+                ] {
+                    if ui
+                        .selectable_label(
+                            self.selected_chart == chart_type,
+                            format!("{:?}", chart_type),
+                        )
+                        .clicked()
+                    {
                         self.selected_chart = chart_type;
                     }
                 }
@@ -197,40 +216,48 @@ impl Screen for DashboardScreen {
         // Stats grid
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = tokens.spacing.lg;
-            
+
             // Total Balance
             Card::new()
                 .title(localization.dashboard_total_balance())
-                .child(Stat::new("balance", "", &format!("{} SC", self.stats.total_balance))
-                    .icon("💰")
-                    .size(crate::components::StatSize::Lg)
+                .child(
+                    Stat::new("balance", "", &format!("{} SC", self.stats.total_balance))
+                        .icon("💰")
+                        .size(crate::components::StatSize::Lg),
                 )
                 .show(ui, theme_manager);
-            
+
             // Pending Transactions
             Card::new()
                 .title(localization.dashboard_pending_transactions())
-                .child(Stat::new("pending", "", &self.stats.pending_transactions.to_string())
-                    .icon("⏳")
-                    .size(crate::components::StatSize::Lg)
+                .child(
+                    Stat::new("pending", "", &self.stats.pending_transactions.to_string())
+                        .icon("⏳")
+                        .size(crate::components::StatSize::Lg),
                 )
                 .show(ui, theme_manager);
-            
+
             // Active Agents
             Card::new()
                 .title(localization.dashboard_active_agents())
-                .child(Stat::new("agents", "", &self.stats.active_agents.to_string())
-                    .icon("🤖")
-                    .size(crate::components::StatSize::Lg)
+                .child(
+                    Stat::new("agents", "", &self.stats.active_agents.to_string())
+                        .icon("🤖")
+                        .size(crate::components::StatSize::Lg),
                 )
                 .show(ui, theme_manager);
-            
+
             // Network Hashrate
             Card::new()
                 .title(localization.dashboard_network_hashrate())
-                .child(Stat::new("hashrate", "", &format!("{:.2} TH/s", self.stats.network_hashrate / 1e12))
+                .child(
+                    Stat::new(
+                        "hashrate",
+                        "",
+                        &format!("{:.2} TH/s", self.stats.network_hashrate / 1e12),
+                    )
                     .icon("⚡")
-                    .size(crate::components::StatSize::Lg)
+                    .size(crate::components::StatSize::Lg),
                 )
                 .show(ui, theme_manager);
         });
@@ -242,12 +269,13 @@ impl Screen for DashboardScreen {
             // Chart (left side, 2/3 width)
             ui.vertical(|ui| {
                 ui.set_width(ui.available_width() * 0.66);
-                
+
                 Card::new()
                     .title(format!("{:?} Chart", self.selected_chart))
-                    .child(Chart::new("chart", crate::components::ChartType::Line)
-                        .data(self.generate_chart_data())
-                        .size(ui.available_width(), 300.0)
+                    .child(
+                        Chart::new("chart", crate::components::ChartType::Line)
+                            .data(self.generate_chart_data())
+                            .size(ui.available_width(), 300.0),
                     )
                     .show(ui, theme_manager);
             });
@@ -346,25 +374,100 @@ impl DashboardScreen {
     fn generate_chart_data(&self) -> Vec<crate::components::ChartDataPoint> {
         match self.selected_chart {
             ChartType::Balance => vec![
-                crate::components::ChartDataPoint { x: 1.0, y: 1000.0, label: None, color: None },
-                crate::components::ChartDataPoint { x: 2.0, y: 1200.0, label: None, color: None },
-                crate::components::ChartDataPoint { x: 3.0, y: 1100.0, label: None, color: None },
-                crate::components::ChartDataPoint { x: 4.0, y: 1300.0, label: None, color: None },
-                crate::components::ChartDataPoint { x: 5.0, y: 1250.0, label: None, color: None },
+                crate::components::ChartDataPoint {
+                    x: 1.0,
+                    y: 1000.0,
+                    label: None,
+                    color: None,
+                },
+                crate::components::ChartDataPoint {
+                    x: 2.0,
+                    y: 1200.0,
+                    label: None,
+                    color: None,
+                },
+                crate::components::ChartDataPoint {
+                    x: 3.0,
+                    y: 1100.0,
+                    label: None,
+                    color: None,
+                },
+                crate::components::ChartDataPoint {
+                    x: 4.0,
+                    y: 1300.0,
+                    label: None,
+                    color: None,
+                },
+                crate::components::ChartDataPoint {
+                    x: 5.0,
+                    y: 1250.0,
+                    label: None,
+                    color: None,
+                },
             ],
             ChartType::Transactions => vec![
-                crate::components::ChartDataPoint { x: 1.0, y: 10.0, label: None, color: None },
-                crate::components::ChartDataPoint { x: 2.0, y: 15.0, label: None, color: None },
-                crate::components::ChartDataPoint { x: 3.0, y: 12.0, label: None, color: None },
-                crate::components::ChartDataPoint { x: 4.0, y: 18.0, label: None, color: None },
-                crate::components::ChartDataPoint { x: 5.0, y: 20.0, label: None, color: None },
+                crate::components::ChartDataPoint {
+                    x: 1.0,
+                    y: 10.0,
+                    label: None,
+                    color: None,
+                },
+                crate::components::ChartDataPoint {
+                    x: 2.0,
+                    y: 15.0,
+                    label: None,
+                    color: None,
+                },
+                crate::components::ChartDataPoint {
+                    x: 3.0,
+                    y: 12.0,
+                    label: None,
+                    color: None,
+                },
+                crate::components::ChartDataPoint {
+                    x: 4.0,
+                    y: 18.0,
+                    label: None,
+                    color: None,
+                },
+                crate::components::ChartDataPoint {
+                    x: 5.0,
+                    y: 20.0,
+                    label: None,
+                    color: None,
+                },
             ],
             ChartType::Network => vec![
-                crate::components::ChartDataPoint { x: 1.0, y: 1.2e6, label: None, color: None },
-                crate::components::ChartDataPoint { x: 2.0, y: 1.3e6, label: None, color: None },
-                crate::components::ChartDataPoint { x: 3.0, y: 1.4e6, label: None, color: None },
-                crate::components::ChartDataPoint { x: 4.0, y: 1.5e6, label: None, color: None },
-                crate::components::ChartDataPoint { x: 5.0, y: 1.6e6, label: None, color: None },
+                crate::components::ChartDataPoint {
+                    x: 1.0,
+                    y: 1.2e6,
+                    label: None,
+                    color: None,
+                },
+                crate::components::ChartDataPoint {
+                    x: 2.0,
+                    y: 1.3e6,
+                    label: None,
+                    color: None,
+                },
+                crate::components::ChartDataPoint {
+                    x: 3.0,
+                    y: 1.4e6,
+                    label: None,
+                    color: None,
+                },
+                crate::components::ChartDataPoint {
+                    x: 4.0,
+                    y: 1.5e6,
+                    label: None,
+                    color: None,
+                },
+                crate::components::ChartDataPoint {
+                    x: 5.0,
+                    y: 1.6e6,
+                    label: None,
+                    color: None,
+                },
             ],
         }
     }
@@ -390,12 +493,12 @@ mod tests {
     fn test_dashboard_stats() {
         let mut screen = DashboardScreen::new();
         let stats = screen.stats_mut();
-        
+
         stats.total_balance = 2000;
         stats.pending_transactions = 10;
         stats.active_agents = 5;
         stats.network_hashrate = 2.0e6;
-        
+
         assert_eq!(stats.total_balance, 2000);
         assert_eq!(stats.pending_transactions, 10);
         assert_eq!(stats.active_agents, 5);
@@ -406,7 +509,7 @@ mod tests {
     fn test_dashboard_transactions() {
         let mut screen = DashboardScreen::new();
         let transactions = screen.transactions_mut();
-        
+
         transactions.push(Transaction {
             id: "tx_003".to_string(),
             from: "sc1ac1h0d4q3z5e7x9c2b4f6a8d0g2j4k6m9n1q3w5e7y0z2x4c6v8b0n2m4q8".to_string(),
@@ -416,7 +519,7 @@ mod tests {
             status: TransactionStatus::Success,
             timestamp: 1642697400,
         });
-        
+
         assert_eq!(transactions.len(), 3);
     }
 
@@ -424,7 +527,7 @@ mod tests {
     fn test_dashboard_agents() {
         let mut screen = DashboardScreen::new();
         let agents = screen.agents_mut();
-        
+
         agents.push(Agent {
             id: "agent_004".to_string(),
             name: "Validator 4".to_string(),
@@ -432,7 +535,7 @@ mod tests {
             uptime: 99.8,
             last_seen: 1642697400,
         });
-        
+
         assert_eq!(agents.len(), 4);
     }
 
@@ -440,10 +543,10 @@ mod tests {
     fn test_dashboard_chart_selection() {
         let mut screen = DashboardScreen::new();
         assert_eq!(screen.selected_chart, ChartType::Balance);
-        
+
         screen.selected_chart = ChartType::Transactions;
         assert_eq!(screen.selected_chart, ChartType::Transactions);
-        
+
         screen.selected_chart = ChartType::Network;
         assert_eq!(screen.selected_chart, ChartType::Network);
     }
