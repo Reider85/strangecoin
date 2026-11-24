@@ -213,6 +213,12 @@ jobs:
       # posts the same endpoint successfully under workflow-level contents:write
       # (comments 210717333, 210722771). pull-requests scope was a wrong guess.
       contents: write
+      # [GITHUB-P32] check-run API (POST /repos/{o}/{r}/check-runs) needs the
+      # separate Checks: write scope — contents: write does NOT cover it
+      # (GitHub docs: checks write is a distinct GITHUB_TOKEN permission; same
+      # 403 class as GITHUB-P30 above). Deviation from CI6.md Промпт 4, which
+      # claimed contents: write suffices.
+      checks: write
     timeout-minutes: 3
     steps:
       - name: Post commit comment
@@ -246,3 +252,36 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             "/repos/${REPO}/commits/${HEAD_SHA}/comments" \
             -f body="$body"
+
+      # [GITHUB-P32] loud signal for the silent skip: notify-skipped's
+      # commit-comment is invisible unless you subscribe to commit-comments,
+      # and the workflow itself shows "success" (its only executed job exited
+      # 0). Publish a check-run on the CI head SHA so the skip surfaces in the
+      # commit checks list / PR checks rollup. Deviations from CI6.md Промпт 4
+      # (literal snippet would NOT work): (D1) Checks: write permission added —
+      # contents: write does not cover POST /check-runs (see permissions above);
+      # (D2) title/summary must be nested under output[...] — top-level fields
+      # are ignored by the API, so the ⚠️ text would never render; (D3)
+      # conclusion=failure for a RED X per the prompt's goal ("красный
+      # check-run") — the literal snippet's skipped/neutral render gray and
+      # contradict that goal. The gate (prerelease.yml line ~36) is unchanged.
+      - name: Create red check-run on CI head SHA
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${REPO}/check-runs" \
+            -F name="Pre-release (dev-tag)" \
+            -F head_sha="${HEAD_SHA}" \
+            -F status="completed" \
+            -F conclusion="failure" \
+            -F details_url="https://github.com/${REPO}/actions/runs/${CI_RUN_ID}" \
+            -F 'output[title]=⚠️ Dev-tag skipped: CI conclusion was '"${CI_CONCLUSION}" \
+            -F 'output[summary]=No vX.Y.Z-dev.N tag was created for this commit because CI did not conclude with '"'"'success'"'"'. See CI5.md for the gate semantics.'
