@@ -57,7 +57,7 @@ Thanks for helping make Strangecoin better. This document is the single source o
 git clone https://github.com/Reider85/strangecoin.git
 cd strangecoin
 
-# Enable the commit-message hook (once per clone)
+# Enable the git hooks (commit-msg + pre-push guard) (once per clone)
 git config core.hooksPath .githooks
 
 cargo check
@@ -112,7 +112,7 @@ docs: stage3 prompt backlog
 
 - `<id>` is the prompt/issue id: `[S3-P01]`..`[S3-P15]`, `[S2-PNN]`, `[S1.5-PNN]`, `[BUG-SN-NNN]`, or no id for docs/chore commits.
 - **One logical change = one commit.** Do not mix an ADR, unrelated refactors, and a feature in one commit.
-- The `commit-msg` hook (`githooks/commit-msg`) validates this format and **warns** (never blocks) on mismatches.
+- The `commit-msg` hook (`.githooks/commit-msg`) validates this format and **warns** (never blocks) on mismatches.
 - Author identity: commits are made as the committer configured in git; PRs from forks keep your own identity.
 
 ---
@@ -130,6 +130,7 @@ cargo test --workspace
 
 Notes:
 
+- **Pre-push guard:** when `core.hooksPath .githooks` is set (see Setup), every push to `master` / `main` / `develop` runs `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -A warnings -D clippy::correctness` locally first (`.githooks/pre-push`, CI6.md [GITHUB-P33]) — the two most common CI-red classes are caught before the push lands. Escape hatch: `git push --no-verify` (use only when you know why CI would still pass).
 - **Windows timing** (measured): `cargo check --workspace` 2–4 min warm; clippy ~1 min; full `cargo test --workspace` ~10–12 min. Run tests in chunks (`-p strangecoin` → `-p strangecoin-core` → `-p strangecoin-vm-wasm` → `-p strangecoin-net`) with output redirected to a file (`cmd /c "cargo ... > target\x.log 2>&1"`) — piping through PowerShell kills long runs.
 - **fmt drift:** if `cargo fmt --all` produces diffs only because the rustfmt channel changed, commit formatting as a separate style commit.
 - CI additionally runs **source gates** (no direct `.balances` mutations outside whitelisted files; every `#[allow(dead_code)]` / `#[allow(clippy::await_holding_lock)]` needs a `//` justification on the previous line), a **3-OS × stable/beta test matrix**, **release build**, **coverage**, and **9 fuzz targets × 600s**.

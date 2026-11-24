@@ -1,0 +1,56 @@
+#!/bin/bash
+# Pre-push guard: catch the two most common CI-red causes BEFORE the push
+# lands on master and triggers Pre-release's workflow_run gate
+# (CI5.md [GITHUB-P33]).
+#
+# Activated via: git config core.hooksPath .githooks
+# (already set by repo's CONTRIBUTING.md, but verify on clone).
+
+# Windows-host bootstrap (deviation from literal CI6.md script, documented
+# in the [GITHUB-P33] commit body): cc-rs build scripts on this host need
+# msys64's dlltool/as on PATH, and the warm build fingerprints use
+# CARGO_HOME=C:\rt\cargo_home. Without reproducing both, a push from a
+# plain shell (no AGENTS.md preamble) either fails on dlltool or triggers
+# a multi-minute full C++ rebuild inside the hook. No-op on Linux/macOS.
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*)
+    if [ -d "/c/msys64/mingw64/bin" ]; then
+      PATH="/c/msys64/mingw64/bin:$PATH"
+    fi
+    if [ -d "/c/rt/cargo_home" ]; then
+      CARGO_HOME="/c/rt/cargo_home"
+    fi
+    export PATH CARGO_HOME
+    ;;
+esac
+
+set -euo pipefail
+
+# Only guard pushes to master / main / develop (the branches CI listens to).
+ref_lines=$(cat)
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/heads/master|refs/heads/main|refs/heads/develop) ;;
+    *) continue ;;
+  esac
+
+  echo "[pre-push] Running fmt + clippy::correctness on $(pwd) before push to ${remote_ref#refs/heads/}..."
+
+  # fmt drift — same command as ci.yml lint step.
+  if ! cargo fmt --all -- --check; then
+    echo "[pre-push] FAIL: cargo fmt drift detected."
+    echo "[pre-push] Run \`cargo fmt --all\` and re-stage before pushing."
+    exit 1
+  fi
+
+  # clippy correctness — same flag order as ci.yml lint step (Deviation 5:
+  # -A warnings first, then -D clippy::correctness wins on overlap).
+  if ! cargo clippy --workspace --all-targets -- -A warnings -D clippy::correctness; then
+    echo "[pre-push] FAIL: clippy::correctness regression detected."
+    echo "[pre-push] Fix the correctness issue (do NOT #[allow] it)."
+    exit 1
+  fi
+
+  echo "[pre-push] OK: fmt + clippy::correctness clean. Pushing."
+done <<< "$ref_lines"
+exit 0
