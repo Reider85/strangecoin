@@ -102,6 +102,11 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -A warnings -D clippy::correctness
 
+      # UI-P02 (ADR-0031 §WCAG): the UI crate is held to -D warnings, unlike
+      # the workspace-wide -A warnings above.
+      - name: UI clippy (strict)
+        run: cargo clippy -p strangecoin-ui --all-targets --all-features -- -D warnings
+
   test-core:
     name: Test (ubuntu, stable)
     # [GITHUB-P06] hybrid runner (see header).
@@ -127,6 +132,9 @@ jobs:
 
       - name: Run tests (nextest)
         run: cargo nextest run --workspace --no-fail-fast --retries 2
+
+      - name: UI WCAG AA gate (UI-P02)
+        run: cargo test -p strangecoin-ui --features a11y-audit
 
       # Deviation 6: nextest skips doctests; `cargo test --all` used to run
       # them — keep them green without losing coverage.

@@ -1,6 +1,8 @@
 //! Wallet screen implementation
 
+use crate::accessibility::WidgetProbe;
 use crate::components::{Button, Card, CardSpacer, CardText, Input};
+use crate::focus::{WidgetMeta, FOCUS_OUTLINE_WIDTH, MIN_TOUCH_TARGET};
 use crate::i18n::Localization;
 use crate::screens::Screen;
 use crate::theme::ThemeManager;
@@ -42,6 +44,35 @@ impl WalletScreen {
             ip: String::new(),
             port: String::new(),
         }
+    }
+
+    pub fn a11y_probes(&self, theme: &ThemeManager) -> Vec<WidgetProbe> {
+        let colors = theme.colors();
+        let mut probes = Vec::new();
+
+        for (id, label) in [
+            ("send", "Send"),
+            ("history", "History"),
+            ("contracts", "Contracts"),
+        ] {
+            probes.push(
+                WidgetProbe::interactive(
+                    WidgetMeta::new(id, "tab", label),
+                    colors.text,
+                    colors.background,
+                    MIN_TOUCH_TARGET,
+                    MIN_TOUCH_TARGET,
+                )
+                .with_focus(true, FOCUS_OUTLINE_WIDTH),
+            );
+        }
+
+        probes.push(self.send_tab.recipient.a11y_probe(theme));
+        probes.push(self.send_tab.amount.a11y_probe(theme));
+        probes.push(self.send_tab.fee.a11y_probe(theme));
+        probes.push(Button::new("Send").a11y_probe(theme));
+        probes.push(Card::new().title("Balance").a11y_probe(theme));
+        probes
     }
 
     // ------------------------------------------------------------------

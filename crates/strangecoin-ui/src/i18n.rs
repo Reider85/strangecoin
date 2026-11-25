@@ -7,6 +7,7 @@ use fluent::concurrent::FluentBundle;
 use fluent::{FluentArgs as FluentNativeArgs, FluentResource};
 use std::collections::HashMap;
 use std::fs;
+use std::path::{Path, PathBuf};
 use unic_langid::{langid, LanguageIdentifier};
 
 /// Supported locales
@@ -22,22 +23,46 @@ pub struct Localization {
     locale_tag: String,
     bundle: FluentBundle<FluentResource>,
     fallback_bundle: FluentBundle<FluentResource>,
+    resource_root: PathBuf,
 }
 
 impl Localization {
     pub fn new() -> Self {
+        Self::with_root(PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+    }
+
+    pub fn with_root(resource_root: PathBuf) -> Self {
         let current_locale = Self::detect_system_locale().unwrap_or(DEFAULT_LOCALE);
+        Self::with_locale_and_root(&current_locale.to_string(), resource_root.clone())
+            .unwrap_or_else(|_| Self::fallback_with_root(resource_root))
+    }
 
-        // Load bundles for current locale and fallback
-        let (bundle, fallback_bundle) = Self::load_bundles(&current_locale);
+    fn fallback_with_root(resource_root: PathBuf) -> Self {
+        let current_locale = DEFAULT_LOCALE;
         let locale_tag = current_locale.to_string();
-
+        let (bundle, fallback_bundle) = Self::load_bundles(&current_locale, &resource_root);
         Self {
             current_locale,
             locale_tag,
             bundle,
             fallback_bundle,
+            resource_root,
         }
+    }
+
+    pub fn with_locale_and_root(locale: &str, resource_root: PathBuf) -> Result<Self, String> {
+        let current_locale: LanguageIdentifier = locale.parse().map_err(|e| format!("{e}"))?;
+        if !SUPPORTED_LOCALES.contains(&current_locale) {
+            return Err(format!("Unsupported locale: {locale}"));
+        }
+        let (bundle, fallback_bundle) = Self::load_bundles(&current_locale, &resource_root);
+        Ok(Self {
+            locale_tag: current_locale.to_string(),
+            current_locale,
+            bundle,
+            fallback_bundle,
+            resource_root,
+        })
     }
 
     pub fn set_locale(&mut self, locale: &str) -> Result<(), String> {
@@ -49,7 +74,7 @@ impl Localization {
             return Err(format!("Unsupported locale: {}", locale));
         }
 
-        let (bundle, fallback_bundle) = Self::load_bundles(&lang_id);
+        let (bundle, fallback_bundle) = Self::load_bundles(&lang_id, &self.resource_root);
 
         self.locale_tag = lang_id.to_string();
         self.current_locale = lang_id;
@@ -139,38 +164,41 @@ impl Localization {
     /// Load fluent bundles for locale
     fn load_bundles(
         locale: &LanguageIdentifier,
+        root: &Path,
     ) -> (FluentBundle<FluentResource>, FluentBundle<FluentResource>) {
-        let current_bundle = Self::load_bundle(locale);
-        let fallback_bundle = Self::load_bundle(&DEFAULT_LOCALE);
+        let current_bundle = Self::load_bundle(locale, root);
+        let fallback_bundle = Self::load_bundle(&DEFAULT_LOCALE, root);
 
         (current_bundle, fallback_bundle)
     }
 
     /// Load a single fluent bundle
-    fn load_bundle(locale: &LanguageIdentifier) -> FluentBundle<FluentResource> {
+    fn load_bundle(locale: &LanguageIdentifier, root: &Path) -> FluentBundle<FluentResource> {
         let mut bundle = FluentBundle::new_concurrent(vec![locale.clone()]);
 
-        let resource_path = Self::get_resource_path(locale);
+        let resource_path = Self::get_resource_path(locale, root);
         if let Ok(resource) = Self::load_resource(&resource_path) {
             if let Err(e) = bundle.add_resource(resource) {
                 tracing::error!("Failed to add resource: {:?}", e);
             }
         } else {
-            tracing::warn!("Failed to load resource file: {}", resource_path);
+            tracing::warn!("Failed to load resource file: {}", resource_path.display());
         }
 
         bundle
     }
 
     /// Get resource file path for locale
-    fn get_resource_path(locale: &LanguageIdentifier) -> String {
-        format!("locales/{}/main.ftl", locale)
+    fn get_resource_path(locale: &LanguageIdentifier, root: &Path) -> PathBuf {
+        root.join("locales")
+            .join(locale.to_string())
+            .join("main.ftl")
     }
 
     /// Load fluent resource from file
-    fn load_resource(path: &str) -> Result<FluentResource, String> {
-        let content =
-            fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
+    fn load_resource(path: &Path) -> Result<FluentResource, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read file {}: {e}", path.display()))?;
 
         FluentResource::try_new(content)
             .map_err(|e| format!("Failed to parse fluent resource: {:?}", e.1))
@@ -422,5 +450,30 @@ mod tests {
         assert!(!localization.settings_title().is_empty());
         assert!(!localization.agent_activity_title().is_empty());
         assert!(!localization.tx_detail_title().is_empty());
+    }
+
+    #[test]
+    fn manifest_root_loads_real_translations_for_all_locales() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut key_counts = Vec::new();
+        for locale in ["en", "ru", "zh"] {
+            let localization = Localization::with_locale_and_root(locale, root.clone())
+                .expect("supported locale must load");
+            let title = localization.wallet_title();
+            assert!(!title.is_empty());
+            assert!(!title.starts_with("{{"), "locale {locale} fell back to key");
+            assert_eq!(localization.current_locale(), locale);
+
+            let path = root.join("locales").join(locale).join("main.ftl");
+            let content = fs::read_to_string(path).expect("locale file");
+            let count = content
+                .lines()
+                .filter(|line| line.contains('=') && !line.trim_start().starts_with('#'))
+                .count();
+            key_counts.push(count);
+        }
+        assert_eq!(key_counts[0], key_counts[1]);
+        assert_eq!(key_counts[1], key_counts[2]);
+        assert!(key_counts[0] >= 100);
     }
 }

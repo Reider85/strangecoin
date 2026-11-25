@@ -1,6 +1,8 @@
 //! Modal component for dialogs and overlays
 
+use crate::accessibility::WidgetProbe;
 use crate::components::Button;
+use crate::focus::{self, WidgetMeta, FOCUS_OUTLINE_WIDTH, MIN_TOUCH_TARGET};
 use crate::theme::ThemeManager;
 use eframe::egui;
 
@@ -85,12 +87,30 @@ impl Modal {
         self.open
     }
 
+    fn a11y_meta(&self) -> WidgetMeta {
+        let label = self.title.clone().unwrap_or_else(|| self.id.clone());
+        WidgetMeta::new("modal", "button", label)
+    }
+
+    pub fn a11y_probe(&self, theme: &ThemeManager) -> WidgetProbe {
+        let colors = theme.colors();
+        WidgetProbe::interactive(
+            self.a11y_meta(),
+            colors.text,
+            colors.surface,
+            MIN_TOUCH_TARGET,
+            MIN_TOUCH_TARGET,
+        )
+        .with_focus(true, FOCUS_OUTLINE_WIDTH)
+    }
+
     pub fn show(&mut self, ctx: &egui::Context, theme_manager: &ThemeManager) {
         if !self.open {
             return;
         }
 
         let colors = theme_manager.colors();
+        let focus_color = colors.text;
         let tokens = theme_manager.tokens();
 
         // Calculate modal size
@@ -144,8 +164,20 @@ impl Modal {
                                 .strong(),
                         );
 
-                        if closable && ui.button("×").clicked() {
-                            self.close();
+                        if closable {
+                            let meta = WidgetMeta::new("modal-close", "button", "Close");
+                            let response = ui
+                                .push_id(focus::widget_id(&meta), |ui| {
+                                    ui.add(
+                                        egui::Button::new("×")
+                                            .min_size(focus::min_touch_size(egui::Vec2::ZERO)),
+                                    )
+                                })
+                                .inner;
+                            focus::apply_focus_ring(ui, &response, focus_color.as_egui());
+                            if response.clicked() {
+                                self.close();
+                            }
                         }
                     });
                     ui.add_space(tokens.spacing.base);

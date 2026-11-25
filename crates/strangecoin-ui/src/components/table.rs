@@ -1,5 +1,7 @@
 //! Table component for displaying data
 
+use crate::accessibility::WidgetProbe;
+use crate::focus::{self, WidgetMeta, FOCUS_OUTLINE_WIDTH, MIN_TOUCH_TARGET};
 use crate::theme::ThemeManager;
 use eframe::egui;
 
@@ -105,8 +107,30 @@ impl<T: Clone + std::fmt::Debug> Table<T> {
         self
     }
 
+    fn a11y_meta(&self) -> WidgetMeta {
+        let label = self
+            .columns
+            .first()
+            .map(|column| column.label.clone())
+            .unwrap_or_else(|| "table".to_string());
+        WidgetMeta::new("table", "button", label)
+    }
+
+    pub fn a11y_probe(&self, theme: &ThemeManager) -> WidgetProbe {
+        let colors = theme.colors();
+        WidgetProbe::interactive(
+            self.a11y_meta(),
+            colors.text,
+            colors.surface,
+            MIN_TOUCH_TARGET,
+            MIN_TOUCH_TARGET,
+        )
+        .with_focus(true, FOCUS_OUTLINE_WIDTH)
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
-        let _colors = theme_manager.colors();
+        let colors = theme_manager.colors();
+        let focus_color = colors.text;
         let tokens = theme_manager.tokens();
 
         // Table container
@@ -144,7 +168,22 @@ impl<T: Clone + std::fmt::Debug> Table<T> {
                                     ui.label(egui::RichText::new(icon).size(12.0));
                                 }
 
-                                if ui.small_button("↕").clicked() {
+                                let meta = WidgetMeta::new(
+                                    format!("table-sort-{}", i),
+                                    "button",
+                                    label.to_string(),
+                                );
+                                let response = ui
+                                    .push_id(focus::widget_id(&meta), |ui| {
+                                        ui.add(
+                                            egui::Button::new("↕")
+                                                .small()
+                                                .min_size(focus::min_touch_size(egui::Vec2::ZERO)),
+                                        )
+                                    })
+                                    .inner;
+                                focus::apply_focus_ring(ui, &response, focus_color.as_egui());
+                                if response.clicked() {
                                     clicked_sort = Some(*i);
                                 }
                             }

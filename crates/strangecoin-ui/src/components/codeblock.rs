@@ -1,5 +1,7 @@
 //! Codeblock component for displaying code
 
+use crate::accessibility::WidgetProbe;
+use crate::focus::{self, WidgetMeta, FOCUS_OUTLINE_WIDTH, MIN_TOUCH_TARGET};
 use crate::theme::ThemeManager;
 use eframe::egui;
 
@@ -24,6 +26,28 @@ impl CodeBlock {
     /// Stable identifier (used for widget ids / a11y labels).
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    fn a11y_meta(&self) -> WidgetMeta {
+        let label = self.language.clone().unwrap_or_else(|| "code".to_string());
+        WidgetMeta::new("codeblock", "textbox", label)
+    }
+
+    pub fn a11y_probe(&self, theme: &ThemeManager) -> WidgetProbe {
+        let colors = theme.colors();
+        let background = if self.theme == CodeTheme::Dark {
+            colors.surface
+        } else {
+            colors.background
+        };
+        WidgetProbe::interactive(
+            self.a11y_meta(),
+            colors.text,
+            background,
+            MIN_TOUCH_TARGET,
+            MIN_TOUCH_TARGET,
+        )
+        .with_focus(true, FOCUS_OUTLINE_WIDTH)
     }
 
     pub fn new(id: &str, code: &str) -> Self {
@@ -59,6 +83,7 @@ impl CodeBlock {
 
     pub fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let colors = theme_manager.colors();
+        let focus_color = colors.text;
         let tokens = theme_manager.tokens();
 
         // Codeblock container
@@ -81,9 +106,21 @@ impl CodeBlock {
                         );
                     }
 
-                    if self.copy_button && ui.button("Copy").clicked() {
-                        // Copy to clipboard
-                        ui.output_mut(|o| o.copied_text = self.code.clone());
+                    if self.copy_button {
+                        let meta = WidgetMeta::new("codeblock-copy", "button", "Copy");
+                        let response = ui
+                            .push_id(focus::widget_id(&meta), |ui| {
+                                ui.add(
+                                    egui::Button::new("Copy")
+                                        .min_size(focus::min_touch_size(egui::Vec2::ZERO)),
+                                )
+                            })
+                            .inner;
+                        focus::apply_focus_ring(ui, &response, focus_color.as_egui());
+                        if response.clicked() {
+                            // Copy to clipboard
+                            ui.output_mut(|o| o.copied_text = self.code.clone());
+                        }
                     }
                 });
 
@@ -99,21 +136,28 @@ impl CodeBlock {
                     .rounding(egui::Rounding::same(4.0))
                     .inner_margin(egui::Margin::same(tokens.spacing.md))
                     .show(ui, |ui| {
+                        let meta = self.a11y_meta();
                         if self.wrap {
-                            ui.add(
+                            let response = ui.add(
                                 egui::TextEdit::multiline(&mut self.code)
+                                    .id(focus::widget_id(&meta))
                                     .frame(false)
                                     .desired_width(f32::INFINITY)
+                                    .min_size(focus::min_touch_size(egui::Vec2::ZERO))
                                     .lock_focus(true),
                             );
+                            focus::apply_focus_ring(ui, &response, focus_color.as_egui());
                         } else {
                             egui::ScrollArea::vertical().show(ui, |ui| {
-                                ui.add(
+                                let response = ui.add(
                                     egui::TextEdit::multiline(&mut self.code)
+                                        .id(focus::widget_id(&meta))
                                         .frame(false)
                                         .desired_width(f32::INFINITY)
+                                        .min_size(focus::min_touch_size(egui::Vec2::ZERO))
                                         .lock_focus(true),
                                 );
+                                focus::apply_focus_ring(ui, &response, focus_color.as_egui());
                             });
                         }
                     });

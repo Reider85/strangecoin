@@ -1,5 +1,7 @@
 //! Card component for content containers
 
+use crate::accessibility::WidgetProbe;
+use crate::focus::WidgetMeta;
 use crate::theme::ThemeManager;
 use eframe::egui;
 
@@ -65,6 +67,16 @@ impl Card {
     pub fn background(mut self, color: egui::Color32) -> Self {
         self.background = Some(color);
         self
+    }
+
+    fn a11y_meta(&self) -> WidgetMeta {
+        let label = self.title.clone().unwrap_or_else(|| "card".to_string());
+        WidgetMeta::new("card", "group", label)
+    }
+
+    pub fn a11y_probe(&self, theme: &ThemeManager) -> WidgetProbe {
+        let colors = theme.colors();
+        WidgetProbe::non_interactive(self.a11y_meta(), colors.text, colors.surface)
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {

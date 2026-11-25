@@ -1,6 +1,8 @@
 //! Agent activity screen implementation
 
+use crate::accessibility::WidgetProbe;
 use crate::components::{Button, Card, CardText, Stat, Table};
+use crate::focus::{WidgetMeta, FOCUS_OUTLINE_WIDTH, MIN_TOUCH_TARGET};
 use crate::i18n::Localization;
 use crate::screens::Screen;
 use crate::theme::ThemeManager;
@@ -158,6 +160,71 @@ impl AgentActivityScreen {
             loading: false,
             error: None,
         }
+    }
+
+    pub fn a11y_probes(&self, theme: &ThemeManager) -> Vec<WidgetProbe> {
+        let colors = theme.colors();
+        let mut probes = Vec::new();
+
+        let online = self
+            .agents
+            .iter()
+            .filter(|agent| agent.status == AgentStatus::Online)
+            .count();
+        let offline = self
+            .agents
+            .iter()
+            .filter(|agent| agent.status == AgentStatus::Offline)
+            .count();
+        let errors = self
+            .agents
+            .iter()
+            .filter(|agent| agent.status == AgentStatus::Error)
+            .count();
+        for (id, title, value) in [
+            (
+                "total_agents",
+                "Total Agents",
+                self.agents.len().to_string(),
+            ),
+            ("online_agents", "Online", online.to_string()),
+            ("offline_agents", "Offline", offline.to_string()),
+            ("error_agents", "Errors", errors.to_string()),
+        ] {
+            probes.push(Stat::new(id, title, &value).a11y_probe(theme));
+        }
+
+        for (id, label) in [
+            ("filter-all", "All"),
+            ("filter-online", "Online"),
+            ("filter-offline", "Offline"),
+            ("filter-errors", "Errors"),
+        ] {
+            probes.push(
+                WidgetProbe::interactive(
+                    WidgetMeta::new(id, "tab", label),
+                    colors.text,
+                    colors.background,
+                    MIN_TOUCH_TARGET,
+                    MIN_TOUCH_TARGET,
+                )
+                .with_focus(true, FOCUS_OUTLINE_WIDTH),
+            );
+        }
+
+        probes.push(
+            Table::<Vec<String>>::new()
+                .column("Name", "Name")
+                .a11y_probe(theme),
+        );
+        for label in [
+            "Refresh Activities",
+            "Export Activities",
+            "View Agent Details",
+        ] {
+            probes.push(Button::new(label).a11y_probe(theme));
+        }
+        probes
     }
 
     /// Render into an [`egui::Context`] (strangler launcher entry point).

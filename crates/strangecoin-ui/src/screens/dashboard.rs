@@ -1,6 +1,8 @@
 //! Dashboard screen implementation
 
+use crate::accessibility::WidgetProbe;
 use crate::components::{Button, Card, CardSpacer, CardText, Chart, Stat};
+use crate::focus::{WidgetMeta, FOCUS_OUTLINE_WIDTH, MIN_TOUCH_TARGET};
 use crate::i18n::Localization;
 use crate::screens::Screen;
 use crate::theme::ThemeManager;
@@ -131,6 +133,61 @@ impl DashboardScreen {
             block_count: 0,
             mempool_count: 0,
         }
+    }
+
+    pub fn a11y_probes(&self, theme: &ThemeManager) -> Vec<WidgetProbe> {
+        let colors = theme.colors();
+        let mut probes = Vec::new();
+
+        for (id, label) in [
+            ("chart-balance", "Balance"),
+            ("chart-transactions", "Transactions"),
+            ("chart-network", "Network"),
+        ] {
+            probes.push(
+                WidgetProbe::interactive(
+                    WidgetMeta::new(id, "tab", label),
+                    colors.text,
+                    colors.background,
+                    MIN_TOUCH_TARGET,
+                    MIN_TOUCH_TARGET,
+                )
+                .with_focus(true, FOCUS_OUTLINE_WIDTH),
+            );
+        }
+
+        for (id, title, value) in [
+            (
+                "balance",
+                "Total Balance",
+                format!("{} SC", self.stats.total_balance),
+            ),
+            (
+                "pending",
+                "Pending Transactions",
+                self.stats.pending_transactions.to_string(),
+            ),
+            (
+                "agents",
+                "Active Agents",
+                self.stats.active_agents.to_string(),
+            ),
+            (
+                "hashrate",
+                "Network Hashrate",
+                format!("{:.2} TH/s", self.stats.network_hashrate / 1e12),
+            ),
+        ] {
+            probes.push(Stat::new(id, title, &value).a11y_probe(theme));
+        }
+
+        probes.push(
+            Chart::new("chart", crate::components::ChartType::Line)
+                .title("Balance Chart")
+                .a11y_probe(theme),
+        );
+        probes.push(Button::new("View Details").a11y_probe(theme));
+        probes
     }
 
     // ------------------------------------------------------------------

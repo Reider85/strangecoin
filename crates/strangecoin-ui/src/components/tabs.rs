@@ -1,5 +1,7 @@
 //! Tabs component for navigation
 
+use crate::accessibility::WidgetProbe;
+use crate::focus::{self, WidgetMeta, FOCUS_OUTLINE_WIDTH, MIN_TOUCH_TARGET};
 use crate::theme::ThemeManager;
 use eframe::egui;
 
@@ -54,6 +56,27 @@ impl Tabs {
         &self.id
     }
 
+    fn a11y_meta(&self) -> WidgetMeta {
+        let label = self
+            .tabs
+            .get(self.active_tab)
+            .map(|tab| tab.label.clone())
+            .unwrap_or_else(|| self.id.clone());
+        WidgetMeta::new("tabs", "tab", label)
+    }
+
+    pub fn a11y_probe(&self, theme: &ThemeManager) -> WidgetProbe {
+        let colors = theme.colors();
+        WidgetProbe::interactive(
+            self.a11y_meta(),
+            colors.text,
+            colors.background,
+            MIN_TOUCH_TARGET,
+            MIN_TOUCH_TARGET,
+        )
+        .with_focus(true, FOCUS_OUTLINE_WIDTH)
+    }
+
     pub fn new(id: &str) -> Self {
         Self {
             id: id.to_string(),
@@ -92,7 +115,8 @@ impl Tabs {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
-        let _colors = theme_manager.colors();
+        let colors = theme_manager.colors();
+        let focus_color = colors.text;
         let tokens = theme_manager.tokens();
 
         // Tab navigation
@@ -100,7 +124,14 @@ impl Tabs {
             TabOrientation::Horizontal => {
                 ui.horizontal(|ui| {
                     for (i, tab) in self.tabs.iter().enumerate() {
-                        let response = ui.selectable_label(i == self.active_tab, &tab.label);
+                        let meta = WidgetMeta::new(format!("tabs-{}", i), "tab", tab.label.clone());
+                        let response = ui
+                            .push_id(focus::widget_id(&meta), |ui| {
+                                ui.set_min_size(focus::min_touch_size(egui::Vec2::ZERO));
+                                ui.selectable_label(i == self.active_tab, &tab.label)
+                            })
+                            .inner;
+                        focus::apply_focus_ring(ui, &response, focus_color.as_egui());
 
                         if response.clicked() && !tab.disabled {
                             self.active_tab = i;
@@ -111,7 +142,14 @@ impl Tabs {
             TabOrientation::Vertical => {
                 ui.vertical(|ui| {
                     for (i, tab) in self.tabs.iter().enumerate() {
-                        let response = ui.selectable_label(i == self.active_tab, &tab.label);
+                        let meta = WidgetMeta::new(format!("tabs-{}", i), "tab", tab.label.clone());
+                        let response = ui
+                            .push_id(focus::widget_id(&meta), |ui| {
+                                ui.set_min_size(focus::min_touch_size(egui::Vec2::ZERO));
+                                ui.selectable_label(i == self.active_tab, &tab.label)
+                            })
+                            .inner;
+                        focus::apply_focus_ring(ui, &response, focus_color.as_egui());
 
                         if response.clicked() && !tab.disabled {
                             self.active_tab = i;
@@ -248,10 +286,19 @@ impl<T: Clone> ListTabContent<T> {
 
 impl<T: Clone + std::fmt::Display> TabContent for ListTabContent<T> {
     fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
+        let colors = theme_manager.colors();
+        let focus_color = colors.text;
         let tokens = theme_manager.tokens();
 
         for (i, item) in self.items.iter().enumerate() {
-            let response = ui.selectable_label(self.selected_item == Some(i), item.to_string());
+            let meta = WidgetMeta::new(format!("tabs-list-{}", i), "tab", item.to_string());
+            let response = ui
+                .push_id(focus::widget_id(&meta), |ui| {
+                    ui.set_min_size(focus::min_touch_size(egui::Vec2::ZERO));
+                    ui.selectable_label(self.selected_item == Some(i), item.to_string())
+                })
+                .inner;
+            focus::apply_focus_ring(ui, &response, focus_color.as_egui());
 
             if response.clicked() {
                 self.selected_item = Some(i);

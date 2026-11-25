@@ -1,0 +1,11 @@
+---
+source: crates/strangecoin-ui/tests/component_snapshot.rs
+expression: component_style(&probe)
+---
+role=status
+label=Alice
+foreground=#18181b
+background=#f4f4f5
+width=44.0
+height=44.0
+focus=false

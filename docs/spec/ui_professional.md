@@ -408,23 +408,31 @@ delegates to Stage 4 indexer.
 
 ### 7.2. Audit harness
 
-`crates/strangecoin-ui/tests/a11y_audit.rs`:
+`crates/strangecoin-ui/tests/a11y_audit.rs` (implemented, UI-P02 Amendment B):
 
-- Headless render of each component + each screen.
-- Synthetic DOM built from egui widget tree (with ARIA-like metadata).
-- axe-core ruleset run against synthetic DOM.
+- `WidgetProbe` from each component's `a11y_probe(&ThemeManager)` (14/14) and
+  each screen's `a11y_probes(&ThemeManager)` (5/5), for light **and** dark.
+- Pure-Rust WCAG AA rules from §7.1 evaluated deterministically (no wall
+  clock, no RNG, no network): `color-contrast`, `button-name`,
+  `focus-visible`, `target-size`, `use-of-color`. Score = passes/total.
+- `AccessibilityCIGate` is fail-closed: zero results, any violation, or a
+  score below 100% fails the build.
+- axe-core 4.9.1 is vendored (`vendor/axe.min.js`) and available as an opt-in
+  harness behind `a11y-axe` (`STRANGECOIN_AXE_AUDIT=1`, `node` + `jsdom`).
+  It is advisory only and never gates CI.
 - CI gate: `cargo test -p strangecoin-ui --features a11y-audit` must pass
   on every PR. Failures block merge.
 
 ### 7.3. Per-screen audit tests
 
-`crates/strangecoin-ui/tests/screens/`:
+`crates/strangecoin-ui/tests/screens_a11y.rs` (5 named tests in one file —
+Cargo does not auto-discover integration tests in nested directories):
 
-- `wallet_a11y.rs` — Send/History/Contracts tabs.
-- `dashboard_a11y.rs` — Peers/Sync/Mempool/Blocks panels.
-- `tx_detail_a11y.rs` — Overview/Receipt/Witness/Events panels.
-- `agent_activity_a11y.rs` — Feed + Filter sidebar.
-- `settings_a11y.rs` — Network/Peers/Keystore/Config/MCP/ACP sub-screens.
+- `wallet_screen_a11y_probes_pass_gate` — Send/History/Contracts tabs.
+- `dashboard_screen_a11y_probes_pass_gate` — Peers/Sync/Mempool/Blocks panels.
+- `tx_detail_screen_a11y_probes_pass_gate` — Overview/Receipt/Witness/Events panels.
+- `agent_activity_screen_a11y_probes_pass_gate` — Feed + Filter sidebar.
+- `settings_screen_a11y_probes_pass_gate` — Network/Peers/Keystore/Config/MCP/ACP sub-screens.
 
 ### 7.4. Manual review items
 

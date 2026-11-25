@@ -20,6 +20,26 @@ retention decision of this ADR (retain eframe/egui, `crates/strangecoin-ui/`
 strangler plan, a11y/i18n consequences) is unchanged. macOS CI cells are the
 verification surface (not locally verifiable on the Windows dev host).
 
+**Amendment B (2026-11-26, UI-P02 completion)** — the blocking WCAG AA gate is
+now a deterministic pure-Rust rule set in `crates/strangecoin-ui/src/accessibility.rs`
+(contrast >= 4.5:1 / 3:1 large text, 2.4.7 2px focus ring, 2.5.5 44x44 target,
+3.3.1/3.3.2 labels, 4.1.2 name/role/value) driven by `WidgetProbe` from all 14
+components and all 5 screens. The original plan (axe-core on a synthetic DOM
+built from the egui widget tree) consumed runtime `curl` + `node`, had an
+inverted score, disabled `color-contrast`, and swallowed errors — i.e. it could
+not fail CI. axe-core 4.9.1 is now vendored at
+`crates/strangecoin-ui/vendor/axe.min.js` (SHA-256
+`182a40dc5d8207e626c09861ad65027d45e85e3a56d01045d068e2e88ee432ea`) and is an
+opt-in harness behind the `a11y-axe` feature (`STRANGECOIN_AXE_AUDIT=1`, needs
+`node` + `jsdom`); it is NOT the hard gate. CI enforces
+`cargo test -p strangecoin-ui --features a11y-audit` and strict clippy on the
+UI crate. Two further deviations: `component_snapshot.rs` snapshots a
+deterministic style probe (not a headless screenshot), and `[ui] theme`/`[ui]
+locale` are persisted through `toml::Value` (whole-file reserialization,
+comments not preserved). Theme `System` resolves via an injected value, not
+platform APIs, to keep storage/UI paths deterministic. Pins for
+`fluent`/`unic-langid`/`insta` are recorded in AGENTS.md §Stage 4 Pin Policy.
+
 ## Context
 
 Strangecoin today ships an `eframe`/`egui 0.22` immediate-mode GUI in

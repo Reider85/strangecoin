@@ -1,5 +1,7 @@
 //! Avatar component for user profile images
 
+use crate::accessibility::WidgetProbe;
+use crate::focus::WidgetMeta;
 use crate::theme::ThemeManager;
 use eframe::egui;
 
@@ -35,6 +37,15 @@ impl Avatar {
     /// Stable identifier (used for widget ids / a11y labels).
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    fn a11y_meta(&self) -> WidgetMeta {
+        WidgetMeta::new("avatar", "status", self.name.clone())
+    }
+
+    pub fn a11y_probe(&self, theme: &ThemeManager) -> WidgetProbe {
+        let colors = theme.colors();
+        WidgetProbe::non_interactive(self.a11y_meta(), colors.text, colors.surface)
     }
 
     pub fn new(id: &str, name: &str) -> Self {

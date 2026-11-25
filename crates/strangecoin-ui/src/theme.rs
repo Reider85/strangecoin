@@ -5,7 +5,8 @@
 use crate::tokens::{Color, DesignTokens, Shade};
 use eframe::egui;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Theme variants
@@ -20,6 +21,25 @@ pub enum Theme {
 impl Default for Theme {
     fn default() -> Self {
         Self::System
+    }
+}
+
+impl Theme {
+    pub fn as_config_str(self) -> &'static str {
+        match self {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        }
+    }
+
+    pub fn from_config_str(raw: &str) -> Option<Self> {
+        match raw {
+            "light" => Some(Theme::Light),
+            "dark" => Some(Theme::Dark),
+            "system" => Some(Theme::System),
+            _ => None,
+        }
     }
 }
 
@@ -38,18 +58,36 @@ pub struct ThemeManager {
     current: Mutex<Theme>,
     config_path: PathBuf,
     tokens: DesignTokens,
+    system_dark: bool,
 }
 
 impl ThemeManager {
     pub fn new() -> Self {
-        let config_path = Self::get_config_path();
+        Self::with_config_path(Self::get_config_path())
+    }
+
+    pub fn with_config_path(config_path: PathBuf) -> Self {
         let current = Self::load_from_config(&config_path).unwrap_or_default();
 
         Self {
             current: Mutex::new(current),
             config_path,
             tokens: DesignTokens::new(),
+            system_dark: false,
         }
+    }
+
+    pub fn with_theme(config_path: PathBuf, theme: Theme) -> Self {
+        let manager = Self::with_config_path(config_path);
+        if let Ok(mut current) = manager.current.lock() {
+            *current = theme;
+        }
+        manager
+    }
+
+    pub fn with_system_dark(mut self, dark: bool) -> Self {
+        self.system_dark = dark;
+        self
     }
 
     pub fn set_theme(&self, theme: Theme) {
@@ -76,7 +114,7 @@ impl ThemeManager {
         match self.get_theme() {
             Theme::Dark => true,
             Theme::Light => false,
-            Theme::System => Self::detect_system_dark_mode(),
+            Theme::System => self.system_dark,
         }
     }
 
@@ -202,24 +240,51 @@ impl ThemeManager {
         ctx.set_visuals(visuals);
     }
 
-    fn detect_system_dark_mode() -> bool {
-        // Simplified: default to light mode. Platform detection lands with UI-P06 polish.
-        false
-    }
-
     fn get_config_path() -> PathBuf {
         std::env::current_dir()
             .unwrap_or_default()
             .join("config.toml")
     }
 
-    fn load_from_config(_path: &PathBuf) -> Option<Theme> {
-        // Simplified: parse of [ui] theme key lands with UI-P06 persistence.
-        None
+    pub fn load_from_config(path: &Path) -> Option<Theme> {
+        let content = fs::read_to_string(path).ok()?;
+        let value: toml::Value = toml::from_str(&content).ok()?;
+        let raw = value.get("ui")?.get("theme")?.as_str()?;
+        Theme::from_config_str(raw)
     }
 
-    fn save_to_config(&self, theme: Theme) {
-        tracing::info!("Saving theme to config: {}", theme);
+    pub fn save_to_config(&self, theme: Theme) {
+        let content = fs::read_to_string(&self.config_path).unwrap_or_default();
+        let mut value: toml::Value = if content.trim().is_empty() {
+            toml::Value::Table(toml::map::Map::new())
+        } else {
+            match toml::from_str(&content) {
+                Ok(value) => value,
+                Err(e) => {
+                    tracing::warn!(error = %e, "cannot parse config for ui.theme persistence");
+                    return;
+                }
+            }
+        };
+        let table = value.as_table_mut().expect("toml root is a table");
+        let ui = table
+            .entry("ui")
+            .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+        let ui_table = ui.as_table_mut().expect("ui section is a table");
+        ui_table.insert(
+            "theme".to_string(),
+            toml::Value::String(theme.as_config_str().to_string()),
+        );
+        let serialized = match toml::to_string(&value) {
+            Ok(serialized) => serialized,
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot serialize ui.theme to config");
+                return;
+            }
+        };
+        if let Err(e) = fs::write(&self.config_path, serialized) {
+            tracing::warn!(error = %e, "cannot persist ui.theme to config");
+        }
     }
 
     /// Get theme-specific colors
@@ -299,14 +364,56 @@ mod tests {
         assert_ne!(colors.text, Color::new(255, 255, 255)); // Not white
     }
 
+    fn temp_config() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "strangecoin-ui-theme-{}-{:?}.toml",
+            std::process::id(),
+            std::thread::current().id()
+        ))
+    }
+
     #[test]
     fn test_theme_switching() {
-        let manager = ThemeManager::new();
+        let path = temp_config();
+        let _ = fs::remove_file(&path);
+        let manager = ThemeManager::with_config_path(path.clone());
         manager.set_dark_mode(true);
         assert_eq!(manager.get_theme(), Theme::Dark);
         assert!(manager.is_dark());
         manager.set_dark_mode(false);
         assert_eq!(manager.get_theme(), Theme::Light);
         assert!(!manager.is_dark());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn theme_persists_to_ui_table_and_preserves_other_keys() {
+        let path = temp_config();
+        let _ = fs::remove_file(&path);
+        fs::write(&path, "network_id = 3\n[ui]\ntheme = \"system\"\n").expect("fixture");
+        let manager = ThemeManager::with_config_path(path.clone());
+        assert_eq!(manager.get_theme(), Theme::System);
+        manager.set_theme(Theme::Dark);
+        assert_eq!(ThemeManager::load_from_config(&path), Some(Theme::Dark));
+        let contents = fs::read_to_string(&path).expect("saved config");
+        assert!(contents.contains("network_id = 3"));
+        assert!(contents.contains("theme = \"dark\""));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn system_theme_resolves_from_injected_value() {
+        let path = temp_config();
+        let _ = fs::remove_file(&path);
+        let manager = ThemeManager::with_config_path(path.clone()).with_system_dark(true);
+        assert_eq!(manager.get_theme(), Theme::System);
+        assert!(manager.is_dark());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn invalid_config_theme_is_ignored() {
+        assert_eq!(Theme::from_config_str("neon"), None);
+        assert_eq!(Theme::from_config_str("dark"), Some(Theme::Dark));
     }
 }

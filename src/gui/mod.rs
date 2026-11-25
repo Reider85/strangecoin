@@ -43,6 +43,7 @@ pub struct WalletApp {
     pub new_wallet_password: String,
     pub data_dir: PathBuf,
     pub use_strangler_migration: bool,
+    pub ui: crate::config::UiConfig,
 }
 
 /// Strangler migration launcher
@@ -502,9 +503,10 @@ if let Some(ref progress_rx) = self.progress_rx {
 /// any_thread` through `NativeOptions::event_loop_builder`, or moving the
 /// GUI back to the main thread) is a separate follow-up, outside CI4 Prompt 6.
 pub async fn run(app: WalletApp) {
+    let ui = app.ui.clone();
     if app.use_strangler_migration {
         // Use the strangler migration launcher
-        let strangler_app = StranglerLauncher::new(app.node, app.data_dir);
+        let strangler_app = StranglerLauncher::with_ui_config(app.node, app.data_dir, &ui);
         run_strangler_launcher(strangler_app).await;
     } else {
         // Use the original WalletApp

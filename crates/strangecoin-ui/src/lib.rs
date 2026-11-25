@@ -20,7 +20,10 @@
 //! ```
 
 pub mod accessibility;
+#[cfg(feature = "a11y-axe")]
+pub mod axe;
 pub mod components;
+pub mod focus;
 pub mod i18n;
 pub mod screens;
 pub mod theme;

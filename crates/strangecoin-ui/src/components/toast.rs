@@ -1,6 +1,9 @@
 //! Toast component for notifications
 
+use crate::accessibility::WidgetProbe;
+use crate::focus::{self, WidgetMeta, FOCUS_OUTLINE_WIDTH, MIN_TOUCH_TARGET};
 use crate::theme::{ThemeColors, ThemeManager};
+use crate::tokens::{Color, Shade};
 use eframe::egui;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -65,13 +68,31 @@ impl Toast {
         self.visible
     }
 
+    fn a11y_meta(&self) -> WidgetMeta {
+        WidgetMeta::new("toast", "button", self.message.clone())
+    }
+
+    pub fn a11y_probe(&self, theme: &ThemeManager) -> WidgetProbe {
+        let colors = theme.colors();
+        WidgetProbe::interactive(
+            self.a11y_meta(),
+            self.message_ink(theme),
+            colors.surface,
+            MIN_TOUCH_TARGET,
+            MIN_TOUCH_TARGET,
+        )
+        .with_focus(true, FOCUS_OUTLINE_WIDTH)
+    }
+
     pub fn show_in_context(&mut self, ctx: &egui::Context, theme_manager: &ThemeManager) {
         if !self.visible {
             return;
         }
 
         let colors = theme_manager.colors();
+        let focus_color = colors.text;
         let tokens = theme_manager.tokens();
+        let message_ink = self.message_ink(theme_manager);
 
         // Calculate toast position (top-right corner)
         let screen_rect = ctx.screen_rect();
@@ -113,24 +134,48 @@ impl Toast {
                     ui.label(
                         egui::RichText::new(&self.message)
                             .size(tokens.typography.sm.size)
-                            .color(colors.text.as_egui()),
+                            .color(message_ink.as_egui()),
                     );
 
                     // Close button
-                    if ui.button("×").clicked() {
+                    let meta = WidgetMeta::new("toast-close", "button", "Close");
+                    let response = ui
+                        .push_id(focus::widget_id(&meta), |ui| {
+                            ui.add(
+                                egui::Button::new("×")
+                                    .min_size(focus::min_touch_size(egui::Vec2::ZERO)),
+                            )
+                        })
+                        .inner;
+                    focus::apply_focus_ring(ui, &response, focus_color.as_egui());
+                    if response.clicked() {
                         self.hide();
                     }
                 });
             });
     }
 
-    fn get_color(&self, colors: &ThemeColors) -> egui::Color32 {
-        match self.level {
-            ToastLevel::Info => colors.info.as_egui(),
-            ToastLevel::Success => colors.success.as_egui(),
-            ToastLevel::Warning => colors.warning.as_egui(),
-            ToastLevel::Error => colors.error.as_egui(),
+    fn message_ink(&self, theme: &ThemeManager) -> Color {
+        let colors = theme.colors();
+        let ink = theme.tokens().colors.neutral(Shade::_950);
+        if colors.surface.contrast_ratio(&colors.text) >= colors.surface.contrast_ratio(&ink) {
+            colors.text
+        } else {
+            ink
         }
+    }
+
+    fn level_color(&self, colors: &ThemeColors) -> Color {
+        match self.level {
+            ToastLevel::Info => colors.info,
+            ToastLevel::Success => colors.success,
+            ToastLevel::Warning => colors.warning,
+            ToastLevel::Error => colors.error,
+        }
+    }
+
+    fn get_color(&self, colors: &ThemeColors) -> egui::Color32 {
+        self.level_color(colors).as_egui()
     }
 }
 

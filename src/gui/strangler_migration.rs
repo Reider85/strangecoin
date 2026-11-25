@@ -19,6 +19,7 @@ use tracing::{debug, error, info, warn};
 use crate::error::StrangecoinError;
 use crate::{wallet, MiningStatus, MiningTask, Node, Transaction};
 
+use strangecoin_ui::theme::Theme;
 use strangecoin_ui::{
     AgentActivityScreen, DashboardScreen, Localization, SettingsScreen, ThemeManager,
     TxDetailScreen, WalletScreen,
@@ -70,8 +71,20 @@ pub enum MigrationPhase {
 impl StranglerLauncher {
     /// Create a new strangler launcher
     pub fn new(node: Node, data_dir: PathBuf) -> Self {
-        let theme_manager = ThemeManager::new();
-        let localization = Localization::new();
+        Self::with_ui_config(node, data_dir, &crate::config::UiConfig::default())
+    }
+
+    pub fn with_ui_config(node: Node, data_dir: PathBuf, ui: &crate::config::UiConfig) -> Self {
+        let config_path = std::env::current_dir()
+            .unwrap_or_default()
+            .join("config.toml");
+        let theme = Theme::from_config_str(&ui.theme).unwrap_or_default();
+        let theme_manager = ThemeManager::with_theme(config_path, theme);
+        let localization = Localization::with_locale_and_root(
+            &ui.locale,
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        )
+        .unwrap_or_else(|_| Localization::new());
 
         Self {
             node,
@@ -875,6 +888,12 @@ mod tests {
     fn test_strangler_launcher_bridge_methods() {
         let (_dir, node) = make_node("strangler_bridge");
         let mut launcher = StranglerLauncher::new(node, PathBuf::from("./test_data"));
+        let temp_config = std::env::temp_dir().join(format!(
+            "strangecoin-ui-launcher-{}.toml",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&temp_config);
+        launcher.theme_manager = ThemeManager::with_config_path(temp_config.clone());
 
         // Theme bridge
         launcher.theme_manager.set_dark_mode(true);
@@ -910,6 +929,7 @@ mod tests {
         assert_eq!(launcher.current_screen, ScreenType::Dashboard);
         launcher.current_screen = ScreenType::Wallet;
         assert_eq!(launcher.current_screen, ScreenType::Wallet);
+        let _ = std::fs::remove_file(&temp_config);
     }
 
     #[test]

@@ -1,5 +1,7 @@
 //! Breadcrumb component for navigation trails
 
+use crate::accessibility::WidgetProbe;
+use crate::focus::{self, WidgetMeta, FOCUS_OUTLINE_WIDTH, MIN_TOUCH_TARGET};
 use crate::theme::ThemeManager;
 use eframe::egui;
 
@@ -22,6 +24,27 @@ impl Breadcrumb {
     /// Stable identifier (used for widget ids / a11y labels).
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    fn a11y_meta(&self) -> WidgetMeta {
+        let label = self
+            .items
+            .first()
+            .map(|item| item.label.clone())
+            .unwrap_or_else(|| self.id.clone());
+        WidgetMeta::new("breadcrumb", "link", label)
+    }
+
+    pub fn a11y_probe(&self, theme: &ThemeManager) -> WidgetProbe {
+        let colors = theme.colors();
+        WidgetProbe::interactive(
+            self.a11y_meta(),
+            colors.text,
+            colors.background,
+            MIN_TOUCH_TARGET,
+            MIN_TOUCH_TARGET,
+        )
+        .with_focus(true, FOCUS_OUTLINE_WIDTH)
     }
 
     pub fn new(id: &str) -> Self {
@@ -66,6 +89,7 @@ impl Breadcrumb {
 
     pub fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let colors = theme_manager.colors();
+        let focus_color = colors.text;
         let _tokens = theme_manager.tokens();
 
         ui.horizontal(|ui| {
@@ -79,7 +103,15 @@ impl Breadcrumb {
                         egui::RichText::new(&item.label).color(colors.text_secondary.as_egui()),
                     );
                 } else {
-                    let response = ui.label(&item.label);
+                    let meta =
+                        WidgetMeta::new(format!("breadcrumb-{}", i), "link", item.label.clone());
+                    let response = ui
+                        .push_id(focus::widget_id(&meta), |ui| {
+                            ui.set_min_size(focus::min_touch_size(egui::Vec2::ZERO));
+                            ui.add(egui::Label::new(&item.label).sense(egui::Sense::click()))
+                        })
+                        .inner;
+                    focus::apply_focus_ring(ui, &response, focus_color.as_egui());
 
                     if response.clicked() {
                         if let Some(ref callback) = self.on_click {

@@ -1,6 +1,9 @@
 //! Badge component for status indicators
 
-use crate::theme::ThemeManager;
+use crate::accessibility::WidgetProbe;
+use crate::focus::WidgetMeta;
+use crate::theme::{ThemeColors, ThemeManager};
+use crate::tokens::Color;
 use eframe::egui;
 
 /// Badge component for status indicators
@@ -63,6 +66,28 @@ impl Badge {
         self
     }
 
+    fn variant_colors(&self, colors: &ThemeColors) -> (Color, Color) {
+        match self.variant {
+            BadgeVariant::Default => (colors.surface, colors.text),
+            BadgeVariant::Primary => (colors.primary, colors.background),
+            BadgeVariant::Secondary => (colors.secondary, colors.text),
+            BadgeVariant::Success => (colors.success, colors.background),
+            BadgeVariant::Warning => (colors.warning, colors.background),
+            BadgeVariant::Error => (colors.error, colors.background),
+            BadgeVariant::Info => (colors.info, colors.background),
+        }
+    }
+
+    fn a11y_meta(&self) -> WidgetMeta {
+        WidgetMeta::new("badge", "status", self.text.clone())
+    }
+
+    pub fn a11y_probe(&self, theme: &ThemeManager) -> WidgetProbe {
+        let colors = theme.colors();
+        let (background, foreground) = self.variant_colors(&colors);
+        WidgetProbe::non_interactive(self.a11y_meta(), foreground, background)
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let colors = theme_manager.colors();
         let tokens = theme_manager.tokens();
@@ -75,15 +100,7 @@ impl Badge {
         };
 
         // Calculate colors
-        let (bg_color, fg_color) = match self.variant {
-            BadgeVariant::Default => (colors.surface, colors.text),
-            BadgeVariant::Primary => (colors.primary, colors.background),
-            BadgeVariant::Secondary => (colors.secondary, colors.text),
-            BadgeVariant::Success => (colors.success, colors.background),
-            BadgeVariant::Warning => (colors.warning, colors.background),
-            BadgeVariant::Error => (colors.error, colors.background),
-            BadgeVariant::Info => (colors.info, colors.background),
-        };
+        let (bg_color, fg_color) = self.variant_colors(&colors);
 
         // Style
         let mut style = egui::Style::default();

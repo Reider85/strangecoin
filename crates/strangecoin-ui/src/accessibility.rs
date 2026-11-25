@@ -1,26 +1,11 @@
-//! Accessibility audit harness for Strangecoin UI
-//!
-//! This module provides accessibility testing using axe-core to ensure
-//! WCAG AA compliance for the UI components and screens.
-
-use serde_json::Value;
+use crate::focus::{WidgetMeta, FOCUS_OUTLINE_WIDTH, MIN_TOUCH_TARGET};
+use crate::tokens::Color;
 use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
-use std::process::Command;
 
-/// Accessibility audit results
-#[derive(Debug, Clone)]
-pub struct AccessibilityAuditResult {
-    pub violations: Vec<AccessibilityViolation>,
-    pub passes: Vec<String>,
-    pub incomplete: Vec<String>,
-    pub timestamp: u64,
-    pub score: f64,
-}
+pub const WCAG_AA_CONTRAST: f32 = 4.5;
+pub const WCAG_AA_LARGE_CONTRAST: f32 = 3.0;
 
-/// Accessibility violation details
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessibilityViolation {
     pub id: String,
     pub impact: String,
@@ -31,8 +16,7 @@ pub struct AccessibilityViolation {
     pub nodes: Vec<AccessibilityNode>,
 }
 
-/// Accessibility node details
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessibilityNode {
     pub html: String,
     pub selector: String,
@@ -40,11 +24,85 @@ pub struct AccessibilityNode {
     pub summary: String,
 }
 
-/// Accessibility auditor for UI components
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccessibilityAuditResult {
+    pub violations: Vec<AccessibilityViolation>,
+    pub passes: Vec<String>,
+    pub incomplete: Vec<String>,
+    pub timestamp: u64,
+    pub score: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WidgetProbe {
+    pub meta: WidgetMeta,
+    pub foreground: Color,
+    pub background: Color,
+    pub large_text: bool,
+    pub focus_ring: bool,
+    pub focus_width: f32,
+    pub width: f32,
+    pub height: f32,
+    pub textual_status: bool,
+}
+
+impl WidgetProbe {
+    pub fn interactive(
+        meta: WidgetMeta,
+        foreground: Color,
+        background: Color,
+        width: f32,
+        height: f32,
+    ) -> Self {
+        Self {
+            meta,
+            foreground,
+            background,
+            large_text: false,
+            focus_ring: false,
+            focus_width: 0.0,
+            width,
+            height,
+            textual_status: true,
+        }
+    }
+
+    pub fn non_interactive(meta: WidgetMeta, foreground: Color, background: Color) -> Self {
+        Self {
+            meta,
+            foreground,
+            background,
+            large_text: false,
+            focus_ring: false,
+            focus_width: 0.0,
+            width: MIN_TOUCH_TARGET,
+            height: MIN_TOUCH_TARGET,
+            textual_status: true,
+        }
+    }
+
+    pub fn with_focus(mut self, ring: bool, width: f32) -> Self {
+        self.focus_ring = ring;
+        self.focus_width = width;
+        self
+    }
+
+    pub fn with_large_text(mut self, large: bool) -> Self {
+        self.large_text = large;
+        self
+    }
+
+    pub fn with_textual_status(mut self, textual: bool) -> Self {
+        self.textual_status = textual;
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct AccessibilityAuditor {
-    pub axe_version: String,
     pub rules: Vec<String>,
     pub exclude_rules: Vec<String>,
+    pub min_contrast: f32,
 }
 
 impl Default for AccessibilityAuditor {
@@ -54,229 +112,144 @@ impl Default for AccessibilityAuditor {
 }
 
 impl AccessibilityAuditor {
-    /// Create a new accessibility auditor
     pub fn new() -> Self {
         Self {
-            axe_version: "4.9.1".to_string(),
             rules: vec![
                 "color-contrast".to_string(),
                 "button-name".to_string(),
-                "image-alt".to_string(),
-                "form-field-label".to_string(),
-                "link-name".to_string(),
-                "aria-required-attr".to_string(),
-                "landmark-one-main".to_string(),
-                "page-has-heading-one".to_string(),
-                "html-lang-valid".to_string(),
-                "meta-viewport".to_string(),
+                "focus-visible".to_string(),
+                "target-size".to_string(),
+                "use-of-color".to_string(),
             ],
-            exclude_rules: vec![
-                "color-contrast".to_string(), // Exclude for testing, should be enabled in production
-            ],
+            exclude_rules: Vec::new(),
+            min_contrast: WCAG_AA_CONTRAST,
         }
     }
 
-    /// Run accessibility audit on HTML content
-    pub fn audit_html(&self, html: &str) -> Result<AccessibilityAuditResult, String> {
-        // Create a temporary HTML file with axe-core script
-        let temp_dir = std::env::temp_dir();
-        let html_file = temp_dir.join("temp_audit.html");
-        let axe_script = temp_dir.join("axe.min.js");
-
-        // Write HTML content
-        fs::write(&html_file, html).map_err(|e| format!("Failed to write HTML file: {}", e))?;
-
-        // Check if axe-core script exists, if not, download it
-        if !axe_script.exists() {
-            self.download_axe_core(&axe_script)?;
+    fn violation(
+        &self,
+        id: &str,
+        impact: &str,
+        probe: &WidgetProbe,
+        detail: &str,
+    ) -> AccessibilityViolation {
+        AccessibilityViolation {
+            id: id.to_string(),
+            impact: impact.to_string(),
+            description: format!("{}: {}", probe.meta.name, detail),
+            help: detail.to_string(),
+            help_url: format!("https://www.w3.org/WAI/WCAG22/Understanding/{}", id),
+            tags: vec!["wcag2aa".to_string()],
+            nodes: vec![AccessibilityNode {
+                html: format!("<{} label=\"{}\">", probe.meta.role, probe.meta.label),
+                selector: format!("[data-ui-id=\"{}\"]", probe.meta.name),
+                target: vec![probe.meta.name.clone()],
+                summary: detail.to_string(),
+            }],
         }
+    }
 
-        // Create JavaScript audit script
-        let js_script = format!(
-            r#"
-            const axe = require('{axe_path}');
-            axe.run('#{{document.body}}', {{
-                rules: {{
-                    enabled: {rules:?},
-                    disabled: {exclude_rules:?}
-                }}
-            }}, (err, results) => {{
-                console.log(JSON.stringify({{
-                    violations: results.violations.map(v => ({{
-                        id: v.id,
-                        impact: v.impact,
-                        description: v.description,
-                        help: v.help,
-                        helpUrl: v.helpUrl,
-                        tags: v.tags,
-                            nodes: v.nodes.map(n => ({{
-                                html: n.html,
-                                selector: n.selector,
-                                target: n.target,
-                                summary: n.summary
-                            }}))
-                        }})),
-                    passes: results.passes.map(p => p.id),
-                    incomplete: results.incomplete.map(i => i.id),
-                    timestamp: Date.now(),
-                    score: results.violations.len() / (results.violations.len() + results.passes.len()) * 100
-                }}));
-            }});
-        "#,
-            axe_path = axe_script.display(),
-            rules = self.rules,
-            exclude_rules = self.exclude_rules
-        );
+    pub fn audit_widget(&self, probe: &WidgetProbe) -> AccessibilityAuditResult {
+        let mut violations = Vec::new();
+        let mut passes = Vec::new();
 
-        // Run Node.js to execute the audit
-        let output = Command::new("node")
-            .args(["-e", &js_script, &format!("{}", html_file.display())])
-            .output()
-            .map_err(|e| format!("Failed to execute Node.js: {}", e))?;
-
-        if !output.status.success() {
-            return Err(format!(
-                "Node.js execution failed: {}",
-                String::from_utf8_lossy(&output.stderr)
+        let required_contrast = if probe.large_text {
+            WCAG_AA_LARGE_CONTRAST
+        } else {
+            self.min_contrast
+        };
+        let ratio = probe.foreground.contrast_ratio(&probe.background);
+        if ratio + f32::EPSILON < required_contrast {
+            violations.push(self.violation(
+                "color-contrast",
+                "serious",
+                probe,
+                &format!("contrast {:.2}:1 below {:.2}:1", ratio, required_contrast),
             ));
+        } else {
+            passes.push("color-contrast".to_string());
         }
 
-        let result_json = String::from_utf8_lossy(&output.stdout);
-        let result_value: Value = serde_json::from_str(&result_json)
-            .map_err(|e| format!("Failed to parse JSON result: {}", e))?;
+        let interactive = probe.meta.is_interactive();
+        if interactive {
+            if probe.meta.label.trim().is_empty() {
+                violations.push(self.violation(
+                    "button-name",
+                    "critical",
+                    probe,
+                    "interactive widget has no accessible name",
+                ));
+            } else {
+                passes.push("button-name".to_string());
+            }
 
-        self.parse_audit_result(result_value)
-    }
+            if !probe.focus_ring || probe.focus_width + f32::EPSILON < FOCUS_OUTLINE_WIDTH {
+                violations.push(self.violation(
+                    "focus-visible",
+                    "serious",
+                    probe,
+                    &format!(
+                        "focus outline must be at least {:.0}px",
+                        FOCUS_OUTLINE_WIDTH
+                    ),
+                ));
+            } else {
+                passes.push("focus-visible".to_string());
+            }
 
-    /// Download axe-core script (via system curl to avoid a heavy HTTP dep)
-    fn download_axe_core(&self, path: &Path) -> Result<(), String> {
-        let url = format!(
-            "https://cdnjs.cloudflare.com/ajax/libs/axe-core/{}/axe.min.js",
-            self.axe_version
-        );
-        let output = Command::new("curl")
-            .args(["-fsSL", "-o"])
-            .arg(path)
-            .arg(&url)
-            .output()
-            .map_err(|e| format!("Failed to download axe-core (curl): {}", e))?;
+            if probe.width + f32::EPSILON < MIN_TOUCH_TARGET
+                || probe.height + f32::EPSILON < MIN_TOUCH_TARGET
+            {
+                violations.push(self.violation(
+                    "target-size",
+                    "serious",
+                    probe,
+                    &format!(
+                        "touch target must be at least {:.0}x{:.0}px",
+                        MIN_TOUCH_TARGET, MIN_TOUCH_TARGET
+                    ),
+                ));
+            } else {
+                passes.push("target-size".to_string());
+            }
+        }
 
-        if !output.status.success() {
-            let _ = fs::remove_file(path);
-            return Err(format!(
-                "axe-core download failed: {}",
-                String::from_utf8_lossy(&output.stderr)
+        if probe.meta.role == "status" && !probe.textual_status {
+            violations.push(self.violation(
+                "use-of-color",
+                "minor",
+                probe,
+                "status must be conveyed in text, not color alone",
             ));
+        } else {
+            passes.push("use-of-color".to_string());
         }
 
-        Ok(())
-    }
+        let total = passes.len() + violations.len();
+        let score = if total == 0 {
+            0.0
+        } else {
+            passes.len() as f64 / total as f64 * 100.0
+        };
 
-    /// Parse audit result from JSON
-    fn parse_audit_result(&self, result: Value) -> Result<AccessibilityAuditResult, String> {
-        let violations = result["violations"]
-            .as_array()
-            .ok_or("Missing violations array")?
-            .iter()
-            .map(|v| AccessibilityViolation {
-                id: v["id"].as_str().unwrap_or("").to_string(),
-                impact: v["impact"].as_str().unwrap_or("").to_string(),
-                description: v["description"].as_str().unwrap_or("").to_string(),
-                help: v["help"].as_str().unwrap_or("").to_string(),
-                help_url: v["helpUrl"].as_str().unwrap_or("").to_string(),
-                tags: v["tags"]
-                    .as_array()
-                    .unwrap_or(&vec![])
-                    .iter()
-                    .map(|t| t.as_str().unwrap_or("").to_string())
-                    .collect(),
-                nodes: v["nodes"]
-                    .as_array()
-                    .unwrap_or(&vec![])
-                    .iter()
-                    .map(|n| AccessibilityNode {
-                        html: n["html"].as_str().unwrap_or("").to_string(),
-                        selector: n["selector"].as_str().unwrap_or("").to_string(),
-                        target: n["target"]
-                            .as_array()
-                            .unwrap_or(&vec![])
-                            .iter()
-                            .map(|t| t.as_str().unwrap_or("").to_string())
-                            .collect(),
-                        summary: n["summary"].as_str().unwrap_or("").to_string(),
-                    })
-                    .collect(),
-            })
-            .collect();
-
-        let passes = result["passes"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .map(|p| p.as_str().unwrap_or("").to_string())
-            .collect();
-
-        let incomplete = result["incomplete"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .map(|i| i.as_str().unwrap_or("").to_string())
-            .collect();
-
-        let score = result["score"].as_f64().unwrap_or(0.0);
-
-        Ok(AccessibilityAuditResult {
+        AccessibilityAuditResult {
             violations,
             passes,
-            incomplete,
-            timestamp: result["timestamp"].as_u64().unwrap_or(0),
+            incomplete: Vec::new(),
+            timestamp: 0,
             score,
-        })
+        }
     }
 
-    /// Run audit on component HTML
-    pub fn audit_component(
-        &self,
-        component_name: &str,
-        html: &str,
-    ) -> Result<AccessibilityAuditResult, String> {
-        let full_html = self.wrap_html_with_axe(component_name, html);
-        self.audit_html(&full_html)
-    }
-
-    /// Wrap HTML with axe-core script
-    fn wrap_html_with_axe(&self, component_name: &str, html: &str) -> String {
-        format!(
-            r#"
-            <!DOCTYPE html>
-            <html lang="en">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Accessibility Audit - {}</title>
-                <style>
-                    body {{ font-family: Arial, sans-serif; margin: 20px; }}
-                    .component {{ border: 1px solid #ccc; padding: 20px; margin: 20px; }}
-                </style>
-            </head>
-            <body>
-                <h1>Accessibility Audit - {}</h1>
-                <div class="component">
-                    {}
-                </div>
-                <script src="https://cdnjs.cloudflare.com/ajax/libs/axe-core/{}/axe.min.js"></script>
-            </body>
-            </html>
-        "#,
-            component_name, component_name, html, self.axe_version
-        )
+    pub fn audit_component(&self, _name: &str, probe: &WidgetProbe) -> AccessibilityAuditResult {
+        self.audit_widget(probe)
     }
 }
 
-/// Accessibility test suite for UI components
+#[derive(Debug, Clone, PartialEq)]
 pub struct AccessibilityTestSuite {
     auditor: AccessibilityAuditor,
-    pub component_tests: HashMap<String, String>,
+    pub component_probes: HashMap<String, WidgetProbe>,
 }
 
 impl Default for AccessibilityTestSuite {
@@ -286,93 +259,42 @@ impl Default for AccessibilityTestSuite {
 }
 
 impl AccessibilityTestSuite {
-    /// Create a new accessibility test suite
     pub fn new() -> Self {
         Self {
             auditor: AccessibilityAuditor::new(),
-            component_tests: HashMap::new(),
+            component_probes: HashMap::new(),
         }
     }
 
-    /// Register a component test
-    pub fn register_component_test(&mut self, component_name: &str, html: &str) {
-        self.component_tests
-            .insert(component_name.to_string(), html.to_string());
+    pub fn register_component_test(&mut self, name: impl Into<String>, probe: WidgetProbe) {
+        self.component_probes.insert(name.into(), probe);
     }
 
-    /// Run all component tests
-    pub fn run_all_tests(&mut self) -> HashMap<String, AccessibilityAuditResult> {
-        let mut results = HashMap::new();
-
-        for (component_name, html) in &self.component_tests {
-            match self.auditor.audit_component(component_name, html) {
-                Ok(result) => {
-                    results.insert(component_name.clone(), result);
-                }
-                Err(e) => {
-                    eprintln!("Failed to audit component {}: {}", component_name, e);
-                }
-            }
-        }
-
-        results
+    pub fn run_all(&self) -> HashMap<String, AccessibilityAuditResult> {
+        self.component_probes
+            .iter()
+            .map(|(name, probe)| (name.clone(), self.auditor.audit_widget(probe)))
+            .collect()
     }
 
-    /// Run a specific component test
-    pub fn run_component_test(&mut self, component_name: &str) -> Option<AccessibilityAuditResult> {
-        if let Some(html) = self.component_tests.get(component_name) {
-            self.auditor.audit_component(component_name, html).ok()
-        } else {
-            None
-        }
-    }
-
-    /// Generate accessibility report
     pub fn generate_report(&self, results: &HashMap<String, AccessibilityAuditResult>) -> String {
-        let mut report = String::new();
-        report.push_str("# Accessibility Audit Report\n\n");
-        report.push_str("## Summary\n\n");
-        report.push_str(&format!("Total components tested: {}\n", results.len()));
-
-        let total_violations = results.values().map(|r| r.violations.len()).sum::<usize>();
-
-        let total_passes = results.values().map(|r| r.passes.len()).sum::<usize>();
-
-        let average_score = results.values().map(|r| r.score).sum::<f64>() / results.len() as f64;
-
-        report.push_str(&format!("Total violations: {}\n", total_violations));
-        report.push_str(&format!("Total passes: {}\n", total_passes));
-        report.push_str(&format!("Average score: {:.1}%\n\n", average_score));
-
-        report.push_str("## Component Details\n\n");
-
-        for (component_name, result) in results {
-            report.push_str(&format!("### {}\n", component_name));
-            report.push_str(&format!("Score: {:.1}%\n", result.score));
-            report.push_str(&format!("{} violations\n", result.violations.len()));
-            report.push_str(&format!("Passes: {}\n", result.passes.len()));
-
-            if !result.violations.is_empty() {
-                report.push_str("\n**Violations:**\n");
-                for violation in &result.violations {
-                    report.push_str(&format!(
-                        "- **{}**: {}\n",
-                        violation.id, violation.description
-                    ));
-                    report.push_str(&format!("  - Impact: {}\n", violation.impact));
-                    report.push_str(&format!("  - Help: {}\n", violation.help));
-                    report.push_str(&format!("  - Tags: {:?}\n", violation.tags));
-                }
-            }
-
-            report.push_str("\n\n");
+        let mut report = String::from("# Accessibility Audit Report\n\n");
+        let mut names: Vec<&String> = results.keys().collect();
+        names.sort();
+        for name in names {
+            let result = &results[name];
+            report.push_str(&format!(
+                "## {} — {:.1}% ({} violations)\n",
+                name,
+                result.score,
+                result.violations.len()
+            ));
         }
-
         report
     }
 }
 
-/// CI gate for accessibility compliance
+#[derive(Debug, Clone, PartialEq)]
 pub struct AccessibilityCIGate {
     pub threshold_score: f64,
     pub max_violations: usize,
@@ -385,91 +307,57 @@ impl Default for AccessibilityCIGate {
 }
 
 impl AccessibilityCIGate {
-    /// Create a new CI gate
     pub fn new() -> Self {
         Self {
-            threshold_score: 90.0, // 90% score threshold
-            max_violations: 5,     // Maximum 5 violations allowed
+            threshold_score: 100.0,
+            max_violations: 0,
         }
     }
 
-    /// Check if audit results pass CI gate
-    ///
-    /// Gate rules:
-    /// - every component must meet the score threshold;
-    /// - a `critical`-impact violation fails the gate immediately;
-    /// - aggregate violation count must stay within `max_violations`.
     pub fn check_compliance(&self, results: &HashMap<String, AccessibilityAuditResult>) -> bool {
+        if results.is_empty() {
+            return false;
+        }
         let mut total_violations = 0;
-        let mut total_components = 0;
-
         for result in results.values() {
-            total_violations += result.violations.len();
-            total_components += 1;
-            if result.score < self.threshold_score {
+            if result.score + f64::EPSILON < self.threshold_score {
                 return false;
             }
             if result.violations.iter().any(|v| v.impact == "critical") {
                 return false;
             }
+            total_violations += result.violations.len();
         }
-
-        if total_components == 0 {
-            return true; // No components tested, pass by default
-        }
-
         total_violations <= self.max_violations
     }
 
-    /// Generate CI gate report
     pub fn generate_ci_report(
         &self,
         results: &HashMap<String, AccessibilityAuditResult>,
     ) -> String {
-        let mut report = String::new();
-        report.push_str("# Accessibility CI Gate Report\n\n");
-
-        let total_violations = results.values().map(|r| r.violations.len()).sum::<usize>();
-
-        let total_components = results.len();
-        let average_score =
-            results.values().map(|r| r.score).sum::<f64>() / total_components as f64;
-
-        report.push_str("## Gate Status\n\n");
-
-        let passes = self.check_compliance(results);
+        let mut report = String::from("# Accessibility CI Gate Report\n\n");
         report.push_str(&format!(
             "Status: {}\n\n",
-            if passes { "✅ PASS" } else { "❌ FAIL" }
+            if self.check_compliance(results) {
+                "PASS"
+            } else {
+                "FAIL"
+            }
         ));
-
         report.push_str("## Thresholds:\n\n");
         report.push_str(&format!("Score threshold: {:.1}%\n", self.threshold_score));
         report.push_str(&format!("Max violations: {}\n\n", self.max_violations));
-
         report.push_str("## Results:\n\n");
-        report.push_str(&format!("Components tested: {}\n", total_components));
-        report.push_str(&format!("Average score: {:.1}%\n", average_score));
-        report.push_str(&format!("Total violations: {}\n\n", total_violations));
-
-        if !passes {
-            report.push_str("## Failures\n\n");
-
-            if average_score < self.threshold_score {
-                report.push_str(&format!(
-                    "- Average score ({:.1}%) below threshold ({:.1}%)\n",
-                    average_score, self.threshold_score
-                ));
-            }
-
-            if total_violations > self.max_violations {
-                report.push_str(&format!(
-                    "- Total violations ({}) exceeds maximum allowed ({})\n",
-                    total_violations, self.max_violations
-                ));
-            }
+        let mut names: Vec<&String> = results.keys().collect();
+        names.sort();
+        for name in names {
+            report.push_str(&format!(
+                "- {}: {:.1}%, {} violations\n",
+                name,
+                results[name].score,
+                results[name].violations.len()
+            ));
         }
-
         report
     }
 }
@@ -478,156 +366,78 @@ impl AccessibilityCIGate {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_accessibility_auditor_creation() {
-        let auditor = AccessibilityAuditor::new();
-        assert_eq!(auditor.axe_version, "4.9.1");
-        assert!(auditor.rules.contains(&"color-contrast".to_string()));
-        assert!(auditor
-            .exclude_rules
-            .contains(&"color-contrast".to_string()));
+    fn probe() -> WidgetProbe {
+        WidgetProbe::interactive(
+            WidgetMeta::new("test_button", "button", "OK"),
+            Color::new(255, 255, 255),
+            Color::new(0, 92, 170),
+            MIN_TOUCH_TARGET,
+            MIN_TOUCH_TARGET,
+        )
+        .with_focus(true, FOCUS_OUTLINE_WIDTH)
     }
 
     #[test]
-    fn test_accessibility_test_suite_creation() {
-        let suite = AccessibilityTestSuite::new();
-        assert_eq!(suite.component_tests.len(), 0);
-    }
-
-    #[test]
-    fn test_accessibility_test_suite_register_test() {
-        let mut suite = AccessibilityTestSuite::new();
-        suite.register_component_test("test_component", "<div>Test</div>");
-        assert_eq!(suite.component_tests.len(), 1);
-        assert_eq!(
-            suite.component_tests.get("test_component"),
-            Some(&"<div>Test</div>".to_string())
-        );
-    }
-
-    #[test]
-    fn test_accessibility_ci_gate_creation() {
-        let gate = AccessibilityCIGate::new();
-        assert_eq!(gate.threshold_score, 90.0);
-        assert_eq!(gate.max_violations, 5);
-    }
-
-    #[test]
-    fn test_accessibility_ci_gate_check_compliance_empty() {
-        let gate = AccessibilityCIGate::new();
-        let results = HashMap::new();
-        assert!(gate.check_compliance(&results));
-    }
-
-    #[test]
-    fn test_accessibility_ci_gate_check_compliance_pass() {
-        let gate = AccessibilityCIGate::new();
-        let mut results = HashMap::new();
-
-        let result = AccessibilityAuditResult {
-            violations: vec![],
-            passes: vec!["test".to_string()],
-            incomplete: vec![],
-            timestamp: 0,
-            score: 95.0,
-        };
-
-        results.insert("test_component".to_string(), result);
-        assert!(gate.check_compliance(&results));
-    }
-
-    #[test]
-    fn test_accessibility_ci_gate_check_compliance_fail_score() {
-        let gate = AccessibilityCIGate::new();
-        let mut results = HashMap::new();
-
-        let result = AccessibilityAuditResult {
-            violations: vec![],
-            passes: vec!["test".to_string()],
-            incomplete: vec![],
-            timestamp: 0,
-            score: 85.0,
-        };
-
-        results.insert("test_component".to_string(), result);
-        assert!(!gate.check_compliance(&results));
-    }
-
-    #[test]
-    fn test_accessibility_ci_gate_check_compliance_fail_violations() {
-        let gate = AccessibilityCIGate::new();
-        let mut results = HashMap::new();
-
-        let result = AccessibilityAuditResult {
-            violations: vec![AccessibilityViolation {
-                id: "test-violation".to_string(),
-                impact: "critical".to_string(),
-                description: "Test violation".to_string(),
-                help: "Test help".to_string(),
-                help_url: "https://example.com".to_string(),
-                tags: vec!["test".to_string()],
-                nodes: vec![],
-            }],
-            passes: vec!["test".to_string()],
-            incomplete: vec![],
-            timestamp: 0,
-            score: 95.0,
-        };
-
-        results.insert("test_component".to_string(), result);
-        assert!(!gate.check_compliance(&results));
-    }
-
-    #[test]
-    fn test_accessibility_audit_result_creation() {
-        let result = AccessibilityAuditResult {
-            violations: vec![],
-            passes: vec![],
-            incomplete: vec![],
-            timestamp: 0,
-            score: 0.0,
-        };
-
-        assert_eq!(result.violations.len(), 0);
-        assert_eq!(result.passes.len(), 0);
-        assert_eq!(result.incomplete.len(), 0);
+    fn accessible_widget_passes_all_rules() {
+        let result = AccessibilityAuditor::new().audit_widget(&probe());
+        assert!(result.violations.is_empty());
+        assert!((result.score - 100.0).abs() < f64::EPSILON);
         assert_eq!(result.timestamp, 0);
-        assert_eq!(result.score, 0.0);
     }
 
     #[test]
-    fn test_accessibility_violation_creation() {
-        let violation = AccessibilityViolation {
-            id: "test-violation".to_string(),
-            impact: "critical".to_string(),
-            description: "Test violation".to_string(),
-            help: "Test help".to_string(),
-            help_url: "https://example.com".to_string(),
-            tags: vec!["test".to_string()],
-            nodes: vec![],
-        };
-
-        assert_eq!(violation.id, "test-violation");
-        assert_eq!(violation.impact, "critical");
-        assert_eq!(violation.description, "Test violation");
-        assert_eq!(violation.help, "Test help");
-        assert_eq!(violation.help_url, "https://example.com");
-        assert_eq!(violation.tags, vec!["test".to_string()]);
-        assert_eq!(violation.nodes.len(), 0);
+    fn missing_focus_and_small_target_are_violations() {
+        let bad = WidgetProbe::interactive(
+            WidgetMeta::new("tiny", "button", "go"),
+            Color::new(255, 255, 255),
+            Color::new(0, 92, 170),
+            20.0,
+            20.0,
+        );
+        let result = AccessibilityAuditor::new().audit_widget(&bad);
+        let ids: Vec<&str> = result.violations.iter().map(|v| v.id.as_str()).collect();
+        assert!(ids.contains(&"focus-visible"));
+        assert!(ids.contains(&"target-size"));
     }
 
     #[test]
-    fn test_accessibility_node_creation() {
-        let node = AccessibilityNode {
-            html: "<div>Test</div>".to_string(),
-            selector: "div".to_string(),
-            target: vec!["div".to_string()],
-            summary: "Test node".to_string(),
-        };
+    fn low_contrast_is_a_violation() {
+        let bad = WidgetProbe::non_interactive(
+            WidgetMeta::new("text", "text", "low contrast"),
+            Color::new(200, 200, 200),
+            Color::new(255, 255, 255),
+        );
+        let result = AccessibilityAuditor::new().audit_widget(&bad);
+        assert!(result.violations.iter().any(|v| v.id == "color-contrast"));
+    }
 
-        assert_eq!(node.html, "<div>Test</div>");
-        assert_eq!(node.selector, "div");
-        assert_eq!(node.target, vec!["div".to_string()]);
-        assert_eq!(node.summary, "Test node");
+    #[test]
+    fn empty_name_is_critical() {
+        let bad = WidgetProbe::interactive(
+            WidgetMeta::new("unnamed", "button", "  "),
+            Color::new(255, 255, 255),
+            Color::new(0, 0, 0),
+            MIN_TOUCH_TARGET,
+            MIN_TOUCH_TARGET,
+        );
+        let result = AccessibilityAuditor::new().audit_widget(&bad);
+        assert!(result
+            .violations
+            .iter()
+            .any(|v| v.id == "button-name" && v.impact == "critical"));
+    }
+
+    #[test]
+    fn gate_fails_closed_on_empty_results() {
+        assert!(!AccessibilityCIGate::new().check_compliance(&HashMap::new()));
+    }
+
+    #[test]
+    fn score_is_not_inverted() {
+        let bad = probe().with_focus(false, 0.0);
+        let result = AccessibilityAuditor::new().audit_widget(&bad);
+        assert!(result.score < 100.0);
+        assert!(!AccessibilityCIGate::new()
+            .check_compliance(&HashMap::from([("test_button".to_string(), result,)])));
     }
 }

@@ -1172,6 +1172,7 @@ pub async fn run_async() {
             // escrow contract configured (escrow ACP messages reject
             // locally until the operator sets the vault address).
             acp: Default::default(),
+            ui: Default::default(),
             log_level: "info".into(),
             data_dir: exe_dir.join("data"),
             allow_grant_blocks: false,
@@ -1423,6 +1424,7 @@ pub async fn run_async() {
         new_wallet_password: String::new(),
         data_dir: config.data_dir.clone(),
         use_strangler_migration: false,
+        ui: config.ui.clone(),
     };
     // Headless: keep the mining sender alive (the mining worker idles on recv) and
     // retain the sync receiver so adoption events can be drained below.

@@ -1,6 +1,8 @@
 //! Settings screen implementation
 
+use crate::accessibility::WidgetProbe;
 use crate::components::{Button, Card, CardText, Input, Tabs};
+use crate::focus::{WidgetMeta, FOCUS_OUTLINE_WIDTH, MIN_TOUCH_TARGET};
 use crate::i18n::Localization;
 use crate::screens::Screen;
 use crate::theme::ThemeManager;
@@ -141,6 +143,55 @@ impl SettingsScreen {
 
     pub fn set_active_tab(&mut self, tab: SettingsTab) {
         self.active_tab = tab;
+    }
+
+    pub fn a11y_probes(&self, theme: &ThemeManager) -> Vec<WidgetProbe> {
+        let colors = theme.colors();
+        let mut probes = Vec::new();
+
+        for (id, label) in [
+            ("general", "General"),
+            ("network", "Network"),
+            ("security", "Security"),
+            ("appearance", "Appearance"),
+            ("about", "About"),
+        ] {
+            probes.push(
+                WidgetProbe::interactive(
+                    WidgetMeta::new(id, "tab", label),
+                    colors.text,
+                    colors.background,
+                    MIN_TOUCH_TARGET,
+                    MIN_TOUCH_TARGET,
+                )
+                .with_focus(true, FOCUS_OUTLINE_WIDTH),
+            );
+        }
+
+        probes.push(
+            Input::new("language")
+                .value(&self.general_tab.language)
+                .a11y_probe(theme),
+        );
+        probes.push(
+            Input::new("currency")
+                .value(&self.general_tab.currency)
+                .a11y_probe(theme),
+        );
+        probes.push(
+            Input::new("data_directory")
+                .value(&self.general_tab.data_directory)
+                .a11y_probe(theme),
+        );
+        probes.push(
+            Input::new("port")
+                .value(&self.network_tab.port.to_string())
+                .a11y_probe(theme),
+        );
+        probes.push(Card::new().title("Settings").a11y_probe(theme));
+        probes.push(Button::new("Save Settings").a11y_probe(theme));
+        probes.push(Button::new("Reset to Defaults").a11y_probe(theme));
+        probes
     }
 
     /// Render into an [`egui::Context`] (strangler launcher entry point).

@@ -1,6 +1,7 @@
 //! Transaction detail screen implementation
 
-use crate::components::{Button, Card, CardText, Input, Table};
+use crate::accessibility::WidgetProbe;
+use crate::components::{Button, Card, CardText, CodeBlock, Input, Table};
 use crate::i18n::Localization;
 use crate::screens::Screen;
 use crate::theme::ThemeManager;
@@ -48,6 +49,28 @@ impl TxDetailScreen {
             loading: false,
             error: None,
         }
+    }
+
+    pub fn a11y_probes(&self, theme: &ThemeManager) -> Vec<WidgetProbe> {
+        let mut probes = vec![
+            Input::new("Transaction ID").a11y_probe(theme),
+            Button::new("Load Transaction").a11y_probe(theme),
+            Card::new().title("Transaction Details").a11y_probe(theme),
+            CodeBlock::new("input", "0x")
+                .language("hex")
+                .a11y_probe(theme),
+            Table::<String>::new()
+                .column("Property", "Property")
+                .a11y_probe(theme),
+        ];
+        for label in [
+            "Copy Transaction Hash",
+            "View Block Explorer",
+            "Export Transaction",
+        ] {
+            probes.push(Button::new(label).a11y_probe(theme));
+        }
+        probes
     }
 
     /// Render into an [`egui::Context`] (strangler launcher entry point).

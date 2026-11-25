@@ -1,0 +1,11 @@
+---
+source: crates/strangecoin-ui/tests/component_snapshot.rs
+expression: component_style(&probe)
+---
+role=tab
+label=Overview
+foreground=#fafafa
+background=#09090b
+width=44.0
+height=44.0
+focus=true

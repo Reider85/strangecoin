@@ -1,6 +1,9 @@
 //! Button component with variants and accessibility support
 
-use crate::theme::ThemeManager;
+use crate::accessibility::WidgetProbe;
+use crate::focus::{self, WidgetMeta, FOCUS_OUTLINE_WIDTH, MIN_TOUCH_TARGET};
+use crate::theme::{ThemeColors, ThemeManager};
+use crate::tokens::{Color, DesignTokens, Shade};
 use eframe::egui;
 
 /// Button component with variants and accessibility support
@@ -78,6 +81,45 @@ impl Button {
         self
     }
 
+    fn variant_colors(&self, colors: &ThemeColors, tokens: &DesignTokens) -> (Color, Color, Color) {
+        let ink = tokens.colors.neutral(Shade::_950);
+        match (self.variant, self.disabled, self.loading) {
+            (ButtonVariant::Primary, true, _) => {
+                (colors.surface, colors.text_secondary, colors.border)
+            }
+            (ButtonVariant::Primary, false, _) => (colors.primary, ink, colors.primary),
+            (ButtonVariant::Secondary, true, _) => {
+                (colors.surface, colors.text_secondary, colors.border)
+            }
+            (ButtonVariant::Secondary, false, _) => (colors.surface, colors.text, colors.border),
+            (ButtonVariant::Ghost, true, _) => {
+                (colors.surface, colors.text_secondary, colors.border)
+            }
+            (ButtonVariant::Ghost, false, _) => (colors.background, colors.text, colors.border),
+            (ButtonVariant::Danger, true, _) => {
+                (colors.surface, colors.text_secondary, colors.border)
+            }
+            (ButtonVariant::Danger, false, _) => (colors.error, ink, colors.error),
+        }
+    }
+
+    fn a11y_meta(&self) -> WidgetMeta {
+        WidgetMeta::new("button", "button", self.label.clone())
+    }
+
+    pub fn a11y_probe(&self, theme: &ThemeManager) -> WidgetProbe {
+        let colors = theme.colors();
+        let (background, foreground, _) = self.variant_colors(&colors, theme.tokens());
+        WidgetProbe::interactive(
+            self.a11y_meta(),
+            foreground,
+            background,
+            MIN_TOUCH_TARGET,
+            MIN_TOUCH_TARGET,
+        )
+        .with_focus(true, FOCUS_OUTLINE_WIDTH)
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let colors = theme_manager.colors();
         let tokens = theme_manager.tokens();
@@ -90,33 +132,9 @@ impl Button {
         };
 
         // Calculate colors based on variant and state
-        let (bg_color, _fg_color, stroke_color) = match (self.variant, self.disabled, self.loading)
-        {
-            (ButtonVariant::Primary, true, _) => {
-                (colors.surface, colors.text_secondary, colors.border)
-            }
-            (ButtonVariant::Primary, false, true) => {
-                (colors.primary, colors.background, colors.primary)
-            }
-            (ButtonVariant::Primary, false, false) => {
-                (colors.primary, colors.background, colors.primary)
-            }
-            (ButtonVariant::Secondary, true, _) => {
-                (colors.surface, colors.text_secondary, colors.border)
-            }
-            (ButtonVariant::Secondary, false, _) => (colors.surface, colors.text, colors.border),
-            (ButtonVariant::Ghost, true, _) => {
-                (colors.surface, colors.text_secondary, colors.border)
-            }
-            (ButtonVariant::Ghost, false, _) => (colors.background, colors.text, colors.border),
-            (ButtonVariant::Danger, true, _) => {
-                (colors.surface, colors.text_secondary, colors.border)
-            }
-            (ButtonVariant::Danger, false, true) => (colors.error, colors.background, colors.error),
-            (ButtonVariant::Danger, false, false) => {
-                (colors.error, colors.background, colors.error)
-            }
-        };
+        let (bg_color, fg_color, stroke_color) = self.variant_colors(&colors, tokens);
+        let focus_color = colors.text;
+        let meta = self.a11y_meta();
 
         // Style
         let mut style = egui::Style::default();
@@ -137,9 +155,18 @@ impl Button {
                 ui.style_mut().override_font_id =
                     Some(egui::FontId::new(font_size, egui::FontFamily::Proportional));
 
-                let response = ui.add_enabled(!self.disabled, egui::Button::new(&self.label));
-
-                // Apply custom style
+                let response = ui
+                    .push_id(focus::widget_id(&meta), |ui| {
+                        ui.add_enabled(
+                            !self.disabled,
+                            egui::Button::new(
+                                egui::RichText::new(&self.label).color(fg_color.as_egui()),
+                            )
+                            .min_size(focus::min_touch_size(egui::Vec2::ZERO)),
+                        )
+                    })
+                    .inner;
+                focus::apply_focus_ring(ui, &response, focus_color.as_egui());
 
                 // Handle click
                 if !self.disabled && !self.loading && response.clicked() {
@@ -158,7 +185,6 @@ impl Button {
                     && response.has_focus()
                     && !self.disabled
                     && !self.loading
-                    && response.contains_pointer()
                 {
                     if let Some(ref callback) = self.onclick {
                         callback();

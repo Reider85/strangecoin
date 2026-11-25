@@ -1,5 +1,7 @@
 //! Input component with validation and accessibility support
 
+use crate::accessibility::WidgetProbe;
+use crate::focus::{self, WidgetMeta, FOCUS_OUTLINE_WIDTH, MIN_TOUCH_TARGET};
 use crate::theme::ThemeManager;
 use eframe::egui;
 
@@ -92,6 +94,22 @@ impl Input {
         self
     }
 
+    fn a11y_meta(&self) -> WidgetMeta {
+        WidgetMeta::new("input", "textbox", self.label.clone())
+    }
+
+    pub fn a11y_probe(&self, theme: &ThemeManager) -> WidgetProbe {
+        let colors = theme.colors();
+        WidgetProbe::interactive(
+            self.a11y_meta(),
+            colors.text,
+            colors.background,
+            MIN_TOUCH_TARGET,
+            MIN_TOUCH_TARGET,
+        )
+        .with_focus(true, FOCUS_OUTLINE_WIDTH)
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let colors = theme_manager.colors();
         let tokens = theme_manager.tokens();
@@ -119,13 +137,18 @@ impl Input {
             }
 
             // Input field
+            let meta = self.a11y_meta();
+            let focus_color = colors.text;
             let response = ui.add_enabled(
                 !self.disabled,
                 egui::TextEdit::singleline(&mut self.value)
+                    .id(focus::widget_id(&meta))
                     .hint_text(&self.placeholder)
                     .frame(false)
-                    .desired_width(f32::INFINITY),
+                    .desired_width(f32::INFINITY)
+                    .min_size(focus::min_touch_size(egui::Vec2::ZERO)),
             );
+            focus::apply_focus_ring(ui, &response, focus_color.as_egui());
 
             // Disabled/readonly tint: egui 0.30 has no per-response style
             // override; the enabled flag above handles disabled state.
@@ -189,14 +212,19 @@ impl Input {
             }
 
             // Input field
-            let mut response = ui.add_enabled(
+            let meta = self.a11y_meta();
+            let focus_color = colors.text;
+            let response = ui.add_enabled(
                 !self.disabled,
                 egui::TextEdit::multiline(&mut self.value)
+                    .id(focus::widget_id(&meta))
                     .hint_text(&self.placeholder)
                     .frame(false)
                     .desired_width(f32::INFINITY)
-                    .desired_rows(8),
+                    .desired_rows(8)
+                    .min_size(focus::min_touch_size(egui::Vec2::ZERO)),
             );
+            focus::apply_focus_ring(ui, &response, focus_color.as_egui());
 
             // Disabled/readonly tint: egui 0.30 has no per-response style override.
             if self.readonly {
@@ -221,8 +249,6 @@ impl Input {
                     );
                 });
             }
-
-            let _ = &mut response;
         });
     }
 

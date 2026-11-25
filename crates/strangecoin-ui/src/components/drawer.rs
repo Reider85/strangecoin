@@ -1,5 +1,7 @@
 //! Drawer component for slide-out panels
 
+use crate::accessibility::WidgetProbe;
+use crate::focus::{self, WidgetMeta, FOCUS_OUTLINE_WIDTH, MIN_TOUCH_TARGET};
 use crate::theme::ThemeManager;
 use eframe::egui;
 
@@ -100,12 +102,30 @@ impl Drawer {
         self.open
     }
 
+    fn a11y_meta(&self) -> WidgetMeta {
+        let label = self.title.clone().unwrap_or_else(|| self.id.clone());
+        WidgetMeta::new("drawer", "button", label)
+    }
+
+    pub fn a11y_probe(&self, theme: &ThemeManager) -> WidgetProbe {
+        let colors = theme.colors();
+        WidgetProbe::interactive(
+            self.a11y_meta(),
+            colors.text,
+            colors.surface,
+            MIN_TOUCH_TARGET,
+            MIN_TOUCH_TARGET,
+        )
+        .with_focus(true, FOCUS_OUTLINE_WIDTH)
+    }
+
     pub fn show(&mut self, ctx: &egui::Context, theme_manager: &ThemeManager) {
         if !self.open {
             return;
         }
 
         let colors = theme_manager.colors();
+        let focus_color = colors.text;
         let tokens = theme_manager.tokens();
 
         // Calculate drawer size
@@ -170,8 +190,20 @@ impl Drawer {
                                 .strong(),
                         );
 
-                        if closable && ui.button("×").clicked() {
-                            self.close();
+                        if closable {
+                            let meta = WidgetMeta::new("drawer-close", "button", "Close");
+                            let response = ui
+                                .push_id(focus::widget_id(&meta), |ui| {
+                                    ui.add(
+                                        egui::Button::new("×")
+                                            .min_size(focus::min_touch_size(egui::Vec2::ZERO)),
+                                    )
+                                })
+                                .inner;
+                            focus::apply_focus_ring(ui, &response, focus_color.as_egui());
+                            if response.clicked() {
+                                self.close();
+                            }
                         }
                     });
                     ui.add_space(tokens.spacing.base);
@@ -256,24 +288,26 @@ impl NavigationDrawerContent {
 impl DrawerContent for NavigationDrawerContent {
     fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager) {
         let tokens = theme_manager.tokens();
-        let _colors = theme_manager.colors();
+        let colors = theme_manager.colors();
+        let focus_color = colors.text;
 
-        for item in &self.items {
+        for (index, item) in self.items.iter().enumerate() {
+            let is_selected = self.selected_item.as_deref() == Some(item.id.as_str());
+            let meta = WidgetMeta::new(format!("drawer-item-{}", index), "tab", item.label.clone());
             let response = ui
-                .horizontal(|ui| {
-                    if let Some(ref icon) = item.icon {
-                        ui.label(icon);
-                    }
-                    ui.label(&item.label);
+                .push_id(focus::widget_id(&meta), |ui| {
+                    ui.set_min_size(focus::min_touch_size(egui::Vec2::ZERO));
+                    ui.horizontal(|ui| {
+                        if let Some(ref icon) = item.icon {
+                            ui.label(icon);
+                        }
+                        let response = ui.selectable_label(is_selected, &item.label);
+                        focus::apply_focus_ring(ui, &response, focus_color.as_egui());
+                        response
+                    })
+                    .inner
                 })
-                .response;
-
-            if let Some(ref selected_id) = self.selected_item {
-                if item.id == *selected_id {
-                    // Selected-item emphasis: egui 0.30 has no per-response
-                    // bg override; selection shown via label weight below.
-                }
-            }
+                .inner;
 
             if response.clicked() {
                 self.selected_item = Some(item.id.clone());

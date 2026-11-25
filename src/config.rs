@@ -108,6 +108,31 @@ impl AcpConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiConfig {
+    #[serde(default = "default_ui_theme")]
+    pub theme: String,
+    #[serde(default = "default_ui_locale")]
+    pub locale: String,
+}
+
+fn default_ui_theme() -> String {
+    "system".into()
+}
+
+fn default_ui_locale() -> String {
+    "en".into()
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            theme: default_ui_theme(),
+            locale: default_ui_locale(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     // Scalar keys first, tables last: TOML emission (and therefore the
     // config.json → config.toml migration writer in `main`) errors with
@@ -142,6 +167,8 @@ pub struct Config {
     /// the other sub-tables (TOML `ValueAfterTable` rule above).
     #[serde(default)]
     pub acp: AcpConfig,
+    #[serde(default)]
+    pub ui: UiConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -707,6 +734,18 @@ impl Config {
                 }
             }
         }
+        if !matches!(self.ui.theme.as_str(), "light" | "dark" | "system") {
+            return Err(StrangecoinError::ConfigError(format!(
+                "ui.theme must be light, dark, or system, got {}",
+                self.ui.theme
+            )));
+        }
+        if !matches!(self.ui.locale.as_str(), "en" | "ru" | "zh") {
+            return Err(StrangecoinError::ConfigError(format!(
+                "ui.locale must be en, ru, or zh, got {}",
+                self.ui.locale
+            )));
+        }
         Ok(())
     }
 
@@ -814,6 +853,7 @@ impl Default for Config {
             pruning: PruningConfig::default(),
             mcp: McpConfig::default(),
             acp: AcpConfig::default(),
+            ui: UiConfig::default(),
             log_level: "info".into(),
             data_dir: "./data".into(),
             allow_grant_blocks: false,
@@ -1493,5 +1533,41 @@ mod tests {
         let rl = Config::default().rate_limit_config();
         let dflt = strangecoin_net::RateLimitConfig::default();
         assert_eq!(rl, dflt);
+    }
+
+    #[test]
+    fn ui_config_defaults_and_table_parse() {
+        let cfg = Config::default();
+        assert_eq!(cfg.ui.theme, "system");
+        assert_eq!(cfg.ui.locale, "en");
+
+        let with_ui = r#"
+network_id = 3
+log_level = "info"
+data_dir = "./data"
+[network]
+listen_addr = "127.0.0.1:9333"
+seeds = []
+max_peers = 8
+[storage]
+path = "./data/rocksdb"
+[ui]
+theme = "dark"
+locale = "ru"
+"#;
+        let cfg: Config = toml::from_str(with_ui).expect("[ui] must parse");
+        assert_eq!(cfg.ui.theme, "dark");
+        assert_eq!(cfg.ui.locale, "ru");
+        cfg.validate().expect("valid ui settings must validate");
+    }
+
+    #[test]
+    fn ui_config_rejects_unknown_theme_and_locale() {
+        let mut cfg = Config::default();
+        cfg.ui.theme = "neon".into();
+        assert!(cfg.validate().is_err());
+        cfg.ui.theme = "dark".into();
+        cfg.ui.locale = "fr".into();
+        assert!(cfg.validate().is_err());
     }
 }
