@@ -32,6 +32,24 @@ wallet-view-abi = 查看 ABI
 wallet-interact = 交互
 wallet-empty-history = 暂无交易
 wallet-empty-contracts = 暂无已部署合约
+wallet-send-batch = 批量发送
+wallet-send-batch-unavailable = 批量发送将在 AI-P04 后可用
+wallet-history-filter-all = 全部
+wallet-history-filter-sent = 已发送
+wallet-history-filter-received = 已接收
+wallet-history-filter-failed = 失败
+wallet-history-col-txid = TxID
+wallet-history-col-type = 类型
+wallet-history-col-from = 来自
+wallet-history-col-to = 发送至
+wallet-history-col-amount = 金额
+wallet-history-col-fee = 手续费
+wallet-history-col-status = 状态
+wallet-history-col-height = 高度
+wallet-history-prev = 上一页
+wallet-history-next = 下一页
+wallet-contracts-read = 读取
+wallet-contracts-write = 写入
 
 ## 节点面板
 dashboard-title = 节点面板

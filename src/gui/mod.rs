@@ -505,8 +505,9 @@ if let Some(ref progress_rx) = self.progress_rx {
 pub async fn run(app: WalletApp) {
     let ui = app.ui.clone();
     if app.use_strangler_migration {
-        // Use the strangler migration launcher
-        let strangler_app = StranglerLauncher::with_ui_config(app.node, app.data_dir, &ui);
+        // Use the strangler migration launcher (UI-P03: real mining sender)
+        let strangler_app =
+            StranglerLauncher::with_ui_config(app.node, app.data_dir, &ui, app.mining_tx);
         run_strangler_launcher(strangler_app).await;
     } else {
         // Use the original WalletApp

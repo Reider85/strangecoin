@@ -6,12 +6,8 @@
 //! Gate 3 of prompt-stage3.md §8.3 (business logic stays out of pure-core;
 //! no consensus rules touched).
 
-use std::sync::Arc;
-
 use strangecoin_core::serialize::{deserialize_block, txid};
 use strangecoin_core::types::{Block, BlockHeader, Transaction};
-use strangecoin_core::vm::gas::BLOCK_GAS_LIMIT;
-use strangecoin_core::vm::{BlockContext, ExecutionContext, TxStatus, VmExecutor};
 use strangecoin_mcp::{CallOutcome, ContractInfo, McpBackend, McpError, McpEvent, TxRecord};
 
 use crate::events::NodeEvent;
@@ -69,87 +65,26 @@ impl McpBackend for BlockchainFacade {
         Ok(id)
     }
 
-    #[cfg(feature = "vm-wasm")]
     fn call_contract(
         &self,
         address: &str,
         calldata: Vec<u8>,
         gas_limit: u64,
     ) -> Result<CallOutcome, McpError> {
-        let account = self
-            .get_account(address)
-            .ok_or_else(|| McpError::NotFound(format!("no account `{address}`")))?;
-        if !account.is_contract() {
-            // Call to an EOA mirrors the `apply_call` transfer-only path:
-            // zero-gas success, empty return data (eth_call semantics).
-            return Ok(CallOutcome {
-                gas_used: 0,
-                return_data: Vec::new(),
-                logs: Vec::new(),
-                status: TxStatus::Success,
-            });
-        }
-
-        let code = self
-            .with_inner(|bc| bc.codes.get(address).cloned())
-            .ok_or_else(|| McpError::NotFound(format!("no code for `{address}`")))?;
-        let tip = self
-            .tip()
-            .ok_or_else(|| McpError::NotFound("chain has no tip".into()))?;
-
-        // Isolated snapshot: `to_state()` clones the account map and the
-        // contract-storage map into a fresh lock, so the read-only frame can
-        // never observe (or block) concurrent node writes.
-        let state = self.state_snapshot().to_state();
-        let mut executor = strangecoin_vm_wasm::WasmiExecutor::new();
-        executor.insert_code(address, code);
-
-        // Caller = the callee itself: the spec §2.5 schema carries no `from`
-        // field, and a read-only frame settles no value (spec amendment).
-        let ctx = ExecutionContext {
-            block: tip.header(),
-            accounts: state.balances.clone(),
-            caller: address.to_string(),
-            callee: address.to_string(),
-            value: 0,
-            gas_limit,
-            gas_used: 0,
-            depth: 0,
-            reentrant: false,
-            read_only: true,
-            block_context: BlockContext {
-                height: tip.index,
-                timestamp: tip.timestamp,
-                coinbase: String::new(),
-                block_gas_limit: BLOCK_GAS_LIMIT,
+        // UI-P03: the wallet's `eth_call` seam and this MCP tool share one
+        // read-only execution path (src/blockchain/read_only.rs).
+        let result = super::read_only::read_only_call(self, address, calldata, gas_limit).map_err(
+            |err| match err {
+                super::read_only::ReadOnlyError::NotFound(msg) => McpError::NotFound(msg),
+                super::read_only::ReadOnlyError::Rejected(msg) => McpError::Rejected(msg),
             },
-            storage: Arc::clone(&state.contract_storage),
-            storage_overlay: Default::default(),
-            storage_address: address.to_string(),
-            input: calldata,
-        };
-
-        let result = executor
-            .execute(ctx)
-            .map_err(|err| McpError::Rejected(format!("vm execution failed: {err}")))?;
+        )?;
         Ok(CallOutcome {
             gas_used: result.gas_used,
             return_data: result.return_data,
             logs: result.logs,
             status: result.status,
         })
-    }
-
-    #[cfg(not(feature = "vm-wasm"))]
-    fn call_contract(
-        &self,
-        _address: &str,
-        _calldata: Vec<u8>,
-        _gas_limit: u64,
-    ) -> Result<CallOutcome, McpError> {
-        Err(McpError::Unsupported(
-            "node built without the `vm-wasm` feature".into(),
-        ))
     }
 
     fn get_tx_with_receipt(&self, txid_hex: &str) -> Result<TxRecord, McpError> {

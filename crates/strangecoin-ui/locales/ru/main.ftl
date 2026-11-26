@@ -32,6 +32,24 @@ wallet-view-abi = Открыть ABI
 wallet-interact = Взаимодействовать
 wallet-empty-history = Транзакций пока нет
 wallet-empty-contracts = Нет развернутых контрактов
+wallet-send-batch = Пакетная отправка
+wallet-send-batch-unavailable = Пакетная отправка доступна после AI-P04
+wallet-history-filter-all = Все
+wallet-history-filter-sent = Отправленные
+wallet-history-filter-received = Полученные
+wallet-history-filter-failed = Ошибки
+wallet-history-col-txid = TxID
+wallet-history-col-type = Тип
+wallet-history-col-from = От
+wallet-history-col-to = Кому
+wallet-history-col-amount = Сумма
+wallet-history-col-fee = Комиссия
+wallet-history-col-status = Статус
+wallet-history-col-height = Высота
+wallet-history-prev = Назад
+wallet-history-next = Вперёд
+wallet-contracts-read = Читать
+wallet-contracts-write = Записать
 
 ## Панель узла
 dashboard-title = Панель узла

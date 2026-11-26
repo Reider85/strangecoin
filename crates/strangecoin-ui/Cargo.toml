@@ -31,3 +31,9 @@ a11y-axe = []
 [lib]
 name = "strangecoin_ui"
 path = "src/lib.rs"
+
+# UI-P03: screen-level a11y gate lives in tests/screens/ (not auto-discovered
+# by Cargo, which only scans tests/*.rs).
+[[test]]
+name = "wallet_a11y"
+path = "tests/screens/wallet_a11y.rs"

@@ -248,6 +248,84 @@ impl Localization {
     pub fn wallet_send_error_insufficient_balance(&self) -> String {
         self.t("wallet-send-error-insufficient-balance")
     }
+    pub fn wallet_balance(&self) -> String {
+        self.t("wallet-balance")
+    }
+    pub fn wallet_send_form_title(&self) -> String {
+        self.t("wallet-send-form-title")
+    }
+    pub fn wallet_send_batch(&self) -> String {
+        self.t("wallet-send-batch")
+    }
+    pub fn wallet_send_batch_unavailable(&self) -> String {
+        self.t("wallet-send-batch-unavailable")
+    }
+    pub fn wallet_recent_transactions(&self) -> String {
+        self.t("wallet-recent-transactions")
+    }
+    pub fn wallet_deployed_contracts(&self) -> String {
+        self.t("wallet-deployed-contracts")
+    }
+    pub fn wallet_view_abi(&self) -> String {
+        self.t("wallet-view-abi")
+    }
+    pub fn wallet_interact(&self) -> String {
+        self.t("wallet-interact")
+    }
+    pub fn wallet_empty_history(&self) -> String {
+        self.t("wallet-empty-history")
+    }
+    pub fn wallet_empty_contracts(&self) -> String {
+        self.t("wallet-empty-contracts")
+    }
+    pub fn wallet_history_filter_all(&self) -> String {
+        self.t("wallet-history-filter-all")
+    }
+    pub fn wallet_history_filter_sent(&self) -> String {
+        self.t("wallet-history-filter-sent")
+    }
+    pub fn wallet_history_filter_received(&self) -> String {
+        self.t("wallet-history-filter-received")
+    }
+    pub fn wallet_history_filter_failed(&self) -> String {
+        self.t("wallet-history-filter-failed")
+    }
+    pub fn wallet_history_col_txid(&self) -> String {
+        self.t("wallet-history-col-txid")
+    }
+    pub fn wallet_history_col_type(&self) -> String {
+        self.t("wallet-history-col-type")
+    }
+    pub fn wallet_history_col_from(&self) -> String {
+        self.t("wallet-history-col-from")
+    }
+    pub fn wallet_history_col_to(&self) -> String {
+        self.t("wallet-history-col-to")
+    }
+    pub fn wallet_history_col_amount(&self) -> String {
+        self.t("wallet-history-col-amount")
+    }
+    pub fn wallet_history_col_fee(&self) -> String {
+        self.t("wallet-history-col-fee")
+    }
+    pub fn wallet_history_col_status(&self) -> String {
+        self.t("wallet-history-col-status")
+    }
+    pub fn wallet_history_col_height(&self) -> String {
+        self.t("wallet-history-col-height")
+    }
+    pub fn wallet_history_prev(&self) -> String {
+        self.t("wallet-history-prev")
+    }
+    pub fn wallet_history_next(&self) -> String {
+        self.t("wallet-history-next")
+    }
+    pub fn wallet_contracts_read(&self) -> String {
+        self.t("wallet-contracts-read")
+    }
+    pub fn wallet_contracts_write(&self) -> String {
+        self.t("wallet-contracts-write")
+    }
 
     // Dashboard
     pub fn dashboard_title(&self) -> String {

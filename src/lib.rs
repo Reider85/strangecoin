@@ -1423,7 +1423,7 @@ pub async fn run_async() {
         last_repaint: 0.0,
         new_wallet_password: String::new(),
         data_dir: config.data_dir.clone(),
-        use_strangler_migration: false,
+        use_strangler_migration: true,
         ui: config.ui.clone(),
     };
     // Headless: keep the mining sender alive (the mining worker idles on recv) and

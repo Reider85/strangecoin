@@ -33,6 +33,24 @@ wallet-view-abi = View ABI
 wallet-interact = Interact
 wallet-empty-history = No transactions yet
 wallet-empty-contracts = No deployed contracts
+wallet-send-batch = Batch send
+wallet-send-batch-unavailable = Batch send is available after AI-P04
+wallet-history-filter-all = All
+wallet-history-filter-sent = Sent
+wallet-history-filter-received = Received
+wallet-history-filter-failed = Failed
+wallet-history-col-txid = TxID
+wallet-history-col-type = Type
+wallet-history-col-from = From
+wallet-history-col-to = To
+wallet-history-col-amount = Amount
+wallet-history-col-fee = Fee
+wallet-history-col-status = Status
+wallet-history-col-height = Height
+wallet-history-prev = Previous
+wallet-history-next = Next
+wallet-contracts-read = Read
+wallet-contracts-write = Write
 
 ## Dashboard
 dashboard-title = Node Dashboard

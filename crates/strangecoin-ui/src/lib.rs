@@ -22,6 +22,7 @@
 pub mod accessibility;
 #[cfg(feature = "a11y-axe")]
 pub mod axe;
+pub mod backend;
 pub mod components;
 pub mod focus;
 pub mod i18n;
@@ -29,6 +30,10 @@ pub mod screens;
 pub mod theme;
 pub mod tokens;
 
+pub use crate::backend::{
+    AbiMethod, BatchCall, ContractRecord, MockWalletBackend, TxHash, TxRecord, TxStatus,
+    WalletBackend, WalletError,
+};
 pub use crate::i18n::Localization;
 pub use crate::theme::ThemeManager;
 use eframe::egui;

@@ -1,9 +1,14 @@
 //! Table component for displaying data
 
+use std::sync::Arc;
+
 use crate::accessibility::WidgetProbe;
 use crate::focus::{self, WidgetMeta, FOCUS_OUTLINE_WIDTH, MIN_TOUCH_TARGET};
 use crate::theme::ThemeManager;
 use eframe::egui;
+
+/// Row cell renderer; `None` keeps the placeholder cells used by snapshots.
+pub type CellRenderer<T> = Arc<dyn Fn(&T, &str, &mut egui::Ui) + Send + Sync>;
 
 /// Table component for displaying data
 pub struct Table<T> {
@@ -15,6 +20,7 @@ pub struct Table<T> {
     row_height: f32,
     striped: bool,
     hoverable: bool,
+    cell_renderer: Option<CellRenderer<T>>,
 }
 
 /// Column definition
@@ -52,6 +58,7 @@ impl<T: Clone + std::fmt::Debug> Table<T> {
             row_height: 32.0,
             striped: true,
             hoverable: true,
+            cell_renderer: None,
         }
     }
 
@@ -104,6 +111,16 @@ impl<T: Clone + std::fmt::Debug> Table<T> {
 
     pub fn hoverable(mut self, hoverable: bool) -> Self {
         self.hoverable = hoverable;
+        self
+    }
+
+    /// Typed cell rendering. Without a renderer the table keeps the original
+    /// `Row N Col id` placeholder (needed by the component snapshots).
+    pub fn cell_renderer(
+        mut self,
+        renderer: impl Fn(&T, &str, &mut egui::Ui) + Send + Sync + 'static,
+    ) -> Self {
+        self.cell_renderer = Some(Arc::new(renderer));
         self
     }
 
@@ -235,13 +252,17 @@ impl<T: Clone + std::fmt::Debug> Table<T> {
         }
 
         // Row content
+        let renderer = self.cell_renderer.clone();
         ui.horizontal(|ui| {
             for col in &self.columns {
                 let cell_response = ui
                     .horizontal(|ui| {
-                        // Get cell value (simplified for example)
-                        let value = format!("Row {} Col {}", row_index, col.id);
-                        ui.label(value);
+                        if let Some(ref render) = renderer {
+                            render(&self.data[row_index], &col.id, ui);
+                        } else {
+                            let value = format!("Row {} Col {}", row_index, col.id);
+                            ui.label(value);
+                        }
                     })
                     .response;
 
@@ -370,6 +391,14 @@ impl<T: Clone + std::fmt::Debug> TableBuilder<T> {
 
     pub fn hoverable(mut self, hoverable: bool) -> Self {
         self.table.hoverable = hoverable;
+        self
+    }
+
+    pub fn cell_renderer(
+        mut self,
+        renderer: impl Fn(&T, &str, &mut egui::Ui) + Send + Sync + 'static,
+    ) -> Self {
+        self.table.cell_renderer = Some(Arc::new(renderer));
         self
     }
 

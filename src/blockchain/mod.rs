@@ -4,6 +4,7 @@ pub mod chain_selector;
 pub mod consensus_manager;
 #[cfg(feature = "mcp")]
 pub mod mcp_backend;
+pub mod read_only;
 pub mod state_cache;
 
 pub use blockchain_facade::{Blockchain, BlockchainFacade};

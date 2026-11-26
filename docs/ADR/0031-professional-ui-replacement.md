@@ -40,6 +40,26 @@ comments not preserved). Theme `System` resolves via an injected value, not
 platform APIs, to keep storage/UI paths deterministic. Pins for
 `fluent`/`unic-langid`/`insta` are recorded in AGENTS.md §Stage 4 Pin Policy.
 
+**Amendment C (2026-11-26, UI-P03)** — the Wallet screen's data source is a
+`WalletBackend` trait in `crates/strangecoin-ui/` with an **in-process**
+implementation (`src/api/mod.rs`) over `BlockchainFacade`, not the `eth_*`
+JSON-RPC endpoints listed in the original §Screens table. No `eth_*` method
+exists in the repository at UI-P03 time (JSON-RPC is Stage-4 deferred per
+ROADMAP; `crates/strangecoin-api/` is an unwired stub and AI-P04 is queued),
+and MCP is spec-forbidden as an `eth_*` replacement. The trait keeps the
+`eth_getBalance` / `eth_getTransactionByHash` / `eth_call` /
+`eth_sendTransaction` / `agent_signAndSubmitBatch` call shapes as a documented
+seam so a future HTTP client can replace the adapter without touching the
+screen. Two further honesty constraints: `estimate_fee()` returns `0` while
+`FEE_SC_PER_GAS = 0` holds until Stage 5, and `submit_batch()` returns an
+explicit `NotImplemented` error ("available after AI-P04") instead of the
+current mock UUID success. The strangler launcher becomes the default UI
+(`MigrationPhase::Phase3_ProfessionalOnly`) with the real mining sender wired;
+the legacy `WalletApp` stays as a rollback fallback until UI-P05 closeout, so
+UI-P03 does not yet reduce `src/gui/` to the ~30-line final form. ABI metadata
+is unavailable without the Stage-4 indexer (`S4-core-P07`), so the Contracts
+tab shows an empty ABI string for code-bearing accounts.
+
 ## Context
 
 Strangecoin today ships an `eframe`/`egui 0.22` immediate-mode GUI in
