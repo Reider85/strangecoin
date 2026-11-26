@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-eframe = { version = "=0.30.0", default-features = false, features = ["default_fonts", "glow"] }
+eframe = "=0.30.0"
 egui = "=0.30.0"
 fluent = "=0.16.1"
 unic-langid = { version = "=0.9.6", features = ["macros"] }

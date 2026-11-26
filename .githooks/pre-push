@@ -1,7 +1,7 @@
 #!/bin/bash
-# Pre-push guard: catch the two most common CI-red causes BEFORE the push
+# Pre-push guard: catch the four known CI-red causes BEFORE the push
 # lands on master and triggers Pre-release's workflow_run gate
-# (CI5.md [GITHUB-P33]).
+# (CI5.md [GITHUB-P33], CI6.md [GITHUB-P34]).
 #
 # Activated via: git config core.hooksPath .githooks
 # (already set by repo's CONTRIBUTING.md, but verify on clone).
@@ -34,7 +34,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     *) continue ;;
   esac
 
-  echo "[pre-push] Running fmt + clippy::correctness on $(pwd) before push to ${remote_ref#refs/heads/}..."
+  echo "[pre-push] Running fmt + clippy::correctness + UI strict clippy + UI a11y gate on $(pwd) before push to ${remote_ref#refs/heads/}..."
 
   # fmt drift — same command as ci.yml lint step.
   if ! cargo fmt --all -- --check; then
@@ -51,6 +51,21 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     exit 1
   fi
 
-  echo "[pre-push] OK: fmt + clippy::correctness clean. Pushing."
+  # [GITHUB-P34] UI strict clippy — exact command from ci.yml lint step;
+  # -D warnings stays and --all-features must compile the crate in isolation.
+  if ! cargo clippy -p strangecoin-ui --all-targets --all-features -- -D warnings; then
+    echo "[pre-push] FAIL: UI strict clippy (-D warnings, --all-features) detected warnings."
+    echo "[pre-push] Fix the warning in code (allow only with // justification, P21)."
+    exit 1
+  fi
+
+  # [GITHUB-P34] UI WCAG AA gate — exact command from ci.yml test step.
+  if ! cargo test -p strangecoin-ui --features a11y-audit; then
+    echo "[pre-push] FAIL: UI WCAG AA gate failed."
+    echo "[pre-push] Fix the a11y tests/snapshots before pushing."
+    exit 1
+  fi
+
+  echo "[pre-push] OK: fmt + clippy::correctness + UI strict clippy + UI a11y gate clean. Pushing."
 done <<< "$ref_lines"
 exit 0
