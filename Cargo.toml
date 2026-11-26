@@ -60,7 +60,7 @@ blake3 = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # UI-P01: i18n support for professional UI
-fluent = "0.16"
+fluent = "0.17"
 fluent-langneg = "0.13"
 fluent-bundle = "0.15"
 unic-langid = "0.9"
