@@ -16,14 +16,15 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::SystemTime;
 use tracing::{debug, error, info, warn};
 
-use crate::api::InProcessWalletBackend;
+use crate::api::{InProcessDashboardBackend, InProcessTxDetailBackend, InProcessWalletBackend};
 use crate::error::StrangecoinError;
+use crate::events::NodeEvent;
 use crate::{wallet, MiningStatus, MiningTask, Node, Transaction};
 
 use strangecoin_ui::theme::Theme;
 use strangecoin_ui::{
-    AgentActivityScreen, DashboardScreen, Localization, SettingsScreen, ThemeManager,
-    TxDetailScreen, WalletBackend, WalletScreen,
+    AgentActivityScreen, DashboardBackend, DashboardScreen, Localization, SettingsScreen,
+    ThemeManager, TxDetailBackend, TxDetailScreen, WalletBackend, WalletScreen,
 };
 
 /// Strangler migration launcher for UI
@@ -51,6 +52,12 @@ pub struct StranglerLauncher {
     pub migration_phase: MigrationPhase,
     /// UI-P03: in-process data source behind `WalletBackend` (src/api/).
     pub wallet_backend: Arc<InProcessWalletBackend>,
+    /// UI-P04: in-process data sources for the dashboard / tx audit screens.
+    pub dashboard_backend: Arc<InProcessDashboardBackend>,
+    pub tx_detail_backend: Arc<InProcessTxDetailBackend>,
+    /// UI-P04: `NodeEvent` subscription owned by the launcher; drained once
+    /// per frame into the dashboard digest (never consumed in the UI crate).
+    pub event_rx: Option<crossbeam_channel::Receiver<NodeEvent>>,
 }
 
 /// Screen types for the new UI
@@ -140,6 +147,20 @@ impl StranglerLauncher {
         let wallet_screen =
             WalletScreen::with_backend(wallet_backend.clone() as Arc<dyn WalletBackend>);
 
+        // UI-P04: the screen layer stays headless — both new screens receive
+        // in-process adapters, and the launcher owns the EventBus receiver.
+        let dashboard_backend = Arc::new(InProcessDashboardBackend::new(
+            Arc::clone(&node.blockchain),
+            Arc::clone(&node.peer_manager),
+        ));
+        let tx_detail_backend =
+            Arc::new(InProcessTxDetailBackend::new(Arc::clone(&node.blockchain)));
+        let dashboard_screen =
+            DashboardScreen::with_backend(dashboard_backend.clone() as Arc<dyn DashboardBackend>);
+        let tx_detail_screen =
+            TxDetailScreen::with_backend(tx_detail_backend.clone() as Arc<dyn TxDetailBackend>);
+        let event_rx = Some(node.event_bus.subscribe());
+
         Self {
             node,
             wallet_address: String::new(),
@@ -150,8 +171,8 @@ impl StranglerLauncher {
             localization,
             current_screen: ScreenType::Wallet,
             wallet_screen,
-            dashboard_screen: DashboardScreen::new(),
-            tx_detail_screen: TxDetailScreen::new(),
+            dashboard_screen,
+            tx_detail_screen,
             agent_activity_screen: AgentActivityScreen::new(),
             settings_screen: SettingsScreen::new(),
             mining_status,
@@ -163,6 +184,9 @@ impl StranglerLauncher {
             new_wallet_password: String::new(),
             migration_phase: MigrationPhase::Phase3_ProfessionalOnly,
             wallet_backend,
+            dashboard_backend,
+            tx_detail_backend,
+            event_rx,
         }
     }
 
@@ -306,8 +330,34 @@ impl StranglerLauncher {
         });
     }
 
+    /// UI-P04: fold the EventBus stream into the dashboard digest once per
+    /// frame. Bounded to avoid starving the render loop on a burst; leftover
+    /// events are picked up on the next repaint.
+    fn drain_node_events(&mut self, ctx: &egui::Context) {
+        let Some(receiver) = &self.event_rx else {
+            return;
+        };
+        let mut seen = 0usize;
+        while seen < 64 {
+            match receiver.try_recv() {
+                Ok(event) => {
+                    self.dashboard_backend.record_event(&event);
+                    seen += 1;
+                }
+                Err(crossbeam_channel::TryRecvError::Empty)
+                | Err(crossbeam_channel::TryRecvError::Disconnected) => break,
+            }
+        }
+        if seen > 0 {
+            debug!(events = seen, "dashboard consumed node events");
+            ctx.request_repaint();
+        }
+    }
+
     /// Show professional UI (new implementation)
     fn show_professional_ui(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.drain_node_events(ctx);
+
         // Wallet unlock stays in the launcher until UI-P05 introduces the
         // dedicated Settings/auth surface; the professional wallet screen
         // itself has no keystore access (ADR-0028 key isolation).
@@ -425,11 +475,10 @@ impl StranglerLauncher {
         let balance = self.node.blockchain.get_balance(&self.wallet_address);
         self.wallet_screen.set_balance(balance);
 
-        // Update dashboard with statistics
-        let block_count = self.node.blockchain.chain_len();
-        let mempool_count = self.node.blockchain.mempool_len();
-        self.dashboard_screen.set_block_count(block_count);
-        self.dashboard_screen.set_mempool_count(mempool_count);
+        // UI-P04: the dashboard pulls its own snapshot from the in-process
+        // adapter (real tip height, peers, mempool and blocks). The legacy
+        // `block_count`/`mempool_count` setters remain only as compat bridges
+        // for older call sites and tests; they must not override the adapter.
 
         // Update other screens as needed
     }
@@ -1028,9 +1077,13 @@ mod tests {
         launcher.update_screens_with_blockchain_data();
 
         // Fresh regtest chain: zero balance, empty mempool, genesis-only chain.
+        // UI-P04: the dashboard reads real state through its adapter, so the
+        // assertion targets the snapshot rather than legacy compat counters.
         assert_eq!(launcher.wallet_screen.send_tab.balance, 0);
-        assert_eq!(launcher.dashboard_screen.mempool_count, 0);
-        assert!(launcher.dashboard_screen.block_count >= 1);
+        let snapshot = launcher.dashboard_screen.snapshot();
+        assert_eq!(snapshot.mempool_count, 0);
+        assert!(!snapshot.blocks.is_empty());
+        assert_eq!(snapshot.sync.current_height, snapshot.blocks[0].height);
     }
 
     #[test]

@@ -1,9 +1,10 @@
-//! Wallet data-source seam (UI-P03, ADR-0031 Amendment C).
+//! Wallet / node data-source seam (UI-P03 + UI-P04, ADR-0031 Amendments C/D).
 //!
 //! The screen layer must not depend on the node monolith (that would invert
-//! the strangler direction). `WalletBackend` is implemented in the node's
-//! `src/api/` module over `BlockchainFacade`; a deterministic mock is used by
-//! UI unit tests, the a11y gate and the gallery.
+//! the strangler direction). `WalletBackend`, `DashboardBackend` and
+//! `TxDetailBackend` are implemented in the node's `src/api/` module over
+//! `BlockchainFacade` / `PeerManager`; deterministic mocks are used by UI unit
+//! tests, the a11y gate and the gallery.
 //!
 //! Method names mirror the Stage-4 JSON-RPC seam (`eth_getBalance`,
 //! `eth_getTransactionByHash`, `eth_call`, `eth_sendTransaction`,
@@ -255,6 +256,338 @@ impl WalletBackend for MockWalletBackend {
     }
 }
 
+// ---------------------------------------------------------------------------
+// UI-P04: node dashboard + transaction detail data-source seams.
+// ---------------------------------------------------------------------------
+
+/// One row of the Peers panel (ADR-0022 scoring bands are rendered by the
+/// screen, not by the backend).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PeerRow {
+    pub node_id: String,
+    pub addr: String,
+    pub latency_ms: u64,
+    pub score: f32,
+    pub direction: String,
+    pub capabilities: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncStatus {
+    pub current_height: u64,
+    pub tip_height: u64,
+    /// Integer percentage (0..=100) — no floating-point rounding in state.
+    pub sync_percent: u64,
+    pub headers_queue: usize,
+    pub blocks_queue: usize,
+    /// `idle` / `headers-first` / `blocks` / `catch-up`.
+    pub state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MempoolRow {
+    pub txid: String,
+    pub sender: String,
+    pub receiver: String,
+    pub amount: u64,
+    pub fee: u64,
+    pub gas: u64,
+    pub rbf_conflict: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockRow {
+    pub height: u64,
+    pub hash: String,
+    pub tx_count: usize,
+    pub gas_used: u64,
+    pub miner: String,
+    pub timestamp: u64,
+    /// Header + tx list for the block detail modal.
+    pub txids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DashboardSnapshot {
+    pub peers: Vec<PeerRow>,
+    pub sync: SyncStatus,
+    pub mempool: Vec<MempoolRow>,
+    /// Authoritative mempool size (rows are capped to the top 10).
+    pub mempool_count: usize,
+    pub blocks: Vec<BlockRow>,
+    pub total_fee: u64,
+}
+
+/// Pull-based seam: the launcher calls `snapshot()` once per rendered frame.
+/// It stays synchronous because egui's `App::update` is synchronous and the
+/// in-process adapter reads node state through point-gets / lock-free clones.
+pub trait DashboardBackend: Send + Sync {
+    fn snapshot(&self) -> DashboardSnapshot;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TxEventLog {
+    pub address: String,
+    pub topics: Vec<String>,
+    pub data: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TxOverview {
+    pub txid: String,
+    pub kind: String,
+    pub from: String,
+    pub to: String,
+    pub amount: u64,
+    pub fee: u64,
+    pub gas_used: u64,
+    pub status: TxStatus,
+    pub block_height: Option<u64>,
+    pub timestamp: u64,
+    pub input: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TxReceipt {
+    pub status: TxStatus,
+    pub gas_used: u64,
+    pub gas_limit: u64,
+    pub logs: Vec<TxEventLog>,
+    pub revert_reason: Option<String>,
+    /// Receipts are derived and only retained for the tip block (ADR-0024).
+    /// `false` means "unavailable", never fabricated.
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WitnessProof {
+    pub pre_state_root: String,
+    pub account_proofs: Vec<String>,
+    pub storage_proofs: Vec<String>,
+    /// Hex encoding of the canonical `StateWitness` wire codec (S3-P11).
+    pub raw: String,
+    /// A witness is block-level; `false` means none could be reconstructed.
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TxDetailData {
+    pub overview: Option<TxOverview>,
+    pub receipt: Option<TxReceipt>,
+    pub witness: Option<WitnessProof>,
+    pub events: Vec<TxEventLog>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TxVerifyResult {
+    pub verified: bool,
+    pub message: String,
+    /// The proof is built on demand (O(height) replay) and returned with the
+    /// verification result — never eagerly on screen open.
+    pub witness: Option<WitnessProof>,
+}
+
+/// Transaction audit seam. `verify` is lazy: the screen only calls it after
+/// an explicit button press because witness reconstruction is an O(height)
+/// replay (S3-P11 documented limitation).
+pub trait TxDetailBackend: Send + Sync {
+    fn load(&self, txid: &str) -> Result<TxDetailData, WalletError>;
+    fn verify(&self, txid: &str) -> Result<TxVerifyResult, WalletError>;
+}
+
+/// Deterministic dashboard fixture (no wall clock, no RNG).
+pub struct MockDashboardBackend {
+    snapshot: DashboardSnapshot,
+}
+
+impl MockDashboardBackend {
+    pub fn new() -> Self {
+        Self {
+            snapshot: DashboardSnapshot {
+                peers: vec![
+                    PeerRow {
+                        node_id: "peer-a".to_string(),
+                        addr: "127.0.0.1:8333".to_string(),
+                        latency_ms: 12,
+                        score: 0.82,
+                        direction: "outbound".to_string(),
+                        capabilities: vec!["Noise".to_string(), "Erlay".to_string()],
+                    },
+                    PeerRow {
+                        node_id: "peer-b".to_string(),
+                        addr: "127.0.0.1:8334".to_string(),
+                        latency_ms: 320,
+                        score: 0.35,
+                        direction: "inbound".to_string(),
+                        capabilities: vec!["Noise".to_string()],
+                    },
+                    PeerRow {
+                        node_id: "peer-c".to_string(),
+                        addr: "127.0.0.1:8335".to_string(),
+                        latency_ms: 900,
+                        score: 0.05,
+                        direction: "inbound".to_string(),
+                        capabilities: Vec::new(),
+                    },
+                ],
+                sync: SyncStatus {
+                    current_height: 42,
+                    tip_height: 42,
+                    sync_percent: 100,
+                    headers_queue: 0,
+                    blocks_queue: 0,
+                    state: "idle".to_string(),
+                },
+                mempool: vec![
+                    MempoolRow {
+                        txid: "0x0000000000000000000000000000000000000000000000000000000000000001"
+                            .to_string(),
+                        sender: "sc1sender".to_string(),
+                        receiver: "sc1receiver".to_string(),
+                        amount: 100,
+                        fee: 7,
+                        gas: 21000,
+                        rbf_conflict: true,
+                    },
+                    MempoolRow {
+                        txid: "0x0000000000000000000000000000000000000000000000000000000000000002"
+                            .to_string(),
+                        sender: "sc1sender".to_string(),
+                        receiver: "sc1receiver".to_string(),
+                        amount: 50,
+                        fee: 3,
+                        gas: 21000,
+                        rbf_conflict: false,
+                    },
+                ],
+                mempool_count: 2,
+                blocks: (0..10)
+                    .map(|index| BlockRow {
+                        height: 42 - index,
+                        hash: format!("block-{:02}", 42 - index),
+                        tx_count: 2,
+                        gas_used: 42000,
+                        miner: "sc1miner".to_string(),
+                        timestamp: 1_700_000_000 + (42 - index) * 60,
+                        txids: vec![format!("0x{:064x}", 42 - index)],
+                    })
+                    .collect(),
+                total_fee: 10,
+            },
+        }
+    }
+
+    pub fn with_snapshot(mut self, snapshot: DashboardSnapshot) -> Self {
+        self.snapshot = snapshot;
+        self
+    }
+}
+
+impl Default for MockDashboardBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DashboardBackend for MockDashboardBackend {
+    fn snapshot(&self) -> DashboardSnapshot {
+        self.snapshot.clone()
+    }
+}
+
+/// Deterministic transaction-detail fixture for the a11y gate and gallery.
+pub struct MockTxDetailBackend {
+    data: Vec<TxDetailData>,
+    verify_result: TxVerifyResult,
+}
+
+impl MockTxDetailBackend {
+    pub fn new() -> Self {
+        let txid = "0x0000000000000000000000000000000000000000000000000000000000000001";
+        Self {
+            data: vec![TxDetailData {
+                overview: Some(TxOverview {
+                    txid: txid.to_string(),
+                    kind: "transfer".to_string(),
+                    from: "sc1sender".to_string(),
+                    to: "sc1receiver".to_string(),
+                    amount: 100,
+                    fee: 7,
+                    gas_used: 21000,
+                    status: TxStatus::Success,
+                    block_height: Some(42),
+                    timestamp: 1_700_000_000,
+                    input: "0x".to_string(),
+                }),
+                receipt: Some(TxReceipt {
+                    status: TxStatus::Success,
+                    gas_used: 21000,
+                    gas_limit: 30000,
+                    logs: vec![TxEventLog {
+                        address: "sc1contract".to_string(),
+                        topics: vec!["0x01".to_string()],
+                        data: "0xdeadbeef".to_string(),
+                    }],
+                    revert_reason: None,
+                    available: true,
+                }),
+                witness: Some(WitnessProof {
+                    pre_state_root: "0x00".to_string(),
+                    account_proofs: vec!["0xabcd".to_string()],
+                    storage_proofs: vec!["0xef01".to_string()],
+                    raw: "0x00".to_string(),
+                    available: true,
+                }),
+                events: vec![TxEventLog {
+                    address: "sc1contract".to_string(),
+                    topics: vec!["0x01".to_string()],
+                    data: "0xdeadbeef".to_string(),
+                }],
+            }],
+            verify_result: TxVerifyResult {
+                verified: true,
+                message: "verified".to_string(),
+                witness: None,
+            },
+        }
+    }
+
+    pub fn with_data(mut self, data: Vec<TxDetailData>) -> Self {
+        self.data = data;
+        self
+    }
+
+    pub fn with_verify_result(mut self, result: TxVerifyResult) -> Self {
+        self.verify_result = result;
+        self
+    }
+}
+
+impl Default for MockTxDetailBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TxDetailBackend for MockTxDetailBackend {
+    fn load(&self, txid: &str) -> Result<TxDetailData, WalletError> {
+        self.data
+            .iter()
+            .find(|data| {
+                data.overview
+                    .as_ref()
+                    .is_some_and(|overview| overview.txid == txid)
+            })
+            .cloned()
+            .ok_or_else(|| WalletError::NotFound(txid.to_string()))
+    }
+
+    fn verify(&self, txid: &str) -> Result<TxVerifyResult, WalletError> {
+        self.load(txid)?;
+        Ok(self.verify_result.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,5 +613,29 @@ mod tests {
             backend.submit_transaction("sc1other", 1, 0).unwrap().len(),
             66
         );
+    }
+
+    #[test]
+    fn dashboard_mock_is_deterministic_and_sorted_by_peer_id() {
+        let backend: Arc<dyn DashboardBackend> = Arc::new(MockDashboardBackend::new());
+        let first = backend.snapshot();
+        let second = backend.snapshot();
+        assert_eq!(first, second);
+        assert_eq!(first.peers.len(), 3);
+        assert_eq!(first.blocks.len(), 10);
+        assert!(first.peers.windows(2).all(|w| w[0].node_id < w[1].node_id));
+    }
+
+    #[test]
+    fn tx_detail_mock_is_deterministic_and_fails_closed_for_unknown_tx() {
+        let backend: Arc<dyn TxDetailBackend> = Arc::new(MockTxDetailBackend::new());
+        let txid = "0x0000000000000000000000000000000000000000000000000000000000000001";
+        assert_eq!(backend.load(txid).unwrap(), backend.load(txid).unwrap());
+        assert!(backend.verify(txid).unwrap().verified);
+        assert!(matches!(
+            backend.load("unknown"),
+            Err(WalletError::NotFound(_))
+        ));
+        assert!(backend.verify("unknown").is_err());
     }
 }

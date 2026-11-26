@@ -241,6 +241,11 @@ impl PeerManager {
         self.pool().node_ids_sorted()
     }
 
+    /// UI-P04: snapshot of every known peer in deterministic `node_id` order.
+    pub fn all_peers_sorted(&self) -> Vec<super::store::PeerRecord> {
+        self.store_read().all_records_sorted()
+    }
+
     /// Fold ADDR-gossip entries into the store as unverified peers (S2-P11
     /// → S2-P12 integration). Returns how many identities were new.
     pub fn learn_addrs(&self, entries: Vec<AddrEntry>) -> usize {

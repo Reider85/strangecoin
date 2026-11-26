@@ -18,7 +18,7 @@ pub struct Modal {
 }
 
 /// Modal content trait
-pub trait ModalContent {
+pub trait ModalContent: Send + Sync {
     fn show(&mut self, ui: &mut egui::Ui, theme_manager: &ThemeManager);
 }
 
@@ -52,6 +52,16 @@ impl Modal {
     pub fn content<T: ModalContent + 'static>(mut self, content: T) -> Self {
         self.content = Box::new(content);
         self
+    }
+
+    /// UI-P04: swap owned content on an existing modal (block detail selection
+    /// changes between frames without recreating the open/close state).
+    pub fn set_content<T: ModalContent + 'static>(&mut self, content: T) {
+        self.content = Box::new(content);
+    }
+
+    pub fn set_title(&mut self, title: impl Into<String>) {
+        self.title = Some(title.into());
     }
 
     pub fn size(mut self, size: ModalSize) -> Self {

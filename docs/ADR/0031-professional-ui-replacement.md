@@ -60,6 +60,33 @@ UI-P03 does not yet reduce `src/gui/` to the ~30-line final form. ABI metadata
 is unavailable without the Stage-4 indexer (`S4-core-P07`), so the Contracts
 tab shows an empty ABI string for code-bearing accounts.
 
+**Amendment D (2026-11-26, UI-P04)** — the Dashboard and Transaction Detail
+screens use two new seams (`DashboardBackend`, `TxDetailBackend`) in
+`crates/strangecoin-ui/src/backend.rs`, implemented in-process in `src/api/`
+over `BlockchainFacade` / `PeerManager`, with deterministic mocks for unit
+tests, a11y gates and `lib.rs::App`. This extends Amendment C's decision to
+keep the UI crate headless (no `strangecoin-core` / monolith dependency). Four
+honesty deviations are recorded: (1) `Receipt` is derived and retained only
+for the tip block (ADR-0024), so the Receipt panel reports
+`available: false` for older transactions instead of fabricating data;
+(2) `StateWitness` is **block-level** and `build_witness_for_block(height)` is
+an O(height) replay (S3-P11), so `get_witness(txid)` does not exist — the
+adapter builds it lazily inside `verify()` and returns it with the result;
+the Verify button calls the facade's `verify_incoming_block_with_witness`,
+which delegates to `verify_block_stateless`; (3) fields the chain does not
+expose are reported as empty/zero rather than guessed: per-block `gas_used`,
+mempool `gas`, RBF conflicts, sync queue depths and HELLO capabilities; the
+"miner" column uses the coinbase receiver when present; sync engine state is
+derived from the `NodeEvent` digest (`idle` / `blocks` / `catch-up`) because
+the sync engine does not publish a live state enum; (4) live updates come from
+one `crossbeam_channel::Receiver<NodeEvent>` owned by `StranglerLauncher`
+(≤64 events drained per frame → digest → `ctx.request_repaint()`), not from a
+subscription inside the UI crate. The UI-P02 flat screen mocks
+`screens/{dashboard,tx_detail}.rs` are replaced by directory modules with
+panel submodules; the public screen API (`new`, `a11y_probes`, `render`,
+launcher setters, `take_selected_transaction` navigation) is preserved.
+Color-coded peer scores always carry a text label (WCAG 1.4.1).
+
 ## Context
 
 Strangecoin today ships an `eframe`/`egui 0.22` immediate-mode GUI in

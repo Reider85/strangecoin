@@ -203,6 +203,15 @@ impl PeerStore {
         ids
     }
 
+    /// UI-P04: clone all records in the same deterministic `node_id` order.
+    /// Used by the node dashboard backend; no lock or I/O escapes the call.
+    pub fn all_records_sorted(&self) -> Vec<PeerRecord> {
+        self.peer_ids_sorted()
+            .into_iter()
+            .filter_map(|id| self.peers.get(&id).cloned())
+            .collect()
+    }
+
     /// Record a ban, replacing any existing one.
     ///
     /// Replacement is what makes score-band *escalation* work: a peer that

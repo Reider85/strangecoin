@@ -358,6 +358,121 @@ impl Localization {
     pub fn dashboard_recent_transactions(&self) -> String {
         self.t("dashboard-recent-transactions")
     }
+    pub fn dashboard_tip_height(&self) -> String {
+        self.t("dashboard-tip-height")
+    }
+    pub fn dashboard_sync_percent(&self, percent: u64) -> String {
+        let mut args = HashMap::new();
+        args.insert("percent", percent.to_string());
+        self.tr("dashboard-sync-percent", args)
+    }
+    pub fn dashboard_connected_peers(&self, count: usize) -> String {
+        let mut args = HashMap::new();
+        args.insert("count", count.to_string());
+        self.tr("dashboard-connected-peers", args)
+    }
+    pub fn dashboard_uptime(&self) -> String {
+        self.t("dashboard-uptime")
+    }
+    pub fn dashboard_version(&self) -> String {
+        self.t("dashboard-version")
+    }
+    pub fn dashboard_current_height(&self) -> String {
+        self.t("dashboard-current-height")
+    }
+    pub fn dashboard_sync_state(&self) -> String {
+        self.t("dashboard-sync-state")
+    }
+    pub fn dashboard_headers_queue(&self) -> String {
+        self.t("dashboard-headers-queue")
+    }
+    pub fn dashboard_blocks_queue(&self) -> String {
+        self.t("dashboard-blocks-queue")
+    }
+    pub fn dashboard_score_healthy(&self) -> String {
+        self.t("dashboard-score-healthy")
+    }
+    pub fn dashboard_score_warning(&self) -> String {
+        self.t("dashboard-score-warning")
+    }
+    pub fn dashboard_score_banned(&self) -> String {
+        self.t("dashboard-score-banned")
+    }
+    pub fn dashboard_no_peers(&self) -> String {
+        self.t("dashboard-no-peers")
+    }
+    pub fn dashboard_peer_id(&self) -> String {
+        self.t("dashboard-peer-id")
+    }
+    pub fn dashboard_peer_addr(&self) -> String {
+        self.t("dashboard-peer-addr")
+    }
+    pub fn dashboard_peer_latency(&self) -> String {
+        self.t("dashboard-peer-latency")
+    }
+    pub fn dashboard_peer_score(&self) -> String {
+        self.t("dashboard-peer-score")
+    }
+    pub fn dashboard_peer_direction(&self) -> String {
+        self.t("dashboard-peer-direction")
+    }
+    pub fn dashboard_peer_capabilities(&self) -> String {
+        self.t("dashboard-peer-capabilities")
+    }
+    pub fn dashboard_total_fee(&self) -> String {
+        self.t("dashboard-total-fee")
+    }
+    pub fn dashboard_no_mempool(&self) -> String {
+        self.t("dashboard-no-mempool")
+    }
+    pub fn dashboard_mempool_txid(&self) -> String {
+        self.t("dashboard-mempool-txid")
+    }
+    pub fn dashboard_mempool_from(&self) -> String {
+        self.t("dashboard-mempool-from")
+    }
+    pub fn dashboard_mempool_to(&self) -> String {
+        self.t("dashboard-mempool-to")
+    }
+    pub fn dashboard_mempool_amount(&self) -> String {
+        self.t("dashboard-mempool-amount")
+    }
+    pub fn dashboard_mempool_fee(&self) -> String {
+        self.t("dashboard-mempool-fee")
+    }
+    pub fn dashboard_mempool_gas(&self) -> String {
+        self.t("dashboard-mempool-gas")
+    }
+    pub fn dashboard_mempool_rbf(&self) -> String {
+        self.t("dashboard-mempool-rbf")
+    }
+    pub fn dashboard_no_blocks(&self) -> String {
+        self.t("dashboard-no-blocks")
+    }
+    pub fn dashboard_block_height(&self) -> String {
+        self.t("dashboard-block-height")
+    }
+    pub fn dashboard_block_hash(&self) -> String {
+        self.t("dashboard-block-hash")
+    }
+    pub fn dashboard_block_txs(&self) -> String {
+        self.t("dashboard-block-txs")
+    }
+    pub fn dashboard_block_gas(&self) -> String {
+        self.t("dashboard-block-gas")
+    }
+    pub fn dashboard_block_miner(&self) -> String {
+        self.t("dashboard-block-miner")
+    }
+    pub fn dashboard_block_timestamp(&self) -> String {
+        self.t("dashboard-block-timestamp")
+    }
+    pub fn dashboard_block_tx_list(&self) -> String {
+        self.t("dashboard-block-tx-list")
+    }
+    pub fn dashboard_block_detail(&self) -> String {
+        self.t("dashboard-block-detail")
+    }
 
     // Transaction detail
     pub fn tx_detail_title(&self) -> String {
@@ -371,6 +486,108 @@ impl Localization {
     }
     pub fn tx_detail_events(&self) -> String {
         self.t("tx-detail-events")
+    }
+    pub fn tx_detail_overview(&self) -> String {
+        self.t("tx-detail-overview")
+    }
+    pub fn tx_detail_status(&self) -> String {
+        self.t("tx-detail-status")
+    }
+    pub fn tx_detail_block(&self) -> String {
+        self.t("tx-detail-block")
+    }
+    pub fn tx_detail_from(&self) -> String {
+        self.t("tx-detail-from")
+    }
+    pub fn tx_detail_to(&self) -> String {
+        self.t("tx-detail-to")
+    }
+    pub fn tx_detail_amount(&self) -> String {
+        self.t("tx-detail-amount")
+    }
+    pub fn tx_detail_fee(&self) -> String {
+        self.t("tx-detail-fee")
+    }
+    pub fn tx_detail_gas_used(&self) -> String {
+        self.t("tx-detail-gas-used")
+    }
+    pub fn tx_detail_timestamp(&self) -> String {
+        self.t("tx-detail-timestamp")
+    }
+    pub fn tx_detail_input_data(&self) -> String {
+        self.t("tx-detail-input-data")
+    }
+    pub fn tx_detail_verify(&self) -> String {
+        self.t("tx-detail-verify")
+    }
+    pub fn tx_detail_load(&self) -> String {
+        self.t("tx-detail-load")
+    }
+    pub fn tx_detail_not_found(&self) -> String {
+        self.t("tx-detail-not-found")
+    }
+    pub fn tx_detail_txid(&self) -> String {
+        self.t("tx-detail-txid")
+    }
+    pub fn tx_detail_kind(&self) -> String {
+        self.t("tx-detail-kind")
+    }
+    pub fn tx_detail_status_pending(&self) -> String {
+        self.t("tx-detail-status-pending")
+    }
+    pub fn tx_detail_copy(&self) -> String {
+        self.t("tx-detail-copy")
+    }
+    pub fn tx_detail_gas_limit(&self) -> String {
+        self.t("tx-detail-gas-limit")
+    }
+    pub fn tx_detail_revert(&self) -> String {
+        self.t("tx-detail-revert")
+    }
+    pub fn tx_detail_events_empty(&self) -> String {
+        self.t("tx-detail-events-empty")
+    }
+    pub fn tx_detail_receipt_unavailable(&self) -> String {
+        self.t("tx-detail-receipt-unavailable")
+    }
+    pub fn tx_detail_verified(&self) -> String {
+        self.t("tx-detail-verified")
+    }
+    pub fn tx_detail_verify_failed(&self) -> String {
+        self.t("tx-detail-verify-failed")
+    }
+    pub fn tx_detail_witness_unavailable(&self) -> String {
+        self.t("tx-detail-witness-unavailable")
+    }
+    pub fn tx_detail_witness_account(&self) -> String {
+        self.t("tx-detail-witness-account")
+    }
+    pub fn tx_detail_witness_storage(&self) -> String {
+        self.t("tx-detail-witness-storage")
+    }
+    pub fn tx_detail_witness_raw(&self) -> String {
+        self.t("tx-detail-witness-raw")
+    }
+    pub fn tx_detail_event_topics(&self) -> String {
+        self.t("tx-detail-event-topics")
+    }
+    pub fn tx_detail_event_data(&self) -> String {
+        self.t("tx-detail-event-data")
+    }
+    pub fn tx_detail_no_selection(&self) -> String {
+        self.t("tx-detail-no-selection")
+    }
+    pub fn tx_detail_loading(&self) -> String {
+        self.t("tx-detail-loading")
+    }
+    pub fn status_confirmed(&self) -> String {
+        self.t("status-confirmed")
+    }
+    pub fn status_failed(&self) -> String {
+        self.t("status-failed")
+    }
+    pub fn status_pending(&self) -> String {
+        self.t("status-pending")
     }
 
     // Agent activity

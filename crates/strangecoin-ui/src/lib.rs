@@ -31,8 +31,10 @@ pub mod theme;
 pub mod tokens;
 
 pub use crate::backend::{
-    AbiMethod, BatchCall, ContractRecord, MockWalletBackend, TxHash, TxRecord, TxStatus,
-    WalletBackend, WalletError,
+    AbiMethod, BatchCall, BlockRow, ContractRecord, DashboardBackend, DashboardSnapshot,
+    MempoolRow, MockDashboardBackend, MockTxDetailBackend, MockWalletBackend, PeerRow, SyncStatus,
+    TxDetailBackend, TxDetailData, TxEventLog, TxHash, TxOverview, TxReceipt, TxRecord, TxStatus,
+    TxVerifyResult, WalletBackend, WalletError, WitnessProof,
 };
 pub use crate::i18n::Localization;
 pub use crate::theme::ThemeManager;
@@ -94,6 +96,11 @@ pub struct App {
     pub localization: Localization,
     pub current_screen: Screen,
     pub node: Arc<BlockchainFacade>,
+    /// UI-P04: mock-backed screens for the standalone (non-launcher) app.
+    /// The monolith uses `StranglerLauncher`, which injects in-process
+    /// adapters instead (ADR-0031 Amendment C/D).
+    pub dashboard_screen: DashboardScreen,
+    pub tx_detail_screen: TxDetailScreen,
 }
 
 impl App {
@@ -107,6 +114,8 @@ impl App {
             localization,
             current_screen,
             node,
+            dashboard_screen: DashboardScreen::new(),
+            tx_detail_screen: TxDetailScreen::new(),
         }
     }
 
@@ -174,22 +183,24 @@ impl App {
     }
 
     fn render_dashboard_screen(&mut self, ui: &mut egui::Ui) {
-        ui.heading(
-            self.localization
-                .tr("dashboard-title", std::collections::HashMap::new()),
+        crate::screens::Screen::show(
+            &mut self.dashboard_screen,
+            ui,
+            &self.theme_manager,
+            &self.localization,
         );
-        // Dashboard screen content will be implemented in UI-P04
-        ui.label("Dashboard screen - to be implemented in UI-P04");
     }
 
     fn render_tx_detail_screen(&mut self, ui: &mut egui::Ui, txid: String) {
-        ui.heading(
-            self.localization
-                .tr("tx-detail-title", std::collections::HashMap::new()),
+        if self.tx_detail_screen.transaction_id().as_deref() != Some(txid.as_str()) {
+            self.tx_detail_screen.set_transaction_id(&txid);
+        }
+        crate::screens::Screen::show(
+            &mut self.tx_detail_screen,
+            ui,
+            &self.theme_manager,
+            &self.localization,
         );
-        ui.label(format!("Transaction ID: {}", txid));
-        // Transaction detail content will be implemented in UI-P04
-        ui.label("Transaction detail screen - to be implemented in UI-P04");
     }
 
     fn render_agent_activity_screen(&mut self, ui: &mut egui::Ui) {

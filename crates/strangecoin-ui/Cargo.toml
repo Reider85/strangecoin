@@ -37,3 +37,12 @@ path = "src/lib.rs"
 [[test]]
 name = "wallet_a11y"
 path = "tests/screens/wallet_a11y.rs"
+
+# UI-P04: screen-level WCAG AA gates for the two new screens.
+[[test]]
+name = "dashboard_a11y"
+path = "tests/screens/dashboard_a11y.rs"
+
+[[test]]
+name = "tx_detail_a11y"
+path = "tests/screens/tx_detail_a11y.rs"
