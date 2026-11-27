@@ -1388,7 +1388,7 @@ pub async fn run_async() {
     *node.sync_task_handle.lock().unwrap() = Some(sync_task_handle);
 
     #[cfg(feature = "gui")]
-    let app = gui::WalletApp {
+    let app = gui::GuiApp {
         node: Node {
             blockchain: Arc::clone(&node.blockchain),
             peers: Arc::clone(&node.peers),
@@ -1407,24 +1407,9 @@ pub async fn run_async() {
             // GUI twin never runs `start_server` — no ACP side.
             acp_escrow_contract: None,
         },
-        wallet_address: String::new(),
-        password: String::new(),
-        is_authenticated: false,
-        receiver_address: String::new(),
-        amount: String::new(),
-        ip: String::new(),
-        port: String::new(),
-        status: String::new(),
-        mining_status: Arc::new(Mutex::new(MiningStatus::Idle)),
-        mining_progress: Arc::new(Mutex::new(None)),
-        progress_rx: None,
-        status_rx: None,
-        mining_tx,
-        last_repaint: 0.0,
-        new_wallet_password: String::new(),
         data_dir: config.data_dir.clone(),
-        use_strangler_migration: true,
         ui: config.ui.clone(),
+        mining_tx,
     };
     // Headless: keep the mining sender alive (the mining worker idles on recv) and
     // retain the sync receiver so adoption events can be drained below.

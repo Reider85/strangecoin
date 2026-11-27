@@ -31,10 +31,13 @@ pub mod theme;
 pub mod tokens;
 
 pub use crate::backend::{
-    AbiMethod, BatchCall, BlockRow, ContractRecord, DashboardBackend, DashboardSnapshot,
-    MempoolRow, MockDashboardBackend, MockTxDetailBackend, MockWalletBackend, PeerRow, SyncStatus,
-    TxDetailBackend, TxDetailData, TxEventLog, TxHash, TxOverview, TxReceipt, TxRecord, TxStatus,
-    TxVerifyResult, WalletBackend, WalletError, WitnessProof,
+    AbiMethod, AcpSessionRow, AcpSettings, ActivityEventType, ActivityFilterSpec, ActivityRecord,
+    AgentActivityBackend, BatchCall, BlockRow, ConfigSettings, ContractRecord, DashboardBackend,
+    DashboardSnapshot, KeystoreEntry, KeystoreSettings, McpSettings, MempoolRow,
+    MockAgentActivityBackend, MockDashboardBackend, MockSettingsBackend, MockTxDetailBackend,
+    MockWalletBackend, NetworkSettings, PeerRow, SettingsBackend, SettingsPeerRow,
+    SettingsSnapshot, SyncStatus, TxDetailBackend, TxDetailData, TxEventLog, TxHash, TxOverview,
+    TxReceipt, TxRecord, TxStatus, TxVerifyResult, WalletBackend, WalletError, WitnessProof,
 };
 pub use crate::i18n::Localization;
 pub use crate::theme::ThemeManager;
@@ -101,6 +104,8 @@ pub struct App {
     /// adapters instead (ADR-0031 Amendment C/D).
     pub dashboard_screen: DashboardScreen,
     pub tx_detail_screen: TxDetailScreen,
+    pub agent_activity_screen: AgentActivityScreen,
+    pub settings_screen: SettingsScreen,
 }
 
 impl App {
@@ -116,6 +121,8 @@ impl App {
             node,
             dashboard_screen: DashboardScreen::new(),
             tx_detail_screen: TxDetailScreen::new(),
+            agent_activity_screen: AgentActivityScreen::new(),
+            settings_screen: SettingsScreen::new(),
         }
     }
 
@@ -204,21 +211,21 @@ impl App {
     }
 
     fn render_agent_activity_screen(&mut self, ui: &mut egui::Ui) {
-        ui.heading(
-            self.localization
-                .tr("agent-activity-title", std::collections::HashMap::new()),
+        crate::screens::Screen::show(
+            &mut self.agent_activity_screen,
+            ui,
+            &self.theme_manager,
+            &self.localization,
         );
-        // Agent activity content will be implemented in UI-P05
-        ui.label("Agent activity screen - to be implemented in UI-P05");
     }
 
     fn render_settings_screen(&mut self, ui: &mut egui::Ui) {
-        ui.heading(
-            self.localization
-                .tr("settings-title", std::collections::HashMap::new()),
+        crate::screens::Screen::show(
+            &mut self.settings_screen,
+            ui,
+            &self.theme_manager,
+            &self.localization,
         );
-        // Settings screen content will be implemented in UI-P05
-        ui.label("Settings screen - to be implemented in UI-P05");
     }
 
     fn render_footer(&mut self, ui: &mut egui::Ui) {

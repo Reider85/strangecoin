@@ -588,6 +588,301 @@ impl TxDetailBackend for MockTxDetailBackend {
     }
 }
 
+// ---------------------------------------------------------------------------
+// UI-P05: agent activity + operator settings data-source seams.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ActivityEventType {
+    AcpNegotiate,
+    AcpTask,
+    AcpSettle,
+    AcpRevoke,
+    BatchedTx,
+    SponsorTx,
+    Transfer,
+}
+
+impl ActivityEventType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::AcpNegotiate => "ACP_NEGOTIATE",
+            Self::AcpTask => "ACP_TASK",
+            Self::AcpSettle => "ACP_SETTLE",
+            Self::AcpRevoke => "ACP_REVOKE",
+            Self::BatchedTx => "batched_tx",
+            Self::SponsorTx => "sponsor_tx",
+            Self::Transfer => "transfer",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityRecord {
+    pub id: String,
+    pub timestamp: u64,
+    pub agent_address: String,
+    pub event_type: ActivityEventType,
+    pub details: String,
+    pub txid: Option<String>,
+    pub acp_message: Option<String>,
+    /// `false` means the row is an explicit stub (indexer/paymaster unavailable).
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ActivityFilterSpec {
+    pub agent_address: Option<String>,
+    pub event_types: Vec<ActivityEventType>,
+    pub from: Option<u64>,
+    pub to: Option<u64>,
+}
+
+/// Pull-based seam mirroring `agent_getActivity`. Sorted newest-first by the
+/// adapter; the screen never sorts timestamps itself.
+pub trait AgentActivityBackend: Send + Sync {
+    fn activities(&self) -> Result<Vec<ActivityRecord>, WalletError>;
+}
+
+pub struct MockAgentActivityBackend {
+    activities: Vec<ActivityRecord>,
+}
+
+impl MockAgentActivityBackend {
+    pub fn new() -> Self {
+        let mut activities: Vec<ActivityRecord> = [
+            (1, ActivityEventType::AcpNegotiate, true),
+            (2, ActivityEventType::AcpTask, true),
+            (3, ActivityEventType::AcpSettle, true),
+            (4, ActivityEventType::AcpRevoke, true),
+            (5, ActivityEventType::BatchedTx, true),
+            (6, ActivityEventType::SponsorTx, false),
+            (7, ActivityEventType::Transfer, true),
+        ]
+        .into_iter()
+        .map(|(index, event_type, available)| ActivityRecord {
+            id: format!("activity-{index:02}"),
+            timestamp: 1_700_000_000 + index * 60,
+            agent_address: format!("sc1agent{index}"),
+            event_type,
+            details: format!("{} #{index}", event_type.as_str()),
+            txid: if available {
+                Some(format!("0x{index:064x}"))
+            } else {
+                None
+            },
+            acp_message: None,
+            available,
+        })
+        .collect();
+        activities.reverse();
+        Self { activities }
+    }
+
+    pub fn with_activities(mut self, activities: Vec<ActivityRecord>) -> Self {
+        self.activities = activities;
+        self
+    }
+}
+
+impl Default for MockAgentActivityBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AgentActivityBackend for MockAgentActivityBackend {
+    fn activities(&self) -> Result<Vec<ActivityRecord>, WalletError> {
+        Ok(self.activities.clone())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkSettings {
+    pub listen_addr: String,
+    pub seeds: Vec<String>,
+    pub max_peers: u32,
+    pub network_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SettingsPeerRow {
+    pub node_id: String,
+    pub addr: String,
+    pub score: f32,
+    pub banned: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeystoreEntry {
+    pub label: String,
+    pub address: String,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeystoreSettings {
+    pub operator: Vec<KeystoreEntry>,
+    pub agents: Vec<KeystoreEntry>,
+    /// `false` while ADR-0028 keystore isolation is design-only.
+    pub available: bool,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigSettings {
+    pub raw: String,
+    pub validation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpSettings {
+    pub enabled: bool,
+    pub transport: String,
+    pub http_listen: String,
+    pub clients: Vec<String>,
+    pub available: bool,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcpSessionRow {
+    pub agent_a: String,
+    pub agent_b: String,
+    pub escrow_txid: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcpSettings {
+    pub enabled: bool,
+    pub sessions: Vec<AcpSessionRow>,
+    pub available: bool,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SettingsSnapshot {
+    pub network: NetworkSettings,
+    pub peers: Vec<SettingsPeerRow>,
+    pub keystore: KeystoreSettings,
+    pub config: ConfigSettings,
+    pub mcp: McpSettings,
+    pub acp: AcpSettings,
+}
+
+/// Operator surface. Mutating methods fail closed by default: a mock or a
+/// read-only adapter must never report a successful ban/save/toggle.
+pub trait SettingsBackend: Send + Sync {
+    fn snapshot(&self) -> SettingsSnapshot;
+
+    fn validate_config(&self, _raw: &str) -> Result<(), String> {
+        Err("config validation is not available".to_string())
+    }
+
+    fn save_config(&self, raw: &str) -> Result<(), String> {
+        self.validate_config(raw)
+    }
+
+    fn set_peer_ban(&self, _node_id: &str, _banned: bool) -> Result<(), String> {
+        Err("peer ban control is not available".to_string())
+    }
+
+    fn add_seed(&self, _addr: &str) -> Result<(), String> {
+        Err("seed management is not available".to_string())
+    }
+
+    fn set_mcp_enabled(&self, _enabled: bool) -> Result<(), String> {
+        Err("MCP toggle is not available at runtime".to_string())
+    }
+
+    fn set_acp_enabled(&self, _enabled: bool) -> Result<(), String> {
+        Err("ACP toggle is not available at runtime".to_string())
+    }
+}
+
+pub struct MockSettingsBackend {
+    snapshot: SettingsSnapshot,
+}
+
+impl MockSettingsBackend {
+    pub fn new() -> Self {
+        Self {
+            snapshot: SettingsSnapshot {
+                network: NetworkSettings {
+                    listen_addr: "127.0.0.1:8333".to_string(),
+                    seeds: vec!["seed.example:8333".to_string()],
+                    max_peers: 32,
+                    network_id: "main".to_string(),
+                },
+                peers: vec![
+                    SettingsPeerRow {
+                        node_id: "peer-a".to_string(),
+                        addr: "127.0.0.1:8334".to_string(),
+                        score: 0.82,
+                        banned: false,
+                    },
+                    SettingsPeerRow {
+                        node_id: "peer-b".to_string(),
+                        addr: "127.0.0.1:8335".to_string(),
+                        score: 0.05,
+                        banned: true,
+                    },
+                ],
+                keystore: KeystoreSettings {
+                    operator: vec![KeystoreEntry {
+                        label: "operator".to_string(),
+                        address: "sc1operator".to_string(),
+                        kind: "secp256k1".to_string(),
+                    }],
+                    agents: vec![KeystoreEntry {
+                        label: "agent-1".to_string(),
+                        address: "sc1agent1".to_string(),
+                        kind: "session".to_string(),
+                    }],
+                    available: true,
+                    note: String::new(),
+                },
+                config: ConfigSettings {
+                    raw: "[network]\nnetwork_id = \"main\"\n".to_string(),
+                    validation: String::new(),
+                },
+                mcp: McpSettings {
+                    enabled: false,
+                    transport: "stdio".to_string(),
+                    http_listen: "127.0.0.1:8080".to_string(),
+                    clients: Vec::new(),
+                    available: false,
+                    note: "no connected-client registry".to_string(),
+                },
+                acp: AcpSettings {
+                    enabled: false,
+                    sessions: Vec::new(),
+                    available: false,
+                    note: "no live session registry".to_string(),
+                },
+            },
+        }
+    }
+
+    pub fn with_snapshot(mut self, snapshot: SettingsSnapshot) -> Self {
+        self.snapshot = snapshot;
+        self
+    }
+}
+
+impl Default for MockSettingsBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SettingsBackend for MockSettingsBackend {
+    fn snapshot(&self) -> SettingsSnapshot {
+        self.snapshot.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -637,5 +932,31 @@ mod tests {
             Err(WalletError::NotFound(_))
         ));
         assert!(backend.verify("unknown").is_err());
+    }
+
+    #[test]
+    fn agent_activity_mock_is_deterministic_and_marks_stubs() {
+        let backend: Arc<dyn AgentActivityBackend> = Arc::new(MockAgentActivityBackend::new());
+        let first = backend.activities().unwrap();
+        assert_eq!(first, backend.activities().unwrap());
+        assert_eq!(first.len(), 7);
+        assert!(first.windows(2).all(|w| w[0].timestamp >= w[1].timestamp));
+        assert!(first.iter().any(|row| !row.available));
+    }
+
+    #[test]
+    fn settings_mock_is_deterministic_and_mutations_fail_closed() {
+        let backend: Arc<dyn SettingsBackend> = Arc::new(MockSettingsBackend::new());
+        assert_eq!(backend.snapshot(), backend.snapshot());
+        let snapshot = backend.snapshot();
+        assert!(snapshot
+            .peers
+            .windows(2)
+            .all(|w| w[0].node_id < w[1].node_id));
+        assert!(backend.save_config("[network]\n").is_err());
+        assert!(backend.set_peer_ban("peer-a", true).is_err());
+        assert!(backend.add_seed("seed.example:8333").is_err());
+        assert!(backend.set_mcp_enabled(true).is_err());
+        assert!(backend.set_acp_enabled(true).is_err());
     }
 }

@@ -448,6 +448,32 @@ Some WCAG AA criteria require manual review (cannot be fully automated):
 These are documented in `docs/spec/ui_professional.md` (this file) per
 screen, and reviewed in PR review.
 
+#### 7.4.1 Per-screen manual review items (UI-P05)
+
+- **Wallet** — toast announcements after Send/batch calls (`loading` /
+  `success` / `error`) must be announced by a screen reader; ABI viewer code
+  blocks must have a descriptive heading (h2/h3 order).
+- **Dashboard** — live peer-score and mempool count changes must not rely on
+  color alone (text labels enforced by the gate); block-detail modal heading
+  hierarchy (h2 → h3) must be reviewed manually.
+- **Transaction Detail** — lazy Verify result (`verified` / `verification
+  failed`) is a dynamic status region; receipt/witness "unavailable" text must
+  be announced, not inferred from a missing panel.
+- **Agent Activity** — filter changes update the feed without a page load;
+  the screen reader must announce the new match count. The ACP detail modal
+  (opened from a stub row) must trap and restore focus, and stub markers must
+  be read as text ("stub - live source unavailable").
+- **Settings** — Save-and-Restart confirmation and all fail-closed operator
+  errors (ban/unban, seed, MCP/ACP toggles, config validation) must be
+  announced as text. The Operator/Agent keystore tabs must expose their names
+  as tabs (not just color), and unavailable registries must be read from the
+  `note` text.
+
+Automated coverage: `tests/screens/{wallet,dashboard,tx_detail,agent_activity,
+settings}_a11y.rs` plus the aggregate `tests/screens_a11y.rs` run the pure-Rust
+WCAG AA gate for all five screens in light and dark themes. The vendored
+axe-core harness remains opt-in and advisory (§7.2).
+
 ---
 
 ## 8. Strangler migration

@@ -87,6 +87,33 @@ panel submodules; the public screen API (`new`, `a11y_probes`, `render`,
 launcher setters, `take_selected_transaction` navigation) is preserved.
 Color-coded peer scores always carry a text label (WCAG 1.4.1).
 
+**Amendment E (2026-11-27, UI-P05 closeout)** — Agent Activity and Settings use
+two new headless seams (`AgentActivityBackend`, `SettingsBackend`) in
+`crates/strangecoin-ui/src/backend.rs`, with deterministic mocks and in-process
+adapters in `src/api/`. `agent_getActivity` exists in `strangecoin-api` but
+returns hard-coded JSON and is not wired into the node; the Stage-4 indexer
+(`S4-core-P07`) does not exist. The adapter therefore derives feed entries from
+local chain/mempool state, reports `sponsor_tx` and indexer-backed ACP events as
+explicit stubs, and never presents mock JSON as live agent telemetry. Settings
+has seven tabs: the six spec sub-screens plus General/About (theme/locale),
+because the КГ says "7 sub-screen" but enumerates six; the count discrepancy is
+resolved in favour of keeping the existing General/About surface. No
+`OperatorKeystore`/`AgentKeystore` types, BIP-32 derivation, connected-MCP
+client registry or live ACP session registry exist yet (ADR-0028/0029/0030 are
+design documents), so those controls report explicit `NotImplemented` /
+`available: false` instead of fabricating data. The strangler closeout removes
+`WalletApp`, `show_legacy_ui`, the four legacy handlers and migration phases,
+but **retains `StranglerLauncher`** as a thin launcher: it owns the auth gate,
+one `EventBus` receiver, and the in-process adapters. Literal §8.2 delegation
+to `strangecoin_ui::App` is not adopted because that `App` is a mock-only
+standalone demo with no backend injection and would silently replace real
+wallet/dashboard/tx-detail data with fixtures. `tests/two_clients.rs` stays
+unchanged (it drives `BlockchainFacade`, not the GUI). The a11y hard gate
+remains the deterministic pure-Rust `a11y-audit` suite; vendored axe-core
+(`a11y-axe`) stays advisory. `Changelog.md` gains a `4.0.0` section marked
+**Unreleased / extension closeout**: AI-P05 SDK and Stage 4 core DoD are not
+committed, so no `v4.0.0-stage4` tag is claimed (FBP10).
+
 ## Context
 
 Strangecoin today ships an `eframe`/`egui 0.22` immediate-mode GUI in

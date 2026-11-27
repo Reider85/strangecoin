@@ -1,14 +1,9 @@
 //! Strangler migration from src/gui/ to strangecoin-ui
 //!
-//! This module implements the strangler pattern migration from the old GUI
-//! implementation in src/gui/ to the new professional UI in crates/strangecoin-ui.
-//!
-//! The migration strategy:
-//! 1. Create a thin launcher that uses both old and new UI
-//! 2. Gradually migrate functionality from old to new UI
-//! 3. Eventually remove old UI completely
-//!
-//! This allows for a gradual migration without breaking existing functionality.
+//! UI-P05 closeout: the legacy renderer, phase switch and legacy-only handlers
+//! are gone. This module is now the single professional UI launcher; every
+//! screen pulls its data from an in-process adapter (`src/api/`), and the
+//! launcher only owns auth state, navigation and the event/mining bridges.
 
 use eframe::egui;
 use std::path::PathBuf;
@@ -16,15 +11,19 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::SystemTime;
 use tracing::{debug, error, info, warn};
 
-use crate::api::{InProcessDashboardBackend, InProcessTxDetailBackend, InProcessWalletBackend};
+use crate::api::{
+    InProcessAgentActivityBackend, InProcessDashboardBackend, InProcessSettingsBackend,
+    InProcessTxDetailBackend, InProcessWalletBackend,
+};
 use crate::error::StrangecoinError;
 use crate::events::NodeEvent;
-use crate::{wallet, MiningStatus, MiningTask, Node, Transaction};
+use crate::{wallet, MiningStatus, MiningTask, Node};
 
 use strangecoin_ui::theme::Theme;
 use strangecoin_ui::{
-    AgentActivityScreen, DashboardBackend, DashboardScreen, Localization, SettingsScreen,
-    ThemeManager, TxDetailBackend, TxDetailScreen, WalletBackend, WalletScreen,
+    AgentActivityBackend, AgentActivityScreen, DashboardBackend, DashboardScreen, Localization,
+    SettingsBackend, SettingsScreen, ThemeManager, TxDetailBackend, TxDetailScreen, WalletBackend,
+    WalletScreen,
 };
 
 /// Strangler migration launcher for UI
@@ -49,12 +48,14 @@ pub struct StranglerLauncher {
     pub mining_tx: tokio::sync::mpsc::UnboundedSender<MiningTask>,
     pub last_repaint: f64,
     pub new_wallet_password: String,
-    pub migration_phase: MigrationPhase,
     /// UI-P03: in-process data source behind `WalletBackend` (src/api/).
     pub wallet_backend: Arc<InProcessWalletBackend>,
     /// UI-P04: in-process data sources for the dashboard / tx audit screens.
     pub dashboard_backend: Arc<InProcessDashboardBackend>,
     pub tx_detail_backend: Arc<InProcessTxDetailBackend>,
+    /// UI-P05: in-process data sources for the agent activity / settings screens.
+    pub agent_activity_backend: Arc<InProcessAgentActivityBackend>,
+    pub settings_backend: Arc<InProcessSettingsBackend>,
     /// UI-P04: `NodeEvent` subscription owned by the launcher; drained once
     /// per frame into the dashboard digest (never consumed in the UI crate).
     pub event_rx: Option<crossbeam_channel::Receiver<NodeEvent>>,
@@ -68,15 +69,6 @@ pub enum ScreenType {
     TxDetail,
     AgentActivity,
     Settings,
-}
-
-/// Migration phases
-#[allow(non_camel_case_types)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum MigrationPhase {
-    Phase1_LegacyOnly,
-    Phase2_Hybrid,
-    Phase3_ProfessionalOnly,
 }
 
 impl StranglerLauncher {
@@ -101,7 +93,7 @@ impl StranglerLauncher {
             .unwrap_or_default()
             .join("config.toml");
         let theme = Theme::from_config_str(&ui.theme).unwrap_or_default();
-        let theme_manager = ThemeManager::with_theme(config_path, theme);
+        let theme_manager = ThemeManager::with_theme(config_path.clone(), theme);
         let localization = Localization::with_locale_and_root(
             &ui.locale,
             PathBuf::from(env!("CARGO_MANIFEST_DIR")),
@@ -161,6 +153,27 @@ impl StranglerLauncher {
             TxDetailScreen::with_backend(tx_detail_backend.clone() as Arc<dyn TxDetailBackend>);
         let event_rx = Some(node.event_bus.subscribe());
 
+        // UI-P05: agent activity and settings are backed by real node state
+        // (chain/mempool and loaded config/peer manager respectively). Config
+        // load is best-effort: a missing or invalid config.toml leaves the
+        // adapter in its fail-closed "unavailable" state.
+        let loaded_config = crate::config::Config::load(&config_path).ok();
+        let agent_activity_backend = Arc::new(InProcessAgentActivityBackend::new(Arc::clone(
+            &node.blockchain,
+        )));
+        let agent_activity_screen = AgentActivityScreen::with_backend(
+            agent_activity_backend.clone() as Arc<dyn AgentActivityBackend>,
+        );
+        let settings_backend = Arc::new(InProcessSettingsBackend::new(
+            loaded_config,
+            config_path.clone(),
+            Arc::clone(&node.peer_manager),
+            data_dir.clone(),
+            node.network_id,
+        ));
+        let settings_screen =
+            SettingsScreen::with_backend(settings_backend.clone() as Arc<dyn SettingsBackend>);
+
         Self {
             node,
             wallet_address: String::new(),
@@ -173,8 +186,8 @@ impl StranglerLauncher {
             wallet_screen,
             dashboard_screen,
             tx_detail_screen,
-            agent_activity_screen: AgentActivityScreen::new(),
-            settings_screen: SettingsScreen::new(),
+            agent_activity_screen,
+            settings_screen,
             mining_status,
             mining_progress: Arc::new(Mutex::new(None)),
             progress_rx: None,
@@ -182,152 +195,13 @@ impl StranglerLauncher {
             mining_tx,
             last_repaint: 0.0,
             new_wallet_password: String::new(),
-            migration_phase: MigrationPhase::Phase3_ProfessionalOnly,
             wallet_backend,
             dashboard_backend,
             tx_detail_backend,
+            agent_activity_backend,
+            settings_backend,
             event_rx,
         }
-    }
-
-    /// Set the migration phase
-    pub fn set_migration_phase(&mut self, phase: MigrationPhase) {
-        self.migration_phase = phase;
-        info!("Migration phase set to: {:?}", phase);
-    }
-
-    /// Show legacy UI (old implementation)
-    fn show_legacy_ui(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // This is the old GUI implementation from src/gui/mod.rs
-        // We keep it for backward compatibility during migration
-
-        let now = ctx.input(|i| i.time);
-        if now - self.last_repaint > 0.01 {
-            ctx.request_repaint();
-            self.last_repaint = now;
-        }
-
-        while let Ok(received_snapshot) = self.node.sync_rx.try_recv() {
-            if received_snapshot.chain.len() <= 1 {
-                debug!("Получена пустая или минимальная цепочка через sync_rx, игнорируем");
-                continue;
-            }
-            let wallet = self.wallet_address.clone();
-            let old_balance = self.node.blockchain.get_balance(&wallet);
-            let adopted = self
-                .node
-                .blockchain
-                .adopt_wire(received_snapshot)
-                .unwrap_or(false);
-            if adopted {
-                info!("UI: Блокчейн обновлён через канал синхронизации");
-                let new_balance = self.node.blockchain.get_balance(&wallet);
-                if old_balance != new_balance {
-                    info!(wallet = %wallet, old_balance = old_balance, new_balance = new_balance, "Баланс кошелька изменился, запрашивается перерисовка");
-                    ctx.request_repaint();
-                } else {
-                    debug!(wallet = %wallet, balance = old_balance, "Баланс кошелька не изменился, перерисовка не требуется");
-                }
-            } else {
-                debug!("Полученный блокчейн через канал синхронизации не длиннее или не прошёл валидацию");
-            }
-        }
-
-        if let Some(ref status_rx) = self.status_rx {
-            while let Ok(status) = status_rx.try_recv() {
-                // Update status in new UI as well
-                self.wallet_screen.set_status(status.clone());
-                if status.starts_with("Транзакция отправлена") {
-                    if let Ok(mut mining_status) = self.mining_status.lock() {
-                        *mining_status = MiningStatus::Idle;
-                        debug!("Статус майнинга сброшен на Idle");
-                    }
-                    self.progress_rx = None;
-                }
-                debug!(status = %status, "Получено обновление статуса");
-                ctx.request_repaint();
-            }
-        }
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.label(&self.wallet_screen.status());
-            ui.label(format!(
-                "Количество транзакций в базе данных: {}",
-                self.node.blockchain.mempool_len()
-            ));
-            if !self.is_authenticated {
-                ui.heading("Аутентификация");
-                ui.label("Адрес кошелька (публичный ключ):");
-                ui.text_edit_singleline(&mut self.wallet_address);
-                ui.label("Пароль:");
-                ui.text_edit_singleline(&mut self.password);
-                ui.horizontal(|ui| {
-                    if ui.button("Войти").clicked() {
-                        self.handle_login();
-                        ctx.request_repaint();
-                    }
-                    if ui.button("Регистрация").clicked() {
-                        self.handle_registration();
-                        ctx.request_repaint();
-                    }
-                });
-                ui.label("Пароль для нового кошелька:");
-                ui.text_edit_singleline(&mut self.new_wallet_password);
-            } else {
-                ui.heading("Кошелёк");
-                ui.label(format!("Адрес: {}", self.wallet_address));
-                let balance = self.node.blockchain.get_balance(&self.wallet_address);
-                ui.label(format!("Баланс: {}", balance));
-
-                ui.heading("Перевод");
-                ui.text_edit_singleline(self.wallet_screen.receiver_address_mut());
-                ui.text_edit_singleline(self.wallet_screen.amount_mut());
-
-                if let Some(ref progress_rx) = self.progress_rx {
-                    while let Ok(progress) = progress_rx.try_recv() {
-                        let mut mining_progress = self
-                            .mining_progress
-                            .lock()
-                            .expect("Не удалось захватить Mutex для mining_progress");
-                        *mining_progress = Some(progress);
-                        debug!(?mining_progress, "Прогресс майнинга обновлён в UI");
-                    }
-                }
-
-                let is_mining = matches!(*self.mining_status.lock().unwrap(), MiningStatus::Mining);
-
-                if is_mining {
-                    ui.label("Майнинг блока в процессе...");
-                    let progress = self
-                        .mining_progress
-                        .lock()
-                        .expect("Не удалось захватить Mutex для mining_progress");
-                    if let Some(progress_msg) = &*progress {
-                        ui.label(format!("Прогресс: {}", progress_msg));
-                    }
-                    ui.spinner();
-                    ctx.request_repaint();
-                } else if ui.button("Отправить").clicked() {
-                    self.handle_send_transaction();
-                    ctx.request_repaint();
-                }
-
-                ui.heading("Поиск кошелька по IP и порту");
-                ui.horizontal(|ui| {
-                    ui.label("IP: ");
-                    ui.text_edit_singleline(self.wallet_screen.ip_mut());
-                    ui.label("Порт: ");
-                    ui.add(
-                        egui::TextEdit::singleline(self.wallet_screen.port_mut())
-                            .desired_width(50.0),
-                    );
-                });
-                if ui.button("Найти кошелёк").clicked() {
-                    self.handle_find_wallet();
-                    ctx.request_repaint();
-                }
-            }
-        });
     }
 
     /// UI-P04: fold the EventBus stream into the dashboard digest once per
@@ -354,13 +228,19 @@ impl StranglerLauncher {
         }
     }
 
+    /// Open a selected txid in Tx Detail. Shared by the wallet History and
+    /// Agent Activity navigation seams.
+    fn open_tx_detail(&mut self, txid: &str) {
+        self.tx_detail_screen.set_transaction_id(txid);
+        self.current_screen = ScreenType::TxDetail;
+    }
+
     /// Show professional UI (new implementation)
     fn show_professional_ui(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_node_events(ctx);
 
-        // Wallet unlock stays in the launcher until UI-P05 introduces the
-        // dedicated Settings/auth surface; the professional wallet screen
-        // itself has no keystore access (ADR-0028 key isolation).
+        // Wallet unlock stays in the launcher until a dedicated Settings/auth
+        // surface owns keystore access (ADR-0028 key isolation).
         if !self.is_authenticated {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.heading("Аутентификация");
@@ -416,9 +296,15 @@ impl StranglerLauncher {
         // UI-P03 → UI-P04 wire: a History row click selects a txid; the
         // launcher opens Tx Detail (implemented by UI-P04).
         if let Some(txid) = self.wallet_screen.take_selected_transaction() {
-            self.tx_detail_screen.set_transaction_id(&txid);
-            self.current_screen = ScreenType::TxDetail;
+            self.open_tx_detail(&txid);
             info!(txid = %txid, "wallet history row opened transaction detail");
+        }
+
+        // UI-P05 wire: an Agent Activity row click selects a txid; the ACP
+        // detail modal is owned by the screen itself and never navigates here.
+        if let Some(txid) = self.agent_activity_screen.take_selected_transaction() {
+            self.open_tx_detail(&txid);
+            info!(txid = %txid, "agent activity row opened transaction detail");
         }
     }
 
@@ -483,7 +369,7 @@ impl StranglerLauncher {
         // Update other screens as needed
     }
 
-    /// Handle login functionality
+    /// Handle login functionality (professional auth gate)
     fn handle_login(&mut self) {
         let start_time = SystemTime::now();
         info!(wallet_address = %self.wallet_address, "Кнопка 'Войти' нажата");
@@ -548,7 +434,7 @@ impl StranglerLauncher {
         }
     }
 
-    /// Handle registration functionality
+    /// Handle registration functionality (professional auth gate)
     fn handle_registration(&mut self) {
         let start_time = SystemTime::now();
         info!("Кнопка 'Регистрация' нажата");
@@ -627,234 +513,6 @@ impl StranglerLauncher {
             }
         }
     }
-
-    /// Handle send transaction functionality
-    fn handle_send_transaction(&mut self) {
-        let start_time = SystemTime::now();
-        info!(receiver = %self.wallet_screen.receiver_address(), amount = %self.wallet_screen.amount(), "Кнопка 'Отправить' нажата");
-
-        if self.wallet_screen.receiver_address().trim().is_empty() {
-            self.wallet_screen
-                .set_status("Адрес получателя не может быть пустым".to_string());
-            let duration = SystemTime::now()
-                .duration_since(start_time)
-                .unwrap()
-                .as_secs_f64();
-            warn!(duration_secs = duration, "Пустой адрес получателя");
-            return;
-        }
-
-        if let Ok(amount) = self.wallet_screen.amount().trim().parse::<u64>() {
-            if amount == 0 {
-                self.wallet_screen
-                    .set_status("Сумма должна быть больше нуля".to_string());
-                let duration = SystemTime::now()
-                    .duration_since(start_time)
-                    .unwrap()
-                    .as_secs_f64();
-                warn!(duration_secs = duration, "Сумма равна нулю");
-                return;
-            }
-
-            let sender_nonce = self.node.blockchain.get_nonce(&self.wallet_address);
-            let mut transaction = Transaction::transfer(
-                &self.wallet_address,
-                self.wallet_screen.receiver_address().trim(),
-                amount,
-                sender_nonce + 1,
-                self.node.network_id,
-            );
-
-            let sanitized_address = self
-                .wallet_address
-                .replace("/", "_")
-                .replace("+", "_")
-                .replace("=", "_");
-            let keystore_path = self
-                .data_dir
-                .join("keystore")
-                .join(format!("wallet_{}.json", sanitized_address));
-            let wallet = match wallet::Wallet::load(&self.password, &keystore_path) {
-                Ok(w) => w,
-                Err(e) => {
-                    self.wallet_screen
-                        .set_status(format!("Ошибка загрузки кошелька: {}", e));
-                    let duration = SystemTime::now()
-                        .duration_since(start_time)
-                        .unwrap()
-                        .as_secs_f64();
-                    error!(duration_secs = duration, error = %e, "Ошибка загрузки кошелька");
-                    return;
-                }
-            };
-
-            if let Err(e) = wallet.sign_transaction(&mut transaction) {
-                self.wallet_screen
-                    .set_status(format!("Ошибка подписи транзакции: {}", e));
-                let duration = SystemTime::now()
-                    .duration_since(start_time)
-                    .unwrap()
-                    .as_secs_f64();
-                error!(duration_secs = duration, error = %e, "Ошибка подписи транзакции");
-                return;
-            }
-
-            let blockchain = Arc::clone(&self.node.blockchain);
-            let mining_status = Arc::clone(&self.mining_status);
-
-            {
-                debug!(?transaction, "Транзакция для добавления");
-                if blockchain.apply_tx(transaction.clone()).is_err() {
-                    self.wallet_screen
-                        .set_status("Недостаточно средств или неверный адрес".to_string());
-                    let duration = SystemTime::now()
-                        .duration_since(start_time)
-                        .unwrap()
-                        .as_secs_f64();
-                    warn!(
-                        duration_secs = duration,
-                        "Недостаточно средств или неверный адрес"
-                    );
-                    return;
-                }
-                let duration = SystemTime::now()
-                    .duration_since(start_time)
-                    .unwrap()
-                    .as_secs_f64();
-                info!(duration_secs = duration, "Транзакция успешно добавлена");
-                self.wallet_screen.refresh();
-            }
-
-            self.wallet_screen
-                .set_status("Запуск майнинга...".to_string());
-            info!("Подготовка к отправке задачи майнинга");
-
-            let (progress_tx, progress_rx) = mpsc::channel();
-            let (status_tx, status_rx) = mpsc::channel();
-
-            {
-                let mut mining_progress = self
-                    .mining_progress
-                    .lock()
-                    .expect("Не удалось захватить Mutex для mining_progress");
-                *mining_progress = None;
-                self.progress_rx = Some(progress_rx);
-                self.status_rx = Some(status_rx);
-                debug!("Каналы прогресса и статуса созданы");
-            }
-
-            if let Ok(mut mining_status) = self.mining_status.lock() {
-                *mining_status = MiningStatus::Mining;
-                info!("Статус майнинга установлен: Mining");
-            } else {
-                self.wallet_screen
-                    .set_status("Ошибка: Не удалось установить статус майнинга".to_string());
-                error!("Не удалось установить статус майнинга");
-                self.progress_rx = None;
-                self.status_rx = None;
-                return;
-            }
-
-            info!("Попытка отправки задачи майнинга");
-            if let Err(e) = self.mining_tx.send(MiningTask {
-                blockchain,
-                transaction,
-                mining_status,
-                progress_tx,
-                status_tx,
-                rate_limiter: self.node.rate_limiter.clone(),
-                shutdown: self.node.shutdown.clone(),
-                event_bus: Arc::clone(&self.node.event_bus),
-                inbox: self.node.inbox.clone(),
-            }) {
-                self.wallet_screen
-                    .set_status(format!("Ошибка отправки задачи майнинга: {}", e));
-                error!(error = %e, "Ошибка отправки задачи майнинга");
-                if let Ok(mut mining_status) = self.mining_status.lock() {
-                    *mining_status = MiningStatus::Idle;
-                    debug!("Статус майнинга сброшен на Idle");
-                }
-                self.progress_rx = None;
-                self.status_rx = None;
-                return;
-            }
-
-            info!("Задача майнинга успешно отправлена");
-            let duration = SystemTime::now()
-                .duration_since(start_time)
-                .unwrap()
-                .as_secs_f64();
-            info!(duration_secs = duration, "Запуск майнинга завершён");
-        } else {
-            self.wallet_screen
-                .set_status("Неверный формат суммы".to_string());
-            let duration = SystemTime::now()
-                .duration_since(start_time)
-                .unwrap()
-                .as_secs_f64();
-            warn!(duration_secs = duration, port = %self.wallet_screen.port(), "Неверный формат суммы");
-        }
-    }
-
-    /// Handle find wallet functionality
-    fn handle_find_wallet(&mut self) {
-        let start_time = SystemTime::now();
-        info!(ip = %self.wallet_screen.ip(), port = %self.wallet_screen.port(), "Кнопка 'Найти кошелёк' нажата");
-
-        let ip_buf = self.wallet_screen.ip().to_string();
-        let port_buf = self.wallet_screen.port().to_string();
-        let ip = ip_buf.trim();
-        if ip.is_empty() {
-            self.wallet_screen
-                .set_status("IP-адрес не может быть пустым".to_string());
-            let duration = SystemTime::now()
-                .duration_since(start_time)
-                .unwrap()
-                .as_secs_f64();
-            warn!(duration_secs = duration, "Пустой IP-адрес");
-        } else if let Ok(port_num) = port_buf.trim().parse::<u16>() {
-            let address = format!("{}:{}", ip, port_num);
-            if let Some(wallet) = self.node.find_wallet_by_ip(ip, port_num) {
-                if self.node.add_peer(address.clone()) {
-                    self.wallet_screen.set_status(format!(
-                        "Найден кошелёк: {} для {}:{} и добавлен в network.json",
-                        wallet, ip, port_num
-                    ));
-                    let duration = SystemTime::now()
-                        .duration_since(start_time)
-                        .unwrap()
-                        .as_secs_f64();
-                    info!(wallet = %wallet, ip = %ip, port = port_num, duration_secs = duration, "Кошелёк найден и добавлен в network.json");
-                } else {
-                    self.wallet_screen.set_status(format!(
-                        "Найден кошелёк: {} для {}:{}, уже существует в network.json",
-                        wallet, ip, port_num
-                    ));
-                    let duration = SystemTime::now()
-                        .duration_since(start_time)
-                        .unwrap()
-                        .as_secs_f64();
-                    info!(wallet = %wallet, ip = %ip, port = port_num, duration_secs = duration, "Кошелёк найден, уже существует в network.json");
-                }
-            } else {
-                self.wallet_screen
-                    .set_status(format!("Кошелёк не найден для {}:{}", ip, port_num));
-                let duration = SystemTime::now()
-                    .duration_since(start_time)
-                    .unwrap()
-                    .as_secs_f64();
-                warn!(ip = %ip, port = port_num, duration_secs = duration, "Кошелёк не найден");
-            }
-        } else {
-            self.wallet_screen
-                .set_status("Неверный формат порта".to_string());
-            let duration = SystemTime::now()
-                .duration_since(start_time)
-                .unwrap()
-                .as_secs_f64();
-            warn!(port = %port_buf, duration_secs = duration, "Неверный формат порта");
-        }
-    }
 }
 
 impl eframe::App for StranglerLauncher {
@@ -865,7 +523,7 @@ impl eframe::App for StranglerLauncher {
             self.last_repaint = now;
         }
 
-        // Handle sync and status updates (same for both UIs)
+        // Handle sync and status updates
         while let Ok(received_snapshot) = self.node.sync_rx.try_recv() {
             if received_snapshot.chain.len() <= 1 {
                 debug!("Получена пустая или минимальная цепочка через sync_rx, игнорируем");
@@ -894,7 +552,6 @@ impl eframe::App for StranglerLauncher {
 
         if let Some(ref status_rx) = self.status_rx {
             while let Ok(status) = status_rx.try_recv() {
-                // Update status in both UIs
                 self.wallet_screen.set_status(status.clone());
                 self.wallet_screen.refresh();
                 if status.starts_with("Транзакция отправлена") {
@@ -909,28 +566,8 @@ impl eframe::App for StranglerLauncher {
             }
         }
 
-        // Show appropriate UI based on migration phase
-        match self.migration_phase {
-            MigrationPhase::Phase1_LegacyOnly => {
-                self.show_legacy_ui(ctx, frame);
-            }
-            MigrationPhase::Phase2_Hybrid => {
-                // Show a toggle button to switch between UIs during development
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        if ui.button("Show Legacy UI").clicked() {
-                            self.show_legacy_ui(ctx, frame);
-                        }
-                        if ui.button("Show Professional UI").clicked() {
-                            self.show_professional_ui(ctx, frame);
-                        }
-                    });
-                });
-            }
-            MigrationPhase::Phase3_ProfessionalOnly => {
-                self.show_professional_ui(ctx, frame);
-            }
-        }
+        // UI-P05: professional UI only — no legacy phase switch remains.
+        self.show_professional_ui(ctx, frame);
     }
 }
 
@@ -971,10 +608,6 @@ mod tests {
         let (_dir, node) = make_node("strangler_create");
         let launcher = StranglerLauncher::new(node, PathBuf::from("./test_data"));
 
-        assert_eq!(
-            launcher.migration_phase,
-            MigrationPhase::Phase3_ProfessionalOnly
-        );
         assert_eq!(launcher.current_screen, ScreenType::Wallet);
         assert!(!launcher.is_authenticated);
         assert_eq!(launcher.wallet_address, "");
@@ -982,22 +615,28 @@ mod tests {
     }
 
     #[test]
-    fn test_migration_phase_switching() {
-        let (_dir, node) = make_node("strangler_phase");
-        let mut launcher = StranglerLauncher::new(node, PathBuf::from("./test_data"));
+    fn test_ui_p05_backends_are_wired_into_screens() {
+        let (_dir, node) = make_node("strangler_ui_p05");
+        let launcher = StranglerLauncher::new(node, PathBuf::from("./test_data"));
 
+        // Both new screens expose exactly the data their in-process adapters
+        // produce (no mock fallback survives the closeout).
         assert_eq!(
-            launcher.migration_phase,
-            MigrationPhase::Phase3_ProfessionalOnly
+            launcher.agent_activity_screen.activities(),
+            launcher
+                .agent_activity_backend
+                .activities()
+                .unwrap()
+                .as_slice()
         );
-
-        launcher.set_migration_phase(MigrationPhase::Phase2_Hybrid);
-        assert_eq!(launcher.migration_phase, MigrationPhase::Phase2_Hybrid);
-
-        launcher.set_migration_phase(MigrationPhase::Phase3_ProfessionalOnly);
+        assert!(launcher
+            .agent_activity_screen
+            .activities()
+            .iter()
+            .any(|row| !row.available && row.txid.is_none()));
         assert_eq!(
-            launcher.migration_phase,
-            MigrationPhase::Phase3_ProfessionalOnly
+            launcher.settings_screen.snapshot(),
+            &launcher.settings_backend.snapshot()
         );
     }
 
@@ -1102,28 +741,19 @@ mod tests {
     }
 
     #[test]
-    fn test_migration_phase_equality() {
+    fn test_agent_activity_nav_seam() {
+        let (_dir, node) = make_node("strangler_activity_nav");
+        let mut launcher = StranglerLauncher::new(node, PathBuf::from("./test_data"));
+
+        assert_eq!(launcher.current_screen, ScreenType::Wallet);
         assert_eq!(
-            MigrationPhase::Phase1_LegacyOnly,
-            MigrationPhase::Phase1_LegacyOnly
-        );
-        assert_eq!(MigrationPhase::Phase2_Hybrid, MigrationPhase::Phase2_Hybrid);
-        assert_eq!(
-            MigrationPhase::Phase3_ProfessionalOnly,
-            MigrationPhase::Phase3_ProfessionalOnly
+            launcher.agent_activity_screen.take_selected_transaction(),
+            None
         );
 
-        assert_ne!(
-            MigrationPhase::Phase1_LegacyOnly,
-            MigrationPhase::Phase2_Hybrid
-        );
-        assert_ne!(
-            MigrationPhase::Phase2_Hybrid,
-            MigrationPhase::Phase3_ProfessionalOnly
-        );
-        assert_ne!(
-            MigrationPhase::Phase3_ProfessionalOnly,
-            MigrationPhase::Phase1_LegacyOnly
-        );
+        // Shared launcher seam: both History and Agent Activity selections
+        // open Tx Detail with the chosen txid.
+        launcher.open_tx_detail("0xabc");
+        assert_eq!(launcher.current_screen, ScreenType::TxDetail);
     }
 }

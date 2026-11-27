@@ -16,6 +16,16 @@ const SUPPORTED_LOCALES: &[LanguageIdentifier] = &[langid!("en"), langid!("ru"),
 /// Default locale
 const DEFAULT_LOCALE: LanguageIdentifier = langid!("en");
 
+macro_rules! ui_p05_accessors {
+    ($($method:ident => $key:literal),* $(,)?) => {
+        $(
+            pub fn $method(&self) -> String {
+                self.t($key)
+            }
+        )*
+    };
+}
+
 /// Localization manager
 pub struct Localization {
     current_locale: LanguageIdentifier,
@@ -695,6 +705,61 @@ impl Localization {
     }
     pub fn info(&self) -> String {
         self.t("info")
+    }
+
+    ui_p05_accessors! {
+        agent_activity_feed_title => "agent-activity-feed-title",
+        agent_activity_filter_title => "agent-activity-filter-title",
+        agent_activity_filter_agent => "agent-activity-filter-agent",
+        agent_activity_filter_types => "agent-activity-filter-types",
+        agent_activity_filter_from => "agent-activity-filter-from",
+        agent_activity_filter_to => "agent-activity-filter-to",
+        agent_activity_filter_clear => "agent-activity-filter-clear",
+        agent_activity_col_time => "agent-activity-col-time",
+        agent_activity_col_agent => "agent-activity-col-agent",
+        agent_activity_col_type => "agent-activity-col-type",
+        agent_activity_col_details => "agent-activity-col-details",
+        agent_activity_stub => "agent-activity-stub",
+        agent_activity_open_tx => "agent-activity-open-tx",
+        agent_activity_open_acp => "agent-activity-open-acp",
+        agent_activity_acp_detail => "agent-activity-acp-detail",
+        agent_activity_no_match => "agent-activity-no-match",
+        agent_event_acp_negotiate => "agent-event-acp-negotiate",
+        agent_event_acp_task => "agent-event-acp-task",
+        agent_event_acp_settle => "agent-event-acp-settle",
+        agent_event_acp_revoke => "agent-event-acp-revoke",
+        agent_event_batched_tx => "agent-event-batched-tx",
+        agent_event_sponsor_tx => "agent-event-sponsor-tx",
+        agent_event_transfer => "agent-event-transfer",
+        settings_network_listen => "settings-network-listen",
+        settings_network_seeds => "settings-network-seeds",
+        settings_network_max_peers => "settings-network-max-peers",
+        settings_network_id => "settings-network-id",
+        settings_read_only => "settings-read-only",
+        settings_peers_ban => "settings-peers-ban",
+        settings_peers_unban => "settings-peers-unban",
+        settings_peers_add_seed => "settings-peers-add-seed",
+        settings_peers_banned => "settings-peers-banned",
+        settings_keystore_operator => "settings-keystore-operator",
+        settings_keystore_agent => "settings-keystore-agent",
+        settings_keystore_import => "settings-keystore-import",
+        settings_keystore_export => "settings-keystore-export",
+        settings_keystore_change_password => "settings-keystore-change-password",
+        settings_keystore_derive => "settings-keystore-derive",
+        settings_keystore_unavailable => "settings-keystore-unavailable",
+        settings_config_raw => "settings-config-raw",
+        settings_config_validate => "settings-config-validate",
+        settings_config_save_restart => "settings-config-save-restart",
+        settings_config_invalid => "settings-config-invalid",
+        settings_mcp_enable => "settings-mcp-enable",
+        settings_mcp_transport => "settings-mcp-transport",
+        settings_mcp_listen => "settings-mcp-listen",
+        settings_mcp_clients => "settings-mcp-clients",
+        settings_acp_enable => "settings-acp-enable",
+        settings_acp_sessions => "settings-acp-sessions",
+        settings_acp_ban_agent => "settings-acp-ban-agent",
+        settings_status_saved => "settings-status-saved",
+        settings_status_error => "settings-status-error",
     }
 }
 

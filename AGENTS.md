@@ -16,7 +16,7 @@ Strangecoin — Rust cryptocurrency (**v3.0.0**, edition 2021): PoW blockchain �
 
 **Status**: Stage 3 complete — S3-P01..S3-P15 закрыты, DoD 11/11 (`docs/stage3/STAGE3_SUMMARY.md`); exit gate annotated tag `v3.0.0-stage3` ставится S3-P15 («done» — только через тег, прецедент S2-P24). Precondition Stage 3 (тег `v2.0.0-stage2` → `346e3c0`) verified 2026-10-30.
 
-**Next**: Stage 4 (`analytics/ROADMAP.md` «Этап 4 — Dev-experience + AI agents»; design-трек AI-P01..AI-P05 / UI-P01..UI-P05 — `analytics/prompt-stage3.md` §8..§14, design-only артефакты писались параллельно; implementation-gate = этот тег). Зависимость закрыта: indexer/JSON-RPC требуют storage crate — ✅ Stage 3 complete. Закрытые extension-промпты: **AI-P01** (ADR-0028, `[S4-AI-P01]`), **AI-P02** (ADR-0029 + `crates/strangecoin-mcp/`, `[S4-AI-P02]`), **AI-P03** (ADR-0030 + ACP wire + EscrowVault + `tests/acp_messages.rs`, `[S4-AI-P03]`), **UI-P01** (ADR-0031, `[S4-UI-P01]`), **UI-P02** (design system + 14 components + a11y gate, `[S4-UI-P02]`, ADR-0031 Amendment B), **UI-P03** (wallet screen migration + in-process `WalletBackend` + strangler Phase3 default, `[S4-UI-P03]`, ADR-0031 Amendment C) — статусы в `analytics/BACKLOG.md` §4; следующие по карте §8.2: **AI-P04** (unblocked: ACP escrow txid закрыт) ∥ **UI-P04**. UI-P05 ждёт UI-P04 + AI-P04.
+**Next**: Stage 4 (`analytics/ROADMAP.md` «Этап 4 — Dev-experience + AI agents»; extension-трек AI-P01..AI-P05 / UI-P01..UI-P05 — `analytics/prompt-stage3.md` §8..§14). Extension closeout выполнен в UI-P05 (`[S4-UI-P05]`, ADR-0031 Amendment E): 5 экранов, strangler closeout, `Changelog.md` 4.0.0 (Unreleased). Закрытые extension-промпты: **AI-P01** (ADR-0028), **AI-P02** (ADR-0029 + `crates/strangecoin-mcp/`), **AI-P03** (ADR-0030 + ACP wire + EscrowVault), **AI-P04** (12 `agent_*` JSON-RPC методов в `crates/strangecoin-api/` — код закоммичен `a7a6c34`/`578d1e4`; `agent_getActivity` пока возвращает захардкоженные данные и не заваен в узел), **UI-P01** (ADR-0031), **UI-P02** (design system + 14 компонентов + a11y gate), **UI-P03** (wallet + `WalletBackend`), **UI-P04** (dashboard + tx detail), **UI-P05** (agent activity + settings + a11y audit + strangler closeout). Остаются открытыми: **AI-P05** (SDK Rust/TS/Python + devnet/faucet + bip32 pin) и Stage 4 core DoD (`eth_*` JSON-RPC, HD wallet, indexer, explorer, metrics). Тег `v4.0.0-stage4` НЕ ставится до закрытия всех_core + extension критериев (FBP10). Статусы — `analytics/BACKLOG.md`.
 
 **Prompts done**: 15 / 15 (S3-P01, S3-P02, S3-P03, S3-P04, S3-P05, S3-P06, S3-P07, S3-P08, S3-P09, S3-P10, S3-P11, S3-P12, S3-P13, S3-P14, S3-P15).
 
@@ -119,13 +119,13 @@ Strangecoin — Rust cryptocurrency (**v3.0.0**, edition 2021): PoW blockchain �
 ---
 
 
-## Stage 4 Pin Policy (pending; AI/UI design track)
+## Stage 4 Pin Policy (AI/UI design + implementation track)
 
 **Правила** (расширение Stage 2/3 Pin Policy): crate'ы, затрагивающие agent key management / SDK / UI, пинятся через `=`. Резолв конкретной версии — при land соответствующего промпта; обновление pinned версии — SCIP + activation height после mainnet freeze. Design-решения фиксируются в ADR до кода (FBP10).
 
 | Crate | Pin | ADR | Промпт | Назначение |
 |-------|-----|-----|--------|------------|
-| `bip32` | `=x.y.z` (резолв в AI-P05) | ADR-0028 | AI-P01 | HD-деривация sub-agents/session keys (`m/44'/1234'/<agent_id>'/…`); fallback — builtin `secp256k1` HD (ADR-0028 §Decision 2) |
+| `bip32` | **`не добавлен`** — версия резолвится в AI-P05 (зависимости нет ни в одном Cargo.toml, на 2026-11-27); HD-деривация пока через blake3 session subkeys (`crates/strangecoin-api/src/context.rs`) | ADR-0028 | AI-P01 / AI-P05 | HD-деривация sub-agents/session keys (`m/44'/1234'/<agent_id>'/…`); fallback — builtin `secp256k1` HD (ADR-0028 §Decision 2) |
 | `axum` | `=0.8.9` (резолв 2026-11-18) | ADR-0029 | AI-P02 | HTTP+SSE transport strangecoin-mcp (POST /mcp, SSE /mcp/events); upgrade требует ADR-0029 amendment |
 | `serde_json` (mcp) | `=1.0.154` (резолв lock 2026-11-18) | ADR-0029 | AI-P02 | Canonical JSON для response signing (Value = BTreeMap, #23); pin в крейте mcp (root — исторический caret `1.0.142`) |
 | `futures-core` | `=0.3.34` (резолв lock) | ADR-0029 | AI-P02 | Stream-адаптер SSE-ответа (вручную impl поверх tokio mpsc — без tokio-stream) |
@@ -133,7 +133,7 @@ Strangecoin — Rust cryptocurrency (**v3.0.0**, edition 2021): PoW blockchain �
 | `http-body-util` (dev) | `=0.1.5` (резолв lock) | ADR-0029 | AI-P02 | Покадровое чтение SSE-стрима в тестах |
 | `snow` (mcp) | **не listed напрямую** — наследуется `=0.10.0` через `strangecoin-net` | ADR-0029 | AI-P02 | Noise-XX идёт через net-API (отклонение: literal deps-лист ADR фиксирует в amendment 1) |
 | `eframe` / `egui` | `=0.30.0` (eframe — фактический `=` в root Cargo.toml с `[UI-P02-A]`; egui транзитивен через eframe, лок в `Cargo.lock`; ранее `=0.22.0` — см. ADR-0031 Amendment A) | ADR-0031 (Amendment A) | UI-P01, CI4 Промпт 6 (`[UI-P02-A..C]`) | Render backend professional UI (`crates/strangecoin-ui/`); upgrade требует ADR-0031 amendment |
-| `fluent` | `=0.16.1` (резолв 2026-11-26; `fluent-bundle`/`fluent-langneg` удалены из deps — неиспользуемые) | ADR-0031 (Amendment B) | UI-P02 | i18n локали en/ru/zh (`crates/strangecoin-ui/locales/`, 134 ключа каждая) |
+| `fluent` | `=0.16.1` (резолв 2026-11-26; `fluent-bundle`/`fluent-langneg` удалены из deps — неиспользуемые) | ADR-0031 (Amendment B) | UI-P02 | i18n локали en/ru/zh (`crates/strangecoin-ui/locales/`, 254 ключа каждая после UI-P05) |
 | `unic-langid` | `=0.9.6` (резолв lock) | ADR-0031 (Amendment B) | UI-P02 | BCP-47 locale id для fluent (детерминированный парс `en`/`ru`/`zh`) |
 | `toml` (ui) | `=1.1.8` (совпадает с root — `toml_edit 0.25` конфликтует через `toml_writer 1.2` с root `toml 1.1`) | ADR-0031 (Amendment B) | UI-P02 | Чтение/запись `[ui] theme` в config.toml (deviation: whole-file reserialization, комментарии не сохраняются) |
 | `insta` (dev) | `=1.49.0` (резолв lock) | ADR-0031 (Amendment B) | UI-P02 | 28 детерминированных style-снапшотов 14 компонентов × light/dark (вместо headless render) |
@@ -141,6 +141,40 @@ Strangecoin — Rust cryptocurrency (**v3.0.0**, edition 2021): PoW blockchain �
 | `secp256k1` (в `strangecoin-net`) | caret **`0.29`** — та же линейка/политика, что root/core/crypto class 2 (без `=`: patch-бампы авто, minor/major — SCIP + Dependabot ignore) | ADR-0030 | AI-P03 | ACP agent-envelope подписи (optional dep фичи `acp`; пин-строка `secp256k1` Stage 3-таблицы покрывает линейку) |
 
 Ожидаемые дополнения (не закреплены до land промптов): `snow` (Stage 2 carry, уже закреплён `=0.10.0`).
+
+## Stage 4 Dependency Map (extension track)
+
+Гейты (`prompt-stage3.md` §8.3, уточнено ADR-0031 Amendment E):
+
+1. **Stage 3 gate**: код AI/UI — только после тега `v3.0.0-stage3` ✅.
+2. **ADR до кода**: AI-P02/P03 — после ADR-0028/0029/0030; UI-P02..UI-P05 — после ADR-0031 ✅ (Amendments A–E).
+3. **Pure-core boundary**: UI-крейт headless — никаких `strangecoin-core`/монолит-зависимостей; данные через backend-сеамы (`WalletBackend`, `DashboardBackend`, `TxDetailBackend`, `AgentActivityBackend`, `SettingsBackend`) и in-process адаптеры в `src/api/`.
+4. **No consensus change**: extension не трогает consensus rules; paymaster/AA/fee market — Stage 5.
+5. **`tests/two_clients.rs` green**: GUI-миграция не меняет headline-тест (он управляет `BlockchainFacade`, не GUI).
+6. **WCAG AA gate**: `cargo test -p strangecoin-ui --features a11y-audit` — 5/5 экранов, light/dark; axe-core — opt-in advisory.
+7. **AI-P05 gate**: Stage 5 paymaster full impl — после AI-P05 (stub допустим в Stage 4).
+
+Гейты 1–6 закрыты UI-P05; гейт 7 открыт (AI-P05 queued).
+
+## Stage 4 Determinism Checklist
+
+- Backend-seams и моки детерминированы: одинаковый input → одинаковый snapshot (unit-тесты в `backend.rs` и `src/api/mod.rs`).
+- Нет `SystemTime::now()`/`thread_rng()` в hot-path экранов и адаптеров; timestamps берутся из `BlockHeader.timestamp`, mempool-строки — `timestamp=0`.
+- Feed сортируется `(timestamp desc, id asc)`, peer-списки — по `node_id`, лимиты 64/16 — детерминированные константы.
+- Runtime-действия оператора (ban/unban) — edge с `Instant::now()`, не consensus state; конфиг-тогглы MCP/ACP и seeds fail-closed с сообщением «config.toml + restart».
+- Недоступные данные (indexer activity, ACP sessions, MCP clients, keystore isolation) помечаются `available=false`/`NotImplemented`, никогда не фабрикуются.
+
+## Stage 4 DoD Quick Reference (extension-часть)
+
+| Критерий | Evidence | Статус |
+|----------|----------|--------|
+| 5 экранов professional UI + WCAG AA (#27) | `tests/screens/*_a11y.rs`, `tests/screens_a11y.rs`; `docs/spec/ui_professional.md` §7.4.1 | ✅ UI-P05 |
+| MCP server (7 tools, 4 resources, stdio/HTTP+SSE) | `crates/strangecoin-mcp/`, `tests/mcp_server.rs` | ✅ AI-P02 |
+| ACP wire + escrow + replay | `crates/strangecoin-net/src/{protocol/acp.rs,acp/}`, `tests/acp_messages.rs` | ✅ AI-P03 |
+| `agent_*` JSON-RPC surface (12 методов) | `crates/strangecoin-api/src/methods.rs` | ✅ AI-P04 (часть методов mock-backed) |
+| SDK Rust/TS/Python + devnet/faucet | `tests/sdk_e2e.rs`, `tests/devnet.rs`, `tests/faucet.rs` | ❌ AI-P05 / Stage 4 core |
+| `eth_*` JSON-RPC + HD wallet + indexer + explorer + metrics | Stage 4 core track | ❌ открыто |
+| `Changelog.md` 4.0.0 + тег `v4.0.0-stage4` | `Changelog.md` (Unreleased) | секция ✅ / тег ❌ |
 
 ## Stage 2 Dependency Map
 
@@ -664,6 +698,7 @@ src/                  # node monolith (orchestrator)
 - **windows-gnu linking Stage 3 (S3-P04)**: default `rust-lld` НЕ линкует rocksdb-стек — GCC16-объекты msys64 тянут `std::__get_once_callable`/`nanosleep64`/`__imp_*`, которых нет в self-contained `libstdc++.a`/`libpthread.a`, а подмешивание msys64-архивов к self-contained `crt2.o` роняет C++ static init (AV на старте тестов). Решение — **линк через gcc (единый GCC16-мир)** в **локальном `.cargo/config.toml`** (`.cargo/` в .gitignore — файл НЕ коммитится, каждый хост настраивает сам): `linker = "gcc"` + `rustflags = ["--sysroot", "C:\\rt\\toolchain"]`, где junction `mklink /J C:\rt\toolchain "%USERPROFILE%\.rustup\toolchains\stable-x86_64-pc-windows-gnu"` обязателен для не-ASCII профилей (`C:\Users\ЗС`) — GNU ld открывает input-пути как ANSI и не видит кириллический sysroot («cannot find ...libtest-*.rlib»; файл при этом существует). Пере-создавать junction после `rustup update`. Линкер/`--sysroot`/rustflags входят в fingerprint — **каждая смена = полный цикл librocksdb-sys C++ (~30 мин) на каждый режим (test, check)**: менять конфиг один раз, не итерировать. Linux CI не затронут (секция `[target.x86_64-pc-windows-gnu]` там inert)
 - **minisketch-rs vendored (S3-P04)**: registry `minisketch-rs =0.1.9` (bindgen 0.49 → clang-sys 0.28) конфликтует с librocksdb-sys (bindgen 0.72 → clang-sys 1.9.1) по `links = "clang"` — cargo допускает одного провайдера; заменён через `[patch.crates-io]` на `vendor/minisketch-rs` (2 строки диффа vs upstream, см. `vendor/README.md`); default-OFF, в --workspace не собирается
 - **GUI**: feature `gui` is defined; default-on после S2-P05 (по спеке промпта; headless-режим — `-- --headless` runtime-флаг)
+- **Strangler closeout (UI-P05)**: `gui::WalletApp` / `MigrationPhase` удалены; `src/gui/` — `GuiApp` + `StranglerLauncher` (auth gate, event receiver, backend wiring), бизнес-логика всех 5 экранов — в `crates/strangecoin-ui/`. Отклонение от буквального `GuiApp → strangecoin_ui::App` (§8.2) зафиксировано в ADR-0031 Amendment E: standalone `App` mock-only и не принимает адаптеры, delegation потеряла бы реальные данные. eframe/egui upgrade требует ADR amendment; MCP spec version закреплёна на 2024-11-05 (`docs/spec/mcp_server.md`); bip32 pin резолвится в AI-P05, не раньше.
 - **cargo-fuzz**: not runnable on this Windows host — use `cargo run --example canonical_decode_soak`; coverage-guided runs live in CI jobs `fuzz-canonical-decode` + Stage 1.5 VM targets + Stage 2 network targets (push/PR)
 - **tracing only** (no println!) — структура: `tracing::info!(target = "net::noise", peer_id = %id, "handshake completed")`
 - **Network test isolation**: `NETWORK_TEST_LOCK` + `network.json` next to test exe

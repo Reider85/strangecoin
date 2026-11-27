@@ -46,3 +46,12 @@ path = "tests/screens/dashboard_a11y.rs"
 [[test]]
 name = "tx_detail_a11y"
 path = "tests/screens/tx_detail_a11y.rs"
+
+# UI-P05: screen-level WCAG AA gates for Agent Activity and Settings.
+[[test]]
+name = "agent_activity_a11y"
+path = "tests/screens/agent_activity_a11y.rs"
+
+[[test]]
+name = "settings_a11y"
+path = "tests/screens/settings_a11y.rs"

@@ -1,5 +1,62 @@
 # Changelog
 
+## 4.0.0 — dev-experience + AI agents + MCP + ACP + professional UI
+
+**Status**: Unreleased / Stage 4 extension closeout — no `v4.0.0-stage4` tag is
+claimed; Stage 4 core DoD and AI-P05 are still open (FBP10: only facts
+confirmed by commits).
+**Date**: 2026-11-27
+**Prompts**: `AI-P01`..`AI-P04`, `UI-P01`..`UI-P05`
+(`analytics/prompt-stage3.md` §8..§10, `analytics/BACKLOG.md`).
+
+### Что сделано
+
+- **ADRs**: ADR-0028 (agent vision + account model), ADR-0029 (MCP server),
+  ADR-0030 (ACP transport), ADR-0031 (professional UI, Amendments A–E).
+- **MCP** (AI-P02): `crates/strangecoin-mcp/` — 7 tools, 4 resources, JSON-RPC
+  2.0 with Ed25519-signed responses, stdio + Noise-XX-over-HTTP/SSE; in-process
+  `[mcp]` surface and `--mcp-stdio` mode.
+- **ACP** (AI-P03): 4 signed wire messages (`0x0E..=0x11`), escrow calldata
+  codec + `EscrowVault` WAT example, replay protection, `NoopEscrowVault`
+  production stub until escrow settlement lands.
+- **Agent JSON-RPC surface** (AI-P04): `crates/strangecoin-api/` with 12
+  `agent_*` methods, session/challenge auth and permission matrix. Honesty
+  note: `agent_getActivity` and several other methods currently return
+  hard-coded data and are not yet wired into the node — the UI-P05 adapter
+  therefore derives activity from local chain state and marks indexer-backed
+  rows as stubs.
+- **Professional UI** (UI-P01..UI-P05): `crates/strangecoin-ui/` — design
+  tokens/themes, 14 components, i18n (en/ru/zh, 254 keys), deterministic WCAG
+  AA gate, and 5 screens (Wallet, Dashboard, Tx Detail, Agent Activity,
+  Settings) over headless backend seams with in-process adapters.
+- **Strangler closeout** (UI-P05): `src/gui/` no longer contains the legacy
+  demo wallet or migration phases — `GuiApp`/`StranglerLauncher` is a thin
+  launcher owning the auth gate, event receiver and backend wiring.
+- **a11y**: all 5 screens gated in light and dark by
+  `cargo test -p strangecoin-ui --features a11y-audit`; manual WCAG review
+  items recorded per screen in `docs/spec/ui_professional.md` §7.4.1.
+
+### Breaking changes (pre-mainnet; после тега `v3.0.0-stage3` — только через SCIP + activation height)
+
+- **`src/gui/` API removed**: `WalletApp` and `MigrationPhase` no longer exist;
+  use `gui::GuiApp` / `StranglerLauncher` and the `strangecoin-ui` crate types.
+- **Legacy demo UI removed** (no rollback phase switch); operator launch always
+  uses the professional UI.
+
+### Not in this change
+
+- **AI-P05**: Rust/TS/Python agent SDK, agent devnet/faucet, 3-agent e2e,
+  BIP-32 HD derivation (pin still unresolved in AGENTS.md).
+- **Stage 4 core**: `eth_*` JSON-RPC, HD wallet, `cargo-strangecoin` SDK,
+  devnet, explorer, faucet, indexer (S4-core-P07), metrics.
+- **Stage 5+**: paymaster full impl (`sponsor_tx` remains a stub), fee market,
+  Account Abstraction; indexer-backed ACP activity and connected-MCP/agent
+  session registries remain explicitly unavailable in the UI.
+- **No release tag**: `v4.0.0-stage4` is gated on all Stage 4 core + extension
+  DoD criteria, not on this closeout alone.
+
+---
+
 ## 3.0.0 — RocksDB storage + stateless validation + pruning + snapshot sync
 
 **Status**: Complete (tag `v3.0.0-stage3` — annotated, ставится этим коммитом; release pipeline run — §`docs/stage3/STAGE3_SUMMARY.md` §7: REST-верификация после push; `gh` CLI не установлен на Windows-хосте — прецедент FBP11)  

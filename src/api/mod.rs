@@ -690,6 +690,360 @@ impl TxDetailBackend for InProcessTxDetailBackend {
     }
 }
 
+// ---------------------------------------------------------------------------
+// UI-P05: in-process agent activity / operator settings adapters.
+// ---------------------------------------------------------------------------
+
+use crate::config::Config;
+use std::fs;
+use std::time::{Duration, Instant};
+use strangecoin_net::peer::BanReason;
+use strangecoin_ui::{
+    AcpSessionRow, AcpSettings, ActivityEventType, ActivityRecord, AgentActivityBackend,
+    ConfigSettings, KeystoreEntry, KeystoreSettings, McpSettings, NetworkSettings, SettingsBackend,
+    SettingsPeerRow, SettingsSnapshot,
+};
+
+const MAX_ACTIVITY_ROWS: usize = 64;
+const RECENT_BLOCKS: usize = 16;
+
+/// Activity feed derived from local chain/mempool state. `agent_getActivity`
+/// (AI-P04) still returns hard-coded JSON and is not wired into the node, and
+/// the Stage-4 indexer does not exist — indexer-backed ACP events and the
+/// paymaster `sponsor_tx` type are emitted as explicit `available: false`
+/// stubs rather than presented as telemetry.
+pub struct InProcessAgentActivityBackend {
+    blockchain: Arc<BlockchainFacade>,
+}
+
+impl InProcessAgentActivityBackend {
+    pub fn new(blockchain: Arc<BlockchainFacade>) -> Self {
+        Self { blockchain }
+    }
+
+    fn stub(index: usize, event_type: ActivityEventType, details: &str) -> ActivityRecord {
+        ActivityRecord {
+            id: format!("activity-stub-{index:02}"),
+            timestamp: 0,
+            agent_address: String::new(),
+            event_type,
+            details: details.to_string(),
+            txid: None,
+            acp_message: None,
+            available: false,
+        }
+    }
+}
+
+impl AgentActivityBackend for InProcessAgentActivityBackend {
+    fn activities(&self) -> Result<Vec<ActivityRecord>, WalletError> {
+        let chain = self.blockchain.chain_snapshot();
+        let mut rows: Vec<ActivityRecord> = chain
+            .iter()
+            .rev()
+            .take(RECENT_BLOCKS)
+            .flat_map(|block| {
+                block
+                    .transactions
+                    .iter()
+                    .filter(|tx| !tx.is_coinbase())
+                    .map(move |tx| ActivityRecord {
+                        id: hex_txid(tx),
+                        timestamp: block.timestamp,
+                        agent_address: tx.sender().to_string(),
+                        event_type: ActivityEventType::Transfer,
+                        details: format!(
+                            "{} -> {} ({})",
+                            tx.sender(),
+                            tx.receiver().unwrap_or(""),
+                            tx.value()
+                        ),
+                        txid: Some(hex_txid(tx)),
+                        acp_message: None,
+                        available: true,
+                    })
+            })
+            .collect();
+
+        for tx in self.blockchain.mempool_transactions() {
+            if tx.is_coinbase() {
+                continue;
+            }
+            rows.push(ActivityRecord {
+                id: hex_txid(&tx),
+                timestamp: 0,
+                agent_address: tx.sender().to_string(),
+                event_type: ActivityEventType::Transfer,
+                details: format!("pending: {}", tx.receiver().unwrap_or("")),
+                txid: Some(hex_txid(&tx)),
+                acp_message: None,
+                available: true,
+            });
+        }
+
+        rows.push(Self::stub(
+            0,
+            ActivityEventType::AcpNegotiate,
+            "ACP activity requires the Stage-4 indexer",
+        ));
+        rows.push(Self::stub(
+            1,
+            ActivityEventType::AcpTask,
+            "ACP activity requires the Stage-4 indexer",
+        ));
+        rows.push(Self::stub(
+            2,
+            ActivityEventType::AcpSettle,
+            "ACP activity requires the Stage-4 indexer",
+        ));
+        rows.push(Self::stub(
+            3,
+            ActivityEventType::AcpRevoke,
+            "ACP activity requires the Stage-4 indexer",
+        ));
+        rows.push(Self::stub(
+            4,
+            ActivityEventType::BatchedTx,
+            "batch activity requires agent_getActivity wiring",
+        ));
+        rows.push(Self::stub(
+            5,
+            ActivityEventType::SponsorTx,
+            "paymaster is available in Stage 5",
+        ));
+
+        rows.sort_by(|left, right| {
+            right
+                .timestamp
+                .cmp(&left.timestamp)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        rows.truncate(MAX_ACTIVITY_ROWS);
+        Ok(rows)
+    }
+}
+
+/// Operator settings surface backed by the node's loaded config, peer manager
+/// and keystore directory. Runtime-only toggles (MCP/ACP, seed rotation) fail
+/// closed with an explicit "requires config.toml + restart" error instead of
+/// pretending to reconfigure a live node.
+pub struct InProcessSettingsBackend {
+    config: Option<Config>,
+    config_path: PathBuf,
+    peer_manager: Arc<PeerManager>,
+    data_dir: PathBuf,
+    network_id: u32,
+}
+
+impl InProcessSettingsBackend {
+    pub fn new(
+        config: Option<Config>,
+        config_path: PathBuf,
+        peer_manager: Arc<PeerManager>,
+        data_dir: PathBuf,
+        network_id: u32,
+    ) -> Self {
+        Self {
+            config,
+            config_path,
+            peer_manager,
+            data_dir,
+            network_id,
+        }
+    }
+
+    fn resolve_node_id(&self, node_id: &str) -> Option<strangecoin_net::NodeId> {
+        self.peer_manager
+            .all_peers_sorted()
+            .into_iter()
+            .find(|record| record.node_id.to_string() == node_id)
+            .map(|record| record.node_id)
+    }
+}
+
+impl SettingsBackend for InProcessSettingsBackend {
+    fn snapshot(&self) -> SettingsSnapshot {
+        let (listen_addr, seeds, max_peers, network_id) = match &self.config {
+            Some(config) => (
+                config.network.listen_addr.to_string(),
+                config
+                    .network
+                    .seeds
+                    .iter()
+                    .map(|seed| seed.to_string())
+                    .collect(),
+                config.network.max_peers as u32,
+                config.network_id.to_string(),
+            ),
+            None => (String::new(), Vec::new(), 0, self.network_id.to_string()),
+        };
+
+        let mut peers: Vec<SettingsPeerRow> = self
+            .peer_manager
+            .all_peers_sorted()
+            .into_iter()
+            .map(|record| SettingsPeerRow {
+                node_id: record.node_id.to_string(),
+                addr: record.addr.to_string(),
+                score: record.score,
+                banned: self.peer_manager.is_banned(&record.node_id),
+            })
+            .collect();
+        peers.sort_by(|left, right| left.node_id.cmp(&right.node_id));
+        peers.truncate(64);
+
+        let keystore_paths = wallet::Wallet::list_keystores(&self.data_dir).unwrap_or_default();
+        let mut operator: Vec<KeystoreEntry> = keystore_paths
+            .iter()
+            .filter_map(|path| {
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .map(|stem| KeystoreEntry {
+                        label: stem.to_string(),
+                        address: String::new(),
+                        kind: "encrypted".to_string(),
+                    })
+            })
+            .collect();
+        operator.sort_by(|left, right| left.label.cmp(&right.label));
+
+        let (mcp_enabled, mcp_transport, mcp_listen, acp_enabled) = match &self.config {
+            Some(config) => (
+                config.mcp.enabled,
+                config.mcp.transport.clone(),
+                config.mcp.http_listen.clone(),
+                !config.acp.escrow_contract.is_empty(),
+            ),
+            None => (false, "stdio".to_string(), String::new(), false),
+        };
+
+        SettingsSnapshot {
+            network: NetworkSettings {
+                listen_addr,
+                seeds,
+                max_peers,
+                network_id,
+            },
+            peers,
+            keystore: KeystoreSettings {
+                operator,
+                agents: Vec::new(),
+                available: false,
+                note: "operator/agent keystore isolation is design-only (ADR-0028)".to_string(),
+            },
+            config: ConfigSettings {
+                raw: fs::read_to_string(&self.config_path).unwrap_or_default(),
+                validation: String::new(),
+            },
+            mcp: McpSettings {
+                enabled: mcp_enabled,
+                transport: mcp_transport,
+                http_listen: mcp_listen,
+                clients: Vec::new(),
+                available: false,
+                note: "no connected-client registry".to_string(),
+            },
+            acp: AcpSettings {
+                enabled: acp_enabled,
+                sessions: Vec::<AcpSessionRow>::new(),
+                available: false,
+                note: "no live ACP session registry".to_string(),
+            },
+        }
+    }
+
+    fn validate_config(&self, raw: &str) -> Result<(), String> {
+        toml::from_str::<Config>(raw)
+            .map(|_| ())
+            .map_err(|err| format!("invalid config.toml: {err}"))
+    }
+
+    fn save_config(&self, raw: &str) -> Result<(), String> {
+        self.validate_config(raw)?;
+        fs::write(&self.config_path, raw).map_err(|err| format!("config write failed: {err}"))
+    }
+
+    fn set_peer_ban(&self, node_id: &str, banned: bool) -> Result<(), String> {
+        let id = self
+            .resolve_node_id(node_id)
+            .ok_or_else(|| format!("unknown peer: {node_id}"))?;
+        if banned {
+            let until = Instant::now() + Duration::from_secs(30 * 24 * 60 * 60);
+            if !self
+                .peer_manager
+                .ban_peer(id, BanReason::Manual, until, true)
+            {
+                return Err(format!("peer already banned: {node_id}"));
+            }
+        } else if !self.peer_manager.unban_peer(&id) {
+            return Err(format!("peer is not banned: {node_id}"));
+        }
+        Ok(())
+    }
+
+    fn add_seed(&self, _addr: &str) -> Result<(), String> {
+        Err("seed changes require config.toml and a node restart".to_string())
+    }
+
+    fn set_mcp_enabled(&self, _enabled: bool) -> Result<(), String> {
+        Err("MCP toggle requires config.toml and a node restart".to_string())
+    }
+
+    fn set_acp_enabled(&self, _enabled: bool) -> Result<(), String> {
+        Err("ACP toggle requires config.toml and a node restart".to_string())
+    }
+}
+
+#[cfg(test)]
+mod ui_p05_tests {
+    use super::*;
+
+    #[test]
+    fn activity_adapter_marks_indexer_and_paymaster_rows_as_stubs() {
+        let dir = std::env::temp_dir().join(format!(
+            "strangecoin-ui-p05-activity-{}",
+            std::process::id()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let blockchain = crate::test_support::create_test_blockchain(&dir);
+        let backend = InProcessAgentActivityBackend::new(Arc::new(blockchain));
+        let activities = backend.activities().unwrap();
+        assert_eq!(activities, backend.activities().unwrap());
+        assert!(activities
+            .iter()
+            .any(|row| row.event_type == ActivityEventType::SponsorTx && !row.available));
+        assert!(activities
+            .iter()
+            .any(|row| row.event_type == ActivityEventType::AcpSettle && !row.available));
+    }
+
+    #[test]
+    fn settings_adapter_fails_runtime_toggles_closed() {
+        let identity = strangecoin_net::NodeKeypair::from_seed([7; 32]);
+        let peer_manager = Arc::new(PeerManager::new(
+            strangecoin_net::peer::PeerManagerConfig::default(),
+            identity,
+        ));
+        let backend = InProcessSettingsBackend::new(
+            None,
+            PathBuf::from("does-not-exist.toml"),
+            peer_manager,
+            PathBuf::from("does-not-exist-data"),
+            3,
+        );
+        assert!(backend.add_seed("127.0.0.1:8333").is_err());
+        assert!(backend.set_mcp_enabled(true).is_err());
+        assert!(backend.set_acp_enabled(true).is_err());
+        assert!(backend.set_peer_ban("unknown", true).is_err());
+        assert!(backend.validate_config("not toml").is_err());
+        let snapshot = backend.snapshot();
+        assert!(!snapshot.keystore.available);
+        assert!(!snapshot.mcp.available);
+        assert!(!snapshot.acp.available);
+        assert_eq!(snapshot.network.network_id, "3");
+    }
+}
+
 #[cfg(test)]
 mod ui_p04_tests {
     use super::*;
