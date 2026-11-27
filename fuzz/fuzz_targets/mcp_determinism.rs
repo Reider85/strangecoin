@@ -10,9 +10,12 @@
 //! fuzz budget goes entirely through the protocol layer (dispatch,
 //! serialization, signing).
 
+#![no_main]
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use libfuzzer_sys::fuzz_target;
 use serde_json::{json, Value};
 use strangecoin_core::types::{Block, BlockHeader, Transaction};
 use strangecoin_mcp::{

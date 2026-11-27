@@ -13,6 +13,11 @@ arbitrary = { version = "1", features = ["derive"] }
 # hex for hex-encoded block hashes in the fuzz-side mock views (same version
 # as strangecoin-net uses; S2-P21).
 hex = "0.4"
+# AI-P03: agent-envelope keys for the acp_handler target (fixed seeds —
+# the same caret as the parent workspace, crypto class 2).
+secp256k1 = "0.29"
+# AI-P02/AI-P03: canonical JSON used by the MCP/ACP fuzz targets.
+serde_json = "1.0"
 
 [dependencies.strangecoin-core]
 path = "../crates/strangecoin-core"
@@ -29,10 +34,6 @@ path = "../crates/strangecoin-vm-wasm"
 [dependencies.strangecoin-net]
 path = "../crates/strangecoin-net"
 features = ["acp"]
-
-# AI-P03: agent-envelope keys for the acp_handler target (fixed seeds —
-# the same caret as the parent workspace, crypto class 2).
-secp256k1 = "0.29"
 
 # AI-P02: MCP determinism target (invariant #23) — 3 mock-backend servers
 # must emit byte-identical signed envelopes for the same fuzz input.

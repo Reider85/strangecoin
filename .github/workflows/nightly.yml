@@ -76,6 +76,36 @@ name: Nightly
 #         `conflicts_with`, exit 2) on every cargo-mutants >= 24.1.2 — the
 #         mutants never ran. `-j 4` dropped (`--in-place` kept: parallel
 #         tree copies do not fit the 14 GB runner disk); user-approved fix.
+#   11. [GITHUB-P35] Run #20 (45828088951, 2026-11-26): the BLOCKING audit job
+#      was red for two causes, neither of them the prompt's quick-xml
+#      hypothesis (0194/0195 were already baselined in [UI-P02-B]):
+#      a. `RUSTSEC-2026-0592` — stack overflow in `Url::origin()` on nested
+#         `blob:` URLs, `url 2.5.8` in both Cargo.lock files; a patched 2.5.9
+#         exists, so the lockfiles were updated (`cargo update -p url
+#         --precise 2.5.9`), NOT ignored. Signal preserved for new advisories.
+#      b. `error[unlicensed]: strangecoin-ui = 0.1.0 is unlicensed` — the new
+#         UI-P02 workspace crate had no `license` field; fixed in that crate's
+#         Cargo.toml, cargo-deny's licenses lint stays enabled.
+#      No NEW baseline ignores were added; the existing removal obligation
+#      remains (deny.toml [advisories] + analytics/BACKLOG.md §5).
+#   12. [GITHUB-P35] miri: the single `cargo miri test -p ... -p ...` command
+#      aborted on `posix_spawnattr_init` in the RocksDB crash-smoke test with
+#      no UB, and vm-wasm never ran (issue #14). Split into two steps-in-one:
+#      `cargo miri test -p strangecoin-vm-wasm` FIRST, then
+#      `cargo miri test -p strangecoin-storage --lib`. Process-spawning/FFI
+#      integration tests stay out of Miri (they are covered by MemoryEngine
+#      unit tests); continue-on-error is unchanged.
+#   13. [GITHUB-P35] mutation: `cargo mutants --workspace --in-place` timed out
+#      after 50 min in run #20 — the unmutated baseline alone took 875s build
+#      + 190s test with 6387 mutants queued, so no score was produced. The
+#      job now runs `cargo mutants -p strangecoin-core --in-place` in the same
+#      budget; the full-workspace score is deferred (BACKLOG.md §5), and
+#      MISSED mutants remain signal-only (not a badge blocker).
+#   14. [GITHUB-P35] two fuzz targets (mcp_determinism, acp_handler) did not
+#      even compile: no `#![no_main]`, no `use libfuzzer_sys::fuzz_target`, no
+#      `serde_json` dependency, and `secp256k1` was nested inside the
+#      `[dependencies.strangecoin-net]` TOML table instead of `[dependencies]`.
+#      Fixed in fuzz/; the ASAN crashes in issues #12/#13 are unchanged.
 
 on:
   schedule:
@@ -383,9 +413,12 @@ jobs:
       # cargo-mutants >= 24.1.2 — the command died at arg parsing in 0 s and
       # the mutants never ran (header deviation 10d). `--in-place` is kept:
       # parallel tree copies do not fit the 14 GB runner disk.
+      # [GITHUB-P35] `--workspace` replaced by `-p strangecoin-core`: run #20
+      # spent 875s building + 190s testing the unmutated workspace baseline
+      # and timed out after 5 of 6387 mutants (header deviation 13).
       - name: Run cargo mutants
         timeout-minutes: 50
-        run: cargo mutants --workspace --in-place
+        run: cargo mutants -p strangecoin-core --in-place
 
       # Deviation 4: actual cargo-mutants output directory is `mutants.out/`.
       - name: Upload mutants report
@@ -424,9 +457,16 @@ jobs:
       # [GITHUB-P06] dropped the literal `+nightly` override: the dtolnay
       # step above already pins the exact toolchain (gnu-flavor locally),
       # and `+nightly` would resolve the msvc-flavor nightly on Windows.
-      - name: "cargo miri test (spec-literal: vm-wasm + storage)"
+      # [GITHUB-P35] issue #14 / header deviation 12: the old combined command
+      # aborted on `posix_spawnattr_init` in the RocksDB crash-smoke test
+      # (no UB), and fail-fast meant vm-wasm never ran. vm-wasm goes FIRST so
+      # its result is always in the log; storage is limited to pure-Rust lib
+      # tests (the FFI/process-spawn integration tests are not Miri-runnable).
+      - name: "cargo miri test (vm-wasm + storage --lib)"
         shell: bash
-        run: cargo miri test -p strangecoin-vm-wasm -p strangecoin-storage
+        run: |
+          cargo miri test -p strangecoin-vm-wasm
+          cargo miri test -p strangecoin-storage --lib
 
       # [GITHUB-P06] the dtolnay step runs `rustup default <toolchain>` —
       # after this job the local machine's default would point at nightly.

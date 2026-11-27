@@ -30,9 +30,12 @@
 //! through decode → authenticate → nonce → validate. Peer scoring runs on a
 //! fresh in-memory `PeerManager` (`network.json` disabled).
 
+#![no_main]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use libfuzzer_sys::fuzz_target;
 use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use strangecoin_core::address::encode_address;
 use strangecoin_core::consensus::CHAIN_ID_REGTEST;
