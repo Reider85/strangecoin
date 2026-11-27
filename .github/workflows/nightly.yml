@@ -96,11 +96,13 @@ name: Nightly
 #      integration tests stay out of Miri (they are covered by MemoryEngine
 #      unit tests); continue-on-error is unchanged.
 #   13. [GITHUB-P35] mutation: `cargo mutants --workspace --in-place` timed out
-#      after 50 min in run #20 — the unmutated baseline alone took 875s build
-#      + 190s test with 6387 mutants queued, so no score was produced. The
-#      job now runs `cargo mutants -p strangecoin-core --in-place` in the same
-#      budget; the full-workspace score is deferred (BACKLOG.md §5), and
-#      MISSED mutants remain signal-only (not a badge blocker).
+#      after 50 min in run #20 (875s build + 190s baseline, 6387 mutants), and
+#      `-p strangecoin-core --in-place` ALSO timed out in the first fix run
+#      (1175 mutants, ~80s test each, only 3 resolved before the cap). The
+#      nightly signal is therefore file-scoped:
+#      `-p strangecoin-core -f crates/strangecoin-core/src/chain_selector.rs`
+#      (15 mutants, ~20 min). Full-workspace AND full-core scores are deferred
+#      (BACKLOG.md §5); MISSED mutants remain signal-only, never badge-blocking.
 #   14. [GITHUB-P35] two fuzz targets (mcp_determinism, acp_handler) did not
 #      even compile: no `#![no_main]`, no `use libfuzzer_sys::fuzz_target`, no
 #      `serde_json` dependency, and `secp256k1` was nested inside the
@@ -413,12 +415,13 @@ jobs:
       # cargo-mutants >= 24.1.2 — the command died at arg parsing in 0 s and
       # the mutants never ran (header deviation 10d). `--in-place` is kept:
       # parallel tree copies do not fit the 14 GB runner disk.
-      # [GITHUB-P35] `--workspace` replaced by `-p strangecoin-core`: run #20
-      # spent 875s building + 190s testing the unmutated workspace baseline
-      # and timed out after 5 of 6387 mutants (header deviation 13).
+      # [GITHUB-P35] `--workspace` (6387 mutants) and then even
+      # `-p strangecoin-core` (1175 mutants, ~80s each) both exceeded the
+      # 50-min cap, so the nightly signal is bounded to the 15-mutant fork
+      # choice file — `cargo mutants --list` verified the count (deviation 13).
       - name: Run cargo mutants
         timeout-minutes: 50
-        run: cargo mutants -p strangecoin-core --in-place
+        run: cargo mutants -p strangecoin-core -f crates/strangecoin-core/src/chain_selector.rs --in-place
 
       # Deviation 4: actual cargo-mutants output directory is `mutants.out/`.
       - name: Upload mutants report
