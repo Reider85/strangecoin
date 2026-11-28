@@ -29,7 +29,7 @@ hex = "0.4"
 blake3 = "1"
 # base64 framing for Noise ciphertext on the HTTP transport (same version
 # as the root crate; pinned exact per Stage 3/4 pin discipline).
-base64 = "=0.22.1"
+base64 = "=0.23.1"
 # Response signing (V-43): same crate + pin as the Stage 2 node_id keys
 # (strangecoin-net Cargo.toml), so signers/verifiers interoperate.
 ed25519-dalek = "=2.0"
