@@ -39,7 +39,7 @@ eframe = { version = "=0.30.0", optional = true }
 toml = "1.1"
 pbkdf2 = { version = "0.12.2", features = ["simple"] }
 rand_core = "0.10.1"
-base64 = "0.22.1"
+base64 = "0.23.1"
 aes-gcm = "0.10"
 # BF-S3-P01: `rand-std` (not bare `rand`) — removing the default-on
 # `rusty-leveldb` dep stopped feature-unifying `rand/std` (getrandom),
