@@ -11,22 +11,25 @@
 //!   divergent-chains refusal.
 #![cfg(feature = "legacy-migrate")]
 
+#[path = "common/legacy_reader.rs"]
+mod legacy_migration;
+
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
-use strangecoin::config::StorageConfig;
-use strangecoin::storage::migrations::{
-    auto_migrate_legacy, migrate_leveldb_to_rocksdb, MigrationReport,
+use legacy_migration::{
+    auto_migrate_legacy, migrate_leveldb_to_rocksdb, seed_legacy_leveldb_full, LegacySeed,
+    MigrationReport,
 };
+use strangecoin::config::StorageConfig;
 use strangecoin::storage::{
     contract_storage_key, decode_block_height_key, decode_schema_version, meta_key, state_key, Cf,
     RocksDbEngine, StorageEngine, META_DIFFICULTY, META_SCHEMA_VERSION, META_TIP_HASH,
     META_TIP_HEIGHT,
 };
 use strangecoin::test_support::{
-    blockchain_db_path_for_port, generate_keypair, random_port, seed_legacy_leveldb_full,
-    sign_transaction, LegacySeed, TestDir,
+    blockchain_db_path_for_port, generate_keypair, random_port, sign_transaction, TestDir,
 };
 use strangecoin::{AccountState, Block, BlockchainFacade, Transaction};
 
@@ -271,7 +274,9 @@ fn auto_run_converts_renames_to_bak_and_is_idempotent() {
         ..Default::default()
     };
 
-    // Open #1: auto-run converts the fixture, then the chain loads.
+    // Open #1: BF-S3-P01 moved the conversion out of the open path — the
+    // tooling wrapper (same parse-all + .bak contract) runs explicitly.
+    auto_migrate_legacy(db.path(), &rocks).expect("explicit conversion must succeed");
     let facade = BlockchainFacade::new(port, CHAIN_ID, config());
     assert_eq!(
         facade.chain_len(),
@@ -294,7 +299,7 @@ fn auto_run_converts_renames_to_bak_and_is_idempotent() {
     );
     assert!(
         !db.path().exists(),
-        "auto-run must rename the legacy directory away"
+        "tooling conversion must rename the legacy directory away"
     );
     assert!(
         db.bak_path().exists(),

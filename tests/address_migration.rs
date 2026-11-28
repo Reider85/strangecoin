@@ -8,25 +8,29 @@
 //! addresses, and is idempotent across reopens.
 //!
 //! S3-P08: the `engine = "leveldb"` backend is gone — the fixture now
-//! rides the one-shot LevelDB → RocksDB auto-migration
-//! (`storage::migrations::auto_migrate_legacy`): the port directory is
-//! converted into a fresh RocksDB and kept as `.leveldb.bak`, then the
-//! *same* open-path runtime migrations run on the converted state. This
-//! is also the regression net for "Stage 0 shapes survive the
-//! conversion" (the fixture still carries the Stage 0
+//! rides the one-shot LevelDB → RocksDB conversion through the dev-only
+//! reader (`legacy_migration::auto_migrate_legacy`, BF-S3-P01): the port
+//! directory is converted into a fresh RocksDB and kept as `.leveldb.bak`,
+//! then the *same* open-path runtime migrations run on the converted
+//! state. This is also the regression net for "Stage 0 shapes survive
+//! the conversion" (the fixture still carries the Stage 0
 //! `HashMap<String, u64>` balances blob — the migration's dual-format
 //! decode path).
 #![cfg(feature = "legacy-migrate")]
+
+#[path = "common/legacy_reader.rs"]
+mod legacy_migration;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use legacy_migration::{auto_migrate_legacy, seed_legacy_leveldb};
 use secp256k1::{PublicKey, Secp256k1, SecretKey};
 
 use strangecoin::config::StorageConfig;
-use strangecoin::test_support::{blockchain_db_path_for_port, random_port, seed_legacy_leveldb};
+use strangecoin::test_support::{blockchain_db_path_for_port, random_port};
 use strangecoin::{address, consensus, Block, BlockchainFacade, Transaction};
 
 /// Magic strings the migration deliberately leaves alone.
@@ -67,9 +71,15 @@ fn seed_balances_and_chain(db_path: &Path, balances: &HashMap<String, u64>, chai
 }
 
 /// Open through the production constructor with a fresh RocksDB target:
-/// the open path auto-migrates the seeded port directory first (S3-P08),
-/// then loads and runs the runtime migrations exactly like a real node.
+/// BF-S3-P01 moved the conversion out of the open path, so the test calls
+/// the dev-only tooling wrapper explicitly, then loads and runs the
+/// runtime migrations exactly like a real node after an operator
+/// converted the database.
 fn open_migrated(port: u16, rocks_path: &Path) -> BlockchainFacade {
+    let legacy = blockchain_db_path_for_port(port);
+    if legacy.exists() {
+        auto_migrate_legacy(&legacy, rocks_path).expect("explicit legacy migration must succeed");
+    }
     BlockchainFacade::new(
         port,
         strangecoin::consensus::CHAIN_ID_REGTEST,
@@ -160,7 +170,7 @@ fn legacy_base64_balances_migrate_to_bech32_on_open() {
     balances.insert("initial_wallet_address".to_string(), 123u64);
     seed_balances(db.path(), &balances);
 
-    // Open #1: auto-migration converts the fixture, then the DB-open path
+    // Open #1: the tooling converts the fixture, then the DB-open path
     // runs `migrate_addresses_to_bech32` on the converted state.
     let facade = open_migrated(port, &rocks);
 
@@ -196,8 +206,8 @@ fn legacy_base64_balances_migrate_to_bech32_on_open() {
         "supply preserved"
     );
 
-    // S3-P08 auto-run side effects: the legacy directory became the
-    // rollback copy, the conversion landed at storage.path.
+    // Conversion side effects: the legacy directory became the rollback
+    // copy, the conversion landed at storage.path.
     assert!(
         !db.path().exists(),
         "legacy port directory must be renamed away by the auto-migration"

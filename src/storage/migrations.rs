@@ -1,55 +1,56 @@
-//! # One-shot LevelDB → RocksDB migration (S3-P08)
+//! # One-shot LevelDB → RocksDB migration — conversion half (S3-P08, BF-S3-P01)
 //!
-//! ADR-0008 §Decision («one-shot `migrate_from_leveldb()` utility, run
-//! automatically on first startup with `storage.engine = "rocksdb"`, with
+//! ADR-0008 §Decision («one-shot `migrate_from_leveldb()` utility with
 //! rollback capability») + ADR-0024 §Decision (legacy blob layout = schema
 //! version **0**, this schema = **1**; upgrades happen only through
 //! `migrations.rs`, never implicitly on open).
 //!
-//! Two entry points:
+//! BF-S3-P01 split: this module is the **pure write side** — a parsed
+//! [`LegacySnapshot`] lands in the per-block schema through one atomic
+//! batch. The LevelDB **reader** is no longer a runtime dependency: it lives
+//! in `tests/common/legacy_migration.rs` (dev-only `rusty-leveldb`) and in
+//! the `migrate-leveldb` tooling example:
+//! `cargo run --example migrate-leveldb --features legacy-migrate`.
+//! The node open path never opens LevelDB — a legacy directory is refused
+//! with the conversion command instead of being auto-migrated.
 //!
-//! * [`migrate_leveldb_to_rocksdb`] — the format conversion itself:
-//!   legacy JSON blobs (`chain` / `balances` / `difficulty` /
-//!   `contract_storage` + `sender:nonce` mempool entries) → per-block
-//!   schema (blocks per height, state, contract slots, mempool CF, tip
-//!   meta). **Read-only with respect to the legacy directory** — the
-//!   caller owns the rollback rename.
-//! * [`auto_migrate_legacy`] — the production auto-run called from
-//!   `state_cache::open_blockchain` before the RocksDB open: converts
-//!   when the target is fresh, renames the legacy directory to
-//!   `<name>.leveldb.bak` (ADR-0008 rollback — the legacy data is *never*
-//!   deleted), and finishes an interrupted attempt after a crash window.
+//! Entry points:
+//!
+//! * [`migrate_snapshot_to_rocksdb`] — parse-first, temp + atomic-rename
+//!   conversion of an already-parsed legacy snapshot. Read-only with
+//!   respect to the legacy directory; the caller owns the rollback rename.
+//! * [`probe_rocks`] / [`RocksProbe`] — read-only target classification
+//!   used by the tooling's crash-window resume (same-tip check).
 //!
 //! ## Fail-closed contract (КГ)
 //!
-//! 1. **Parse-all before write**: every legacy blob is decoded in memory
-//!    first; a present-but-unparsable state blob (`chain`, `balances`,
-//!    `difficulty`, `contract_storage`) is [`StorageError::Corrupt`] and
-//!    nothing is written anywhere — never a partial apply. *Stricter than
-//!    the legacy open path* (which was lenient): migrating silently
-//!    dropping state would be data loss.
+//! 1. **Parse-all before write**: the tooling decodes every legacy blob in
+//!    memory first; a present-but-unparsable blob is
+//!    [`StorageError::Corrupt`] and nothing is written anywhere. This check
+//!    is enforced by the reader before [`migrate_snapshot_to_rocksdb`] is
+//!    called — never a partial apply (stricter than the legacy open path).
 //! 2. **Temp + atomic rename**: the new database is written to
 //!    `{target}.migrating` (a stale one from an interrupted attempt is
 //!    cleaned first), flushed, closed, and only then renamed onto the
 //!    target. A crash mid-conversion leaves the target absent and the
-//!    legacy directory untouched, so the next open simply redoes it.
+//!    legacy directory untouched.
 //! 3. **Mempool entries** that do not parse as transactions are skipped
-//!    with a warning (legacy semantics: the old loader ignored them too —
-//!    they were never usable).
+//!    by the reader with a warning (legacy semantics: the old loader
+//!    ignored them too — they were never usable).
 //! 4. **Divergent datasets** (legacy present *and* the target already
-//!    holds a different chain) → [`StorageError::Corrupt`]: the operator
-//!    resolves it manually; neither side is modified.
+//!    holds a different chain) → [`StorageError::Corrupt`]: the tooling
+//!    compares recomputed canonical tip hashes via [`probe_rocks`] and
+//!    neither side is modified.
 //!
-//! ## Deviations (FBP, S3-P08)
+//! ## Deviations (FBP, S3-P08 + BF-S3-P01)
 //!
-//! * Lives in the **monolith**, not in `strangecoin-storage` — the prompt
-//!   preferred the crate with a `LegacyReader` trait; blob parsing and
-//!   value encoding are monolith-edge knowledge by design (ADR-0024
+//! * Lives in the **monolith**, not in `strangecoin-storage` — blob parsing
+//!   and value encoding are monolith-edge knowledge by design (ADR-0024
 //!   §Decision "Values", `src/storage/codec.rs`: "the storage crate never
-//!   sees a Block / AccountState / Transaction"), and the crate would gain
-//!   `serde_json` + `strangecoin-core` dependencies for nothing the trait
-//!   boundary protects. The crate's migration rail (schema versioning,
-//!   atomic batches) is already in place.
+//!   sees a Block / AccountState / Transaction").
+//! * BF-S3-P01: the read side moved to dev-only tooling; ADR-0008's
+//!   "run automatically on first startup" became an explicit operator
+//!   step (recorded in Changelog 3.0.1 and STAGE3_SUMMARY §6).
 //! * `state_history` is **not** backfilled for migrated heights — the
 //!   legacy schema stored current-state only (ADR-0024 explicitly notes
 //!   this); history starts at the first adopt after the migration.
@@ -57,39 +58,31 @@
 //!   S3-P07 schema either (grep-verified during S3-P08).
 //! * **Tip hash is recomputed**, not copied from the legacy JSON: canonical
 //!   block serialization excludes `hash` and the load re-derives it from
-//!   the header bytes (`FORMAT_VERSION` bumps rewrite hashes — BUG-S1-007),
-//!   so the meta value must be what the *reloaded* block will hash to.
+//!   the header bytes (BUG-S1-007 — hashes are recomputed across
+//!   `FORMAT_VERSION` bumps), so a stored value drifted by a version
+//!   bump would brick the fail-closed load of an otherwise sound
+//!   chain. (Documented deviation: the legacy blob kept whatever the
+//!   writer believed.)
 //!
 //! Determinism (Stage 3 checklist): pure byte transforms + path renames —
-//! no `SystemTime`/`Instant`, no RNG, no network; `.bak`/`.migrating`
-//! names are static strings. Batch op order follows sorted legacy key
-//! iteration and per-height index order; the result is order-independent
+//! no `SystemTime`/`Instant`, no RNG, no network; `.migrating` names are
+//! static strings. Batch op order follows the snapshot's insertion order
 //! (unique keys, one atomic `write_batch`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use rusty_leveldb::LdbIterator;
 use strangecoin_core::types::{Block, Transaction};
 use strangecoin_storage::{
     Cf, RocksDbEngine, StorageEngine, StorageError, WriteBatchOp, META_DIFFICULTY, META_TIP_HASH,
     META_TIP_HEIGHT,
 };
-use tracing::{info, warn};
 
-use crate::blockchain::state_cache::{contract_storage_from_json, ContractStorageJson};
 use crate::storage::{codec, schema::*};
 use crate::AccountState;
 
-/// The four constant blob keys of the Stage 0-2 schema (everything else
-/// in the legacy keyspace was a mempool entry).
-const LEGACY_CHAIN: &[u8] = b"chain";
-const LEGACY_BALANCES: &[u8] = b"balances";
-const LEGACY_DIFFICULTY: &[u8] = b"difficulty";
-const LEGACY_CONTRACT_STORAGE: &[u8] = b"contract_storage";
-
 /// What the conversion moved out of the legacy database
-/// (prompt-specified shape — logged via `tracing::info`).
+/// (prompt-specified shape — logged via `tracing::info` in the tooling).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MigrationReport {
     pub blocks: usize,
@@ -97,25 +90,23 @@ pub struct MigrationReport {
     pub mempool_txs: usize,
 }
 
-/// Fully parsed legacy database — the fail-closed intermediate: nothing
-/// touches the filesystem until every blob decoded successfully.
+/// Fully parsed legacy database — the fail-closed intermediate: the reader
+/// fills this in memory before the write side touches any directory.
+/// Public fields let the dev-only reader build it without exposing the
+/// codec helpers (`pub(crate)` in `src/storage/codec.rs`).
 #[derive(Debug, Default)]
-struct LegacySnapshot {
+pub struct LegacySnapshot {
     /// `None` = no (or empty) chain blob — a pre-storage/Stage-0 database;
     /// the open path installs fresh genesis on top of the migrated state.
-    chain: Option<Vec<Block>>,
-    // Named `accounts`, not `balances`: the BUG-S0-022 source gate scans
-    // for whole-field replacements of that field outside the state-cache
-    // layer and would flag this snapshot member (it is a parse fixture,
-    // never the blockchain state cache).
-    accounts: Option<HashMap<String, AccountState>>,
-    contract_storage: Option<strangecoin_core::state::ContractStorageMap>,
-    difficulty: Option<u32>,
-    mempool_txs: Vec<Transaction>,
+    pub chain: Option<Vec<Block>>,
+    pub accounts: Option<HashMap<String, AccountState>>,
+    pub contract_storage: Option<strangecoin_core::state::ContractStorageMap>,
+    pub difficulty: Option<u32>,
+    pub mempool_txs: Vec<Transaction>,
 }
 
 impl LegacySnapshot {
-    fn report(&self) -> MigrationReport {
+    pub fn report(&self) -> MigrationReport {
         MigrationReport {
             blocks: self.chain.as_ref().map(Vec::len).unwrap_or(0),
             accounts: self.accounts.as_ref().map(HashMap::len).unwrap_or(0),
@@ -126,12 +117,6 @@ impl LegacySnapshot {
 
 fn corrupt(msg: &'static str) -> StorageError {
     StorageError::Corrupt(msg)
-}
-
-/// `rusty-leveldb` errors are `Status` (Display + Error) — surface them
-/// as I/O failures of the storage layer.
-fn leveldb_io(err: rusty_leveldb::Status) -> StorageError {
-    StorageError::Io(std::io::Error::other(err))
 }
 
 /// Lexical normalization for the same-path guard: canonicalize when the
@@ -150,16 +135,6 @@ fn normalized(path: &Path) -> PathBuf {
     }
 }
 
-/// Rollback sibling of the legacy directory (ADR-0008 "rollback
-/// capability"): `blockchain_db_{port}` → `blockchain_db_{port}.leveldb.bak`.
-fn bak_path(legacy_path: &Path) -> PathBuf {
-    let name = legacy_path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "legacy_db".to_string());
-    legacy_path.with_file_name(format!("{name}.leveldb.bak"))
-}
-
 /// Scratch sibling of the migration target (same parent ⇒ same volume ⇒
 /// `rename` is atomic).
 fn tmp_path(target: &Path) -> PathBuf {
@@ -168,111 +143,6 @@ fn tmp_path(target: &Path) -> PathBuf {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "rocksdb".to_string());
     target.with_file_name(format!("{name}.migrating"))
-}
-
-// ---------------------------------------------------------------------------
-// Read side (legacy LevelDB)
-// ---------------------------------------------------------------------------
-
-/// Decode the whole legacy database. The handle is dropped before the
-/// function returns, closing every file — a later directory rename must
-/// not trip over open handles (Windows).
-fn read_legacy_snapshot(legacy_path: &Path) -> Result<LegacySnapshot, StorageError> {
-    if !legacy_path.exists() {
-        return Err(StorageError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "legacy LevelDB directory does not exist",
-        )));
-    }
-    // `create_if_missing` defaults to true in rusty-leveldb — never call
-    // `DB::open` before the existence check above, it would *create* the
-    // directory it was asked to read.
-
-    let mut db = rusty_leveldb::DB::open(legacy_path, rusty_leveldb::Options::default())
-        .map_err(leveldb_io)?;
-
-    let mut snapshot = LegacySnapshot::default();
-
-    // ---- `chain` ----
-    if let Some(bytes) = db.get(LEGACY_CHAIN) {
-        let chain: Vec<Block> = serde_json::from_slice(&bytes)
-            .map_err(|_| corrupt("legacy chain blob is unparsable"))?;
-        for (position, block) in chain.iter().enumerate() {
-            if block.index != position as u64 {
-                return Err(corrupt(
-                    "legacy chain block index does not match its position",
-                ));
-            }
-        }
-        if chain.is_empty() {
-            warn!("legacy chain blob is empty — migrating as a chain-less database");
-        } else {
-            snapshot.chain = Some(chain);
-        }
-    }
-
-    // ---- `balances` (dual format, same fallback the legacy loader
-    //      applied: `HashMap<String, AccountState>` first, Stage 0
-    //      `HashMap<String, u64>` second — but present-and-unparsable
-    //      in *both* shapes is fatal here) ----
-    if let Some(bytes) = db.get(LEGACY_BALANCES) {
-        let parsed: Result<HashMap<String, AccountState>, serde_json::Error> =
-            serde_json::from_slice::<HashMap<String, AccountState>>(&bytes).or_else(|_| {
-                serde_json::from_slice::<HashMap<String, u64>>(&bytes).map(|legacy| {
-                    legacy
-                        .into_iter()
-                        .map(|(address, balance)| (address, AccountState::eoa(balance, 0)))
-                        .collect()
-                })
-            });
-        snapshot.accounts =
-            Some(parsed.map_err(|_| corrupt("legacy balances blob is unparsable"))?);
-    }
-
-    // ---- `difficulty` ----
-    if let Some(bytes) = db.get(LEGACY_DIFFICULTY) {
-        snapshot.difficulty = Some(
-            serde_json::from_slice::<u32>(&bytes)
-                .map_err(|_| corrupt("legacy difficulty blob is unparsable"))?,
-        );
-    }
-
-    // ---- `contract_storage` ----
-    if let Some(bytes) = db.get(LEGACY_CONTRACT_STORAGE) {
-        let raw: ContractStorageJson = serde_json::from_slice(&bytes)
-            .map_err(|_| corrupt("legacy contract_storage blob is unparsable"))?;
-        snapshot.contract_storage =
-            Some(contract_storage_from_json(&raw).ok_or_else(|| {
-                corrupt("legacy contract_storage blob contains an invalid slot key")
-            })?);
-    }
-
-    // ---- everything else = mempool entries (legacy semantics: skip what
-    //      does not parse, those entries were never loadable) ----
-    let mut iterator = db.new_iter().map_err(leveldb_io)?;
-    let mut skipped = 0usize;
-    while let Some((key, value)) = iterator.next() {
-        if key == LEGACY_CHAIN
-            || key == LEGACY_BALANCES
-            || key == LEGACY_DIFFICULTY
-            || key == LEGACY_CONTRACT_STORAGE
-        {
-            continue;
-        }
-        match serde_json::from_slice::<Transaction>(&value) {
-            Ok(tx) => snapshot.mempool_txs.push(tx),
-            Err(_) => skipped += 1,
-        }
-    }
-    if skipped > 0 {
-        warn!(
-            skipped,
-            "legacy mempool entries are not transactions — skipped (legacy load semantics)"
-        );
-    }
-    drop(db);
-
-    Ok(snapshot)
 }
 
 // ---------------------------------------------------------------------------
@@ -355,19 +225,28 @@ fn build_ops(snapshot: &LegacySnapshot) -> Result<Vec<WriteBatchOp>, StorageErro
     Ok(ops)
 }
 
-// ---------------------------------------------------------------------------
-// Entry points
-// ---------------------------------------------------------------------------
+/// Open a fresh RocksDB at `dir` (schema version 1 is initialized by the
+/// engine guard) and land the snapshot in one atomic batch + flush.
+fn write_snapshot(dir: &Path, snapshot: &LegacySnapshot) -> Result<MigrationReport, StorageError> {
+    let engine = RocksDbEngine::open(dir)?;
+    let ops = build_ops(snapshot)?;
+    engine.write_batch(ops)?;
+    engine.flush()?;
+    drop(engine);
+    Ok(snapshot.report())
+}
 
-/// One-shot conversion: legacy blob schema → per-block schema.
+/// One-shot conversion: parsed legacy blob schema → per-block schema.
 ///
-/// The legacy directory is **only read** (the caller renames it after a
-/// successful conversion — [`auto_migrate_legacy`] does). The target must
-/// be absent or an empty directory; the data lands through
+/// Called by the dev-only tooling reader after parse-all succeeded. The
+/// legacy directory is **only checked for existence** (the tooling renames
+/// it to `.leveldb.bak` after a successful conversion). The target must be
+/// absent or an empty directory; the data lands through
 /// `{target}.migrating` + atomic `rename`, so a crash at any point leaves
 /// either nothing or a complete database (КГ «fail-closed, без partial
 /// apply»).
-pub fn migrate_leveldb_to_rocksdb(
+pub fn migrate_snapshot_to_rocksdb(
+    snapshot: &LegacySnapshot,
     legacy_path: &Path,
     new_path: &Path,
 ) -> Result<MigrationReport, StorageError> {
@@ -391,17 +270,14 @@ pub fn migrate_leveldb_to_rocksdb(
         // Schema-initialized RocksDB without data — replaced below.
     }
 
-    // 2. Parse everything before touching any directory (fail-closed).
-    let snapshot = read_legacy_snapshot(legacy_path)?;
-
-    // 3. Write to the scratch directory; drop the engine (RocksDB handle)
+    // 2. Write to the scratch directory; drop the engine (RocksDB handle)
     //    before the rename below.
     let tmp = tmp_path(new_path);
     if tmp.exists() {
         std::fs::remove_dir_all(&tmp)?;
     }
     std::fs::create_dir_all(&tmp)?;
-    let written = write_snapshot(&tmp, &snapshot);
+    let written = write_snapshot(&tmp, snapshot);
     let report = match written {
         Ok(report) => report,
         Err(err) => {
@@ -410,7 +286,7 @@ pub fn migrate_leveldb_to_rocksdb(
         }
     };
 
-    // 4. Atomic placement: the target was verified data-free in step 1
+    // 3. Atomic placement: the target was verified data-free in step 1
     //    (empty directory or a schema-initialized RocksDB without data).
     if new_path.exists() {
         if let Err(err) = std::fs::remove_dir_all(new_path) {
@@ -431,104 +307,6 @@ pub fn migrate_leveldb_to_rocksdb(
     Ok(report)
 }
 
-/// Open a fresh RocksDB at `dir` (schema version 1 is initialized by the
-/// engine guard) and land the snapshot in one atomic batch + flush.
-fn write_snapshot(dir: &Path, snapshot: &LegacySnapshot) -> Result<MigrationReport, StorageError> {
-    let engine = RocksDbEngine::open(dir)?;
-    let ops = build_ops(snapshot)?;
-    engine.write_batch(ops)?;
-    engine.flush()?;
-    drop(engine);
-    Ok(snapshot.report())
-}
-
-/// Production auto-run (ADR-0008): called from the DB-open path before
-/// the RocksDB open, keyed off the historical
-/// `<exe_dir>/blockchain_db_{port}` directory.
-///
-/// * no legacy directory → `Ok(None)` (the normal restart — no-op);
-/// * fresh target → convert, then rename legacy → `.leveldb.bak`;
-/// * target already holds data → crash-window resume: same tip ⇒ finish
-///   the `.bak` rename; different chains ⇒ fail closed.
-///
-/// The legacy directory is renamed only *after* a complete conversion, so
-/// the rollback copy survives every failure mode.
-pub fn auto_migrate_legacy(
-    legacy_path: &Path,
-    rocks_path: &Path,
-) -> Result<Option<MigrationReport>, StorageError> {
-    if !legacy_path.exists() {
-        return Ok(None);
-    }
-    if normalized(legacy_path) == normalized(rocks_path) {
-        return Err(corrupt(
-            "storage.path must not equal the legacy LevelDB directory",
-        ));
-    }
-    let bak = bak_path(legacy_path);
-    if bak.exists() {
-        return Err(corrupt(
-            "legacy LevelDB rollback copy (.bak) already exists; resolve manually",
-        ));
-    }
-
-    let target = probe_rocks(rocks_path)?;
-    let target_holds_data = target.as_ref().map(|p| p.has_data).unwrap_or(false);
-
-    if !target_holds_data {
-        // Fresh target (absent / empty directory / a schema-initialized
-        // RocksDB without data): the conversion, then the rollback rename.
-        let report = migrate_leveldb_to_rocksdb(legacy_path, rocks_path)?;
-        std::fs::rename(legacy_path, &bak)?;
-        info!(
-            blocks = report.blocks,
-            accounts = report.accounts,
-            mempool_txs = report.mempool_txs,
-            legacy = %legacy_path.display(),
-            rollback = %bak.display(),
-            "LevelDB -> RocksDB migration complete; legacy directory kept as rollback"
-        );
-        return Ok(Some(report));
-    }
-
-    // The target already holds data: finish an interrupted attempt (a
-    // crash between the conversion and the `.bak` rename) or refuse to
-    // pick a winner between two different chains.
-    let target = target.expect("target_holds_data implies a probe result");
-    {
-        let snapshot = read_legacy_snapshot(legacy_path)?;
-        // Same rule as the conversion: compare *recomputed* canonical
-        // hashes on both sides (the legacy JSON's stored `hash` field is
-        // not authoritative — see `build_ops`).
-        let legacy_tip = snapshot
-            .chain
-            .as_ref()
-            .and_then(|chain| chain.last())
-            .map(|block| hex::encode(strangecoin_core::serialize::block_hash(block)));
-        let same = match (legacy_tip.as_deref(), target.tip_hash.as_deref()) {
-            (Some(legacy), Some(existing)) => legacy == existing,
-            (None, None) => true,
-            _ => false,
-        };
-        if !same {
-            return Err(corrupt(
-                "legacy LevelDB and the existing RocksDB hold different chains; resolve manually",
-            ));
-        }
-        let report = snapshot.report();
-        std::fs::rename(legacy_path, &bak)?;
-        info!(
-            blocks = report.blocks,
-            accounts = report.accounts,
-            mempool_txs = report.mempool_txs,
-            legacy = %legacy_path.display(),
-            rollback = %bak.display(),
-            "finished interrupted LevelDB -> RocksDB migration (rollback rename only)"
-        );
-        Ok(Some(report))
-    }
-}
-
 /// What the migration target currently is (read-only probe).
 ///
 /// * `Ok(None)` — absent or an empty directory (a fresh target);
@@ -537,7 +315,7 @@ pub fn auto_migrate_legacy(
 ///   database that actually holds chain/state/mempool records;
 /// * `Err(_)` — a non-empty directory that is *not* a RocksDB database →
 ///   fail closed, nothing is touched (never deleted, never written).
-fn probe_rocks(rocks_path: &Path) -> Result<Option<RocksProbe>, StorageError> {
+pub fn probe_rocks(rocks_path: &Path) -> Result<Option<RocksProbe>, StorageError> {
     if !rocks_path.exists() {
         return Ok(None);
     }
@@ -569,9 +347,9 @@ fn probe_rocks(rocks_path: &Path) -> Result<Option<RocksProbe>, StorageError> {
 
 /// Probe result of [`probe_rocks`].
 #[derive(Debug)]
-struct RocksProbe {
-    has_data: bool,
+pub struct RocksProbe {
+    pub has_data: bool,
     /// Hex `Block::hash` of the stored tip, or `None` when the database
     /// has records but no chain (chain-less legacy migration).
-    tip_hash: Option<String>,
+    pub tip_hash: Option<String>,
 }

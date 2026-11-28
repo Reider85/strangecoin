@@ -385,27 +385,10 @@ pub(crate) fn capture_pre_state(
 /// (S1.5-P15): serde_json cannot use `[u8; 32]` map keys, so slots are
 /// stored as sorted `(hex_key, value)` pairs per address; the sorted order
 /// keeps the persisted bytes deterministic. Written by the Stage 0-2 blob
-/// schema, read by the S3-P08 migration (`contract_storage_from_json`
-/// below); nothing on the per-block path emits it anymore. Public since
-/// S3-P08: the legacy fixture seeder (`test_support::LegacySeed`) builds
-/// this shape for `tests/leveldb_migration.rs`.
+/// schema; nothing on the per-block path emits it anymore. Public since
+/// S3-P08: the dev-only legacy reader/fixture seeder builds this shape
+/// (`tests/common/legacy_reader.rs`, BF-S3-P01).
 pub type ContractStorageJson = Vec<(String, Vec<(String, Vec<u8>)>)>;
-
-pub(crate) fn contract_storage_from_json(
-    raw: &ContractStorageJson,
-) -> Option<strangecoin_core::state::ContractStorageMap> {
-    let mut map = strangecoin_core::state::ContractStorageMap::new();
-    for (address, slots) in raw {
-        let mut storage = strangecoin_core::state::ContractStorage::new();
-        for (hex_key, value) in slots {
-            let bytes = hex::decode(hex_key).ok()?;
-            let key: [u8; 32] = bytes.try_into().ok()?;
-            storage.insert(key, value.clone());
-        }
-        map.insert(address.clone(), storage);
-    }
-    Some(map)
-}
 
 pub(crate) fn db_path_for_port(port: u16) -> PathBuf {
     let exe_path =
@@ -425,14 +408,14 @@ pub(crate) fn db_path_for_port(port: u16) -> PathBuf {
 ///
 /// Path rule (ADR-0024 "Config surface"): `RocksDbEngine` at
 /// `storage.path`; the historical `<exe_dir>/blockchain_db_{port}`
-/// directory (`legacy_path`) is never opened as a backend anymore — on
-/// first open it is converted into `storage.path` and kept as
-/// `.leveldb.bak` (ADR-0008 rollback capability).
+/// directory (`legacy_path`) is never opened as a backend anymore.
+/// BF-S3-P01 removed the runtime auto-migration: an operator converts the
+/// legacy database once with the `migrate-leveldb` tooling example, which
+/// keeps the original as `.leveldb.bak` (ADR-0008 rollback capability).
 ///
-/// Fail-closed: a migration error (or a legacy directory present in a
-/// build without the reader) panics here, before the RocksDB open — the
-/// node never starts over unconverted or divergent data, and the legacy
-/// directory is left untouched.
+/// Fail-closed: a legacy directory present at open panics here, before
+/// the RocksDB open — the node never starts over unconverted data, and
+/// the legacy directory is left untouched.
 pub(crate) fn open_blockchain(
     port: u16,
     chain_id: u32,
@@ -443,20 +426,11 @@ pub(crate) fn open_blockchain(
 
     let start_time = std::time::SystemTime::now();
     let legacy_path = db_path_for_port(port);
-    #[cfg(feature = "legacy-migrate")]
-    if let Err(err) =
-        crate::storage::migrations::auto_migrate_legacy(&legacy_path, &storage_cfg.path)
-    {
-        panic!(
-            "LevelDB -> RocksDB migration failed: {err} (legacy directory left untouched at {})",
-            legacy_path.display()
-        );
-    }
-    #[cfg(not(feature = "legacy-migrate"))]
     if legacy_path.exists() {
         panic!(
-            "legacy LevelDB database found at {} but this build lacks the `legacy-migrate` \
-             feature; rebuild with `--features legacy-migrate` to convert it \
+            "legacy LevelDB database found at {} but the node no longer auto-migrates it \
+             (BF-S3-P01); convert once with \
+             `cargo run --example migrate-leveldb --features legacy-migrate -- <legacy> <storage.path>` \
              (refusing to start over unconverted data)",
             legacy_path.display()
         );

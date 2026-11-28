@@ -44,6 +44,18 @@ Key design choices:
 - `rusty-leveldb` dependency removed from root `Cargo.toml`; `storage` module interface unchanged
 - No consensus rule changes; storage is an implementation detail
 
+## Post-implementation note (BF-S3-P01, 2026-11-28)
+
+The one-shot conversion no longer runs automatically at first startup: the
+LevelDB reader is a dev-dependency (`tests/common/legacy_reader.rs`) and the
+conversion is an explicit operator step via the `migrate-leveldb` example
+(`cargo run --example migrate-leveldb --features legacy-migrate -- <legacy> <target>`).
+The node refuses to open over an unconverted legacy directory (fail-closed).
+`rusty-leveldb` is absent from the runtime dependency graph; the rollback
+(`.leveldb.bak`) and parse-all-before-write contract are unchanged. This
+amends the original "run automatically on first startup" decision without
+changing the storage format or any consensus rule.
+
 ## Alternatives
 
 ### Alternative 1: redb (pure Rust embedded database)

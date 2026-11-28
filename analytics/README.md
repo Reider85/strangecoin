@@ -180,7 +180,7 @@ cargo build --release --no-default-features --features net
 
 ### Key dependencies
 
-`tokio` (multi-thread runtime) · `secp256k1` · `blake3` · `aes-gcm` · `pbkdf2` · `eframe`/`egui 0.30` · `rusty-leveldb` · `tracing` + `tracing-subscriber` · `crossbeam-channel` · `serde`/`serde_json` · `toml` · `hex`
+`tokio` (multi-thread runtime) · `secp256k1` · `blake3` · `aes-gcm` · `pbkdf2` · `eframe`/`egui 0.30` · `rusty-leveldb` (dev-only: legacy migration tooling) · `tracing` + `tracing-subscriber` · `crossbeam-channel` · `serde`/`serde_json` · `toml` · `hex`
 
 > **Windows build note (updated [UI-P02-C]).** eframe 0.30 depends on
 > `windows-sys` with declared features — the old `winapi` feature shim for
@@ -581,7 +581,7 @@ Strangecoin stands on the shoulders of many open-source projects and protocol de
 
 - **[Rust](https://www.rust-lang.org/)** & the **[tokio](https://tokio.rs)** async runtime
 - **[egui / eframe](https://github.com/emilk/egui)** — the immediate-mode GUI driving the wallet client
-- **[rusty-leveldb](https://crates.io/crates/rusty-leveldb)** — pure-Rust LevelDB
+- **[rusty-leveldb](https://crates.io/crates/rusty-leveldb)** — pure-Rust LevelDB (dev-only: legacy migration tooling, not a runtime dependency)
 - **secp256k1**, **blake3**, **aes-gcm**, **pbkdf2** — the cryptographic primitives
 - **[minisketch](https://github.com/sipa/minisketch)** (Erlay set reconciliation) — vendored copy in `vendor/minisketch-rs/`, see the provenance note in `Cargo.toml`
 - Bitcoin's P2P protocol design and BIP-style improvement proposals (the SCIP format is inspired by BIPs)

@@ -236,7 +236,7 @@ Strangecoin stands on the shoulders of many open-source projects:
 
 - **[Rust](https://www.rust-lang.org/)** & **[tokio](https://tokio.rs)** async runtime
 - **[egui / eframe](https://github.com/emilk/egui)** — the GUI framework
-- **[rusty-leveldb](https://crates.io/crates/rusty-leveldb)** — pure-Rust LevelDB
+- **[rusty-leveldb](https://crates.io/crates/rusty-leveldb)** — pure-Rust LevelDB (dev-only: legacy migration tooling, not a runtime dependency)
 - **secp256k1**, **blake3**, **aes-gcm**, **pbkdf2** — cryptographic primitives
 - **[minisketch](https://github.com/sipa/minisketch)** — Erlay set reconciliation
 - Bitcoin's P2P protocol design and BIP-style improvement proposals

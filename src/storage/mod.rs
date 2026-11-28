@@ -8,15 +8,13 @@
 //! * [`Storage`] — the single-backend handle owned by `Blockchain`: the
 //!   per-block/per-account schema over [`strangecoin_storage::RocksDbEngine`]
 //!   (ADR-0024). The transitional LevelDB variant of S3-P07 is gone
-//!   (S3-P08): its one-shot conversion lives in [`migrations`] behind the
-//!   default-on `legacy-migrate` feature, and nothing here opens LevelDB
-//!   for storage anymore.
+//!   (S3-P08): its write-side conversion lives in [`migrations`], and
+//!   nothing here opens LevelDB for storage anymore.
 //!
-//! `rusty-leveldb` is reachable only through [`migrations`] (read-only
-//! legacy reader) and the test fixture seeder — see the S3-P08 deviation
-//! note in the commit / `Cargo.toml` (the КГ `cargo tree -i rusty-leveldb`
-//! expectation of "dev-deps only" is met only for `--no-default-features`
-//! builds: production auto-migration needs a runtime reader).
+//! BF-S3-P01: `rusty-leveldb` is a **dev-dependency only** — the read side
+//! lives in `tests/common/legacy_reader.rs` and the `migrate-leveldb`
+//! example (`--features legacy-migrate`). The node open path fails closed
+//! on a legacy directory with the conversion command instead of migrating.
 //!
 //! Lock ordering (ADR-0024 §Decision "Concurrency"): the RocksDB engine is
 //! `Send + Sync` with no interior mutex, so the Stage 1 `Arc<Mutex<DB>>`
@@ -97,8 +95,8 @@ use crate::error::StrangecoinError;
 /// Open rule (ADR-0024 "Config surface"): `storage.path` (default
 /// `./data/rocksdb`) is opened as a `RocksDbEngine`; the historical
 /// `<exe_dir>/blockchain_db_{port}` directory is never opened directly —
-/// when it exists it is converted first (`migrations::auto_migrate_legacy`,
-/// invoked from the DB-open path) and then kept as `.leveldb.bak`.
+/// convert it once with the `migrate-leveldb` tooling example (BF-S3-P01);
+/// the converted legacy copy is kept as `.leveldb.bak`.
 ///
 /// S3-P10: when `block_cache_capacity > 0` the engine is wrapped in a
 /// [`CachedEngine`] (LRU over `Cf::Blocks`/`Cf::Transactions` point reads;

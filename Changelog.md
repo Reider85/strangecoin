@@ -57,6 +57,42 @@ confirmed by commits).
 
 ---
 
+## 3.0.1 — post-tag follow-up: LevelDB reader out of runtime deps
+
+**Status**: Unreleased / post-`v3.0.0-stage3` bugfix (BF-S3-P01)
+**Date**: 2026-11-28
+**Prompt**: `analytics/BUGFIXES-stage3.md` BF-S3-P01
+
+### Что сделано
+
+- **`rusty-leveldb` удалён из runtime-зависимостей**: перенесён в
+  `[dev-dependencies]`; `legacy-migrate` выключен по умолчанию и включает
+  только dev-only tooling + feature-gated тесты.
+- **Конверсия стала явной**: авто-миграция при открытии БД убрана;
+  legacy-директория (`<exe_dir>/blockchain_db_{port}`) отвергается
+  fail-closed с командой
+  `cargo run --example migrate-leveldb --features legacy-migrate -- <legacy> <storage.path>`.
+  Успешная конверсия по-прежнему оставляет `.leveldb.bak` и проверяет
+  все blob'ы до записи.
+- **Reader + фикстуры**: `tests/common/legacy_reader.rs` (dev-only);
+  write-side (`LegacySnapshot` → `migrate_snapshot_to_rocksdb`, `probe_rocks`)
+  осталась в `src/storage/migrations.rs`.
+- **`secp256k1` feature `rand-std`**: bare `rand` заменён на `rand-std` —
+  без `rusty-leveldb` в default-графе пропало feature-unification
+  `rand/std` (getrandom), необходимый для `OsRng` в wallet/test_support.
+
+### Breaking changes (pre-mainnet)
+
+- Ноды с неконвертированной legacy-БД должны выполнить tooling-команду
+  вручную до запуска; автоматической конверсии больше нет.
+
+### Проверка
+
+- `cargo tree --edges no-dev -i rusty-leveldb` — пусто; `cargo tree -i rusty-leveldb` — только dev-рёбра.
+- `cargo test -p strangecoin --features legacy-migrate --test leveldb_migration --test address_migration` — green.
+
+---
+
 ## 3.0.0 — RocksDB storage + stateless validation + pruning + snapshot sync
 
 **Status**: Complete (tag `v3.0.0-stage3` — annotated, ставится этим коммитом; release pipeline run — §`docs/stage3/STAGE3_SUMMARY.md` §7: REST-верификация после push; `gh` CLI не установлен на Windows-хосте — прецедент FBP11)  
@@ -66,11 +102,11 @@ confirmed by commits).
 ### Что сделано
 
 - **ADRs**: ADR-0024 (storage schema + StorageEngine trait — аменда ADR-0008), ADR-0025 (state pruning height-window + archival mode + SCIP-path), ADR-0026 (snapshot sync format — commitment-verified, file-based).
-- **`crates/strangecoin-storage/` создан** (S3-P04): workspace member, feature `rocksdb` default-on; pins `rocksdb = "=0.25.0"`, `rusty-leveldb = "=4.0.0"` (optional), `lru = "=0.19.0"`.
+- **`crates/strangecoin-storage/` создан** (S3-P04): workspace member, feature `rocksdb` default-on; pins `rocksdb = "=0.25.0"`, `rusty-leveldb = "=4.0.0"` (optional; в 3.0.1/BF-S3-P01 → dev-deps), `lru = "=0.19.0"`.
 - **Schema v1** (S3-P05): `SCHEMA_VERSION=1`, `KeyPrefix` index-subspace tags, BE key constructors (pure, proptest-covered).
 - **RocksDbEngine** (S3-P06): 7 column families, schema-version guard fail-closed (mismatch → `StorageError::SchemaVersion`, без auto-upgrade), атомарный WriteBatch, sorted prefix-iter, flush всех CF на Drop.
 - **Monolith-миграция** (S3-P07): per-block incremental saves (common-ancestor + diff), mempool CF put/delete, `state_history` pre-apply capture, `[storage] path` config wiring.
-- **One-shot LevelDB→RocksDB миграция** (S3-P08): parse-all fail-closed → temp + atomic rename; legacy `blockchain_db_{port}` переименовывается в `.leveldb.bak` (rollback, никогда не удаляется); `storage.engine` config-key / `LeveldbError` / `legacy.rs` удалены; `rusty-leveldb` → optional default-on feature `legacy-migrate` (read-only legacy reader; полное выпиливание крейта — Stage 4+).
+- **One-shot LevelDB→RocksDB миграция** (S3-P08): parse-all fail-closed → temp + atomic rename; legacy `blockchain_db_{port}` переименовывается в `.leveldb.bak` (rollback, никогда не удаляется); `storage.engine` config-key / `LeveldbError` / `legacy.rs` удалены; `rusty-leveldb` → optional default-on feature `legacy-migrate` (read-only legacy reader; в 3.0.1/BF-S3-P01 reader переведён в dev-deps, авто-миграция убрана).
 - **O(1) индексы** (S3-P09): `txid→(height,index)`+raw, `hash→height`, `contract→storage_root` кэш; reorg Phase A deletes → Phase B puts + legacy backfill; facade point-get lookups (`tests/indices.rs`).
 - **Performance + crash-recovery** (S3-P10): batch microbench ratio **719.7x** локально (37.8s sequential×1000 put+flush vs 52.6ms один write_batch+flush — DoD ≥10x; CI-time не верифицируемо локально); kill-sweep crash-suite `k∈{0,1,5,50}` (атомарность batch'ей + stale-LOCK auto-release); `CachedEngine` LRU + `[storage] block_cache_capacity`.
 - **Stateless validation** (S3-P11): canonical witness codec `WITNESS_FORMAT_VERSION=1` (sorted-by-address proofs, golden vector) + facade `build_witness_for_block` / `verify_incoming_block_with_witness` + light-client e2e (`tests/stateless_light_client.rs`). **Wire-интеграция witness в strangecoin-net — Stage 4+ residual.**
@@ -84,14 +120,14 @@ confirmed by commits).
 ### Breaking changes (pre-mainnet; после тега `v3.0.0-stage3` — только через SCIP + activation height)
 
 - **Storage format v1**: пер-блочная RocksDB-схема (7 CF, `SCHEMA_VERSION=1`) вместо LevelDB JSON-блобов — прямое чтение старых БД невозможно (только авто-миграция при первом открытии).
-- **LevelDB engine удалён**: `storage.engine` config-key удалён (leftover-ключ в старых config.toml игнорируется + warn при `Config::load`); `rusty-leveldb` больше не runtime-engine (optional `legacy-migrate` reader).
+- **LevelDB engine удалён**: `storage.engine` config-key удалён (leftover-ключ в старых config.toml игнорируется + warn при `Config::load`); `rusty-leveldb` больше не runtime-engine (optional `legacy-migrate` reader; с 3.0.1/BF-S3-P01 — только dev-deps).
 - **Storage path default**: `./data/rocksdb` (`[storage] path`); исторический `<exe_dir>/blockchain_db_{port}` используется только как источник авто-миграции.
 - **Stateless witness wire**: новый canonical формат `WITNESS_FORMAT_VERSION=1` (sorted-by-address proofs) — witness, построенный старым кодом, отвергается fail-closed decode.
 
 ### Not in this change
 
 - **SCIP-gated**: Verkle trie (ADR-0006 amendment), state expiry (ADR-0025), receipts prune, contract-storage prune, state rent, Erlay full minisketch (`impl_id=1`) — см. `docs/stage3/RESIDUAL_RISKS_STAGE4_PLUS.md`.
-- **Stage 4+**: wire snapshot sync (GET_SNAPSHOT P2P), wire witness в gossip/sync, SDK, devnet, indexer, explorer, JSON-RPC eth_*, faucet, cargo-strangecoin, выпиливание `legacy-migrate` reader, HD wallets/Ledger, metrics/Docker/systemd.
+- **Stage 4+**: wire snapshot sync (GET_SNAPSHOT P2P), wire witness в gossip/sync, SDK, devnet, indexer, explorer, JSON-RPC eth_*, faucet, cargo-strangecoin, выпиливание dev-only reader (закрыто BF-S3-P01), HD wallets/Ledger, metrics/Docker/systemd.
 - **Stage 5+**: Account Abstraction (ERC-4337), EIP-1559, threshold encryption mempool, fee market (инвариант #20).
 - **Stage 6+**: K-framework, ZK-VM, external audit, TLA+ network protocol, Block-STM (Stage 3+/6).
 - **Stage 7**: BLS12-381 + `bls_aggregate`, PoS/Casper, inclusion lists, validator ops.

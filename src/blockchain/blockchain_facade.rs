@@ -114,9 +114,9 @@ pub struct BlockchainFacade {
 
 impl BlockchainFacade {
     /// Open the port-based node database per `storage` (S3-P07: the
-    /// config-driven `storage.path`; S3-P08: a leftover historical
-    /// `<exe_dir>/blockchain_db_{port}` LevelDB directory is auto-migrated
-    /// into it first — see `storage::migrations`).
+    /// config-driven `storage.path`; BF-S3-P01: a leftover historical
+    /// `<exe_dir>/blockchain_db_{port}` LevelDB directory is refused —
+    /// convert it first with the `migrate-leveldb` tooling example).
     pub fn new(port: u16, chain_id: u32, storage: crate::config::StorageConfig) -> Self {
         Self {
             inner: Arc::new(RwLock::new(Blockchain::new(port, chain_id, &storage))),

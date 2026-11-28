@@ -24,18 +24,6 @@ strangecoin-mcp = { path = "crates/strangecoin-mcp", version = "0.1.0", optional
 # with design system, components, and 5 screens. Default-on per ADR-0031.
 strangecoin-ui = { path = "crates/strangecoin-ui", version = "0.1.0", optional = true }
 ctrlc = "3.4"
-# S3-P08: transitional — only the read-only LevelDB reader of the one-shot
-# LevelDB -> RocksDB migration (`src/storage/migrations.rs`) still needs this
-# crate; the storage engine itself is RocksDB since S3-P07. Optional behind
-# the default-on `legacy-migrate` feature so `--no-default-features` builds
-# (light/headless direction) carry no LevelDB code at all. Full removal of
-# the crate (with the reader) is a Stage 4+ cleanup — see the S3-P08 commit
-# deviation note (КГ "cargo tree -i rusty-leveldb" is non-empty in default
-# features: exactly one runtime edge, the migration reader).
-# Pinned exact per Stage 3 Pin Policy (AGENTS.md): caret "4.0.0" since
-# Stage 0, fixed at =4.0.0 in S3-P08 — a caret bump changing legacy read
-# semantics would silently corrupt the one-shot migration.
-rusty-leveldb = { version = "=4.0.0", optional = true }
 uuid = { version = "1.17.0", features = ["v4"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.142"
@@ -53,7 +41,10 @@ pbkdf2 = { version = "0.12.2", features = ["simple"] }
 rand_core = "0.10.1"
 base64 = "0.22.1"
 aes-gcm = "0.10"
-secp256k1 = { version = "0.29", features = ["rand", "serde", "global-context", "recovery"] }
+# BF-S3-P01: `rand-std` (not bare `rand`) — removing the default-on
+# `rusty-leveldb` dep stopped feature-unifying `rand/std` (getrandom),
+# which `src/wallet.rs` / `test_support` need for `OsRng`.
+secp256k1 = { version = "0.29", features = ["rand-std", "serde", "global-context", "recovery"] }
 thiserror = "2"
 hex = "0.4"
 blake3 = "1"
@@ -83,11 +74,10 @@ tokio = { version = "1", features = [
 # vm-wasm is default-on (regtest/devnet builds).
 # gui is default-on per S2-P05 spec (operator desktop client; headless via
 # --no-default-features + selective re-enable).
-# legacy-migrate is default-on (S3-P08): the LevelDB -> RocksDB one-shot
-# auto-migration must read the legacy `<exe_dir>/blockchain_db_{port}`
-# directory in production builds (ADR-0008 "run automatically on first
-# startup"); --no-default-features builds drop it with everything else.
-default = ["net", "vm-wasm", "gui", "legacy-migrate", "mcp", "ui"]
+# BF-S3-P01: `legacy-migrate` is opt-in — the LevelDB reader lives in dev-deps
+# + the `migrate-leveldb` tooling example; the node never opens LevelDB at
+# runtime and fails closed on a legacy directory with a conversion command.
+default = ["net", "vm-wasm", "gui", "mcp", "ui"]
 # `net` implies `strangecoin-net/acp` (AI-P03, ADR-0030): every production
 # node speaks ACP over its Noise connections; the net crate keeps `acp`
 # default-off so a bare `-p strangecoin-net` build compiles both feature
@@ -95,7 +85,9 @@ default = ["net", "vm-wasm", "gui", "legacy-migrate", "mcp", "ui"]
 net = ["dep:strangecoin-net", "strangecoin-net/acp"]
 vm-wasm = ["dep:strangecoin-vm-wasm"]
 gui = ["dep:eframe"]
-legacy-migrate = ["dep:rusty-leveldb"]
+# Marker feature for the dev-only `migrate-leveldb` tooling example and the
+# feature-gated migration tests; activates no runtime dependency.
+legacy-migrate = []
 # AI-P02 (ADR-0029): MCP server facade, default-on Stage 4.
 mcp = ["dep:strangecoin-mcp"]
 # AI-P02 KГ: `cargo test --features determinism-fuzz` runs the extra
@@ -105,6 +97,14 @@ determinism-fuzz = ["dep:strangecoin-mcp", "strangecoin-mcp/determinism-fuzz"]
 # UI-P01 (ADR-0031): Professional UI replacement with design system, components,
 # and 5 screens. Default-on per ADR-0031.
 ui = ["dep:strangecoin-ui"]
+
+# BF-S3-P01: explicit one-shot LevelDB -> RocksDB converter (the runtime
+# auto-migration was removed from the node open path). Requires the opt-in
+# `legacy-migrate` marker feature; the reader itself comes from dev-deps.
+[[example]]
+name = "migrate-leveldb"
+path = "examples/migrate_leveldb.rs"
+required-features = ["legacy-migrate"]
 
 [profile.dev]
 # Disk-budget guard (incident 2026-11-18: target/ reached 615 GB, ENOSPC):
@@ -120,6 +120,11 @@ codegen-units = 1
 strip = true
 
 [dev-dependencies]
+# BF-S3-P01: the read-only LevelDB reader is dev-only — used by the legacy
+# fixture seeder/tests and the `migrate-leveldb` example (examples see dev-deps).
+# Pinned exact per Stage 3 Pin Policy: =4.0.0 since S3-P08 (a caret bump can
+# silently change legacy read semantics).
+rusty-leveldb = "=4.0.0"
 proptest = "1"
 # AI-P02 tests: in-process axum requests (ServiceExt::oneshot) without a
 # real socket, and incremental SSE frame reads. Both already sit in the

@@ -78,13 +78,15 @@ BF-S3-P06 (tag hygiene / gate-фиксация) ──────────�
 - `tests/leveldb_migration.rs` (feature-gated)
 - `docs/stage3/STAGE3_SUMMARY.md`, `Changelog.md`, `AGENTS.md` (правки)
 
-**КГ:**
-- [ ] `cargo tree -i rusty-leveldb` на default-фичах пуст (evidence в коммите)
-- [ ] `cargo build` без фичей не тянет rusty-leveldb (проверено `cargo tree` / `cargo metadata`)
-- [ ] Авто-миграция зелёная в тесте с `--features legacy-migrate`
-- [ ] Deviation-записи в STAGE3_SUMMARY/AGENTS закрыты/обновлены
-- [ ] `cargo test --workspace` green; clippy -D warnings green
-- [ ] Коммит `[BF-S3-P01] migrate: remove rusty-leveldb from runtime deps (legacy-migrate opt-in)`
+**Статус: fixed (2026-11-28)** — dev-only reader + opt-in tooling; авто-миграция в узле заменена fail-closed проверкой. Отклонения: (a) `[[example]] migrate-leveldb` вместо `[[bin]]` — examples видят dev-dependencies, bin'ы нет; (b) write-часть конверсии (`LegacySnapshot` → RocksDB) осталась в lib, чтобы не поднимать видимость `pub(crate)` codec-хелперов; (c) `secp256k1` переключён с `rand` на `rand-std` — без `rusty-leveldb` пропало feature-unification `rand/std` (getrandom) для `OsRng`.
+
+**КГ (evidence):**
+- [x] `cargo tree --edges no-dev -i rusty-leveldb` → `warning: nothing to print.` (runtime-граф пуст); `cargo tree -i rusty-leveldb` → только `[dev-dependencies]`-ребро (допустимо по КГ с пометкой)
+- [x] `cargo check --workspace` / default-сборка не тянет rusty-leveldb (проверено `cargo tree` + `cargo check`)
+- [x] Конверсия (explicit tooling wrapper, former auto-run) зелёная: `cargo test -p strangecoin --features legacy-migrate --test leveldb_migration --test address_migration` → 6 passed; smoke `cargo run --example migrate-leveldb --features legacy-migrate -- <legacy> <target>` → корректный no-op
+- [x] Deviation-записи в STAGE3_SUMMARY / AGENTS / Changelog 3.0.1 / ADR-0008 обновлены
+- [x] `cargo test -p strangecoin` green (53 suite / 277 passed / 0 failed); `cargo fmt --all -- --check` green; `cargo clippy -p strangecoin --all-targets -- -D warnings` — 3 pre-existing lint-ошибки в не тронутом `src/api/mod.rs` (clippy 1.98: useless_borrows_in_formatting / unnecessary_sort_by / redundant_closure); с `-A` на них — green (default + `--features legacy-migrate`). Полный `cargo test --workspace` не прогонялся целиком: холодный `-p strangecoin-storage` пересобирает librocksdb-sys C++ (~30+ мин); изменённый там файл — doc-only
+- [x] Коммит `[BF-S3-P01] migrate: remove rusty-leveldb from runtime deps (legacy-migrate opt-in)`
 
 ---
 

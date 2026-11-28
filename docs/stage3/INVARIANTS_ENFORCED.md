@@ -81,7 +81,7 @@ v2.0.0-stage2 run).
 - **#1** — extension: смена backend (LevelDB-блобы → per-block RocksDB-схема) не меняет направление «валидность из цепочки»: state-cache по-прежнему пересобирается из chain, batch-атомарность держит disk-состояние консистентным между crash'ами (evidence — crash-suite + counting-mock `per_block_writes`).
 - **#14** — extension: `Drop` flush'ит все CF; LOCK-файл снимается автоматически (stale-LOCK test), ручное удаление по-прежнему не требуется/не предусмотрено.
 - **#16/#17** — net-инварианты: Stage 3 не меняет `strangecoin-net` (witness/snapshot — core/storage API, wire-integration в gossip — Stage 4+ residual). Stage 2 extensions остаются в силе, regression green.
-- **#23** — guard без auto-upgrade: расхождение версий схемы = отказ открыть (молчаливый downgrade мог бы порча данные). `rusty-leveldb`-чтение legacy — только в рамках one-shot миграции (S3-P08), не runtime-путь.
+- **#23** — guard без auto-upgrade: расхождение версий схемы = отказ открыть (молчаливый downgrade мог бы порча данные). `rusty-leveldb`-чтение legacy — только в рамках one-shot миграции (S3-P08); BF-S3-P01: dev-only tooling, не runtime-путь.
 - **#24** — atomicity на уровне WriteBatch (не « fsync per key»); kill-sweep детерминированный (determinism checklist: без wall-clock в триггерах, k — параметр).
 - **#25** — fail-closed в обе стороны: подделанный контент отвергается; «свежесть» БД (`NotFreshDatabase`) защищает от перезаписи существующей цепочки snapshot'ом.
 - **#26** — boundary — прямое следствие ADR-0025: state expiry (удаление current state) — SCIP-gated и НЕ реализован; Stage 3 трогает только исторические `state_history`-дельты.

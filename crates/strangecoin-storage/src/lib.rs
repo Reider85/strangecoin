@@ -39,9 +39,10 @@
 //! witness (S3-P11) modules; the reverse dependency is forbidden.
 //!
 //! No LevelDB code lives here: the S3-P08 one-shot LevelDB → RocksDB
-//! migration reads the legacy blob schema from the monolith edge
-//! (`src/storage/migrations.rs`, default-on feature `legacy-migrate`) —
-//! this crate only receives the already-decoded snapshot as opaque
+//! conversion is at the monolith edge (`src/storage/migrations.rs`,
+//! write side); BF-S3-P01 moved the legacy reader to dev-only tooling
+//! (`tests/common/legacy_reader.rs` + the `migrate-leveldb` example).
+//! This crate only receives the already-decoded snapshot as opaque
 //! `WriteBatchOp`s.
 
 pub mod cache;
